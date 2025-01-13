@@ -1,0 +1,2 @@
+numpy
+torch>=2.5
