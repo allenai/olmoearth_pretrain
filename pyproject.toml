@@ -6,7 +6,7 @@ authors = [
     {name = "Favyen Bastani", email = "favyenb@allenai.org"},
     {name = "Patrick Beukema", email = "patrickb@allenai.org"},
     {name = "Henry Herzog", email = "henryh@allenai.org"},
-    {name = "Gabirel Tseng", email = "gabrielt@allenai.org"},
+    {name = "Gabriel Tseng", email = "gabrielt@allenai.org"},
     {name = "Yawen Zhang", email = "yawenz@allenai.org"},
 ]
 readme = "README.md"
