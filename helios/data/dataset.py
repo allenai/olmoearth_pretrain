@@ -32,33 +32,36 @@ S2_BANDS = [
 ]
 
 
+class ArrayWithMetadata(NamedTuple):
+    """A named tuple for storing the output of the dataset to the model (a single sample)."""
+
+    array: np.ndarray
+    metadata: dict
+
+
 class DatasetOutput(NamedTuple):
     """A named tuple for storing the output of the dataset to the model (a single sample).
 
-    Args:
-        space_time_x: Input data that is space-time varying
-        space_x: Input data that is space varying only
-        time_x: Input data that is time varying only
-        static_x: Input data that is static across space and time
-        time_info: Input data that is time info namely all the time metadata for the time index
+    The output is a dictionary of data sources with the array and metadata.
     """
 
-    space_time_x: np.ndarray
-    space_x: np.ndarray
-    time_x: np.ndarray
-    static_x: np.ndarray
-    time_info: np.ndarray
+    sentinel2: ArrayWithMetadata
+    sample_metadata: dict
 
 
 # TODO: Adding a Dataset specific fingerprint is probably good for an evolving dataset
 # TODO: We want to make what data sources and examples we use configuration drivend
 
 # Quick and dirty interface for data sources
-ALL_DATA_SOURCES = ["sentinel2_freq", "sentinel2_monthly"]
+ALL_DATA_SOURCES = ["sentinel2"]
+
+DATA_FREQUENCY_TYPES = ["freq", "monthly"]
 
 LOAD_DATA_SOURCE_METADATA_FUNCTIONS = {
-    "sentinel2_freq": load_sentinel2_frequency_metadata,
-    "sentinel2_monthly": load_sentinel2_monthly_metadata,
+    "sentinel2": {
+        "freq": load_sentinel2_frequency_metadata,
+        "monthly": load_sentinel2_monthly_metadata,
+    },
 }
 
 # Quick and dirty interface for data source variation types
@@ -67,67 +70,110 @@ DATA_SOURCE_VARIATION_TYPES = Literal[
 ]
 
 DATA_SOURCE_TO_VARIATION_TYPE = {
-    "sentinel2_freq": "space_time_varying",
-    "sentinel2_monthly": "space_time_varying",
+    "sentinel2": "space_time_varying",
 }
 
 
 # Expected types of Data Sources
-# Space-TIme varying
-# TIme varying only
+# Space-Time varying
+# Time varying only
 # Space varying only
 # Static only
 # For a given location and or time we want to be able to coalesce the data sources
 class HeliosDataset(PyTorchDataset):
     """Helios dataset."""
 
-    def __init__(self, data_index_path: UPath | str, output_hw: int = 256):
+    def __init__(self, data_index_path: UPath | str):
         """Initialize the dataset."""
+        self.data_sources = ALL_DATA_SOURCES
         self.data_index_path = UPath(data_index_path)
+        self.root_dir = self.data_index_path.parent
         # Using a df as initial ingest due to ease of inspection and manipulation,
         self.data_index_df = load_data_index(data_index_path)
-        # Intersect available data sources with index column names
-        self.data_sources = [
-            source
-            for source in ALL_DATA_SOURCES
-            if source in self.data_index_df.columns
-        ]
-        print(self.data_sources)
-        assert (
-            len(self.data_sources) > 0
-        ), "No data sources found in index, check naming of columns"
-        print(self.data_index_df.head())
-        self.example_ids = self.data_index_df["example_id"].to_numpy(dtype=str)
-        self.output_hw = output_hw
         self.example_id_to_index_metadata_dict = self.data_index_df.set_index(
             "example_id"
         ).to_dict("index")
+
+        self.freq_metadata_df_dict = {}
+        self.monthly_metadata_df_dict = {}
+        for data_source in self.data_sources:
+            self.freq_metadata_df_dict[data_source] = (
+                LOAD_DATA_SOURCE_METADATA_FUNCTIONS[
+                    data_source
+                ]["freq"](self.get_path_to_data_source_metadata(data_source, "freq"))
+            )
+            self.monthly_metadata_df_dict[data_source] = (
+                LOAD_DATA_SOURCE_METADATA_FUNCTIONS[
+                    data_source
+                ][
+                    "monthly"
+                ](self.get_path_to_data_source_metadata(data_source, "monthly"))
+            )
+
+        # Intersect available data sources with index column names
+
+        assert (
+            len(self.data_sources) > 0
+        ), "No data sources found in index, check naming of columns"
+
+        # Get example IDs where at least one data source has monthly data
+        monthly_mask = (
+            self.data_index_df[
+                [col for col in self.data_index_df.columns if "monthly" in col]
+            ]
+            .eq("y")
+            .any(axis=1)
+        )
+        monthly_example_ids = self.data_index_df.loc[
+            monthly_mask, "example_id"
+        ].to_numpy(dtype=str)
+        freq_mask = (
+            self.data_index_df[
+                [col for col in self.data_index_df.columns if "freq" in col]
+            ]
+            .eq("y")
+            .any(axis=1)
+        )
+        freq_example_ids = self.data_index_df.loc[freq_mask, "example_id"].to_numpy(
+            dtype=str
+        )
+
         self.root_dir = self.data_index_path.parent
 
-        # Load metadata per data source so we can access quickly per data source per example
-        self.data_source_metadata_dict = {}
-        for data_source in self.data_sources:
-            metadata_df = LOAD_DATA_SOURCE_METADATA_FUNCTIONS[data_source](
-                self.get_path_to_data_source_metadata(data_source)
-            )
-            print(metadata_df.head())
-            metadata_df.set_index(["example_id", "image_idx"], inplace=True, drop=True)
-            # Structure of the metadata is {example_id, image_idx: {column: value}}
-            example_id_to_data_source_metadata_dict = metadata_df.to_dict(
-                orient="index"
-            )
+        # Store the example IDs and create indices
+        self.monthly_example_ids = monthly_example_ids
+        self.freq_example_ids = freq_example_ids
 
-            self.data_source_metadata_dict[data_source] = (
-                example_id_to_data_source_metadata_dict
-            )
+        # Create separate indices for monthly and frequency data
+        self.monthly_indices = np.arange(len(monthly_example_ids))
+        self.freq_indices = np.arange(len(freq_example_ids))
 
-    def get_path_to_data_source_metadata(self, data_source: str) -> UPath:
+    def get_path_to_data_source_metadata(
+        self, data_source: str, frequency_type: str
+    ) -> UPath:
         """Get the path to the data source metadata."""
-        return self.root_dir / f"{data_source}.csv"
+        return self.root_dir / f"{data_source}_{frequency_type}.csv"
 
     def __len__(self) -> int:
         """Get the length of the dataset."""
-        return len(self.example_ids)
+        return len(self.monthly_example_ids) + len(self.freq_example_ids)
+
+    def get_example_from_index(
+        self, index: int
+    ) -> tuple[str, Literal["monthly", "freq"]]:
+        """Convert a global index to an example ID and its type.
+
+        Args:
+            index: Global index between 0 and len(dataset)-1
+
+        Returns:
+            tuple: (example_id, data_type)
+        """
+        if index < len(self.monthly_example_ids):
+            return self.monthly_example_ids[index], "monthly"
+        else:
+            freq_index = index - len(self.monthly_example_ids)
+            return self.freq_example_ids[freq_index], "freq"
 
     def _tif_to_array(self, tif_path: UPath | str, data_source: str) -> np.ndarray:
         """Convert a tif file to an array.
@@ -138,9 +184,7 @@ class HeliosDataset(PyTorchDataset):
         Returns:
             The array from the tif file.
         """
-        if data_source == "sentinel2_freq":
-            space_bands = S2_BANDS
-        elif data_source == "sentinel2_monthly":
+        if data_source == "sentinel2":
             space_bands = S2_BANDS
         else:
             raise ValueError(f"Unknown data source: {data_source}")
@@ -188,64 +232,68 @@ class HeliosDataset(PyTorchDataset):
             print(f"Replacing tif {tif_path} due to {e}")
             raise e
 
-    def _get_tif_path(self, data_source: str, example_id: str) -> UPath:
-        return self.root_dir / data_source / f"{example_id}.tif"
+    def _get_tif_path(
+        self,
+        data_source: str,
+        example_id: str,
+        frequency_type: Literal["monthly", "freq"],
+    ) -> UPath:
+        return self.root_dir / f"{data_source}_{frequency_type}" / f"{example_id}.tif"
+
+    def _get_metadata_for_sample(
+        self, data_source: str, example_id: str, frequency_type: str
+    ) -> dict:
+        """Get the metadata for a sample."""
+        metadata_df = self.freq_metadata_df_dict[data_source]
+        meta_dict_records = metadata_df[
+            metadata_df["example_id"] == example_id
+        ].to_dict(orient="records")
+        # TURN INto single dict without example_id
+        meta_dict = {}
+        for record in meta_dict_records:
+            image_idx = record.pop("image_idx")
+            record.pop("example_id")
+            meta_dict[image_idx] = record
+        print(
+            f"Metadata for {example_id} from {data_source} {frequency_type}: {meta_dict}"
+        )
+        return meta_dict
 
     def __getitem__(self, index: int) -> DatasetOutput:
         """Get the item at the given index."""
-        example_id = self.example_ids[index]
-        index_metadata = self.example_id_to_index_metadata_dict[example_id]
-        # check which data sources are available for this example
-        data_sources_available_for_example = []
+        example_id, data_frequency_type = self.get_example_from_index(index)
+        sample_metadata = self.example_id_to_index_metadata_dict[example_id]
+        data_source_output_dict = {}
         for data_source in self.data_sources:
-            if data_source in index_metadata.keys():
-                if index_metadata[data_source] == "y":
-                    data_sources_available_for_example.append(data_source)
-
-        space_time_x = []
-        space_x = []
-        time_x = []
-        static_x = []
-        time_info = []
-        for data_source in data_sources_available_for_example:
-            tif_path = self._get_tif_path(data_source, example_id)
-            data_source_variation_type = DATA_SOURCE_TO_VARIATION_TYPE[data_source]
+            tif_path = self._get_tif_path(data_source, example_id, data_frequency_type)
             data_source_array = self._tif_to_array_with_checks(tif_path, data_source)
-
-            # TODO: Confirm that this is what we want before we commit to a more optimal structure
-            time_data_info = []
-            for image_idx in range(data_source_array.shape[2]):
-                time_data_info.append(
-                    self.data_source_metadata_dict[data_source][
-                        (example_id, image_idx)
-                    ]["start_time"]
-                )
-            time_info.append(np.array(time_data_info))
-            # grab the related time info for each index on the time axis
-            if data_source_variation_type == "space_time_varying":
-                space_time_x.append(data_source_array)
-            elif data_source_variation_type == "time_varying_only":
-                time_x.append(data_source_array)
-            elif data_source_variation_type == "space_varying_only":
-                space_x.append(data_source_array)
-            elif data_source_variation_type == "static_only":
-                static_x.append(data_source_array)
-
-        # TODO: We will likely want to save thse numpy arrays locally and load directly those files
-        # we will then need to decide how we will handle combining all the data sources together
-        # What part of the dataset output the data belongs too depends on the type of the data source
-        # concatenate on the time index dimensions are (h, w, t, c)
-        space_time_x = np.concatenate(space_time_x, axis=2)
-        ## SO FAR WE ARE NOT USING The below types of data sources
-        space_x = np.empty([])
-        time_x = np.empty([])
-        static_x = np.empty([])
-        time_info = np.concatenate(time_info, axis=0)
-        return DatasetOutput(space_time_x, space_x, time_x, static_x, time_info)
+            # Probably there is a better way to have direct access to the metadata but will leave for now
+            metadata_dict = self._get_metadata_for_sample(
+                data_source, example_id, data_frequency_type
+            )
+            data_source_output_dict[data_source] = ArrayWithMetadata(
+                array=data_source_array,
+                metadata=metadata_dict,
+            )
+        sample_metadata["frequency_type"] = data_frequency_type
+        return DatasetOutput(**data_source_output_dict, sample_metadata=sample_metadata)
 
 
 if __name__ == "__main__":
     # TODO: Make this work for remote files likely want to use rslearn utils
     data_index_path = "gs://ai2-helios/data/20250113-sample-dataset-helios/index.csv"
     dataset = HeliosDataset(data_index_path)
-    print(dataset[0])
+    print(f"Dataset length: {len(dataset)}")
+    import time
+
+    time_to_load_sample = []
+    for i in np.random.randint(0, len(dataset), size=10):
+        start_time = time.time()
+        dataset[i]
+        end_time = time.time()
+        time_taken = end_time - start_time
+        print(f"Time taken: {time_taken} seconds")
+        time_to_load_sample.append(time_taken)
+    print(
+        f"Time taken: {np.mean(time_to_load_sample)} seconds and {np.std(time_to_load_sample)} seconds"
+    )

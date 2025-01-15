@@ -52,7 +52,9 @@ repos:
     hooks:
       - id: bandit
         exclude: ^tests/
-        args: ["-s", "B101"]
+        args:
+          - -s
+          - B101
   - repo: local
     hooks:
       - id: interrogate
