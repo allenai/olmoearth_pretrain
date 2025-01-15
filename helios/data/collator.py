@@ -42,6 +42,7 @@ def variable_time_collate_fn(
     """Collate function for inputs with variable time data."""
     assert items
     max_len = max(item.sample_metadata["num_timesteps"] for item in items)
+    print(f"Max len: {max_len}")
     all_space_time_x: list[torch.Tensor] = []
     all_space_x: list[torch.Tensor] = []
     all_time_x: list[torch.Tensor] = []
@@ -54,6 +55,7 @@ def variable_time_collate_fn(
             if variation_type == "space_time_varying":
                 array_with_metadata: ArrayWithMetadata = getattr(item, data_source)
                 num_timesteps = item.sample_metadata["num_timesteps"]
+                print(f"Num timesteps: {num_timesteps}")
                 space_time_x = torch.tensor(array_with_metadata.array)
                 # h, w,t,c
                 pad_shape = (0, 0, 0, int(max_len - num_timesteps), 0, 0)
@@ -123,30 +125,42 @@ def variable_time_collate_fn(
 
 
 if __name__ == "__main__":
-    import numpy as np
+    from torch.utils.data import DataLoader
 
     from helios.data.dataset import HeliosDataset
 
     data_index_path = "gs://ai2-helios/data/20250113-sample-dataset-helios/index.csv"
     dataset = HeliosDataset(data_index_path)
     print(f"Dataset length: {len(dataset)}")
-    import time
-
-    time_to_load_sample = []
-    items = []
-    np.random.seed(42)
-    batch_size = 4
-    for i in np.random.randint(0, len(dataset), size=batch_size):
-        start_time = time.time()
-        items.append(dataset[i])
-        end_time = time.time()
-        time_taken = end_time - start_time
-        print(f"Time taken: {time_taken} seconds")
-        time_to_load_sample.append(time_taken)
-    print(items)
-    collated_output = variable_time_collate_fn(items)
-    print(
-        f"Time taken: {np.mean(time_to_load_sample)} seconds "
-        f"and {np.std(time_to_load_sample)} seconds"
+    dataloader = DataLoader(
+        dataset, batch_size=4, shuffle=True, collate_fn=variable_time_collate_fn
     )
-    # Do we want to sample monthly data and freq data in the same batch?
+    for batch in dataloader:
+        batch.space_time_x.shape
+    # import time
+
+    # time_to_load_sample = []
+    # items = []
+    # np.random.seed(42)
+    # batch_size = 4
+    # for i in np.random.randint(0, len(dataset), size=batch_size):
+    #     start_time = time.time()
+    #     items.append(dataset[i])
+    #     end_time = time.time()
+    #     time_taken = end_time - start_time
+    #     print(f"Time taken: {time_taken} seconds")
+    #     time_to_load_sample.append(time_taken)
+    # collated_output = variable_time_collate_fn(items)
+
+    # # print the shapes and sums of all tnesors in collated output in a clear and readable format
+    # for key, value in collated_output._asdict().items():
+    #     if isinstance(value, torch.Tensor):
+    #         print(f"{key}: {value.shape} {value.sum()}")
+    #     else:
+    #         print(f"{key}: {value}")
+
+    # print(
+    #     f"Time taken: {np.mean(time_to_load_sample)} seconds "
+    #     f"and {np.std(time_to_load_sample)} seconds"
+    # )
+    # # Do we want to sample monthly data and freq data in the same batch?
