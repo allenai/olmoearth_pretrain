@@ -1,0 +1,11 @@
+ai2-olmo-core
+einops==0.7.0
+gcsfs
+numpy
+pandas
+pandera
+pytest
+rasterio
+rioxarray
+torch>=2.5
+universal_pathlib>=0.2.5

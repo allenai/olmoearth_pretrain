@@ -53,11 +53,8 @@ repos:
       - id: bandit
         exclude: ^tests/
         args:
-          [
-            # Skip error about using pseudo-random number generator, since we are not
-            # using it for a cryptographic purpose.
-            --skip=B311,
-          ]
+          - -s
+          - B101,B311 # B101 is assert ban, B311 hates rngs
   - repo: local
     hooks:
       - id: interrogate
