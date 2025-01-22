@@ -4,13 +4,11 @@ import logging
 from typing import Any
 
 import numpy as np
-import rasterio
-from einops import rearrange
 from olmo_core.data.numpy_dataset import NumpyDatasetBase
 from torch.utils.data import Dataset
 from upath import UPath
 
-from helios.data.constants import DATA_SOURCE_TO_VARIATION_TYPE, S2_BANDS
+from helios.data.data_source_io import DataSourceLoaderRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +32,6 @@ class HeliosDataset(NumpyDatasetBase, Dataset):
             eos_token_id=-1,  # Not needed only LM
             vocab_size=-1,  # Not needed only LM
         )
-        #
-        # What does it look like for me to access paths?
-
-        # After init we have
-        # paths to samples
-        # numpy data type
-        pass
 
     @property
     def max_sequence_length(self) -> int:
@@ -58,73 +49,45 @@ class HeliosDataset(NumpyDatasetBase, Dataset):
         """Get the length of the dataset."""
         return len(self.paths)
 
-    def _tif_to_array(
-        self, tif_path: UPath | str, data_source: str
-    ) -> tuple[np.ndarray, float]:
-        """Convert a tif file to an array.
+    def _load_data_source(
+        self, file_path: UPath | str, data_source: str
+    ) -> tuple[np.ndarray, int]:
+        """Load data from a data source using the appropriate reader.
 
         Args:
-            tif_path: The path to the tif file.
-            data_source: The data source string to load the correct datasource
-        Returns:
-            The array from the tif file.
-        """
-        if data_source == "sentinel2":
-            space_bands = S2_BANDS
-        else:
-            raise ValueError(f"Unknown data source: {data_source}")
-        # We will need different ingestion logic for different data sources at this point
-
-        variation_type = DATA_SOURCE_TO_VARIATION_TYPE[data_source]
-        if variation_type == "space_time_varying":
-            with rasterio.open(tif_path) as data:
-                values = data.read()
-
-            num_timesteps = values.shape[0] / len(space_bands)
-            assert (
-                num_timesteps % 1 == 0
-            ), f"{tif_path} has incorrect number of channels {space_bands} \
-                {values.shape[0]=} {len(space_bands)=}"
-            space_time_x = rearrange(
-                values, "(t c) h w -> h w t c", c=len(space_bands), t=int(num_timesteps)
-            )
-            return space_time_x, num_timesteps
-        else:
-            raise NotImplementedError(f"Unknown variation type: {variation_type}")
-
-    def _tif_to_array_with_checks(
-        self, tif_path: UPath | str, data_source: str
-    ) -> tuple[np.ndarray, float]:
-        """Load the tif file and return the array.
-
-        Args:
-            tif_path: The path to the tif file.
-            data_source: The data source.
+            file_path: Path to the data file
+            data_source: Name of the data source
 
         Returns:
-            The array from the tif file.
+            Tuple of (data_array, num_timesteps)
         """
         try:
-            output = self._tif_to_array(tif_path, data_source)
-            return output
+            reader = DataSourceLoaderRegistry.get_reader(data_source)
+            return reader.load(file_path)
         except Exception as e:
-            logger.error(f"Replacing tif {tif_path} due to {e}")
-            # TODO: Implement behavior so that we don't hit bad indices again
-            # For now just raise the error so it fails obviously
-            raise e
+            logger.error(f"Error loading {file_path} from {data_source}: {e}")
+            raise
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         """Get the item at the given index."""
-        sample = self.paths[index]  # THis really is the dict of all the sample info
+        sample = self.paths[index]
         data_source_paths = sample["data_source_paths"]
         data_arrays = {}
-        for data_source, tif_path in data_source_paths.items():
-            data_source_array, num_timesteps = self._tif_to_array_with_checks(
-                tif_path, data_source
-            )
-            data_arrays[data_source] = data_source_array
-        output_dict: dict[str, Any] = {"data_arrays": data_arrays}
-        output_dict["sample_metadata"] = sample["sample_metadata"]
-        output_dict["num_timesteps"] = num_timesteps
-        output_dict["data_source_metadata"] = sample["data_source_metadata"]
-        return output_dict
+        num_timesteps = None
+
+        for data_source, file_path in data_source_paths.items():
+            data_array, ts = self._load_data_source(file_path, data_source)
+            data_arrays[data_source] = data_array
+            if num_timesteps is None:
+                num_timesteps = ts
+            else:
+                assert (
+                    ts == num_timesteps
+                ), f"Mismatched timesteps: {ts} != {num_timesteps}"
+
+        return {
+            "data_arrays": data_arrays,
+            "sample_metadata": sample["sample_metadata"],
+            "num_timesteps": num_timesteps,
+            "data_source_metadata": sample["data_source_metadata"],
+        }

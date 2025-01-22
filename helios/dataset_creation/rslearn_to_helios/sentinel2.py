@@ -13,24 +13,10 @@ from rslearn.utils.mp import star_imap_unordered
 from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
 
+from helios.constants import S2_BANDS
+
 from ..const import METADATA_COLUMNS
 from ..util import get_modality_fname, get_modality_temp_meta_fname
-
-BANDS = [
-    "B01",
-    "B02",
-    "B03",
-    "B04",
-    "B05",
-    "B06",
-    "B07",
-    "B08",
-    "B8A",
-    "B09",
-    "B10",
-    "B11",
-    "B12",
-]
 
 # Modality for frequent data in the output Helios dataset.
 MODALITY_FREQ = "sentinel2_freq"
@@ -63,7 +49,7 @@ def convert_sentinel2(window_path: UPath, helios_path: UPath) -> None:
             )
         item = Item.deserialize(group[0])
         timestamp = item.geometry.time_range[0]
-        raster_dir = window.get_raster_dir(layer_name, BANDS, group_idx)
+        raster_dir = window.get_raster_dir(layer_name, S2_BANDS, group_idx)
         image = raster_format.decode_raster(raster_dir, window.bounds)
         images.append(image)
         timestamps.append(timestamp.isoformat())
@@ -104,7 +90,7 @@ def convert_sentinel2(window_path: UPath, helios_path: UPath) -> None:
         layer_name = f"sentinel2_mo{month_idx}"
         start_time = window.time_range[0] + timedelta(days=(month_idx - 7) * 30)
         end_time = start_time + timedelta(days=30)
-        raster_dir = window.get_raster_dir(layer_name, BANDS)
+        raster_dir = window.get_raster_dir(layer_name, S2_BANDS)
         if not raster_dir.exists():
             continue
         image = raster_format.decode_raster(raster_dir, window.bounds)
