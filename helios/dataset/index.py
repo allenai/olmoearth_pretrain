@@ -3,15 +3,18 @@
 TODO: Add the assumed dataset organizing format and rules
 """
 
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import numpy as np
 from pandera.typing import DataFrame
 from upath import UPath
 
 from helios.dataset.schemas import TrainingDataIndexDataModel
-from helios.dataset.utils import (DataSourceMetadataRegistry, FrequencyType,
-                                  load_data_index)
+from helios.dataset.utils import (
+    FrequencyType,
+    load_data_index,
+    load_data_source_metadata,
+)
 
 
 class SampleInformation(NamedTuple):
@@ -31,6 +34,16 @@ class SampleInformation(NamedTuple):
 class DatasetIndexParser:
     """Parses the dataset index and provides paths to individual samples along with sample_me."""
 
+    # TODO: THis should be stored in a single place that is shared with the dataset creation code
+
+    EXTENSIONS = {
+        "naip": "tif",
+        "openstreetmap": "geojson",
+        "sentinel2_freq": "tif",
+        "sentinel2_monthly": "tif",
+        "worldcover": "tif",
+    }
+
     def __init__(self, data_index_path: UPath | str):
         """Initialize the dataset index parser."""
         self.data_index_path = UPath(data_index_path)
@@ -41,7 +54,10 @@ class DatasetIndexParser:
         self.example_id_to_sample_metadata_dict = self.data_index_df.set_index(
             "example_id"
         ).to_dict("index")
-
+        self.data_source_and_freq_types = self._get_data_sources_and_freq_types()
+        assert (
+            len(self.data_source_and_freq_types) > 0
+        ), "No data sources found in index, check naming of columns"
         (
             self.freq_metadata_df_dict,
             self.monthly_metadata_df_dict,
@@ -49,10 +65,6 @@ class DatasetIndexParser:
         ) = self._load_all_data_source_metadata()
 
         # Intersect available data sources with index column names
-
-        assert (
-            len(self.data_sources) > 0
-        ), "No data sources found in index, check naming of columns"
 
         self.monthly_example_ids = self.get_example_ids_by_frequency_type("monthly")
         self.freq_example_ids = self.get_example_ids_by_frequency_type("freq")
@@ -68,9 +80,10 @@ class DatasetIndexParser:
 
         self.root_dir = self.data_index_path.parent
 
-    def get_data_sources_and_freq_types(
+    def _get_data_sources_and_freq_types(
         self,
-    ) -> list[tuple[str, Optional[FrequencyType]]]:
+    ) -> list[tuple[str, FrequencyType | None]]:
+        """Get the data sources and frequency types."""
         data_source_columns_and_freq_types = []
         for (
             column_name,
@@ -93,34 +106,17 @@ class DatasetIndexParser:
         static_metadata_df_dict = {}
         freq_metadata_df_dict = {}
         monthly_metadata_df_dict = {}
-        for data_source, freq_type in self.get_data_sources_and_freq_types():
-            # How to deal with time static data sources?
+        for data_source, freq_type in self.data_source_and_freq_types:
             metadata_path = self.get_path_to_data_source_metadata(
                 data_source, freq_type
             )
+            data_source_metadata_df = load_data_source_metadata(metadata_path)
             if freq_type is None:
-                static_metadata_df_dict[data_source] = (
-                    DataSourceMetadataRegistry.load_and_validate(
-                        data_source,
-                        path=metadata_path,
-                    )
-                )
+                static_metadata_df_dict[data_source] = data_source_metadata_df
             elif freq_type == "freq":
-                freq_metadata_df_dict[data_source] = (
-                    DataSourceMetadataRegistry.load_and_validate(
-                        data_source,
-                        "freq",
-                        path=metadata_path,
-                    )
-                )
+                freq_metadata_df_dict[data_source] = data_source_metadata_df
             elif freq_type == "monthly":
-                monthly_metadata_df_dict[data_source] = (
-                    DataSourceMetadataRegistry.load_and_validate(
-                        data_source,
-                        "monthly",
-                        path=metadata_path,
-                    )
-                )
+                monthly_metadata_df_dict[data_source] = data_source_metadata_df
             else:
                 raise ValueError(f"Unknown frequency type: {freq_type}")
         return static_metadata_df_dict, freq_metadata_df_dict, monthly_metadata_df_dict
@@ -129,6 +125,9 @@ class DatasetIndexParser:
         self, example_id: str, freq_type: FrequencyType
     ) -> SampleInformation:
         """Get the sample information from an example ID.
+
+        For a given frequency type, we will get all the data sources that are available for that frequency type
+        and all static data sources associated with that example_id.
 
         Args:
             example_id: The example ID to get information for.
@@ -144,7 +143,7 @@ class DatasetIndexParser:
         example_row = self.data_index_df[
             self.data_index_df["example_id"] == example_id
         ].iloc[0]
-        for data_source in self.data_sources:
+        for data_source, _ in self.data_source_and_freq_types:
             if example_row[f"{data_source}_{freq_type}"] != "y":
                 continue
             data_source_metadata[data_source] = (
@@ -187,7 +186,7 @@ class DatasetIndexParser:
         return example_ids
 
     def get_path_to_data_source_metadata(
-        self, data_source: str, frequency_type: Optional[str]
+        self, data_source: str, frequency_type: str | None
     ) -> UPath:
         """Get the path to the data source metadata."""
         if frequency_type is None:
@@ -199,24 +198,31 @@ class DatasetIndexParser:
         self,
         data_source: str,
         example_id: str,
-        frequency_type: Optional[FrequencyType],
+        frequency_type: FrequencyType | None,
     ) -> UPath:
         """Get the path to the tif file."""
+        extension = self.EXTENSIONS[data_source]
         if frequency_type is None:
-            return self.root_dir / data_source / f"{example_id}.tif"
+            return self.root_dir / data_source / f"{example_id}.{extension}"
         else:
             return (
-                self.root_dir / f"{data_source}_{frequency_type}" / f"{example_id}.tif"
+                self.root_dir
+                / f"{data_source}_{frequency_type}"
+                / f"{example_id}.{extension}"
             )
 
     def get_metadata_for_data_source_in_sample(
-        self, data_source: str, example_id: str, frequency_type: FrequencyType
+        self, data_source: str, example_id: str, frequency_type: FrequencyType | None
     ) -> dict:
         """Get the metadata for a sample."""
         if frequency_type == "monthly":
             metadata_df = self.monthly_metadata_df_dict[data_source]
-        else:
+        elif frequency_type == "freq":
             metadata_df = self.freq_metadata_df_dict[data_source]
+        elif frequency_type is None:
+            metadata_df = self.static_metadata_df_dict[data_source]
+        else:
+            raise ValueError(f"Unknown frequency type: {frequency_type}")
         meta_dict_records = metadata_df[
             metadata_df["example_id"] == example_id
         ].to_dict(orient="records")

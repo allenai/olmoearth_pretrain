@@ -17,8 +17,8 @@ class BaseDataModel(DataFrameModel):
         strict = False  # allow extra columns
 
 
-class GeoTiffTimeSeriesMetadataModel(BaseDataModel):
-    """Base schema for time series metadata files."""
+class DataSourceMetadataModel(BaseDataModel):
+    """Data source metadata schema."""
 
     example_id: Series[str] = pa.Field(
         description="Unique identifier for the example, name of the file",
@@ -40,24 +40,6 @@ class GeoTiffTimeSeriesMetadataModel(BaseDataModel):
         description="End time in ISO format",
         nullable=False,
         regex=r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+\d{2}:\d{2}",
-    )
-
-
-class Sentinel2FrequencyMetadataDataModel(GeoTiffTimeSeriesMetadataModel):
-    """Schema for Sentinel-2 Frequency metadata files."""
-
-    # Inherits all fields from TimeSeriesMetadataModel
-    pass
-
-
-class Sentinel2MonthlyMetadataDataModel(GeoTiffTimeSeriesMetadataModel):
-    """Schema for Sentinel-2 Monthly metadata files."""
-
-    # Inherits all fields from TimeSeriesMetadataModel
-    # Could override image_idx description if needed:
-    image_idx: Series[int] = pa.Field(
-        description="Index of the monthly mosaic on the time axis for the geotiff",
-        nullable=False,
     )
 
 
@@ -107,7 +89,6 @@ class TrainingDataIndexDataModel(BaseDataModel):
         nullable=False,
         isin=[1, 10, 250],  # Based on the values in the CSV
     )
-
     start_column: Series[int] = is_data_source_field(
         is_data_source=False,
         description="Starting column UTM coordinate",
@@ -127,7 +108,6 @@ class TrainingDataIndexDataModel(BaseDataModel):
             (b) for one-year data, the one year period is roughly centered at that time.",
         nullable=False,
         regex=r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+\d{2}:\d{2}",  # ISO timestamp format
-        is_data_source=False,
     )
 
     sentinel2_freq: Series[str] = is_data_source_field(
