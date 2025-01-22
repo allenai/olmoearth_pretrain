@@ -84,8 +84,10 @@ class TestDatasetIndex:
             }
             parser.data_index_df = pd.DataFrame(
                 {
-                    "example_id": ["example_001"],
-                    "sentinel2_freq": ["y"],
+                    "example_id": ["example_001", "example_002", "example_003"],
+                    "sentinel2_freq": ["y", "n", "y"],
+                    "worldcover": ["y", "y", "n"],
+                    "sentinel2_monthly": ["n", "y", "y"],
                 }
             )
             parser.freq_metadata_df_dict = {
@@ -97,8 +99,21 @@ class TestDatasetIndex:
                     }
                 )
             }
+            parser.static_metadata_df_dict = {
+                "worldcover": pd.DataFrame(
+                    {
+                        "example_id": ["example_001"],
+                        "meta_key": ["meta_value"],
+                        "image_idx": [0],
+                    }
+                )
+            }
 
-            parser.data_source_and_freq_types = [("sentinel2", "freq")]
+            parser.data_source_and_freq_types = [
+                ("sentinel2", "freq"),
+                ("worldcover", None),
+                ("sentinel2", "monthly"),
+            ]
 
             # Call the method
             sample_info = parser.get_sample_information_from_example_id(
@@ -109,10 +124,12 @@ class TestDatasetIndex:
             assert isinstance(sample_info, SampleInformation)
             assert sample_info.sample_metadata["example_id"] == "example_001"
             assert sample_info.data_source_metadata == {
-                "sentinel2": {0: {"meta_key": "meta_value"}}
+                "sentinel2": {0: {"meta_key": "meta_value"}},
+                "worldcover": {0: {"meta_key": "meta_value"}},
             }
             assert sample_info.data_source_paths == {
-                "sentinel2": UPath("/dummy_root_dir/sentinel2_freq/example_001.tif")
+                "sentinel2": UPath("/dummy_root_dir/sentinel2_freq/example_001.tif"),
+                "worldcover": UPath("/dummy_root_dir/worldcover/example_001.tif"),
             }
 
     def test_get_example_ids_by_frequency_type(self) -> None:
