@@ -10,6 +10,7 @@ from helios.data.collator import PerModalityCollatedOutput
 
 logger = getLogger(__name__)
 
+
 ## TODO: DELEte this
 def move_to_device_helios(
     batch: PerModalityCollatedOutput, device: torch.device, non_blocking: bool = True
