@@ -7,6 +7,7 @@ from olmo_core.train.callbacks.speed_monitor import SpeedMonitorCallback
 
 
 # FOR NOW FORGET ABOUT TOKENS AND STUFF
+# TODO: update this for V2
 class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
     """Speed monitor callback for the trainer for Helios."""
 
