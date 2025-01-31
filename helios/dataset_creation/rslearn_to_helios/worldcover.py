@@ -8,14 +8,13 @@ from datetime import datetime, timezone
 import tqdm
 from rslearn.dataset import Window
 from rslearn.utils.mp import star_imap_unordered
-from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
 
-from helios.constants import WORLDCOVER_BANDS
+from ..const import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
+from ..util import get_modality_fname, get_modality_temp_meta_fname, parse_window_name
 
-from ..const import METADATA_COLUMNS
-from ..util import get_modality_fname, get_modality_temp_meta_fname
-
+BANDS = ["B1"]
+RESOLUTION = 10
 START_TIME = datetime(2021, 1, 1, tzinfo=timezone.utc)
 END_TIME = datetime(2022, 1, 1, tzinfo=timezone.utc)
 
@@ -23,7 +22,7 @@ END_TIME = datetime(2022, 1, 1, tzinfo=timezone.utc)
 LAYER_NAME = "worldcover"
 
 # Modality in the output Helios dataset.
-MODALITY = "worldcover"
+MODALITY = "10_worldcover"
 
 
 def convert_worldcover(window_path: UPath, helios_path: UPath) -> None:
@@ -34,15 +33,17 @@ def convert_worldcover(window_path: UPath, helios_path: UPath) -> None:
         helios_path: Helios dataset path to write to.
     """
     window = Window.load(window_path)
-    raster_format = GeotiffRasterFormat()
+    window_metadata = parse_window_name(window.name)
 
     if not window.is_layer_completed(LAYER_NAME):
         return
 
-    raster_dir = window.get_raster_dir(LAYER_NAME, WORLDCOVER_BANDS)
-    image = raster_format.decode_raster(raster_dir, window.bounds)
-    dst_fname = get_modality_fname(helios_path, MODALITY, window.name, "tif")
-    raster_format.encode_raster(
+    raster_dir = window.get_raster_dir(LAYER_NAME, BANDS)
+    image = GEOTIFF_RASTER_FORMAT.decode_raster(raster_dir, window.bounds)
+    dst_fname = get_modality_fname(
+        helios_path, MODALITY, window_metadata, RESOLUTION, "tif"
+    )
+    GEOTIFF_RASTER_FORMAT.encode_raster(
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
@@ -50,12 +51,16 @@ def convert_worldcover(window_path: UPath, helios_path: UPath) -> None:
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(helios_path, MODALITY, window.name)
+    metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with metadata_fname.open("w") as f:
         writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
         writer.writeheader()
         writer.writerow(
             dict(
-                example_id=window.name,
+                crs=window_metadata.crs,
+                col=window_metadata.col,
+                row=window_metadata.row,
+                tile_time=window_metadata.time.isoformat(),
                 image_idx="0",
                 start_time=START_TIME.isoformat(),
                 end_time=END_TIME.isoformat(),

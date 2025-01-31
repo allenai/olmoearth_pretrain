@@ -11,6 +11,9 @@ from rslearn.utils.geometry import STGeometry
 from rslearn.utils.get_utm_ups_crs import get_utm_ups_projection
 from upath import UPath
 
+from ..util import WindowMetadata
+from .util import WINDOW_SIZE, create_window
+
 # Some arbitrarily chosen locations for now.
 LOCATIONS = [
     (-122.32, 47.62),
@@ -32,63 +35,44 @@ LOCATIONS = [
     (78.88, 17.51),
 ]
 
-# Resolutions to sample from in m/pixel.
-RESOLUTIONS = [1, 10, 250]
-
-WINDOW_SIZE = 256
+RESOLUTION = 10
 
 START_TIME = datetime(2016, 6, 1, tzinfo=timezone.utc)
 END_TIME = datetime(2024, 6, 1, tzinfo=timezone.utc)
-WINDOW_DURATION = timedelta(days=14)
-GROUP = "default_{resolution}"
 
 
-def create_window_random_time(
-    ds_path: UPath, lon: float, lat: float, resolution: float
-) -> Window:
-    """Create a window centered at the specified longitude and latitude.
+def create_window_random_time(ds_path: UPath, lon: float, lat: float) -> list[Window]:
+    """Create windows corresponding to the specified longitude and latitude.
 
     It will have a random timestamp between START_TIME and END_TIME.
 
     Args:
         ds_path: path to the rslearn dataset to add the window to.
-        lon: the longitude center.
-        lat: the latitude center.
-        resolution: the m/pixel resolution of the window. Note that it will be in UTM
-            projection.
+        lon: the longitude that the window should contain.
+        lat: the latitude that the window should contain.
 
     Returns:
-        the new Window.
+        the new windows.
     """
-    projection = get_utm_ups_projection(lon, lat, resolution, -resolution)
+    # Find the 10 m/pixel grid cell that contains the specified longitude/latitude.
+    projection = get_utm_ups_projection(lon, lat, RESOLUTION, -RESOLUTION)
     src_geom = STGeometry(WGS84_PROJECTION, shapely.Point(lon, lat), None)
     dst_geom = src_geom.to_projection(projection)
-    bounds = (
-        int(dst_geom.shp.x) - WINDOW_SIZE // 2,
-        int(dst_geom.shp.y) - WINDOW_SIZE // 2,
-        int(dst_geom.shp.x) + WINDOW_SIZE // 2,
-        int(dst_geom.shp.y) + WINDOW_SIZE // 2,
-    )
+    col = int(dst_geom.shp.x) // WINDOW_SIZE
+    row = int(dst_geom.shp.y) // WINDOW_SIZE
+
+    # Uniformly sample a timestamp.
     total_seconds = (END_TIME - START_TIME).total_seconds()
     selected_seconds = random.randint(0, int(total_seconds))
     selected_ts = START_TIME + timedelta(seconds=selected_seconds)
     selected_date = datetime(
         selected_ts.year, selected_ts.month, selected_ts.day, tzinfo=timezone.utc
     )
-    time_range = (selected_date, selected_date + WINDOW_DURATION)
 
-    window_name = f"{str(projection.crs)}_{resolution}_{bounds[0]}_{bounds[1]}_{time_range[0].isoformat()}"
-    group = GROUP.format(resolution=resolution)
-    window = Window(
-        path=Window.get_window_root(ds_path, group, window_name),
-        group=group,
-        name=window_name,
-        projection=projection,
-        bounds=bounds,
-        time_range=time_range,
+    return create_window(
+        ds_path,
+        WindowMetadata(str(projection.crs), RESOLUTION, col, row, selected_date),
     )
-    window.save()
-    return window
 
 
 if __name__ == "__main__":
@@ -110,5 +94,4 @@ if __name__ == "__main__":
             for lat_offset in [-0.03, 0, 0.03]:
                 lon = lon_base + lon_offset
                 lat = lat_base + lat_offset
-                resolution = random.choice(RESOLUTIONS)
-                create_window_random_time(ds_path, lon, lat, resolution)
+                create_window_random_time(ds_path, lon, lat)

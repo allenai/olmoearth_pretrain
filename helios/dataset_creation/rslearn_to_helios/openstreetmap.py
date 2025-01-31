@@ -7,12 +7,13 @@ from datetime import datetime, timezone
 
 import tqdm
 from rslearn.dataset import Window
+from rslearn.utils.geometry import Projection
 from rslearn.utils.mp import star_imap_unordered
 from rslearn.utils.vector_format import GeojsonCoordinateMode, GeojsonVectorFormat
 from upath import UPath
 
 from ..const import METADATA_COLUMNS
-from ..util import get_modality_fname, get_modality_temp_meta_fname
+from ..util import get_modality_fname, get_modality_temp_meta_fname, parse_window_name
 
 # Placeholder time range for OpenStreetMap.
 START_TIME = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -22,7 +23,11 @@ END_TIME = datetime(2025, 1, 1, tzinfo=timezone.utc)
 LAYER_NAME = "openstreetmap"
 
 # Modality in the output Helios dataset.
-MODALITY = "openstreetmap"
+MODALITY = "10_openstreetmap"
+
+RESOLUTION = 0.625
+# Coordinates of OSM features are 16x zoomed in from the 10 m/pixel tiles.
+FACTOR = 16
 
 
 def convert_openstreetmap(window_path: UPath, helios_path: UPath) -> None:
@@ -33,26 +38,40 @@ def convert_openstreetmap(window_path: UPath, helios_path: UPath) -> None:
         helios_path: Helios dataset path to write to.
     """
     window = Window.load(window_path)
+    window_metadata = parse_window_name(window.name)
     vector_format = GeojsonVectorFormat(coordinate_mode=GeojsonCoordinateMode.CRS)
 
     if not window.is_layer_completed(LAYER_NAME):
         return
 
     layer_dir = window.get_layer_dir(LAYER_NAME)
-    features = vector_format.decode_vector(layer_dir, window.bounds)
-    dst_fname = get_modality_fname(helios_path, MODALITY, window.name, "geojson")
+    adjusted_bounds = (
+        window.bounds[0] * FACTOR,
+        window.bounds[1] * FACTOR,
+        window.bounds[2] * FACTOR,
+        window.bounds[3] * FACTOR,
+    )
+    features = vector_format.decode_vector(layer_dir, adjusted_bounds)
+    dst_fname = get_modality_fname(
+        helios_path, MODALITY, window_metadata, RESOLUTION, "geojson"
+    )
+    dst_fname.parent.mkdir(parents=True, exist_ok=True)
     vector_format.encode_to_file(
         fname=dst_fname,
-        projection=window.projection,
+        projection=Projection(window.projection.crs, RESOLUTION, -RESOLUTION),
         features=features,
     )
     metadata_fname = get_modality_temp_meta_fname(helios_path, MODALITY, window.name)
+    metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with metadata_fname.open("w") as f:
         writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
         writer.writeheader()
         writer.writerow(
             dict(
-                example_id=window.name,
+                crs=window_metadata.crs,
+                col=window_metadata.col,
+                row=window_metadata.row,
+                tile_time=window_metadata.time.isoformat(),
                 image_idx="N/A",
                 start_time=START_TIME.isoformat(),
                 end_time=END_TIME.isoformat(),

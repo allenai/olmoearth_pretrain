@@ -12,10 +12,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -42,10 +48,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -71,10 +83,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -100,10 +118,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -129,10 +153,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -158,10 +188,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -187,10 +223,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -216,10 +258,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -245,10 +293,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -274,10 +328,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -303,10 +363,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -332,10 +398,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }
@@ -361,10 +433,16 @@
             "B5",
             "B6",
             "B7",
-            "B8",
             "B9",
             "B10",
             "B11"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B8"
           ],
           "dtype": "uint16"
         }

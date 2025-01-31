@@ -7,20 +7,11 @@ import tqdm
 from rslearn.utils.mp import star_imap_unordered
 from upath import UPath
 
-from .multitemporal_raster import convert_freq, convert_monthly
+from .multitemporal_raster import BandSet, convert_freq, convert_monthly
 
-BANDS = [
-    "B1",
-    "B2",
-    "B3",
-    "B4",
-    "B5",
-    "B6",
-    "B7",
-    "B8",
-    "B9",
-    "B10",
-    "B11",
+BAND_SETS = [
+    BandSet(["B8"], 10),
+    BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 20),
 ]
 
 # rslearn layer for frequent data.
@@ -30,10 +21,10 @@ LAYER_FREQ = "landsat_freq"
 LAYER_MONTHLY = "landsat"
 
 # Modality for frequent data in the output Helios dataset.
-MODALITY_FREQ = "landsat_freq"
+MODALITY_FREQ = "10_landsat_freq"
 
 # Modality for monthly data in the output Helios dataset.
-MODALITY_MONTHLY = "landsat_monthly"
+MODALITY_MONTHLY = "10_landsat_monthly"
 
 
 def convert_landsat(window_path: UPath, helios_path: UPath) -> None:
@@ -43,8 +34,17 @@ def convert_landsat(window_path: UPath, helios_path: UPath) -> None:
         window_path: the rslearn window directory to read data from.
         helios_path: Helios dataset path to write to.
     """
-    convert_freq(window_path, helios_path, LAYER_FREQ, BANDS, MODALITY_FREQ)
-    convert_monthly(window_path, helios_path, LAYER_MONTHLY, BANDS, MODALITY_MONTHLY)
+    convert_freq(
+        window_path,
+        helios_path,
+        LAYER_FREQ,
+        MODALITY_FREQ,
+        BAND_SETS,
+        missing_okay=True,
+    )
+    convert_monthly(
+        window_path, helios_path, LAYER_MONTHLY, MODALITY_MONTHLY, BAND_SETS
+    )
 
 
 if __name__ == "__main__":
@@ -76,7 +76,7 @@ if __name__ == "__main__":
     ds_path = UPath(args.ds_path)
     helios_path = UPath(args.helios_path)
 
-    metadata_fnames = ds_path.glob("windows/*/*/metadata.json")
+    metadata_fnames = ds_path.glob("windows/res_10/*/metadata.json")
     jobs = []
     for metadata_fname in metadata_fnames:
         jobs.append(

@@ -5,56 +5,60 @@ from datetime import datetime
 from upath import UPath
 
 
-class ExampleMetadata:
-    """Class to represent the various metadata encoded within an example ID."""
+class WindowMetadata:
+    """Class to represent the metadata associated with an rslearn window used for Helios.
+
+    The window name specifies the CRS, column, row, resolution, and timestamp.
+    These can also be derived from the rslearn window metadata.
+    """
 
     def __init__(
         self,
-        projection: str,
+        crs: str,
         resolution: float,
-        start_column: int,
-        start_row: int,
+        col: int,
+        row: int,
         time: datetime,
     ):
-        """Create a new ExampleMatadata.
+        """Create a new WindowMetadata.
 
         Args:
-            projection: the UTM projection that the example is in.
-            resolution: the m/pixel resolution of the example.
-            start_column: starting column in pixel units.
-            start_row: starting row in pixel units.
-            time: the center time of the example.
+            crs: the UTM CRS that the example is in.
+            resolution: the resolution of the grid that this window is on.
+            col: the column of the tile in the grid.
+            row: the row of the tile in the grid.
+            time: the center time used at this tile.
         """
-        self.projection = projection
+        self.crs = crs
         self.resolution = resolution
-        self.start_column = start_column
-        self.start_row = start_row
+        self.col = col
+        self.row = row
         self.time = time
 
-    def get_example_id(self) -> str:
-        """Encode the metadata back to an example ID."""
+    def get_window_name(self) -> str:
+        """Encode the metadata back to a window name."""
         return (
-            f"{self.projection}_{self.resolution}_"
-            + f"{self.start_column}_{self.start_row}_"
+            f"{self.crs}_{self.resolution}_"
+            + f"{self.col}_{self.row}_"
             + self.time.isoformat()
         )
 
 
-def parse_example_id(example_id: str) -> ExampleMetadata:
-    """Parse the specified example ID, extracting the encoded metadata.
+def parse_window_name(window_name: str) -> WindowMetadata:
+    """Parse the specified window name, extracting the encoded metadata.
 
     Args:
-        example_id: the example ID to parse.
+        window_name: the window name to parse.
 
     Returns:
-        ExampleMetadata object containing the metadata encoded within the example ID
+        WindowMetadata object containing the metadata encoded within the window name
     """
-    projection, resolution, start_column, start_row, time = example_id.split("_")
-    return ExampleMetadata(
-        projection,
+    crs, resolution, col, row, time = window_name.split("_")
+    return WindowMetadata(
+        crs,
         float(resolution),
-        int(start_column),
-        int(start_row),
+        int(col),
+        int(row),
         datetime.fromisoformat(time),
     )
 
@@ -97,20 +101,30 @@ def list_examples_for_modality(helios_path: UPath, modality: str) -> list[str]:
 
 
 def get_modality_fname(
-    helios_path: UPath, modality: str, example_id: str, ext: str
+    helios_path: UPath,
+    modality: str,
+    window_metadata: WindowMetadata,
+    resolution: float,
+    ext: str,
 ) -> UPath:
-    """Get the filename where to store data for the specified example and modality.
+    """Get the filename where to store data for the specified window and modality.
 
     Args:
         helios_path: the Helios dataset root.
         modality: the modality name.
-        example_id: the example ID.
+        window_metadata: details extracted from the window name.
+        resolution: the resolution of this band. This should be a power of 2 multiplied
+            by the window resolution.
         ext: the filename extension, like "tif" or "geojson".
 
     Returns:
         the filename to store the data in.
     """
-    return helios_path / modality / f"{example_id}.{ext}"
+    crs = window_metadata.crs
+    col = window_metadata.col
+    row = window_metadata.row
+    fname = f"{crs}_{col}_{row}_{resolution}.{ext}"
+    return helios_path / modality / fname
 
 
 def get_modality_temp_meta_dir(helios_path: UPath, modality: str) -> UPath:
