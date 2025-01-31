@@ -92,7 +92,7 @@ if __name__ == "__main__":
         loss_fn=patch_disc_loss,
     )
     import uuid
-    run_name = f"test-debug-{uuid.uuid4()}"
+    run_name = f"test-debug-{uuid.uuid4()[:8]}"
     wandb_callback = WandBCallback(
         name=run_name,
         project="helios-test",
