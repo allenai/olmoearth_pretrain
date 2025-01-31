@@ -11,16 +11,12 @@ from rslearn.utils.mp import star_imap_unordered
 from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
 
+from helios.constants import NAIP_BANDS
+
 from ..const import METADATA_COLUMNS
 from ..util import get_modality_fname, get_modality_temp_meta_fname
 
 GROUPS = ["naip"]
-BANDS = [
-    "R",
-    "G",
-    "B",
-    "IR",
-]
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "naip"
@@ -60,7 +56,7 @@ def convert_naip(window_path: UPath, helios_path: UPath) -> None:
     # times should never be None.
     assert start_time is not None and end_time is not None  # nosec
 
-    raster_dir = window.get_raster_dir(LAYER_NAME, BANDS)
+    raster_dir = window.get_raster_dir(LAYER_NAME, NAIP_BANDS)
     image = raster_format.decode_raster(raster_dir, window.bounds)
     dst_fname = get_modality_fname(helios_path, MODALITY, window.name, "tif")
     raster_format.encode_raster(

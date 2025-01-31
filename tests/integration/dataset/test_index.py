@@ -1,4 +1,4 @@
-"""Unit tests for parsing the dataset index."""
+"""Integration tests for the dataset index."""
 
 import pytest
 
@@ -20,11 +20,17 @@ def test_dataset_index(sample_index_path: str) -> None:
     first_sample_info = index_parser.samples[0]
 
     # Check the keys in the first sample's data_source_paths
-    assert set(first_sample_info.data_source_paths.keys()) == {"sentinel2"}
+    expected_data_sources = {"sentinel2", "naip", "worldcover", "openstreetmap"}
+    assert set(first_sample_info.data_source_paths.keys()) == expected_data_sources
 
-    # Define expected paths
+    # Define expected paths (split into multiple lines to fix line length)
     expected_paths = {
-        "sentinel2": "tests/fixtures/sample-dataset/sentinel2_monthly/example_001.tif"
+        "sentinel2": (
+            "tests/fixtures/sample-dataset/sentinel2_monthly/" "example_001.tif"
+        ),
+        "naip": "tests/fixtures/sample-dataset/naip/example_001.tif",
+        "worldcover": "tests/fixtures/sample-dataset/worldcover/example_001.tif",
+        "openstreetmap": "tests/fixtures/sample-dataset/openstreetmap/example_001.geojson",
     }
 
     # Compare actual paths with expected paths
@@ -35,7 +41,7 @@ def test_dataset_index(sample_index_path: str) -> None:
         assert str(actual_paths[data_source]) == expected_path
 
     # Check the keys in the first sample's data_source_metadata
-    assert "sentinel2" in first_sample_info.data_source_metadata
+    assert set(first_sample_info.data_source_metadata.keys()) == expected_data_sources
 
     # Check the keys in the first sample's sample_metadata
     assert "example_id" in first_sample_info.sample_metadata

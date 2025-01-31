@@ -11,10 +11,11 @@ from rslearn.utils.mp import star_imap_unordered
 from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
 
+from helios.constants import WORLDCOVER_BANDS
+
 from ..const import METADATA_COLUMNS
 from ..util import get_modality_fname, get_modality_temp_meta_fname
 
-BANDS = ["B1"]
 START_TIME = datetime(2021, 1, 1, tzinfo=timezone.utc)
 END_TIME = datetime(2022, 1, 1, tzinfo=timezone.utc)
 
@@ -38,7 +39,7 @@ def convert_worldcover(window_path: UPath, helios_path: UPath) -> None:
     if not window.is_layer_completed(LAYER_NAME):
         return
 
-    raster_dir = window.get_raster_dir(LAYER_NAME, BANDS)
+    raster_dir = window.get_raster_dir(LAYER_NAME, WORLDCOVER_BANDS)
     image = raster_format.decode_raster(raster_dir, window.bounds)
     dst_fname = get_modality_fname(helios_path, MODALITY, window.name, "tif")
     raster_format.encode_raster(

@@ -282,3 +282,11 @@ class HeliosDataLoader(NumpyDataLoaderBase):
             persistent_workers=False,
             timeout=0,
         )
+
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        """Iterate over the local rank batches."""
+        for batch in self._iter_batches():
+            # TODO: Ensure this tracking aligns in a meaningful way with the trainer
+            self.batches_processed += 1
+            self.tokens_processed += self.global_batch_size
+            yield batch

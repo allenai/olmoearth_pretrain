@@ -137,6 +137,10 @@ def apply_random_masking(
     )
 
     # get the space mask tokens
+    print(token_mask.shape)
+    print(num_space_time_tokens)
+    print(num_time_tokens)
+    print(num_static_tokens)
     space_tokens = token_mask[
         :, num_space_time_tokens : -(num_time_tokens + num_static_tokens)
     ]

@@ -7,115 +7,76 @@ from typing import NamedTuple
 import torch
 from torch.nn import functional as F
 
-from helios.data.constants import DATA_SOURCE_TO_VARIATION_TYPE
-from helios.data.masking import apply_random_masking
-
 logger = logging.getLogger(__name__)
 
 
-class CollatedOutput(NamedTuple):
-    """Output of the collate function.
+class PerModalityCollatedOutput(NamedTuple):
+    """Output for collation by modality."""
 
-    Based on presto-v3
+    sentinel2: torch.Tensor
+    naip: torch.Tensor
+    worldcover: torch.Tensor
+    sample_metadata: list[dict]
+
+
+def pad_time_dim(
+    data: torch.Tensor, num_timesteps: int, max_len: int, pad_token_value: float = 0.0
+) -> torch.Tensor:
+    """Pad the time dimension of the data to the max length.
+
+    Assumes the data is in the shape (h, w, t, c)
     """
-
-    space_time_x: torch.Tensor  # Spatiotime features
-    space_x: torch.Tensor  # space-only features
-    time_x: torch.Tensor  # time-only features
-    static_x: torch.Tensor  # Static features
-    space_time_mask: torch.Tensor  # Mask for spatiotime features
-    space_mask: torch.Tensor  # Mask for space features
-    time_mask: torch.Tensor  # Mask for time features
-    static_mask: torch.Tensor  # Mask for static features
-    time_info: torch.Tensor  # Time information associated with each index
-    patch_size: float  # Size of patches
-    collate_info: dict | None  # Additional collation metadata
+    pad_shape = (0, 0, 0, int(max_len - num_timesteps), 0, 0)
+    return F.pad(
+        data,
+        pad_shape,
+        value=pad_token_value,
+    )
 
 
-def variable_time_collate_fn(
-    items: Sequence[dict],
-    pad_token_value: float = 0.0,
-    patch_size: int = 4,
-    encode_ratio: float = 0.5,
-    decode_ratio: float = 0.5,
-) -> CollatedOutput:
-    """Collate function for inputs with variable time data."""
-    assert items
+def per_modality_collate_fn(items: Sequence[dict]) -> PerModalityCollatedOutput:
+    """Collate function for inputs with variable time data into per modality tuples.
+
+    Args:
+        items: Sequence of dictionaries containing data for each modality
+
+    Returns:
+        PerModalityCollatedOutput containing batched tensors for each modality
+    """
     max_len = max(item["num_timesteps"] for item in items)
-    logger.debug(f"Max len: {max_len}")
-    all_space_time_x: list[torch.Tensor] = []
-    all_space_x: list[torch.Tensor] = []
-    all_time_x: list[torch.Tensor] = []
-    all_static_x: list[torch.Tensor] = []
+    all_sentinel2 = []
+    all_naip = []
+    all_worldcover = []
+    sample_metadata = []
+
     for item in items:
-        num_timesteps = item["num_timesteps"]
-        for data_source_name, array in item["data_arrays"].items():
-            variation_type = DATA_SOURCE_TO_VARIATION_TYPE[data_source_name]
-            # Note: layers are not necessarily sorted in time order
-            if variation_type == "space_time_varying":
-                space_time_x = torch.tensor(array)
-                # h, w,t,c
-                pad_shape = (0, 0, 0, int(max_len - num_timesteps), 0, 0)
-                all_space_time_x.append(
-                    F.pad(
-                        space_time_x,
-                        pad_shape,
-                        value=pad_token_value,
-                    )
-                )
-            elif variation_type == "time_varying":
-                raise NotImplementedError("Time varying data not implemented")
-            elif variation_type == "space_varying":
-                raise NotImplementedError("Space varying data not implemented")
-            elif variation_type == "static":
-                raise NotImplementedError("Static data not implemented")
-            else:
-                raise ValueError(
-                    f"Unknown data source variation type: {variation_type}"
-                )
-    space_time_x = (
-        torch.stack(all_space_time_x) if all_space_time_x else torch.tensor([])
+        data_inputs = item["data_inputs"]
+        assert "sentinel2" in data_inputs.keys()
+        assert "naip" in data_inputs.keys()
+        assert "worldcover" in data_inputs.keys()
+        # Random time index a number between 0 and 365 padded to max num timesteps
+        sentinel2_time_index = torch.randint(0, 365, (item["num_timesteps"],))
+        sentinel2_time_index = F.pad(
+            sentinel2_time_index, (0, max_len - item["num_timesteps"])
+        )
+        all_sentinel2.append(
+            pad_time_dim(
+                torch.as_tensor(data_inputs["sentinel2"]),
+                item["num_timesteps"],
+                max_len,
+            )
+        )
+        all_naip.append(torch.as_tensor(data_inputs["naip"]))
+        all_worldcover.append(torch.as_tensor(data_inputs["worldcover"]))
+        sample_metadata.append(item["sample_metadata"])
+    sentinel2_batch = torch.stack(all_sentinel2)
+    naip_batch = torch.stack(all_naip)
+    worldcover_batch = torch.stack(all_worldcover)
+    # for each time index we just need the day of the year of each timestep
+    # That can be gotten and acqured from the metadata but also must be padded
+    return PerModalityCollatedOutput(
+        sentinel2=sentinel2_batch,
+        naip=naip_batch,
+        worldcover=worldcover_batch,
+        sample_metadata=sample_metadata,
     )
-    space_x = torch.stack(all_space_x) if all_space_x else torch.tensor([])
-    time_x = torch.stack(all_time_x) if all_time_x else torch.tensor([])
-    static_x = torch.stack(all_static_x) if all_static_x else torch.tensor([])
-    # patching and masking can occur here for now
-    # We need to figure out how mmany patches per dimension for the space stuff
-    # Then figure out what the new image sized will be which is patch size times the space patches per dim
-    b, h, w, t, c = space_time_x.shape
-    assert h == w, "space dimensions must be equal"
-    # Unneeded until we add subset code and the like
-    # space_dim_size = h
-    # space_patches_per_dim = int(space_dim_size / patch_size)
-    # patched_image_size = patch_size * space_patches_per_dim
-
-    # TODO: COllecting the time info
-    time_info = torch.tensor([])
-    # Random Masking only
-
-    masked_output = apply_random_masking(
-        space_time_x=space_time_x,
-        space_x=space_x,
-        time_x=time_x,
-        static_x=static_x,
-        time_info=time_info,
-        patch_size=patch_size,
-        encode_ratio=encode_ratio,
-        decode_ratio=decode_ratio,
-    )
-
-    collated_output = CollatedOutput(
-        space_time_x=masked_output.space_time_x,
-        space_x=masked_output.space_x,
-        time_x=masked_output.time_x,
-        static_x=masked_output.static_x,
-        space_time_mask=masked_output.space_time_mask,
-        space_mask=masked_output.space_mask,
-        time_mask=masked_output.time_mask,
-        static_mask=masked_output.static_mask,
-        time_info=masked_output.time_info,
-        patch_size=patch_size,
-        collate_info=None,
-    )
-
-    return collated_output

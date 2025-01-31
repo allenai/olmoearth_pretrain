@@ -1,4 +1,5 @@
 ai2-olmo-core
+class-registry
 einops==0.7.0
 gcsfs
 numpy
