@@ -10,7 +10,7 @@ from rslearn.data_sources import Item
 from rslearn.dataset import Window
 from upath import UPath
 
-from ..const import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
+from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_fname, get_modality_temp_meta_fname, parse_window_name
 
 PIXELS_PER_TILE = 256

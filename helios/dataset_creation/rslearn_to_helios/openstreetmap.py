@@ -12,7 +12,7 @@ from rslearn.utils.mp import star_imap_unordered
 from rslearn.utils.vector_format import GeojsonCoordinateMode, GeojsonVectorFormat
 from upath import UPath
 
-from ..const import METADATA_COLUMNS
+from ..constants import METADATA_COLUMNS
 from ..util import get_modality_fname, get_modality_temp_meta_fname, parse_window_name
 
 # Placeholder time range for OpenStreetMap.

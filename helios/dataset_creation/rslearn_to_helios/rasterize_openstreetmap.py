@@ -13,7 +13,7 @@ from rasterio.crs import CRS
 from rslearn.utils.geometry import Projection
 from upath import UPath
 
-from ..const import GEOTIFF_RASTER_FORMAT
+from ..constants import GEOTIFF_RASTER_FORMAT
 
 WINDOW_SIZE = 256
 # Factor by which coordinates in openstreetmap are zoomed in.
