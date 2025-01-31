@@ -7,6 +7,7 @@ earth system foundation model data, training, and eval
 
 1. Create a virtual environment in prefered directory with python 3.12 `python3 -m venv .venv-helios` \
 2. Navigate to root directory of this repo and run `pip install -e .`
+3. Run `pre-commit install`
 
 ## Setup Instructions for running olmo_core_proto.py
 1. Clone the [Olmo-core](https://github.com/allenai/OLMo-core/tree/v2) repo and switch to the v2 branch `git checkout v2`

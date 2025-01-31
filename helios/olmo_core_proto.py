@@ -10,6 +10,7 @@ from olmo_core.train import prepare_training_environment, teardown_training_envi
 from olmo_core.train.callbacks.wandb import WandBCallback
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
+from olmo_core.train.config import TrainerConfig
 from olmo_core.utils import get_default_device
 from upath import UPath
 
@@ -23,10 +24,13 @@ from helios.train.decoder import SimpleLatentDecoder
 from helios.train.encoder import PatchEncoder
 from helios.train.loss import patch_disc_loss
 from helios.train.train_module import HeliosTrainModule
-from helios.train.trainer import HeliosTrainer
 
 logger = logging.getLogger(__name__)
 
+# THings that need a config
+# Train Module
+# Data Loader
+# Model
 
 if __name__ == "__main__":
     # Variables to be changed per user
@@ -102,10 +106,8 @@ if __name__ == "__main__":
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
     )
-    trainer = HeliosTrainer(
+    trainer_config = TrainerConfig(
         work_dir=workdir,
-        train_module=train_module,
-        data_loader=dataloader,
         load_strategy=LoadStrategy.if_available,
         device=device,
         save_folder=workdir / "save_folder",
@@ -118,6 +120,9 @@ if __name__ == "__main__":
         max_duration=max_duration,
         checkpointer=checkpointer,
     )
-
+    trainer = trainer_config.build(
+        train_module=train_module,
+        data_loader=dataloader,
+    )
     trainer.fit()
     teardown_training_environment()
