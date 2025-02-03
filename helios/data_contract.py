@@ -55,6 +55,10 @@ class DataContract(NamedTuple):
         return {"s2": S2_BANDS, "latlon": LATLON_BANDS, "timestamps": TIMESTAMPS}
 
     @property
+    def b(self):
+        return self.timestamps.shape[0]
+
+    @property
     def t(self):
         return self.timestamps.shape[-1]
 
@@ -64,6 +68,8 @@ class DataContract(NamedTuple):
         # if s2 is None:
         #     naip_height = self.naip[-2]
         # return naip_height / 10  (since we have a reference res of 10)
+        # the encoder wouldn't support these varying sizes but lets not let
+        # perfect get in the way of something working
         return self.s2.shape[-2]
 
     @property
