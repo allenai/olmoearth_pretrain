@@ -115,7 +115,6 @@ class HeliosIterableDatasetWrapper(_IterableDatasetWrapper):
             instance_iterator = (
                 self.data_loader._get_dataset_item(int(idx)) for idx in indices
             )
-        print(f"data loader rank batch size {self.data_loader.rank_batch_size}")
         return (
             self.data_loader.collator(batch)
             for batch in iter_batched(
@@ -282,6 +281,25 @@ class HeliosDataLoader(NumpyDataLoaderBase):
             persistent_workers=False,
             timeout=0,
         )
+
+    def get_mock_batch(self) -> dict[str, Any]:
+        """Get a mock batch."""
+        # TODO: warning assign dtypes like this is bad and w probaby should have it be a shared state
+        return {
+            "sentinel2": torch.rand(
+                (self.global_batch_size, 256, 256, 12, 13), dtype=torch.float32
+            ),
+            "naip": torch.rand(
+                (self.global_batch_size, 256, 256, 4), dtype=torch.float32
+            ),
+            "worldcover": torch.rand(
+                (self.global_batch_size, 1, 256, 1), dtype=torch.float32
+            ),
+            "sample_metadata": dict(
+                sample_id=torch.rand((self.global_batch_size,)),
+                num_timesteps=torch.rand((self.global_batch_size,)),
+            ),
+        }
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         """Iterate over the local rank batches."""

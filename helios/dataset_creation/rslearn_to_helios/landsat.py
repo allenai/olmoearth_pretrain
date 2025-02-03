@@ -1,4 +1,4 @@
-"""Post-process ingested Sentinel-2 data into the Helios dataset."""
+"""Post-process ingested Landsat data into the Helios dataset."""
 
 import argparse
 import multiprocessing
@@ -10,36 +10,34 @@ from upath import UPath
 from .multitemporal_raster import convert_freq, convert_monthly
 
 BANDS = [
-    "B01",
-    "B02",
-    "B03",
-    "B04",
-    "B05",
-    "B06",
-    "B07",
-    "B08",
-    "B8A",
-    "B09",
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6",
+    "B7",
+    "B8",
+    "B9",
     "B10",
     "B11",
-    "B12",
 ]
 
 # rslearn layer for frequent data.
-LAYER_FREQ = "sentinel2_freq"
+LAYER_FREQ = "landsat_freq"
 
 # rslearn layer prefix for monthly data.
-LAYER_MONTHLY = "sentinel2"
+LAYER_MONTHLY = "landsat"
 
 # Modality for frequent data in the output Helios dataset.
-MODALITY_FREQ = "sentinel2_freq"
+MODALITY_FREQ = "landsat_freq"
 
 # Modality for monthly data in the output Helios dataset.
-MODALITY_MONTHLY = "sentinel2_monthly"
+MODALITY_MONTHLY = "landsat_monthly"
 
 
-def convert_sentinel2(window_path: UPath, helios_path: UPath) -> None:
-    """Add Sentinel-2 data for this window to the Helios dataset.
+def convert_landsat(window_path: UPath, helios_path: UPath) -> None:
+    """Add Landsat data for this window to the Helios dataset.
 
     Args:
         window_path: the rslearn window directory to read data from.
@@ -89,7 +87,7 @@ if __name__ == "__main__":
         )
 
     p = multiprocessing.Pool(args.workers)
-    outputs = star_imap_unordered(p, convert_sentinel2, jobs)
+    outputs = star_imap_unordered(p, convert_landsat, jobs)
     for _ in tqdm.tqdm(outputs, total=len(jobs)):
         pass
     p.close()

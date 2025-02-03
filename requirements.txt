@@ -11,3 +11,4 @@ rioxarray
 torch>=2.5
 universal_pathlib>=0.2.5
 geobench
+wandb>=0.19.0

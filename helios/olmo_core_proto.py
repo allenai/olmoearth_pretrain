@@ -9,7 +9,6 @@ The released version on pypi is behind what is used here.
 import logging
 
 import numpy as np
-import torch
 from olmo_core.utils import setup_logging
 from upath import UPath
 
@@ -18,6 +17,7 @@ from helios.data.dataloader import HeliosDataLoader
 from helios.data.dataset import HeliosDataset
 from helios.dataset.index import DatasetIndexParser
 from helios.train.decoder import SimpleLatentDecoder
+from helios.train.loss import patch_disc_loss
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,10 @@ if __name__ == "__main__":
     # set log level to debug
     logger.setLevel(logging.DEBUG)
 
-    index_path_old = "gs://ai2-helios/data/20250113-sample-dataset-helios/index.csv"
-    index_path = "gs://ai2-helios/data/20250115-sample-dataset-helios/index.csv"
+    index_path = "/weka/dfive-default/helios_sample_data/20250115-sample-dataset-helios/index.csv"
     index_parser = DatasetIndexParser(index_path)
     samples = index_parser.samples
-    workdir = UPath("/weka/dfive-default/henryh/helios/workdir")
+    workdir = UPath("/Users/henryh/Desktop/eai-repos/helios-repos/helios/workdir")
     dataloader = HeliosDataLoader.wrap_numpy_dataset(
         dataset=HeliosDataset(
             *samples,
@@ -47,7 +46,7 @@ if __name__ == "__main__":
         collator=per_modality_collate_fn,
         work_dir=workdir,
         num_threads=0,
-        num_workers=0,
+        num_workers=2,
     )
 
     from helios.latent_predictor import LatentMIMStyle
@@ -69,64 +68,12 @@ if __name__ == "__main__":
         dropout=0.1,
     )
     model = LatentMIMStyle(encoder, decoder)
-    # target_encoder = deepcopy(encoder)
-    # for p in target_encoder.parameters():
-    #     p.requires_grad = False
-
-    # # we will need to keep the state of momentum so that we can resume training
-    # # Add EMA decay rate and optimizer
-    # ema_decay = 0.99
-    # optimizer = torch.optim.AdamW(
-    #     list(encoder.parameters()) + list(decoder.parameters()),
-    #     lr=1e-4,
-    #     weight_decay=0.01
-    # )
-
-    # for epoch in range(1, 3):
-    #     dataloader.reshuffle(epoch=epoch)
-    #     batch_iterator = dataloader._iter_batches()
-    #     batches_found = 0
-    #     for batch in batch_iterator:
-    #         optimizer.zero_grad()
-
-    #         with torch.no_grad():
-    #             input = rearrange(batch.sentinel2, "b h w t c -> b c t h w")
-    #             target_output = target_encoder.forward(input)
-
-    #         # Run Encoder and decoder on the augmented input
-    #         latent = encoder.forward(input, apply_aug=True)
-    #         decoded = decoder.forward(latent["encoded"])
-    #         loss = patch_disc_loss(
-    #             pred=decoded,
-    #             target=target_output["encoded"],
-    #             pred2unit=True,
-    #         )
-
-    #         # Backpropagate and optimize
-    #         loss.backward()
-    #         optimizer.step()
-
-    #         print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
-
-    #         # Update target encoder with EMA
-    #         with torch.no_grad():
-    #             for param, target_param in zip(
-    #                 encoder.parameters(), target_encoder.parameters()
-    #             ):
-    #                 target_param.data = (
-    #                     ema_decay * target_param.data + (1 - ema_decay) * param.data
-    #                 )
-
-    #     dataloader.reset()
-
-    # Need an optimizer
-    # Need a checkpointer
-    # Need a module
-    # first lets grab the anysat model already in there repo
 
     from olmo_core.optim import AdamWConfig
+    from olmo_core.train.callbacks.wandb import WandBCallback
     from olmo_core.train.checkpoint import CheckpointerConfig
     from olmo_core.train.common import Duration, LoadStrategy
+    from olmo_core.utils import get_default_device
 
     from helios.train.callbacks.speed_monitor import HeliosSpeedMonitorCallback
 
@@ -134,21 +81,38 @@ if __name__ == "__main__":
 
     checkpointer_config = CheckpointerConfig(work_dir=workdir)
     checkpointer = checkpointer_config.build()
-    DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    DEVICE = get_default_device()
     model = model.to(DEVICE)
     optim_config = AdamWConfig()
-    optim = optim_config.build(model)
+    from helios.train.train_module import HeliosTrainModule
+
+    train_module = HeliosTrainModule(
+        model=model,
+        optim=optim_config,
+        rank_batch_size=4,
+        loss_fn=patch_disc_loss,
+    )
+    import uuid
+
+    run_name = f"test-debug-{str(uuid.uuid4())[:8]}"
+    wandb_callback = WandBCallback(
+        name=run_name,
+        project="helios-test",
+        entity="henryhzog",  # PLEASE CHANGE
+    )
     trainer = HeliosTrainer(
         work_dir=workdir,
-        model=model,
-        optim=optim,
+        train_module=train_module,
         data_loader=dataloader,
-        load_strategy=LoadStrategy.never,
+        load_strategy=LoadStrategy.if_available,
         device=DEVICE,
         save_folder=workdir / "save_folder",
-        callbacks={"speed_monitor": HeliosSpeedMonitorCallback()},
-        rank_microbatch_size=4,
+        callbacks={
+            "speed_monitor": HeliosSpeedMonitorCallback(),
+            "wandb": wandb_callback,
+        },
         cancel_check_interval=1,
+        metrics_collect_interval=1,
         max_duration=max_duration,
         checkpointer=checkpointer,
     )

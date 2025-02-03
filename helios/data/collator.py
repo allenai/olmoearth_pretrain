@@ -34,14 +34,14 @@ def pad_time_dim(
     )
 
 
-def per_modality_collate_fn(items: Sequence[dict]) -> PerModalityCollatedOutput:
+def per_modality_collate_fn(items: Sequence[dict]) -> dict:
     """Collate function for inputs with variable time data into per modality tuples.
 
     Args:
         items: Sequence of dictionaries containing data for each modality
 
     Returns:
-        PerModalityCollatedOutput containing batched tensors for each modality
+        Dictionary containing batched tensors for each modality
     """
     max_len = max(item["num_timesteps"] for item in items)
     all_sentinel2 = []
@@ -74,9 +74,9 @@ def per_modality_collate_fn(items: Sequence[dict]) -> PerModalityCollatedOutput:
     worldcover_batch = torch.stack(all_worldcover)
     # for each time index we just need the day of the year of each timestep
     # That can be gotten and acqured from the metadata but also must be padded
-    return PerModalityCollatedOutput(
-        sentinel2=sentinel2_batch,
-        naip=naip_batch,
-        worldcover=worldcover_batch,
-        sample_metadata=sample_metadata,
-    )
+    return {
+        "sentinel2": sentinel2_batch,
+        "naip": naip_batch,
+        "worldcover": worldcover_batch,
+        "sample_metadata": sample_metadata,
+    }
