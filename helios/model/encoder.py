@@ -12,7 +12,7 @@ from einops import rearrange, repeat
 from torch import Tensor, vmap
 from torch.jit import Final
 
-from helios.data_contract import DataContract
+from helios.data_contract import REFERENCE_RESOLUTION, DataContract
 
 from .embeddings import (
     get_1d_sincos_pos_embed_from_grid_torch,
@@ -497,9 +497,55 @@ class Base(nn.Module):
                 s_t_x[:, self.space_time_groups.index(sensor_group)].append(
                     x[:, channel_idxs, :, :, :]
                 )
-        s_t_x_t = rearrange("b c t h w -> b h w t c")
+        s_t_x = rearrange(s_t_x, "b c t h w -> b h w t c")
 
-        return s_t_x_t
+        sp_x = torch.zeros(
+            (
+                data_contract.b,
+                len(self.space_time_groups),
+                data_contract.h,
+                data_contract.w,
+            )
+        )
+
+        for sensor, sensor_groups in self.SPACE.items():
+            if data_contract[sensor] is None:
+                continue
+            x = data_contract[sensor]
+            for sensor_group, channel_idxs in sensor_groups.items():
+                sp_x[:, self.space_groups.index(sensor_group)].append(
+                    x[:, channel_idxs, :, :]
+                )
+        sp_x = rearrange(sp_x, "b c h w -> b h w c")
+        t_x = torch.zeros(
+            (
+                data_contract.b,
+                len(self.space_time_groups),
+                data_contract.t,
+            )
+        )
+
+        for sensor, sensor_groups in self.TIME.items():
+            if data_contract[sensor] is None:
+                continue
+            x = data_contract[sensor]
+            for sensor_group, channel_idxs in sensor_groups.items():
+                s_t_x[:, self.time_groups.index(sensor_group)].append(
+                    x[:, channel_idxs, :, :, :]
+                )
+        t_x = rearrange(t_x, "b c t -> b t c")
+        st_x = torch.zeros((data_contract.b, len(self.space_time_groups)))
+
+        for sensor, sensor_groups in self.STATIC.items():
+            if data_contract[sensor] is None:
+                continue
+            x = data_contract[sensor]
+            for sensor_group, channel_idxs in sensor_groups.items():
+                st_x[:, self.static_groups.index(sensor_group)].append(
+                    x[:, channel_idxs]
+                )
+        st_x = rearrange(st_x, "b c t h w -> b h w t c")
+        return s_t_x, sp_x, t_x, st_x
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -617,7 +663,7 @@ class Base(nn.Module):
         if patch_size is None:
             patch_size = self.base_patch_size
         token_res = input_res * patch_size
-        gsd_ratio = token_res / BASE_GSD
+        gsd_ratio = token_res / REFERENCE_RESOLUTION
 
         assert (
             h == w
