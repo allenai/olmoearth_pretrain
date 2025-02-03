@@ -3,15 +3,18 @@
 import contextlib
 import math
 from collections.abc import Callable, Generator
+from dataclasses import dataclass
 from logging import getLogger
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 import torch.nn as nn
 from einops import rearrange
+from olmo_core.config import Config, DType
 from olmo_core.distributed.parallel import (
+    DataParallelConfig,
     DataParallelType,
     build_device_mesh,
     get_dp_mesh,
@@ -26,7 +29,6 @@ from olmo_core.train.common import ReduceType
 from olmo_core.train.train_module import EvalBatchSizeUnit, EvalBatchSpec, TrainModule
 from olmo_core.train.train_module.transformer import (
     TransformerActivationCheckpointingConfig,
-    TransformerDataParallelConfig,
 )
 from olmo_core.utils import gc_cuda, get_default_device, move_to_device
 from torch.distributed.checkpoint.metadata import Metadata
@@ -39,7 +41,89 @@ logger = getLogger(__name__)
 TRAIN_PATCH_DISC_LOSS_METRIC = "train/patch_disc_loss"
 
 
-# I can also build a helios config that follows omo core config however we want
+@dataclass
+class HeliosTrainModuleConfig(Config):
+    """A configuration class for building :class:`HeliosTrainModule` instances.
+
+    Args:
+        rank_batch_size: The batch size per rank in instances.
+        optim: The optimizer configuration.
+        compile_model: Whether to compile the model using torch.compile.
+        float8_config: Configuration for Float8 training if enabled.
+        dp_config: Data parallel configuration for distributed training.
+        ac_config: Activation checkpointing configuration.
+        compile_loss: Whether to compile the loss function.
+        autocast_precision: Enable AMP with this data type.
+        max_grad_norm: Clip gradient norms to this value.
+        scheduler: Optional learning rate scheduler.
+        state_dict_save_opts: Override state dict options for saving.
+        state_dict_load_opts: Override state dict options for loading.
+        ema_decay: EMA decay rate for target encoder (default: 0.99).
+    """
+
+    rank_batch_size: int
+    optim: OptimConfig
+
+    # Model settings
+    compile_model: bool = False
+    float8_config: Float8Config | None = None  # UNTESTED for helios
+    dp_config: DataParallelConfig | None = None
+    ac_config: TransformerActivationCheckpointingConfig | None = (
+        None  # UNTESTED for helios
+    )
+
+    # Loss function settings
+    compile_loss: bool = False
+    loss_fn: Callable | None = None
+
+    # Training settings
+    autocast_precision: DType | None = None  # UNTESTED for helios
+    max_grad_norm: float | None = None
+    scheduler: Scheduler | None = None
+
+    # Checkpoint settings
+    state_dict_save_opts: dict[str, Any] | None = None
+    state_dict_load_opts: dict[str, Any] | None = None
+
+    # Helios specific settings
+    ema_decay: float = 0.99
+
+    def build(
+        self,
+        model: Any,
+        device: torch.device | None = None,
+    ) -> "HeliosTrainModule":
+        """Build the corresponding :class:`HeliosTrainModule`.
+
+        Args:
+            model: The model to train.
+            device: The device to train on.
+        """
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        if (autocast_precision := kwargs.pop("autocast_precision", None)) is not None:
+            kwargs["autocast_precision"] = cast(DType, autocast_precision).as_pt()
+        if (
+            state_dict_save_opts := kwargs.pop("state_dict_save_opts", None)
+        ) is not None:
+            kwargs["state_dict_save_opts"] = dist_cp_sd.StateDictOptions(
+                **state_dict_save_opts
+            )
+        if (
+            state_dict_load_opts := kwargs.pop("state_dict_load_opts", None)
+        ) is not None:
+            kwargs["state_dict_load_opts"] = dist_cp_sd.StateDictOptions(
+                **state_dict_load_opts
+            )
+        if (loss_fn := kwargs.pop("loss_fn", None)) is None:
+            raise ValueError("loss_fn must be provided")
+        kwargs["loss_fn"] = loss_fn
+        return HeliosTrainModule(
+            model=model,
+            device=device,
+            **kwargs,
+        )
+
+
 class HeliosTrainModule(TrainModule):
     """A :class:`TrainModule`.
 
@@ -70,7 +154,7 @@ class HeliosTrainModule(TrainModule):
         rank_batch_size: int,
         compile_model: bool = False,
         float8_config: Float8Config | None = None,
-        dp_config: TransformerDataParallelConfig | None = None,
+        dp_config: DataParallelConfig | None = None,
         ac_config: TransformerActivationCheckpointingConfig | None = None,
         loss_fn: Callable | None = None,
         compile_loss: bool = False,
@@ -80,6 +164,7 @@ class HeliosTrainModule(TrainModule):
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
+        ema_decay: float = 0.99,
     ):
         """Initialize the training module.
 
@@ -99,17 +184,16 @@ class HeliosTrainModule(TrainModule):
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
+            ema_decay: EMA decay rate for target encoder (default: 0.99).
         """
         super().__init__()
-        self.moe_handler = None
-        self.ema_decay = 0.99
+        self.ema_decay = ema_decay
         self.model = model
         self.device = device or get_default_device()
         self.world_mesh = build_device_mesh(dp=dp_config, device_type=self.device.type)
         logger.info(
             f"Data parallel world size = {get_world_size(self.dp_process_group):,d}"
         )
-
         self.base_loss_fn = loss_fn
         if compile_loss:
             self.base_loss_fn = torch.compile(self.base_loss_fn)

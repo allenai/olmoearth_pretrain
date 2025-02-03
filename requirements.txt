@@ -1,4 +1,4 @@
-ai2-olmo-core
+# ai2-olmo-core for now this must be pip installed on the v2 branch
 class-registry
 einops==0.7.0
 gcsfs
