@@ -28,13 +28,17 @@ TIMESTAMPS = ["day", "month", "year"]
 ArrayTensor = Union[np.ndarray, torch.Tensor]
 
 
+REFERENCE_RESOLUTION = 10
+
+
 class DataContract(NamedTuple):
     # if an attribute is added here, its bands must also
     # be added to attribute_to_bands
 
-    s2: ArrayTensor | None = None  # [B, H, W, T, len(S2_bands)]
+    # input shape is (B, C, T, H, W)
+    s2: ArrayTensor | None = None  # [B, len(S2_bands), T H, W]
     latlon: ArrayTensor | None = None  # [B, 2]
-    timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
+    timestamps: ArrayTensor | None = None  # [B, D=3, T], where D=[day, month, year]
 
     def as_dict(self, ignore_nones: bool = True):
         return_dict = {}
@@ -49,6 +53,22 @@ class DataContract(NamedTuple):
     @staticmethod
     def attribute_to_bands() -> dict[str, list[str]]:
         return {"s2": S2_BANDS, "latlon": LATLON_BANDS, "timestamps": TIMESTAMPS}
+
+    @property
+    def t(self):
+        return self.timestamps.shape[-1]
+
+    @property
+    def h(self):
+        # if we had NAIP only, we'd do something like
+        # if s2 is None:
+        #     naip_height = self.naip[-2]
+        # return naip_height / 10  (since we have a reference res of 10)
+        return self.s2.shape[-2]
+
+    @property
+    def w(self):
+        return self.s2.shape[-1]
 
 
 def collate_fn(batch: Sequence[DataContract]):
