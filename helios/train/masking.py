@@ -29,8 +29,9 @@ class MaskedHeliosSample(NamedTuple):
     """A masked sample of the data from the Helios dataset.
 
     This is a namedtuple that contains the data for a single sample from the Helios dataset.
-    For each modality. we have an ArrayTensor named by modality, positions in lat lon named modality_latlon, and
-    time named modality_timestamps, as well as a mask for each of these modalities.
+    latlon and timestamps are the same for all modalities.
+    For each modality. we have an ArrayTensor named by modality, and a mask for each modality named by modality_mask.
+    we also have a mask for the latlon called latlon_mask
 
     Args:
         s2: ArrayTensor  # [B, len(S2_bands), T H, W]
@@ -42,9 +43,9 @@ class MaskedHeliosSample(NamedTuple):
 
     s2: ArrayTensor  # [B, len(S2_bands), T H, W]
     s2_mask: ArrayTensor
-    s2_latlon: ArrayTensor  # [B, 2]
-    s2_latlon_mask: ArrayTensor
-    s2_timestamps: ArrayTensor  # [B, D=3, T], where D=[day, month, year]
+    latlon: ArrayTensor  # [B, 2]
+    latlon_mask: ArrayTensor
+    timestamps: ArrayTensor  # [B, D=3, T], where D=[day, month, year]
 
     def as_dict(self) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
