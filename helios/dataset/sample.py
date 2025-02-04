@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class Sample:
-    """A training example.
+class SampleInformation:
+    """Specification of a training example.
 
     The example corresponds to one GridTile that appears in the dataset.
 
@@ -41,7 +41,7 @@ class Sample:
 
 def image_tiles_to_samples(
     image_tiles: dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]],
-) -> list[Sample]:
+) -> list[SampleInformation]:
     """Compute samples from the parsed per-modality image tiles.
 
     TODO: Currently, this only returns samples where every modality is available, but
@@ -52,7 +52,7 @@ def image_tiles_to_samples(
         image_tiles: the parsed dataset from parse_helios_dataset.
 
     Returns:
-        a list of training examples (Sample objects).
+        a list of training examples (SampleInformation objects).
     """
     # Convert from (modality -> time_span -> tile list) to
     # (modality, grid_tile, time_span) -> tile).
@@ -83,9 +83,9 @@ def image_tiles_to_samples(
 
     # Now for each (grid_tile, time_span), construct the Sample object.
     # We also skip if not all modalities are available.
-    samples: list[Sample] = []
+    samples: list[SampleInformation] = []
     for grid_tile, time_span in unique_image_tiles:
-        sample = Sample(
+        sample = SampleInformation(
             grid_tile=grid_tile,
             time_span=time_span,
             modalities={},
@@ -141,7 +141,9 @@ def image_tiles_to_samples(
     return samples
 
 
-def load_image_for_sample(image_tile: ModalityTile, sample: Sample) -> npt.NDArray:
+def load_image_for_sample(
+    image_tile: ModalityTile, sample: SampleInformation
+) -> npt.NDArray:
     """Loads the portion of the image that corresponds with the sample.
 
     If image_tile and sample share the same resolution, then we load the entire image.
@@ -153,7 +155,7 @@ def load_image_for_sample(image_tile: ModalityTile, sample: Sample) -> npt.NDArr
 
     Args:
         image_tile: the image to load.
-        sample: the training example. This is used to determine if the entire image
+        sample: the SampleInformation. This is used to determine if the entire image
             should be loaded or just a portion of it.
 
     Returns:
