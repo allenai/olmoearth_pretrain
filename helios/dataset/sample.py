@@ -216,4 +216,4 @@ def load_image_for_sample(image_tile: ModalityTile, sample: Sample) -> npt.NDArr
 
                 band_set_images.append(image)
 
-    return np.concatenate(band_set_images, axis=0)
+    return np.concatenate(band_set_images, axis=1)
