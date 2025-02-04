@@ -8,9 +8,11 @@ from torch import Tensor, nn
 
 from helios.constants import BASE_GSD
 from helios.nn.attention import Block
-from helios.nn.encodings import (get_1d_sincos_pos_encoding,
-                                 get_2d_sincos_pos_encoding_with_resolution,
-                                 get_month_encoding_table)
+from helios.nn.encodings import (
+    get_1d_sincos_pos_encoding,
+    get_2d_sincos_pos_encoding_with_resolution,
+    get_month_encoding_table,
+)
 from helios.nn.flexi_patch_embed import FlexiPatchEmbed
 from helios.train.masking import MaskedHeliosSample
 
@@ -270,6 +272,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         return TokensOnly(**output_dict)
 
 
+# FIXME: HOw we find and use input res has to be changed
 # I want this class to be slighlty more agnostic to the passed in encoding class and have that be configurable too
 class Encoder(nn.Module):
     """Encoder module that processes masked input samples into token representations."""
@@ -377,14 +380,16 @@ class Predictor(nn.Module):
 
 if __name__ == "__main__":
     import rasterio
+    from einops import rearrange
 
     # I want an example that I can start running
     # I am going to create a batch of 2 samples
     path_to_example_s2_scene = "gs://ai2-helios/data/20250130-sample-dataset-helios/10_sentinel2_monthly/EPSG:32610_166_-1971_20.tif"
     with rasterio.open(path_to_example_s2_scene) as data:
         values = data.read()
-    print(values.shape)
-    # s2_array = example_s2_scene.read(1)
+    num_bands = 12
+    num_timesteps = int(values.shape[0] / num_bands)
+    data_array = rearrange(values, "(t c) h w -> h w t c", c=num_bands, t=num_timesteps)
     # s2_mask = torch.ones_like(s2_array)
     # s2_latlon = torch.randn(2)
     # s2_latlon_mask = torch.ones_like(s2_latlon)

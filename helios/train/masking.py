@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, NamedTuple
 
 from class_registry import ClassRegistry
@@ -9,6 +10,18 @@ from olmo_core.config import Config
 
 from helios.data.dataset import HeliosSample
 from helios.types import ArrayTensor
+
+
+class MaskValue(Enum):
+    """Masks can take 3 possible values.
+
+    This enum records those values and describes
+    what they represent.
+    """
+
+    ONLINE_ENCODER = 0
+    TARGET_ENCODER_ONLY = 1
+    DECODER_ONLY = 2
 
 
 # SHould be return type of masking strategy

@@ -1,6 +1,8 @@
 """Constants related to Helios dataset creation."""
 
 MODALITIES = [
+    "landsat_freq",
+    "landsat_monthly",
     "naip",
     "openstreetmap",
     "sentinel2_freq",

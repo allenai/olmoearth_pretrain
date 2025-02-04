@@ -21,13 +21,13 @@ class HeliosSample(NamedTuple):
     """A sample of the data from the Helios dataset.
 
     This is a namedtuple that contains the data for a single sample from the Helios dataset.
-    For each modality. we have an ArrayTensor named by modality, positions in lat lon named modality_latlon, and
-    time named modality_timestamps.
+    For each modality. we have an ArrayTensor named by modality, positions in lat lon of each sample and
+    timestamps of each sample.
 
     Args:
         s2: ArrayTensor | None = None  # [B, len(S2_bands), T H, W]
-        s2_latlon: ArrayTensor | None = None  # [B, 2]
-        s2_timestamps: ArrayTensor | None = None  # [B, D=3, T], where D=[day, month, year]
+        latlon: ArrayTensor | None = None  # [B, 2]
+        timestamps: ArrayTensor | None = None  # [B, D=3, T], where D=[day, month, year]
     """
 
     # if an attribute is added here, its bands must also
@@ -35,8 +35,8 @@ class HeliosSample(NamedTuple):
 
     # input shape is (B, C, T, H, W)
     s2: ArrayTensor | None = None  # [B, len(S2_bands), T H, W]
-    s2_latlon: ArrayTensor | None = None  # [B, 2]
-    s2_timestamps: ArrayTensor | None = None  # [B, D=3, T], where D=[day, month, year]
+    latlon: ArrayTensor | None = None  # [B, 2]
+    timestamps: ArrayTensor | None = None  # [B, D=3, T], where D=[day, month, year]
 
     def as_dict(self, ignore_nones: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
