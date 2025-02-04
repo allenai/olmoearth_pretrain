@@ -3,8 +3,8 @@
 Warning: this is only developed for raster data currently.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import Enum
 
 # The highest resolution that we are working at.
 # Everything else is a factor (which is a power of 2) coarser than this resolution.
@@ -16,7 +16,22 @@ BASE_RESOLUTION = 0.625
 IMAGE_TILE_SIZE = 256
 
 
-@dataclass
+def get_resolution(resolution_factor: int) -> float | int:
+    """Compute the resolution.
+
+    If it is 10 or 160, it is rounded to integer so that it works with the raw
+    Helios dataset, where some files are named based on the integer. We may want to
+    change this in the future to avoid the extra code here.
+    """
+    resolution = BASE_RESOLUTION * resolution_factor
+    if resolution == 10.0:
+        return 10
+    elif resolution == 160.0:
+        return 160
+    return resolution
+
+
+@dataclass(frozen=True)
 class BandSet:
     """A group of bands that is stored at the same resolution.
 
@@ -25,13 +40,21 @@ class BandSet:
     """
 
     # List of band names.
-    bands: list[str]
+    bands: Sequence[str]
 
-    # Resolution is BASE_RESOLUTION // resolution_factor.
+    # Resolution is BASE_RESOLUTION * resolution_factor.
     resolution_factor: int
 
+    def __hash__(self) -> int:
+        """Hash this BandSet."""
+        return hash((tuple(self.bands), self.resolution_factor))
 
-@dataclass
+    def get_resolution(self) -> float:
+        """Compute the resolution."""
+        return get_resolution(self.resolution_factor)
+
+
+@dataclass(frozen=True)
 class ModalitySpec:
     """Specification of one modality."""
 
@@ -41,23 +64,38 @@ class ModalitySpec:
     tile_resolution_factor: int
 
     # Band sets in this modality.
-    band_sets: list[BandSet]
+    band_sets: Sequence[BandSet]
+
+    # If True, this modality should have two sets of tiles in the raw Helios dataset,
+    # one _monthly for monthly over one-year period, and one _freq for every sample over
+    # two-week period.
+    is_multitemporal: bool
+
+    def __hash__(self) -> int:
+        """Hash this ModalitySpec."""
+        return hash(self.name)
+
+    def get_tile_resolution(self) -> float:
+        """Compute the tile resolution."""
+        return get_resolution(self.tile_resolution_factor)
 
 
 # Modalities supported by helios
-class Modality(Enum):
+class Modality:
     """Modality information."""
 
     NAIP = ModalitySpec(
         name="naip",
         tile_resolution_factor=1,
         band_sets=[BandSet(["R", "G", "B", "IR"], 1)],
+        is_multitemporal=False,
     )
 
     S1 = ModalitySpec(
         name="sentinel1",
         tile_resolution_factor=16,
         band_sets=[BandSet(["VV", "VH"], 16)],
+        is_multitemporal=True,
     )
 
     S2 = ModalitySpec(
@@ -71,6 +109,7 @@ class Modality(Enum):
             # 60 m/pixel bands that we store at 40 m/pixel.
             BandSet(["B01", "B09", "B10"], 64),
         ],
+        is_multitemporal=True,
     )
 
     LANDSAT = ModalitySpec(
@@ -82,12 +121,14 @@ class Modality(Enum):
             # 30 m/pixel bands that we store at 20 m/pixel.
             BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 16),
         ],
+        is_multitemporal=True,
     )
 
     WORLDCOVER = ModalitySpec(
         name="worldcover",
         tile_resolution_factor=16,
         band_sets=[BandSet(["B1"], 16)],
+        is_multitemporal=False,
     )
 
     OSM = ModalitySpec(
@@ -132,4 +173,11 @@ class Modality(Enum):
                 4,
             )
         ],
+        is_multitemporal=False,
     )
+
+
+ALL_MODALITIES = [
+    Modality.S1,
+    Modality.S2,
+]

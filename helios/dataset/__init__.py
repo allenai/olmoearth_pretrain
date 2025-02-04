@@ -1,1 +1,1 @@
-"""Code to read helios datasets."""
+"""Code to parse the Helios dataset."""
