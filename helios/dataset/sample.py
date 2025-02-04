@@ -27,12 +27,15 @@ class Sample:
 
     grid_tile: GridTile
 
-    # Whether this training example covers a one-year or two-week period.
-    # Note that time_span should never be static since we should always be looking at
-    # a particular time range.
+    # Whether this training example covers a one-year (TimeSpan.YEAR) or two-week
+    # (TimeSpan.TWO_WEEK) period.
+    # Note that time_span should never be TimeSpan.STATIC since a training sample is
+    # always tied to a specific time range.
     time_span: TimeSpan
 
     # The modalities available at this grid tile or coarser ones containing this tile.
+    # The time spans from which the ModalityTiles are sourced should either match the
+    # time span of the sample, or should be TimeSpan.STATIC.
     modalities: dict[ModalitySpec, ModalityTile]
 
 

@@ -179,8 +179,6 @@ def parse_helios_dataset(
     tiles: dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]] = {}
 
     for modality in ALL_MODALITIES:
-        tile_resolution = modality.get_tile_resolution()
-
         if modality.is_multitemporal:
             # We need to load the one-year and two-week data separately.
             time_spans = [TimeSpan.YEAR, TimeSpan.TWO_WEEK]
@@ -189,14 +187,22 @@ def parse_helios_dataset(
             # Just need to load the static data.
             time_spans = [TimeSpan.STATIC]
 
+        # For each possible time span available for this modality, parse the associated
+        # CSV to get the ModalityTiles under that time span.
         tiles[modality] = {}
         for time_span in time_spans:
+            # Reconstruct the CSV filename from the grid resolution, modality, and time span.
+            tile_resolution = modality.get_tile_resolution()
+            csv_fname = (
+                helios_path
+                / f"{tile_resolution}_{modality.name}{time_span.get_suffix()}.csv"
+            )
+
             tiles[modality][time_span] = parse_modality_csv(
                 helios_path,
                 modality,
                 time_span,
-                helios_path
-                / f"{tile_resolution}_{modality.name}{time_span.get_suffix()}.csv",
+                csv_fname,
             )
 
     return tiles
