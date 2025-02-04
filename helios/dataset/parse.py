@@ -56,9 +56,16 @@ class ModalityTile:
     # The band sets along with the file containing them.
     band_sets: dict[BandSet, UPath]
 
-    # def load_for_sample(self, sample: Sample) -> npt.NDArray:
-    #    factor = self.resolution // sample.resolution
-    #    WINDOW_SIZE // factor
+    def get_flat_bands(self) -> list[str]:
+        """Get the names of the bands as a flat list.
+
+        This would correspond to the order of the bands in any function that combines
+        the band sets into a single tensor.
+        """
+        bands: list[str] = []
+        for band_set in self.band_sets:
+            bands.extend(band_set.bands)
+        return bands
 
 
 class TimeSpan(StrEnum):
@@ -126,14 +133,20 @@ def parse_modality_csv(
             # This image should appear at the index above. But the indexes should be in
             # order in the CSV.
             if image_idx != len(modality_tiles[grid_tile].images):
-                raise ValueError(
-                    "expected image index to be in increasing order and contiguous"
-                )
+                # This should be an error but currently I realized there are one or two
+                # tiles that actually have two timestamps in the original rslearn
+                # dataset, which means the Helios dataset has two sets of entries in
+                # the CSV but there is really only one file.
+                # raise ValueError(
+                #    "expected image index to be in increasing order and contiguous"
+                # )
+                continue
             modality_tiles[grid_tile].images.append(image)
 
     # Now we can fill in the band sets.
     # We also double check that there are no None in the image lists.
     for tile in modality_tiles.values():
+        grid_tile = tile.grid_tile
         window_metadata = WindowMetadata(
             crs=grid_tile.crs,
             resolution=BASE_RESOLUTION * grid_tile.resolution_factor,

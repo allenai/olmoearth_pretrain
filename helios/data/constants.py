@@ -19,15 +19,13 @@ IMAGE_TILE_SIZE = 256
 def get_resolution(resolution_factor: int) -> float | int:
     """Compute the resolution.
 
-    If it is 10 or 160, it is rounded to integer so that it works with the raw
-    Helios dataset, where some files are named based on the integer. We may want to
-    change this in the future to avoid the extra code here.
+    If it is an integer, then we cast it to int so that it works with the raw Helios
+    dataset, where some files are named based on the integer. We may want to change
+    this in the future to avoid the extra code here.
     """
     resolution = BASE_RESOLUTION * resolution_factor
-    if resolution == 10.0:
-        return 10
-    elif resolution == 160.0:
-        return 160
+    if float(int(resolution)) == resolution:
+        return int(resolution)
     return resolution
 
 
@@ -180,4 +178,5 @@ class Modality:
 ALL_MODALITIES = [
     Modality.S1,
     Modality.S2,
+    Modality.NAIP,
 ]
