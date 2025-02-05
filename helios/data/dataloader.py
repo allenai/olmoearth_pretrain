@@ -8,11 +8,12 @@ from typing import Any
 
 import numpy as np
 import torch
+from upath import UPath
+
 from olmo_core.data.data_loader import DataLoaderBase
 from olmo_core.data.utils import get_rng, memmap_to_write
 from olmo_core.utils import roundrobin, threaded_generator
-from olmo_core.distributed.utils import get_fs_local_rank, barrier, get_rank, get_world_size
-from upath import UPath
+from olmo_core.distributed.utils import barrier
 
 from helios.data.dataset import HeliosDataset
 
@@ -20,7 +21,11 @@ logger = logging.getLogger(__name__)
 
 
 class HeliosDataLoader(DataLoaderBase):
-    """Helios data loader."""
+    """Helios dataloader.
+    
+    This dataloader is adapted from OLMo-core's TextDataLoaderBase and NumpyDataLoaderBase, 
+    incorporating their core functionality for DDP, multi-threading, and multi-processing.
+    """
     def __init__(
         self,
         dataset: HeliosDataset,
@@ -227,7 +232,7 @@ class HeliosDataLoader(DataLoaderBase):
         # TODO: add a batch of arbitrary data
         pass
 
-
+# TODO: this is mainly for multi-threading, if not needed, we can simplify `_iter_batches` and remove this
 class _IterableDatasetWrapper(torch.utils.data.IterableDataset[Dict[str, Any]]):
     """Iterable dataset wrapper.
     
@@ -282,4 +287,4 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[Dict[str, Any]]):
             for batch in iter_batched(instance_iterator, self.data_loader.rank_batch_size)
         )
 
-# TODO: we also need a configuration class for HeliosDataLoader
+# TODO: we will also need a configuration class for HeliosDataLoader
