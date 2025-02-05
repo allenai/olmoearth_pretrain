@@ -122,15 +122,23 @@ class HeliosDataset(Dataset):
     def __init__(
         self,
         *samples: SampleInformation,
+        path: UPath,
         dtype: np.dtype,
     ):
         """Initialize the dataset.
+
+        Warning from OLMo-core:
+            In distributed settings, be sure that the :data:`work_dir` is shared among all local ranks 
+            and :data:`fs_local_rank` is set accordingly. Once those fields are set you should then call 
+            :meth:`prepare()` in the main process before doing anything else.
         
         Args:
             samples: The samples to include in the dataset.
+            path: The path to the dataset.
             dtype: The dtype of the data.
         """
         self.samples = list(samples)
+        self.path = path
         self.dtype = dtype
         self.fs_local_rank = get_fs_local_rank()
         self.work_dir: Optional[Path] = None
@@ -145,8 +153,8 @@ class HeliosDataset(Dataset):
     def fingerprint(self) -> str:
         """Can be used to identify/compare a dataset."""
         sha256_hash = hashlib.sha256()
-        # TODO: add helios dataset root path
         sha256_hash.update(
+            f"path={self.path},"
             f"sample_size={len(self.samples)},"
             f"dtype={self.dtype}".encode()
         )
@@ -171,6 +179,9 @@ class HeliosDataset(Dataset):
     def work_dir(self, work_dir: PathOrStr):
         self.work_dir = Path(work_dir)
         self.work_dir_set = True
+
+    def prepare(self):
+        len(self)
 
     def __len__(self) -> int:
         """Get the length of the dataset."""
