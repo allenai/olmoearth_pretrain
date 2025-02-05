@@ -16,6 +16,9 @@ from helios.data.data_source_io import DataSourceReader, DataSourceReaderRegistr
 from helios.dataset.index import SampleInformation
 from helios.types import ArrayTensor
 
+from helios.dataset.sample import SampleInformation, load_image_for_sample
+from helios.data.constants import Modality
+
 logger = logging.getLogger(__name__)
 
 
@@ -187,8 +190,17 @@ class HeliosDataset(Dataset):
         """Get the length of the dataset."""
         return len(self.samples)
 
-    def __getitem__(self, index: int) -> dict[str, Any]:
+    def __getitem__(self, index: int) -> HeliosSample:
         """Get the item at the given index."""
         sample: SampleInformation = self.samples[index]
-        # TODO: add data loading and processing here
-        return sample
+        for modality, image_tiles in sample.modalities.items():
+            image = load_image_for_sample(image_tile, sample)
+            if modality == Modality.S1:
+                s1_data = image.permute(1, 0, 2, 3)  # from TxCxHxW to CxTxHxW
+            elif modality == Modality.S2:
+                s2_data = image.permute(1, 0, 2, 3)  # from TxCxHxW to CxTxHxW
+            else:
+                pass
+        # TODO: convert grid_tile to latlon and timestamps
+        # TODO: either do imputation here, or just add padding to collate function, make all modalities have the same shape
+        return HeliosSample(s1=s1_data, s2=s2_data, latlon=sample.grid_tile.latlon, timestamps=sample.timestamps)
