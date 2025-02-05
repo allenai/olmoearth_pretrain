@@ -198,9 +198,10 @@ if __name__ == "__main__":
 
     common_args = {"geobench_dir": geobench_dir, "dataset": "m-eurosat"}
     train_ds = GeobenchDataset(geobench_dir, "m-eurosat", "train", "default")
-    train_loader = DataLoader(train_ds)
+    train_loader = DataLoader(train_ds, collate_fn=GeobenchDataset.collate_fn)
     val_loader = DataLoader(
-        GeobenchDataset(geobench_dir, "m-eurosat", "valid", "default")
+        GeobenchDataset(geobench_dir, "m-eurosat", "valid", "default"),
+        collate_fn=GeobenchDataset.collate_fn,
     )
     train_embeddings, train_labels = get_embeddings(
         data_loader=train_loader, model=encoder, device=device

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from pathlib import Path
 from types import MethodType
 from typing import NamedTuple
@@ -7,12 +8,14 @@ import numpy as np
 import torch.multiprocessing
 from einops import repeat
 from geobench.dataset import Stats
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, default_collate
+
+from helios.data.dataset import S2_BANDS, HeliosSample
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
 
-S2_BAND_NAMES = [
+GEOBENCH_S2_BAND_NAMES = [
     "01 - Coastal aerosol",
     "02 - Blue",
     "03 - Green",
@@ -26,6 +29,18 @@ S2_BAND_NAMES = [
     "10 - SWIR - Cirrus",
     "11 - SWIR",
     "12 - SWIR",
+]
+
+
+def geobench_band_index_from_helios_name(helios_name: str) -> int:
+    for idx, band_name in enumerate(GEOBENCH_S2_BAND_NAMES):
+        if helios_name.endswith(band_name.split(" ")[0][-2:]):
+            return idx
+    raise ValueError(f"Unmatched band name {helios_name}")
+
+
+GEOBENCH_TO_HELIOS_S2_BANDS = [
+    geobench_band_index_from_helios_name(b) for b in S2_BANDS
 ]
 
 
@@ -103,7 +118,7 @@ class GeobenchDataset(Dataset):
     def get_norm_stats(imputed_band_info: list[Stats]):
         means = []
         stds = []
-        for band_name in S2_BAND_NAMES:
+        for band_name in GEOBENCH_S2_BAND_NAMES:
             assert band_name in imputed_band_info, f"{band_name} not found in band_info"
             means.append(imputed_band_info[band_name].mean)
             stds.append(imputed_band_info[band_name].std)
@@ -117,7 +132,7 @@ class GeobenchDataset(Dataset):
 
         names_list = list(band_info.keys())
         new_band_info = {}
-        for band_name in S2_BAND_NAMES:
+        for band_name in GEOBENCH_S2_BAND_NAMES:
             new_band_info[band_name] = {}
             if band_name in names_list:
                 # we have the band, so use it
@@ -144,7 +159,7 @@ class GeobenchDataset(Dataset):
 
         # create a new image list by looping through and imputing where necessary
         new_image_list = []
-        for band_name in S2_BAND_NAMES:
+        for band_name in GEOBENCH_S2_BAND_NAMES:
             if band_name in names_list:
                 # we have the band, so append it
                 band_idx = names_list.index(band_name)
@@ -217,8 +232,18 @@ class GeobenchDataset(Dataset):
             label = np.array(list(label))
 
         target = torch.tensor(label, dtype=torch.long)
-
-        return {"s2": repeat(x, "h w c -> c t h w", t=1), "target": target}
+        s2 = repeat(x, "h w c -> c t h w", t=1)[GEOBENCH_TO_HELIOS_S2_BANDS, :, :, :]
+        return HeliosSample(s2=s2), target
 
     def __len__(self):
         return len(self.dataset)
+
+    @staticmethod
+    def collate_fn(batch: Sequence[tuple[HeliosSample, torch.Tensor]]):
+        samples, targets = zip(*batch)
+        # we assume that the same values are consistently None
+        collated_sample = default_collate(
+            [s.as_dict(ignore_nones=True) for s in samples]
+        )
+        collated_target = default_collate([t for t in targets])
+        return HeliosSample(**collated_sample), collated_target
