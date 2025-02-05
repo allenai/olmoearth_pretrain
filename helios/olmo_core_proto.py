@@ -202,6 +202,7 @@ if __name__ == "__main__":
     )
     train_embeddings, train_labels = get_embeddings(
         data_loader=train_loader, model=encoder
+<<<<<<< HEAD
     )
 <<<<<<< HEAD
     val_embeddings, test_labels = get_embeddings(data_loader=val_loader, model=encoder)
@@ -210,6 +211,10 @@ if __name__ == "__main__":
         data_loader=val_loader, model=encoder, device=DEVICE
     )
 >>>>>>> eeda120 (More docstrings)
+=======
+    )
+    val_embeddings, test_labels = get_embeddings(data_loader=val_loader, model=encoder)
+>>>>>>> dbb6bde (mypy)
     val_result = run_knn(
         eval_type="KNN-20",
         train_embeddings=train_embeddings,
