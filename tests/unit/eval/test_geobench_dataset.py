@@ -14,7 +14,7 @@ def geobench_dir() -> Path:
     return Path("tests/fixtures/sample_geobench")
 
 
-def test_geobench_dataset(geobench_dir: Path):
+def test_geobench_dataset(geobench_dir: Path) -> None:
     """Test the dataset works."""
     d = GeobenchDataset(
         dataset="m-eurosat",
@@ -26,7 +26,7 @@ def test_geobench_dataset(geobench_dir: Path):
     assert sample.s2.shape == (13, 1, 64, 64)
 
 
-def test_geobench_dataset_and_dataloader(geobench_dir: Path):
+def test_geobench_dataset_and_dataloader(geobench_dir: Path) -> None:
     """Test the dataloader (and specifically the collate fn) works."""
     d = DataLoader(
         GeobenchDataset(
