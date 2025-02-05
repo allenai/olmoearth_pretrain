@@ -3,7 +3,7 @@
 import csv
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
+from enum import StrEnum  # type: ignore
 
 from upath import UPath
 
@@ -195,13 +195,13 @@ def parse_helios_dataset(
             tile_resolution = modality.get_tile_resolution()
             csv_fname = (
                 helios_path
-                / f"{tile_resolution}_{modality.name}{time_span.get_suffix()}.csv"
+                / f"{tile_resolution}_{modality.name}{time_span.get_suffix()}.csv"  # type: ignore
             )
 
-            tiles[modality][time_span] = parse_modality_csv(
+            tiles[modality][time_span] = parse_modality_csv(  # type: ignore
                 helios_path,
                 modality,
-                time_span,
+                time_span,  # type: ignore
                 csv_fname,
             )
 

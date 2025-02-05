@@ -76,10 +76,10 @@ def image_tiles_to_samples(
             if grid_tile.resolution_factor > 1:
                 continue
             else:
-                unique_image_tiles.add((grid_tile, TimeSpan.TWO_WEEK))
-                unique_image_tiles.add((grid_tile, TimeSpan.YEAR))
+                unique_image_tiles.add((grid_tile, TimeSpan.TWO_WEEK))  # type: ignore
+                unique_image_tiles.add((grid_tile, TimeSpan.YEAR))  # type: ignore
         else:
-            unique_image_tiles.add((grid_tile, time_span))
+            unique_image_tiles.add((grid_tile, time_span))  # type: ignore
 
     # Now for each (grid_tile, time_span), construct the Sample object.
     # We also skip if not all modalities are available.
@@ -106,9 +106,9 @@ def image_tiles_to_samples(
             # for the lookup.
             lookup_time_span: TimeSpan
             if modality.is_multitemporal:
-                lookup_time_span = sample.time_span
+                lookup_time_span = sample.time_span  # type: ignore
             else:
-                lookup_time_span = TimeSpan.STATIC
+                lookup_time_span = TimeSpan.STATIC  # type: ignore
 
             # We need to downscale the grid tile for the lookup.
             modality_grid_tile = GridTile(

@@ -1,23 +1,24 @@
 """Dataset module for helios."""
 
+import hashlib
 import logging
-from typing import Any, NamedTuple, Optional
+import tempfile
+from pathlib import Path
+from typing import Any, NamedTuple
 
 import numpy as np
+import pandas as pd
+from olmo_core.aliases import PathOrStr
+from olmo_core.distributed.utils import get_fs_local_rank
+from pyproj import Transformer
 from torch.utils.data import Dataset
 from upath import UPath
-from pathlib import Path
-
-from olmo_core.distributed.utils import get_fs_local_rank
-from olmo_core.aliases import PathOrStr
 
 from helios.constants import LATLON_BANDS, S2_BANDS, TIMESTAMPS
-from helios.data.data_source_io import DataSourceReader, DataSourceReaderRegistry
-from helios.dataset.index import SampleInformation
-from helios.types import ArrayTensor
-
+from helios.data.constants import BASE_RESOLUTION, IMAGE_TILE_SIZE, Modality
+from helios.dataset.parse import TimeSpan
 from helios.dataset.sample import SampleInformation, load_image_for_sample
-from helios.data.constants import Modality
+from helios.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
 
@@ -131,21 +132,62 @@ class HeliosDataset(Dataset):
         """Initialize the dataset.
 
         Warning from OLMo-core:
-            In distributed settings, be sure that the :data:`work_dir` is shared among all local ranks 
-            and :data:`fs_local_rank` is set accordingly. Once those fields are set you should then call 
+            In distributed settings, be sure that the :data:`work_dir` is shared among all local ranks
+            and :data:`fs_local_rank` is set accordingly. Once those fields are set you should then call
             :meth:`prepare()` in the main process before doing anything else.
-        
+
         Args:
             samples: The samples to include in the dataset.
             path: The path to the dataset.
             dtype: The dtype of the data.
         """
-        self.samples = list(samples)
+        self.samples = self._process_samples(list(samples))
         self.path = path
         self.dtype = dtype
         self.fs_local_rank = get_fs_local_rank()
-        self.work_dir: Optional[Path] = None
+        self.work_dir: Path | None = None  # type: ignore
         self.work_dir_set = False
+
+    def _process_samples(self, samples: list[SampleInformation]) -> list[HeliosSample]:
+        """Process samples to adjust to the HeliosSample format."""
+        # Right now, we only need S2 data for the year data
+        # Instead of imputing the missing data, we just skip examples with missing months
+        # TODO: this is a temporary solution, we need to find a better way to handle this
+        processed_samples = []
+        for sample in samples:
+            for modality, image_tile in sample.modalities.items():
+                if modality == Modality.S2 and sample.time_span == TimeSpan.YEAR:
+                    timestamps = [i.start_time for i in image_tile.images]
+                    if len(timestamps) == 12:
+                        image = load_image_for_sample(image_tile, sample)
+                        s2_data = image.permute(
+                            1, 0, 2, 3
+                        )  # from [T, C, H, W] to [C, T, H, W]
+                        dt = pd.to_datetime(timestamps)
+                        time_data = np.array([dt.day, dt.month, dt.year])  # [3, T]
+                        # Get coordinates at projection units, and transform to latlon
+                        grid_size = (
+                            sample.grid_tile.resolution_factor
+                            * BASE_RESOLUTION
+                            * IMAGE_TILE_SIZE
+                        )
+                        x, y = (
+                            (sample.grid_tile.col + 0.5) * grid_size,
+                            (sample.grid_tile.row + 0.5) * grid_size,
+                        )
+                        transformer = Transformer.from_crs(
+                            sample.grid_tile.crs, "EPSG:4326", always_xy=True
+                        )
+                        lon, lat = transformer.transform(x, y)
+                        latlon_data = np.array([lat, lon])
+                        processed_samples.append(
+                            HeliosSample(
+                                s2=s2_data,
+                                latlon=latlon_data,
+                                timestamps=time_data,
+                            )
+                        )
+        return processed_samples
 
     @property
     def fingerprint_version(self) -> str:
@@ -165,25 +207,30 @@ class HeliosDataset(Dataset):
 
     @property
     def fs_local_rank(self) -> int:
+        """Get the fs local rank."""
         return self.fs_local_rank
 
     @fs_local_rank.setter
-    def fs_local_rank(self, fs_local_rank: int):
+    def fs_local_rank(self, fs_local_rank: int) -> None:
+        """Set the fs local rank."""
         self.fs_local_rank = fs_local_rank
 
     @property
     def work_dir(self) -> Path:
+        """Get the work directory."""
         if self.work_dir is not None:
             return self.work_dir
         else:
             return Path(tempfile.gettempdir())
 
     @work_dir.setter
-    def work_dir(self, work_dir: PathOrStr):
+    def work_dir(self, work_dir: PathOrStr) -> None:
+        """Set the work directory."""
         self.work_dir = Path(work_dir)
         self.work_dir_set = True
 
-    def prepare(self):
+    def prepare(self) -> None:
+        """Prepare the dataset."""
         len(self)
 
     def __len__(self) -> int:
@@ -192,15 +239,4 @@ class HeliosDataset(Dataset):
 
     def __getitem__(self, index: int) -> HeliosSample:
         """Get the item at the given index."""
-        sample: SampleInformation = self.samples[index]
-        for modality, image_tiles in sample.modalities.items():
-            image = load_image_for_sample(image_tile, sample)
-            if modality == Modality.S1:
-                s1_data = image.permute(1, 0, 2, 3)  # from TxCxHxW to CxTxHxW
-            elif modality == Modality.S2:
-                s2_data = image.permute(1, 0, 2, 3)  # from TxCxHxW to CxTxHxW
-            else:
-                pass
-        # TODO: convert grid_tile to latlon and timestamps
-        # TODO: either do imputation here, or just add padding to collate function, make all modalities have the same shape
-        return HeliosSample(s1=s1_data, s2=s2_data, latlon=sample.grid_tile.latlon, timestamps=sample.timestamps)
+        return self.samples[index]
