@@ -1,12 +1,15 @@
 """Dataset module for helios."""
 
 import logging
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Optional
 
 import numpy as np
-from olmo_core.data.numpy_dataset import NumpyDatasetBase
 from torch.utils.data import Dataset
 from upath import UPath
+from pathlib import Path
+
+from olmo_core.distributed.utils import get_fs_local_rank
+from olmo_core.aliases import PathOrStr
 
 from helios.constants import LATLON_BANDS, S2_BANDS, TIMESTAMPS
 from helios.data.data_source_io import DataSourceReader, DataSourceReaderRegistry
@@ -113,7 +116,7 @@ class HeliosSample(NamedTuple):
         return self.s2.shape[-1]
 
 
-class HeliosDataset(NumpyDatasetBase, Dataset):
+class HeliosDataset(Dataset):
     """Helios dataset."""
 
     def __init__(
@@ -127,8 +130,47 @@ class HeliosDataset(NumpyDatasetBase, Dataset):
             samples: The samples to include in the dataset.
             dtype: The dtype of the data.
         """
-        self.samples = samples
+        self.samples = list(samples)
         self.dtype = dtype
+        self.fs_local_rank = get_fs_local_rank()
+        self.work_dir: Optional[Path] = None
+        self.work_dir_set = False
+
+    @property
+    def fingerprint_version(self) -> str:
+        """The version of the fingerprint."""
+        return "v0.1"
+
+    @property
+    def fingerprint(self) -> str:
+        """Can be used to identify/compare a dataset."""
+        sha256_hash = hashlib.sha256()
+        # TODO: add helios dataset root path
+        sha256_hash.update(
+            f"sample_size={len(self.samples)},"
+            f"dtype={self.dtype}".encode()
+        )
+        return sha256_hash.hexdigest()
+
+    @property
+    def fs_local_rank(self) -> int:
+        return self.fs_local_rank
+
+    @fs_local_rank.setter
+    def fs_local_rank(self, fs_local_rank: int):
+        self.fs_local_rank = fs_local_rank
+
+    @property
+    def work_dir(self) -> Path:
+        if self.work_dir is not None:
+            return self.work_dir
+        else:
+            return Path(tempfile.gettempdir())
+
+    @work_dir.setter
+    def work_dir(self, work_dir: PathOrStr):
+        self.work_dir = Path(work_dir)
+        self.work_dir_set = True
 
     def __len__(self) -> int:
         """Get the length of the dataset."""
