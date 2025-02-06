@@ -1,7 +1,8 @@
-# ai2-olmo-core for now this must be pip installed on the v2 branch
+ # ai2-olmo-core for now this must be pip installed on the v2 branch
 class-registry
 einops==0.7.0
 gcsfs
+geobench
 numpy
 pandas
 pandera

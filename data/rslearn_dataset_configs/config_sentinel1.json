@@ -1,0 +1,396 @@
+{
+  "layers": {
+    "sentinel1_freq": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "query_config": {
+          "max_matches": 9999,
+          "space_mode": "INTERSECTS"
+        }
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo01": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "-180d"
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo02": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "-150d"
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo03": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "-120d"
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo04": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "-90d"
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo05": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "-60d"
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo06": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "-30d"
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo07": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "0d"
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo08": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "30d"
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo09": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "60d"
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo10": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "90d"
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo11": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "120d"
+      },
+      "type": "raster"
+    },
+    "sentinel1_mo12": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "ingest": false,
+        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "query": {
+          "sar:instrument_mode": {
+            "eq": "IW"
+          },
+          "sar:polarizations": {
+            "eq": [
+              "VV",
+              "VH"
+            ]
+          }
+        },
+        "time_offset": "150d"
+      },
+      "type": "raster"
+    }
+  }
+}

@@ -303,7 +303,7 @@
         },
         "name": "rslearn.data_sources.openstreetmap.OpenStreetMap",
         "pbf_fnames": [
-          "source_data/openstreetmap//china-latest.osm.pbf",
+          "source_data/openstreetmap/china-latest.osm.pbf",
           "source_data/openstreetmap/india-latest.osm.pbf",
           "source_data/openstreetmap/us-latest.osm.pbf"
         ],
@@ -311,7 +311,8 @@
           "max_matches": 16
         }
       },
-      "type": "vector"
+      "type": "vector",
+      "zoom_offset": 4
     }
   }
 }
