@@ -141,53 +141,27 @@ class HeliosDataset(Dataset):
             path: The path to the dataset.
             dtype: The dtype of the data.
         """
-        self.samples = self._process_samples(list(samples))
+        self.samples = self._filter_samples(list(samples))
         self.path = path
         self.dtype = dtype
         self.fs_local_rank = get_fs_local_rank()
         self.work_dir: Path | None = None  # type: ignore
         self.work_dir_set = False
 
-    def _process_samples(self, samples: list[SampleInformation]) -> list[HeliosSample]:
-        """Process samples to adjust to the HeliosSample format."""
-        # Right now, we only need S2 data for the year data
-        # Instead of imputing the missing data, we just skip examples with missing months
-        # TODO: this is a temporary solution, we need to find a better way to handle this
-        processed_samples = []
+    def _filter_samples(
+        self, samples: list[SampleInformation]
+    ) -> list[SampleInformation]:
+        """Filter samples to adjust to the HeliosSample format."""
+        # Right now, we only need S2 data with complete year data (12 months)
+        # Later, more modalities can be easily added
+        filtered_samples = []
         for sample in samples:
             for modality, image_tile in sample.modalities.items():
                 if modality == Modality.S2 and sample.time_span == TimeSpan.YEAR:
                     timestamps = [i.start_time for i in image_tile.images]
                     if len(timestamps) == 12:
-                        image = load_image_for_sample(image_tile, sample)
-                        s2_data = image.permute(
-                            1, 0, 2, 3
-                        )  # from [T, C, H, W] to [C, T, H, W]
-                        dt = pd.to_datetime(timestamps)
-                        time_data = np.array([dt.day, dt.month, dt.year])  # [3, T]
-                        # Get coordinates at projection units, and transform to latlon
-                        grid_size = (
-                            sample.grid_tile.resolution_factor
-                            * BASE_RESOLUTION
-                            * IMAGE_TILE_SIZE
-                        )
-                        x, y = (
-                            (sample.grid_tile.col + 0.5) * grid_size,
-                            (sample.grid_tile.row + 0.5) * grid_size,
-                        )
-                        transformer = Transformer.from_crs(
-                            sample.grid_tile.crs, "EPSG:4326", always_xy=True
-                        )
-                        lon, lat = transformer.transform(x, y)
-                        latlon_data = np.array([lat, lon])
-                        processed_samples.append(
-                            HeliosSample(
-                                s2=s2_data,
-                                latlon=latlon_data,
-                                timestamps=time_data,
-                            )
-                        )
-        return processed_samples
+                        filtered_samples.append(sample)
+        return filtered_samples
 
     @property
     def fingerprint_version(self) -> str:
@@ -239,4 +213,26 @@ class HeliosDataset(Dataset):
 
     def __getitem__(self, index: int) -> HeliosSample:
         """Get the item at the given index."""
-        return self.samples[index]
+        sample = self.samples[index]
+        sample_s2 = sample.modalities[Modality.S2]
+        timestamps = [i.start_time for i in sample_s2.images]
+        image = load_image_for_sample(sample_s2, sample)
+        s2_data = image.permute(1, 0, 2, 3)  # from [T, C, H, W] to [C, T, H, W]
+        dt = pd.to_datetime(timestamps)
+        time_data = np.array([dt.day, dt.month, dt.year])  # [3, T]
+        # Get coordinates at projection units, and transform to latlon
+        grid_resolution = sample.grid_tile.resolution_factor * BASE_RESOLUTION
+        x, y = (
+            (sample.grid_tile.col + 0.5) * grid_resolution * IMAGE_TILE_SIZE,
+            (sample.grid_tile.row + 0.5) * -grid_resolution * IMAGE_TILE_SIZE,
+        )
+        transformer = Transformer.from_crs(
+            sample.grid_tile.crs, "EPSG:4326", always_xy=True
+        )
+        lon, lat = transformer.transform(x, y)
+        latlon_data = np.array([lat, lon])
+        return HeliosSample(
+            s2=s2_data,
+            latlon=latlon_data,
+            timestamps=time_data,
+        )
