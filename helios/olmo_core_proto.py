@@ -185,4 +185,37 @@ if __name__ == "__main__":
         data_loader=dataloader,
     )
     trainer.fit()
+
+    # eval. Currently this will fail because by default our model ingests 4 timesteps.
+    # we should update the model architecture to ingest variable numbers of timesteps
+    from torch.utils.data import DataLoader
+
+    from helios.evals.datasets import GeobenchDataset
+    from helios.evals.embeddings import get_embeddings
+    from helios.evals.knn import run_knn
+
+    geobench_dir = UPath("/weka/skylight-default/presto-geobench/dataset/geobench")
+
+    common_args = {"geobench_dir": geobench_dir, "dataset": "m-eurosat"}
+    train_ds = GeobenchDataset(geobench_dir, "m-eurosat", "train", "default")
+    train_loader = DataLoader(train_ds, collate_fn=GeobenchDataset.collate_fn)
+    val_loader = DataLoader(
+        GeobenchDataset(geobench_dir, "m-eurosat", "valid", "default"),
+        collate_fn=GeobenchDataset.collate_fn,
+    )
+    train_embeddings, train_labels = get_embeddings(
+        data_loader=train_loader, model=encoder
+    )
+    val_embeddings, test_labels = get_embeddings(data_loader=val_loader, model=encoder)
+    val_result = run_knn(
+        eval_type="KNN-20",
+        train_embeddings=train_embeddings,
+        train_labels=train_labels,
+        test_embeddings=val_embeddings,
+        test_labels=test_labels,
+        num_classes=train_ds.num_classes,
+        is_multilabel=train_ds.is_multilabel,
+        device=device,
+    )
+    print(val_result)
     teardown_training_environment()

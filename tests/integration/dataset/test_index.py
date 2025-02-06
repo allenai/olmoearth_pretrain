@@ -26,7 +26,7 @@ def test_dataset_index(sample_index_path: str) -> None:
     # Define expected paths (split into multiple lines to fix line length)
     expected_paths = {
         "sentinel2": (
-            "tests/fixtures/sample-dataset/sentinel2_monthly/" "example_001.tif"
+            "tests/fixtures/sample-dataset/sentinel2_monthly/example_001.tif"
         ),
         "naip": "tests/fixtures/sample-dataset/naip/example_001.tif",
         "worldcover": "tests/fixtures/sample-dataset/worldcover/example_001.tif",
