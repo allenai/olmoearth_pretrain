@@ -1,5 +1,6 @@
 """Simple set up of latent predictor."""
 
+# TODO: THis should be adapted when we make everything work with new architecture
 from copy import deepcopy
 
 import torch

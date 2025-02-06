@@ -1,5 +1,6 @@
 """Mock Encoder code for the Latent MIM loss set up."""
 
+# TODO:DELETE THIS FILE WHEN ARCHIITECTURE IS REINCORPORATED into main training code
 import torch
 import torch.nn as nn
 

@@ -28,6 +28,7 @@ class TokensOnly(NamedTuple):
     s2: torch.Tensor
 
 
+# TokensAndMasks will pretty much never change
 class TokensAndMasks(NamedTuple):
     """Output to compute the loss on.
 
@@ -1068,8 +1069,6 @@ if __name__ == "__main__":
 
     from helios.constants import S2_BANDS
 
-    # I want an example that I can start running
-    # I am going to create a batch of 2 samples
     # Each band set is stored at different resolutions for monthly so that has to happen for us to load in
     path_to_example_s2_scene = "gs://ai2-helios/data/20250130-sample-dataset-helios/10_sentinel2_monthly/EPSG:32610_165_-1971_10.tif"
     other_bands_s2 = "gs://ai2-helios/data/20250130-sample-dataset-helios/10_sentinel2_monthly/EPSG:32610_165_-1971_20.tif"

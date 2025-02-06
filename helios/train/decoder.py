@@ -1,5 +1,6 @@
 """Decoder code for the Latent MIM loss set up."""
 
+# TODO:DELETE THIS FILE WHEN ARCHIITECTURE IS REINCORPORATED into main training code
 import torch
 from torch import nn
 
