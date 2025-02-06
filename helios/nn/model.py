@@ -169,7 +169,6 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         return TokensAndMasks(**output_dict)
 
 
-# SHould this be called FlexiHeliosCompositeEncodings? or FlexiHeliosCompositeEmbeddings?
 class FlexiHeliosCompositeEncodings(nn.Module):
     """Composite encodings for the FlexiHelios model."""
 

@@ -2,8 +2,8 @@
 
 import torch
 
+from helios.nn.model import TokensAndMasks
 from helios.train.loss import PatchDiscriminationLoss
-from helios.train.model import TokensAndMasks
 
 
 def test_patch_disc_loss() -> None:
