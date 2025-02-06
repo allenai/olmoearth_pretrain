@@ -1165,12 +1165,3 @@ if __name__ == "__main__":
     # Add S1 data into the test
     # add additional unit tests for the tsub components
     # clean up Refactor and SUbmit the PR
-    # write the decoder and all unit tests for the decoder
-    # Add S1 data into the test
-    # add additional unit tests for the tsub components
-    # clean up Refactor and SUbmit the PR
-    # add additional unit tests for the tsub components
-    # clean up Refactor and SUbmit the PR
-    # clean up Refactor and SUbmit the PR
-    # add additional unit tests for the tsub components
-    # clean up Refactor and SUbmit the PR
