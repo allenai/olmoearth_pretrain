@@ -1,7 +1,5 @@
 """Unit tests for the core model code"""
 
-from collections import OrderedDict
-
 import pytest
 import torch
 from einops import repeat
@@ -17,9 +15,7 @@ class TestEncoder:
         Returns:
             Encoder: Test encoder instance with small test config
         """
-        modalities_dict = OrderedDict(
-            {"s2": OrderedDict({"rgb": [0, 1, 2], "nir": [3]})}
-        )
+        modalities_dict = dict({"s2": dict({"rgb": [0, 1, 2], "nir": [3]})})
         return Encoder(
             embedding_size=8,
             max_patch_size=8,
@@ -214,29 +210,7 @@ class TestEncoder:
             4,
         ], f"Incorrect shape for modality2 tokens: {modality2_tokens.shape}"
 
-    def test_apply_attn(self, encoder: Encoder) -> None:
-        """Test applying attention layers with masking.
 
-        Args:
-            encoder: Test encoder instance
-        """
-        pass
+# TODO: write unit tests for applying the Composite encodings
 
-    def test_forward(self, encoder: Encoder) -> None:
-        """Test full forward pass.
-
-        Args:
-            encoder: Test encoder instance
-        """
-        pass
-
-
-# First write unit testss for all the complex mask manipulation stuff in the Encoder
-
-# Then write a unit test for applying the Composite encodings
-
-# Then write a unit test for the FlexiPatchEmbeddings
-
-# Then write a unit test for the encoder apply attention
-
-# Then write a unit test for encoder forward
+# TODO: write a unit test for the FlexiPatchEmbeddings

@@ -2,7 +2,7 @@
 
 import logging
 from collections import OrderedDict
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 import torch
 import torch.nn.functional as F
@@ -11,11 +11,9 @@ from torch import Tensor, nn
 
 from helios.constants import BASE_GSD
 from helios.nn.attention import Block
-from helios.nn.encodings import (
-    get_1d_sincos_pos_encoding,
-    get_2d_sincos_pos_encoding_with_resolution,
-    get_month_encoding_table,
-)
+from helios.nn.encodings import (get_1d_sincos_pos_encoding,
+                                 get_2d_sincos_pos_encoding_with_resolution,
+                                 get_month_encoding_table)
 from helios.nn.flexi_patch_embed import FlexiPatchEmbed
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
@@ -313,8 +311,61 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         return TokensOnly(**output_dict)
 
 
-# I want this class to be slighlty more agnostic to the passed in encoding class and have that be configurable too
-class Encoder(nn.Module):
+class FlexiHeliosBase(nn.Module):
+    """FlexiHeliosBase is a base class for FlexiHelios models."""
+
+    cross_attn: bool
+
+    def __init__(
+        self,
+        embedding_size: int,
+        max_sequence_length: int,
+        base_patch_size: int,
+        use_channel_embs: bool,
+        num_heads: int,
+        mlp_ratio: float,
+        depth: int,
+        drop_path: float,
+        modalities_to_channel_groups_dict: dict[str, dict[str, list[int]]],
+    ):
+        """Initialize the FlexiHeliosBase class."""
+        super().__init__()
+
+        self.embedding_size = embedding_size
+        self.modalities_to_channel_groups_dict = modalities_to_channel_groups_dict
+        logger.info(
+            f"modalities being used by model: {modalities_to_channel_groups_dict.keys()}"
+        )
+
+        self.max_sequence_length = max_sequence_length
+        self.base_patch_size = base_patch_size
+        self.use_channel_embs = use_channel_embs
+
+        self.blocks = ModuleListWithInit(
+            [
+                Block(
+                    embedding_size,
+                    num_heads,
+                    mlp_ratio,
+                    qkv_bias=True,
+                    norm_layer=nn.LayerNorm,  # TODO: This should be configurable
+                    cross_attn=self.cross_attn,
+                    drop_path=drop_path,
+                )
+                for _ in range(depth)
+            ]
+        )
+
+        self.composite_encodings = FlexiHeliosCompositeEncodings(
+            embedding_size,
+            modalities_to_channel_groups_dict,
+            max_sequence_length,
+            base_patch_size,
+            use_channel_embs,
+        )
+
+
+class Encoder(FlexiHeliosBase):
     """Encoder module that processes masked input samples into token representations."""
 
     cross_attn: bool = False
@@ -332,23 +383,16 @@ class Encoder(nn.Module):
         base_patch_size: int,
         use_channel_embs: bool = True,
     ):
-        super().__init__()
-        self.embedding_size = embedding_size
-        self.modalities_to_channel_groups_dict = modalities_to_channel_groups_dict
-        logger.info(
-            f"modalities being used by model: {modalities_to_channel_groups_dict.keys()}"
-        )
-
-        self.max_sequence_length = max_sequence_length
-        self.base_patch_size = base_patch_size
-        self.use_channel_embs = use_channel_embs
-
-        self.composite_encodings = FlexiHeliosCompositeEncodings(
-            embedding_size,
-            modalities_to_channel_groups_dict,
-            max_sequence_length,
-            base_patch_size,
-            use_channel_embs,
+        super().__init__(
+            embedding_size=embedding_size,
+            depth=depth,
+            mlp_ratio=mlp_ratio,
+            num_heads=num_heads,
+            max_sequence_length=max_sequence_length,
+            base_patch_size=base_patch_size,
+            use_channel_embs=use_channel_embs,
+            drop_path=drop_path,
+            modalities_to_channel_groups_dict=modalities_to_channel_groups_dict,
         )
         self.patch_embeddings = FlexiHeliosPatchEmbeddings(
             modalities_to_channel_groups_dict,
@@ -356,21 +400,6 @@ class Encoder(nn.Module):
             embedding_size,
         )
         self.norm = nn.LayerNorm(embedding_size)
-
-        self.blocks = ModuleListWithInit(
-            [
-                Block(
-                    embedding_size,
-                    num_heads,
-                    mlp_ratio,
-                    qkv_bias=True,
-                    norm_layer=nn.LayerNorm,  # TODO: This should be configurable
-                    cross_attn=self.cross_attn,
-                    drop_path=drop_path,
-                )
-                for _ in range(depth)
-            ]
-        )
 
     def collapse_and_combine_hwtc(self, x: TokensAndMasks) -> tuple[Tensor, Tensor]:
         """Collapse the tokens and masks, respectively, into two tensors"""
@@ -694,6 +723,50 @@ class Encoder(nn.Module):
 class Predictor(nn.Module):
     """Predictor module that generates predictions from encoded tokens."""
 
+    cross_attn = True
+
+    def __init__(
+        self,
+        encoder_embedding_size: int = 128,
+        decoder_embedding_size: int = 128,
+        depth=2,
+        mlp_ratio=2,
+        num_heads=8,
+        max_sequence_length=24,
+        max_patch_size: int = 8,
+        learnable_channel_embeddings: bool = False,
+        output_embedding_size: Optional[int] = None,
+    ):
+        # Need to refactor the Encoder to subclass the shared components because we want the exact same apply encodings etc
+        super().__init__(
+            decoder_embedding_size,
+            depth,
+            mlp_ratio,
+            num_heads,
+            max_sequence_length,
+            max_patch_size,
+            use_channel_embs=learnable_channel_embeddings,
+            drop_path=0.0,
+        )
+        self.learnable_channel_embeddings = learnable_channel_embeddings
+        self.encoder_embedding_size = encoder_embedding_size
+        self.encoder_to_decoder_embed = nn.Linear(
+            encoder_embedding_size, decoder_embedding_size, bias=True
+        )
+        if output_embedding_size is None:
+            output_embedding_size = encoder_embedding_size
+        self.output_embedding_size = output_embedding_size
+        self.to_output_embed = nn.Linear(
+            decoder_embedding_size, output_embedding_size, bias=True
+        )
+        # THIS is the learnable mask token
+        self.mask_token = nn.Parameter(torch.zeros(decoder_embedding_size))
+
+        self.max_patch_size = max_patch_size
+        self.input_norm = nn.LayerNorm(encoder_embedding_size)
+        self.norm = nn.LayerNorm(decoder_embedding_size)
+        self.apply(self._init_weights)
+
     def forward(self, x: TokensAndMasks) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -703,7 +776,9 @@ class Predictor(nn.Module):
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
         """
-        raise NotImplementedError
+        # Apply Input Norms and encoder to decoder embeds to each modality
+
+        # A
 
 
 if __name__ == "__main__":
@@ -832,8 +907,7 @@ if __name__ == "__main__":
     )
     print(encoded_tokens)
 
-    # Write unit tests for all the components of the encoder
     # write the decoder and all unit tests for the decoder
     # Add S1 data into the test
-    # add additional unit tests for the torch sub components
+    # add additional unit tests for the tsub components
     # clean up Refactor and SUbmit the PR

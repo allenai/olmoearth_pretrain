@@ -22,7 +22,7 @@ def get_1d_sincos_pos_encoding(pos: torch.Tensor, encoding_dim: int) -> torch.Te
     Returns:
         encoding: position encoding for the given positions: size (L, D)
     """
-    assert encoding_dim % 2 == 0
+    assert encoding_dim % 2 == 0, f"encoding_dim must be even, got {encoding_dim}"
     omega = torch.arange(encoding_dim // 2, device=pos.device) / encoding_dim / 2.0
     omega = 1.0 / 10000**omega  # (D/2,)
 
@@ -47,8 +47,9 @@ def get_2d_sincos_pos_encoding(grid: torch.Tensor, encoding_dim: int) -> torch.T
     assert encoding_dim % 2 == 0
 
     # use half of dimensions to encode grid_h
-    emb_h = get_1d_sincos_pos_encoding(grid[0], encoding_dim // 2)  # (h*w, D/2)
-    emb_w = get_1d_sincos_pos_encoding(grid[1], encoding_dim // 2)  # (h*w, D/2)
+    encoding_dim_1d = encoding_dim // 2
+    emb_h = get_1d_sincos_pos_encoding(grid[0], encoding_dim_1d)  # (h*w, D/2)
+    emb_w = get_1d_sincos_pos_encoding(grid[1], encoding_dim_1d)  # (h*w, D/2)
 
     emb = torch.cat([emb_h, emb_w], dim=1)  # (h*w, D)
     return emb
