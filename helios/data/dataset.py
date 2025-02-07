@@ -10,17 +10,16 @@ import numpy as np
 import pandas as pd
 import torch
 from einops import rearrange
-from olmo_core.aliases import PathOrStr
-from olmo_core.distributed.utils import get_fs_local_rank
-from pyproj import Transformer
-from torch.utils.data import Dataset
-from upath import UPath
-
 from helios.constants import LATLON_BANDS, S2_BANDS, TIMESTAMPS
 from helios.data.constants import BASE_RESOLUTION, IMAGE_TILE_SIZE, Modality
 from helios.dataset.parse import TimeSpan
 from helios.dataset.sample import SampleInformation, load_image_for_sample
 from helios.types import ArrayTensor
+from olmo_core.aliases import PathOrStr
+from olmo_core.distributed.utils import get_fs_local_rank
+from pyproj import Transformer
+from torch.utils.data import Dataset
+from upath import UPath
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +63,23 @@ class HeliosSample(NamedTuple):
             else:
                 return_dict[field] = val
         return return_dict
+
+    def to_device(self, device: torch.device) -> "HeliosSample":
+        """Move all tensors to the specified device.
+
+        Args:
+            device: The device to move the tensors to.
+
+        Returns:
+            A new HeliosSample with all tensors moved to the specified device.
+        """
+        return HeliosSample(
+            s2=self.s2.to(device) if self.s2 is not None else None,
+            latlon=self.latlon.to(device) if self.latlon is not None else None,
+            timestamps=(
+                self.timestamps.to(device) if self.timestamps is not None else None
+            ),
+        )
 
     @staticmethod
     def attribute_to_bands() -> dict[str, list[str]]:

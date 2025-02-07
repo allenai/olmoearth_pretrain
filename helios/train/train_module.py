@@ -12,24 +12,22 @@ import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 import torch.nn as nn
 from einops import rearrange
+from helios.train.masking import MaskedHeliosSample, MaskingConfig
 from olmo_core.config import Config, DType
-from olmo_core.distributed.parallel import (
-    DataParallelConfig,
-    DataParallelType,
-    build_device_mesh,
-    get_dp_mesh,
-    get_dp_process_group,
-)
+from olmo_core.distributed.parallel import (DataParallelConfig,
+                                            DataParallelType,
+                                            build_device_mesh, get_dp_mesh,
+                                            get_dp_process_group)
 from olmo_core.distributed.utils import get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.float8 import Float8Config, Float8Handler
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
-from olmo_core.train.train_module import EvalBatchSizeUnit, EvalBatchSpec, TrainModule
-from olmo_core.train.train_module.transformer import (
-    TransformerActivationCheckpointingConfig,
-)
+from olmo_core.train.train_module import (EvalBatchSizeUnit, EvalBatchSpec,
+                                          TrainModule)
+from olmo_core.train.train_module.transformer import \
+    TransformerActivationCheckpointingConfig
 from olmo_core.utils import gc_cuda, get_default_device, move_to_device
 from torch.distributed.checkpoint.metadata import Metadata
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -151,6 +149,7 @@ class HeliosTrainModule(TrainModule):
         self,
         model: Any,
         optim: OptimConfig,
+        masking_config: MaskingConfig,
         rank_batch_size: int,
         compile_model: bool = False,
         float8_config: Float8Config | None = None,
@@ -195,6 +194,7 @@ class HeliosTrainModule(TrainModule):
             f"Data parallel world size = {get_world_size(self.dp_process_group):,d}"
         )
         self.base_loss_fn = loss_fn
+        self.masking_strategy = masking_config.build()
         if compile_loss:
             self.base_loss_fn = torch.compile(self.base_loss_fn)
 
@@ -357,7 +357,7 @@ class HeliosTrainModule(TrainModule):
         """Zero the gradients."""
         self.optimizer.zero_grad(set_to_none=True)
 
-    def train_batch(self, batch: dict[str, Any], dry_run: bool = False) -> None:
+    def train_batch(self, batch: MaskedHeliosSample, dry_run: bool = False) -> None:
         """Train a batch."""
         # Record how many instances are going to be skipped (masked out).
         # if (instance_mask := batch.get("instance_mask")) is not None and not dry_run:
@@ -365,10 +365,11 @@ class HeliosTrainModule(TrainModule):
 
         # Move tensors to the right device.
         # we may want to modify this
-        batch = move_to_device(batch, self.device)
+        batch = batch.to_device(self.device)
+        masked_batch = self.masking_strategy.apply_mask(batch)
 
         # Run Encoder and decoder on the augmented input
-        decoded, loss = self.model_forward(batch)
+        decoded, loss = self.model_forward(masked_batch)
 
         self.trainer.record_metric(
             TRAIN_PATCH_DISC_LOSS_METRIC,
@@ -477,14 +478,12 @@ class HeliosTrainModule(TrainModule):
 
     def model_forward(
         self,
-        batch: dict[str, Any],
+        batch: MaskedHeliosSample,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         """Run a forward pass."""
         with self._model_forward_context():
             with torch.no_grad():
-                s2_data = batch["sentinel2"]
-                input = rearrange(s2_data, "b h w t c -> b c t h w")
-                target_output = self.model.target_encoder.forward(input)
+                target_output = self.model.target_encoder.forward(batch)
 
             # Run Encoder and decoder on the augmented input
             decoded = self.model.forward(input)
@@ -565,6 +564,9 @@ class HeliosTrainModule(TrainModule):
                 total_norm **= 1.0 / norm_type
 
         torch.nn.utils.clip_grads_with_norm_(
+            parameters, max_grad_norm, total_norm, foreach=foreach
+        )
+        return total_norm
             parameters, max_grad_norm, total_norm, foreach=foreach
         )
         return total_norm
