@@ -16,10 +16,10 @@ from olmo_core.train.config import TrainerConfig
 from olmo_core.utils import get_default_device
 from upath import UPath
 
-from helios.data.collator import per_modality_collate_fn
 from helios.data.dataloader import HeliosDataLoader
-from helios.data.dataset import HeliosDataset
-from helios.dataset.index import DatasetIndexParser
+from helios.data.dataset import HeliosDataset, collate_helios
+from helios.dataset.parse import parse_helios_dataset
+from helios.dataset.sample import image_tiles_to_samples
 from helios.latent_predictor import LatentMIMStyle
 from helios.train.callbacks.speed_monitor import HeliosSpeedMonitorCallback
 from helios.train.decoder import SimpleLatentDecoder
@@ -109,10 +109,6 @@ if __name__ == "__main__":
     # set log level to debug
     logger.setLevel(logging.DEBUG)
 
-    index_path = "/weka/dfive-default/helios_sample_data/20250115-sample-dataset-helios/index.csv"
-    index_parser = DatasetIndexParser(index_path)
-    samples = index_parser.samples
-
     # Variable masking is not used
     encoder = PatchEncoder(
         in_channels=13,
@@ -142,18 +138,24 @@ if __name__ == "__main__":
     )
     train_module = train_module_config.build(model=model)
     dp_process_group = train_module.dp_process_group
-    dataloader = HeliosDataLoader.wrap_numpy_dataset(
+
+    # Prepare samples from Helios dataset
+    tile_path = "/weka/dfive-default/helios_sample_data/20250130-sample-dataset-helios/"
+    tiles = parse_helios_dataset(tile_path)
+    samples = image_tiles_to_samples(tiles)
+
+    # Create HeliosDataLoader
+    dataloader = HeliosDataLoader(
         dataset=HeliosDataset(
             *samples,
-            ignore_data_sources=["openstreetmap"],
-            filter_samples_with_missing_inputs=True,
+            path=tile_path,
             dtype=np.dtype("float32"),
         ),
+        collator=collate_helios,
         global_batch_size=GLOBAL_BATCH_SIZE,
         dp_world_size=get_world_size(dp_process_group),
         dp_rank=get_rank(dp_process_group),
         fs_local_rank=get_fs_local_rank(),
-        collator=per_modality_collate_fn,
         work_dir=workdir,
         num_threads=NUM_THREADS,
         num_workers=NUM_WORKERS,

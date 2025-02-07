@@ -1,16 +1,25 @@
 """Dataset module for helios."""
 
+import hashlib
 import logging
+import tempfile
+from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
-from olmo_core.data.numpy_dataset import NumpyDatasetBase
+import pandas as pd
+import torch
+from einops import rearrange
+from olmo_core.aliases import PathOrStr
+from olmo_core.distributed.utils import get_fs_local_rank
+from pyproj import Transformer
 from torch.utils.data import Dataset
 from upath import UPath
 
 from helios.constants import LATLON_BANDS, S2_BANDS, TIMESTAMPS
-from helios.data.data_source_io import DataSourceReader, DataSourceReaderRegistry
-from helios.dataset.index import SampleInformation
+from helios.data.constants import BASE_RESOLUTION, IMAGE_TILE_SIZE, Modality
+from helios.dataset.parse import TimeSpan
+from helios.dataset.sample import SampleInformation, load_image_for_sample
 from helios.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
@@ -113,100 +122,141 @@ class HeliosSample(NamedTuple):
         return self.s2.shape[-1]
 
 
-class HeliosDataset(NumpyDatasetBase, Dataset):
+def collate_helios(batch: list[HeliosSample]) -> HeliosSample:
+    """Collate function."""
+
+    # Stack tensors while handling None values
+    def stack_or_none(attr: str) -> torch.Tensor | None:
+        """Stack the tensors while handling None values."""
+        if batch[0].__getattribute__(attr) is None:
+            return None
+        return torch.stack([getattr(sample, attr) for sample in batch], dim=0)
+
+    return HeliosSample(
+        s2=stack_or_none("s2"),
+        latlon=stack_or_none("latlon"),
+        timestamps=stack_or_none("timestamps"),
+    )
+
+
+class HeliosDataset(Dataset):
     """Helios dataset."""
 
     def __init__(
         self,
         *samples: SampleInformation,
-        ignore_data_sources: list[str] = [],
-        filter_samples_with_missing_inputs: bool = False,
-        dtype: np.dtype,
+        path: UPath,
+        dtype: np.dtype = np.float32,
     ):
         """Initialize the dataset.
 
-        Things that would need to be optional or should be forgotten about, or changed
-        - paths would need to ba dictionary or collection of paths for this to work
-        - pad_token_id: int,
-        - eos_token_id: int,
-        - vocab_size: int,
+        Warning from OLMo-core:
+            In distributed settings, be sure that the :data:`work_dir` is shared among all local ranks
+            and :data:`fs_local_rank` is set accordingly. Once those fields are set you should then call
+            :meth:`prepare()` in the main process before doing anything else.
+
+        Args:
+            samples: The samples to include in the dataset.
+            path: The path to the dataset.
+            dtype: The dtype of the data.
         """
-        self.ignore_data_sources = ignore_data_sources
-        if filter_samples_with_missing_inputs:
-            filtered_samples = [
-                sample
-                for sample in samples
-                if not sample.sample_metadata["has_missing_inputs"]
-            ]
-        else:
-            filtered_samples = list(samples)
-        super().__init__(
-            *filtered_samples,
-            dtype=dtype,
-            pad_token_id=-1,  # Not needed only LM
-            eos_token_id=-1,  # Not needed only LM
-            vocab_size=-1,  # Not needed only LM
-        )
+        self.samples = self._filter_samples(list(samples))
+        self.path = path
+        self.dtype = dtype
+        self._fs_local_rank = get_fs_local_rank()
+        self._work_dir: Path | None = None  # type: ignore
+        self._work_dir_set = False
+
+    def _filter_samples(
+        self, samples: list[SampleInformation]
+    ) -> list[SampleInformation]:
+        """Filter samples to adjust to the HeliosSample format."""
+        # Right now, we only need S2 data with complete year data (12 months)
+        # Later, more modalities can be easily added
+        filtered_samples = []
+        for sample in samples:
+            for modality, image_tile in sample.modalities.items():
+                if modality == Modality.S2 and sample.time_span == TimeSpan.YEAR:
+                    timestamps = [i.start_time for i in image_tile.images]
+                    if len(timestamps) == 12:
+                        filtered_samples.append(sample)
+        return filtered_samples
 
     @property
-    def max_sequence_length(self) -> int:
-        """Max sequence length."""
-        # NOT SUPER needed
-        # instances are always based on batch size
-        return 1
+    def fingerprint_version(self) -> str:
+        """The version of the fingerprint."""
+        return "v0.1"
 
     @property
     def fingerprint(self) -> str:
-        """Fingerprint of the dataset."""
-        import hashlib
-
+        """Can be used to identify/compare a dataset."""
         sha256_hash = hashlib.sha256()
-        sha256_hash.update(f"dtype={self.dtype}".encode())
-        logger.warning("Fingerprint: is not yet meaningful")
+        sha256_hash.update(
+            f"path={self.path},"
+            f"sample_size={len(self.samples)},"
+            f"dtype={self.dtype}".encode()
+        )
         return sha256_hash.hexdigest()
+
+    @property
+    def fs_local_rank(self) -> int:
+        """Get the fs local rank."""
+        return self._fs_local_rank
+
+    @fs_local_rank.setter
+    def fs_local_rank(self, _fs_local_rank: int) -> None:
+        """Set the fs local rank."""
+        self._fs_local_rank = _fs_local_rank
+
+    @property
+    def work_dir(self) -> Path:
+        """Get the working directory."""
+        if self._work_dir is not None:
+            return self._work_dir
+        else:
+            return Path(tempfile.gettempdir())
+
+    @work_dir.setter
+    def work_dir(self, _work_dir: PathOrStr) -> None:
+        """Set the working directory."""
+        self._work_dir = Path(_work_dir)
+        self._work_dir_set = True
+
+    @property
+    def work_dir_set(self) -> bool:
+        """Check if the working directory was explicitly set."""
+        return self._work_dir_set
+
+    def prepare(self) -> None:
+        """Prepare the dataset."""
+        len(self)
 
     def __len__(self) -> int:
         """Get the length of the dataset."""
-        return len(self.paths)
+        return len(self.samples)
 
-    def _load_data_source(
-        self, file_path: UPath | str, data_source: str
-    ) -> np.ndarray | dict[str, Any]:
-        """Load data from a data source using the appropriate reader.
-
-        Args:
-            file_path: Path to the data file
-            data_source: Name of the data source
-
-        Returns:
-            Either a numpy array or a dictionary of data
-        """
-        try:
-            reader: DataSourceReader = DataSourceReaderRegistry.get_class(data_source)
-            return reader.load(file_path)
-        except Exception as e:
-            logger.error(f"Error loading {file_path} from {data_source}: {e}")
-            raise
-
-    def __getitem__(self, index: int) -> dict[str, Any]:
+    def __getitem__(self, index: int) -> HeliosSample:
         """Get the item at the given index."""
-        sample: SampleInformation = self.paths[index]
-        data_source_paths = sample.data_source_paths
-        data_inputs = {}
-        max_num_timesteps = 1
-        for data_source, file_path in data_source_paths.items():
-            if data_source in self.ignore_data_sources:
-                continue
-            data_input = self._load_data_source(file_path, data_source)
-            if isinstance(data_input, np.ndarray):
-                max_num_timesteps = max(max_num_timesteps, data_input.shape[2])
-                # make the data all have same dtype
-                data_input = data_input.astype(self.dtype)
-            data_inputs[data_source] = data_input
-
-        return {
-            "data_inputs": data_inputs,
-            "sample_metadata": sample.sample_metadata,
-            "num_timesteps": max_num_timesteps,
-            "data_source_metadata": sample.data_source_metadata,
-        }
+        sample = self.samples[index]
+        sample_s2 = sample.modalities[Modality.S2]
+        timestamps = [i.start_time for i in sample_s2.images]
+        image = load_image_for_sample(sample_s2, sample)
+        s2_data = rearrange(image, "t c h w -> c t h w")
+        dt = pd.to_datetime(timestamps)
+        time_data = np.array([dt.day, dt.month, dt.year])  # [3, T]
+        # Get coordinates at projection units, and then transform to latlon
+        grid_resolution = sample.grid_tile.resolution_factor * BASE_RESOLUTION
+        x, y = (
+            (sample.grid_tile.col + 0.5) * grid_resolution * IMAGE_TILE_SIZE,
+            (sample.grid_tile.row + 0.5) * -grid_resolution * IMAGE_TILE_SIZE,
+        )
+        transformer = Transformer.from_crs(
+            sample.grid_tile.crs, "EPSG:4326", always_xy=True
+        )
+        lon, lat = transformer.transform(x, y)
+        latlon_data = np.array([lat, lon])
+        return HeliosSample(
+            s2=s2_data,
+            latlon=latlon_data,
+            timestamps=time_data,
+        )

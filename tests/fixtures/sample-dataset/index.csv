@@ -1,5 +1,0 @@
-example_id,projection,resolution,start_column,start_row,time,sentinel2_monthly,sentinel2_freq,naip,worldcover,openstreetmap
-example_001,EPSG:4326,10,500000,4000000,2023-01-01T00:00:00+00:00,y,y,y,y,y
-example_002,EPSG:4326,10,510000,4100000,2023-01-01T00:00:00+00:00,y,n,y,n,n
-example_003,EPSG:4326,10,520000,4200000,2023-01-01T00:00:00+00:00,n,y,n,y,y
-example_004,EPSG:4326,10,530000,4300000,2023-01-01T00:00:00+00:00,n,n,y,n,y
