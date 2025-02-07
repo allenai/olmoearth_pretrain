@@ -117,7 +117,9 @@ class RandomMaskingStrategy(MaskingStrategy):
         # hopefully this will allow for reproducibility, since random is seeded
         rng = np.random.default_rng(random.randint(0, 100))
         flat_mask_tokens = rng.permuted(flat_mask_tokens, axis=1)
-        static_mask = rearrange(flat_mask_tokens, "(b t) -> b t", b=b, t=len(channel_groups_dict))
+        static_mask = rearrange(
+            flat_mask_tokens, "(b t) -> b t", b=b, t=len(channel_groups_dict)
+        )
         if return_tensor_device:
             return torch.from_numpy(static_mask).to(return_tensor_device)
         else:
