@@ -4,13 +4,7 @@ import pytest
 import torch
 from einops import repeat
 
-from helios.nn.model import (
-    Encoder,
-    FlexiHeliosBase,
-    Predictor,
-    TokensAndMasks,
-    TokensOnly,
-)
+from helios.nn.model import Encoder, FlexiHeliosBase, Predictor, TokensAndMasks
 from helios.train.masking import MaskValue
 
 
@@ -117,7 +111,7 @@ class TestEncoder:
         """
         B, H, W, T, D = 1, 2, 2, 2, 4
         s2_tokens = torch.zeros(B, H, W, T, D)
-        x = TokensOnly(s2_tokens)
+        x = {"s2": s2_tokens}
 
         token_exit_cfg = {"rgb": 1, "nir": 2}
         exit_ids_dict = encoder.create_token_exit_ids(x, token_exit_cfg)
@@ -144,7 +138,7 @@ class TestEncoder:
         """
         B, H, W, T, D = 1, 2, 2, 2, 4
         s2_tokens = torch.zeros(B, H, W, T, D)
-        x = TokensOnly(s2_tokens)
+        x = {"s2": s2_tokens}
 
         with pytest.raises(KeyError):
             incomplete_exit_cfg = {"rgb": 1}  # Missing the "nir" key

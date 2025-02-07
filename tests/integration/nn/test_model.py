@@ -94,8 +94,8 @@ class TestEncoder:
         s2_mask = torch.zeros(B, H, W, T, num_channel_groups, dtype=torch.long)
         latlon = torch.randn(B, 2)
         latlon_mask = torch.ones(B, 2, dtype=torch.float32)
-        days = torch.randint(1, 31, (B, 1, T), dtype=torch.long)
-        months = torch.randint(1, 13, (B, 1, T), dtype=torch.long)
+        days = torch.randint(0, 25, (B, 1, T), dtype=torch.long)
+        months = torch.randint(0, 12, (B, 1, T), dtype=torch.long)
         years = torch.randint(2018, 2020, (B, 1, T), dtype=torch.long)
         timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
 
@@ -147,8 +147,8 @@ class TestEncoder:
         latlon = torch.randn(B, 2)
         latlon_mask = torch.ones(B, 2, dtype=torch.float32)
         # Generate valid timestamps with month in [1, 12]
-        days = torch.randint(1, 31, (B, 1, T), dtype=torch.long)
-        months = torch.randint(1, 13, (B, 1, T), dtype=torch.long)
+        days = torch.randint(0, 25, (B, 1, T), dtype=torch.long)
+        months = torch.randint(0, 12, (B, 1, T), dtype=torch.long)
         years = torch.randint(2018, 2020, (B, 1, T), dtype=torch.long)
         timestamps = torch.cat([days, months, years], dim=1)
 

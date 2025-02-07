@@ -1,7 +1,6 @@
 """Model code for the Helios model."""
 
 import logging
-from collections import OrderedDict
 from typing import NamedTuple
 
 import torch
@@ -22,13 +21,7 @@ from helios.train.masking import MaskedHeliosSample, MaskValue
 logger = logging.getLogger(__name__)
 
 
-class TokensOnly(NamedTuple):
-    """Container for token tensors without masks."""
-
-    s2: torch.Tensor
-
-
-# TokensAndMasks will pretty much never change
+# TokensAndMasks will pretty much never change so we may want this in a more central location near train module
 class TokensAndMasks(NamedTuple):
     """Output to compute the loss on.
 
@@ -245,11 +238,11 @@ class FlexiHeliosCompositeEncodings(nn.Module):
     # TODO: Maybe this should just return a dict so we don't do so much unpacking and repacking
     def forward(
         self,
-        per_modality_input_tokens: TokensOnly,
+        per_modality_input_tokens: dict[str, Tensor],
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
-    ) -> TokensOnly:
+    ) -> dict[str, Tensor]:
         """Apply the encodings to the patchified data.
 
         Args:
@@ -265,7 +258,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         for modality in self.modalities_to_channel_groups_dict.keys():
             # TODO: We will need to be able to handle modalities that do not need all these types of encodings
             # For right now we are going to have S1, S2 and worldcover so this does not support worldcover
-            modality_tokens: Tensor = getattr(per_modality_input_tokens, modality)
+            modality_tokens: Tensor = per_modality_input_tokens[modality]
 
             if len(modality_tokens.shape) < 5:
                 raise NotImplementedError(
@@ -328,7 +321,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             )
             output_dict[modality] = modality_embed + modality_tokens
 
-        return TokensOnly(**output_dict)
+        return output_dict
 
 
 class FlexiHeliosBase(nn.Module):
@@ -430,7 +423,7 @@ class FlexiHeliosBase(nn.Module):
             x: Tokens to split and expand
             modalities_to_dims_dict: Dictionary mapping modalities to their dimensions
         Returns:
-            tokens_only_dict: OrderedDict mapping modalities to their tokens
+            tokens_only_dict: mapping modalities to their tokens
         """
         tokens_only_dict = {}
         tokens_reshaped = 0
@@ -507,7 +500,7 @@ class Encoder(FlexiHeliosBase):
         self.apply(self._init_weights)
 
     def create_token_exit_ids(
-        self, x: TokensOnly, token_exit_cfg: dict[str, int]
+        self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
     ) -> dict[str, Tensor]:
         """Create the token exit ids for # of layers of attention for each band group."""
         exit_ids_per_modality_dict = {}
@@ -515,7 +508,7 @@ class Encoder(FlexiHeliosBase):
             modality,
             band_groups_dict,
         ) in self.modalities_to_channel_groups_dict.items():
-            exit_seq_modality = torch.zeros_like(getattr(x, modality))
+            exit_seq_modality = torch.zeros_like(x[modality])
             for idx, (band_group, _) in enumerate(band_groups_dict.items()):
                 num_exit_layers = token_exit_cfg[band_group]
                 exit_seq_modality[:, :, :, idx, :] = num_exit_layers
@@ -622,7 +615,7 @@ class Encoder(FlexiHeliosBase):
         # TODO: this part should be cleaner many unneded packaging and unpackaging of data
         tokens_only_dict = {}
         original_masks_dict = {}
-        modalities_to_dims_dict = OrderedDict()
+        modalities_to_dims_dict = {}
         # TODO: add a class method for the named tuple here
         for modality in self.modalities_to_channel_groups_dict.keys():
             x_modality = getattr(x, modality)
@@ -630,12 +623,11 @@ class Encoder(FlexiHeliosBase):
             modalities_to_dims_dict[modality] = x_modality.shape
             masked_modality_name = x.get_masked_modality_name(modality)
             original_masks_dict[masked_modality_name] = getattr(x, masked_modality_name)
-        tokens_only = TokensOnly(**tokens_only_dict)
 
         # TODO: wrap all this complicated exit token stuff into a seperate method
         if token_exit_cfg:
             exit_ids_per_modality = self.create_token_exit_ids(
-                tokens_only, token_exit_cfg
+                tokens_only_dict, token_exit_cfg
             )
             x_dict = x._asdict()
             x_dict.update(exit_ids_per_modality)
@@ -651,14 +643,13 @@ class Encoder(FlexiHeliosBase):
             exit_ids_seq = None
             exited_tokens = None
 
-        tokens_only = self.composite_encodings.forward(
-            tokens_only,
+        tokens_dict = self.composite_encodings.forward(
+            tokens_only_dict,
             timestamps,
             patch_size,
             input_res,
         )
         # Prepare data for collapsing and combining
-        tokens_dict = tokens_only._asdict()
         tokens_and_masks_dict = x._asdict()
         tokens_and_masks_dict.update(tokens_dict)
         tokens_and_masks = TokensAndMasks(**tokens_and_masks_dict)
@@ -959,11 +950,11 @@ class Predictor(FlexiHeliosBase):
             modalities_to_dims_dict[modality] = x_modality.shape
             masked_modality_name = x.get_masked_modality_name(modality)
             original_masks_dict[masked_modality_name] = getattr(x, masked_modality_name)
-        tokens_only: TokensOnly = self.composite_encodings(
-            TokensOnly(**tokens_only_dict), timestamps, patch_size, input_res
+        tokens_dict = self.composite_encodings(
+            tokens_only_dict, timestamps, patch_size, input_res
         )
         tokens_and_masks_dict = x._asdict()
-        tokens_and_masks_dict.update(tokens_only._asdict())
+        tokens_and_masks_dict.update(tokens_dict)
         x, mask = self.collapse_and_combine_hwtc(
             TokensAndMasks(**tokens_and_masks_dict)
         )
