@@ -46,9 +46,13 @@ class TestEncoder:
         # Mask the first and second "positions" in this 2x2 grid.
         s2_mask[0, 0, 0, 0] = 1  # mask first token
         s2_mask[0, 0, 1, 0] = 1  # mask second token
+        latlon = torch.randn(1, 2, 1, 1, 2, 2)
+        latlon_mask = torch.randint(0, 2, (1, 2, 1, 1, 2)).float()
 
         # Construct the TokensAndMasks namedtuple with mock modality data + mask.
-        x = TokensAndMasks(s2=s2_tokens, s2_mask=s2_mask)
+        x = TokensAndMasks(
+            s2=s2_tokens, s2_mask=s2_mask, latlon=latlon, latlon_mask=latlon_mask
+        )
 
         timestamps = (
             torch.tensor(

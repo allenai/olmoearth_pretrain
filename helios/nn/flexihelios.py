@@ -35,7 +35,7 @@ class TokensAndMasks(NamedTuple):
 
     s2: Tensor  # (B, C_G, T, P_H, P_W)
     s2_mask: Tensor
-    # Not sure how these fit in yet will be needed when there is a missing timestamp missing timestamp and latlon are the same thing
+    # TODO:Temporary internal hack for not dealing with lat lons yet
     latlon: Tensor | None = None
     latlon_mask: Tensor | None = None
 
@@ -235,7 +235,6 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         """Calculate the Ground Sample Distance ratio."""
         return input_res * patch_size / BASE_GSD
 
-    # TODO: Maybe this should just return a dict so we don't do so much unpacking and repacking
     def forward(
         self,
         per_modality_input_tokens: dict[str, Tensor],
@@ -264,10 +263,11 @@ class FlexiHeliosCompositeEncodings(nn.Module):
                 raise NotImplementedError(
                     "Only modalities that have bathc, width, height, channel_group, embedding dims are supported"
                 )
-            b, h, w, t, c_g, _ = (
-                modality_tokens.shape
-            )  # Embed dim is unused and last dim is embedding dim
-
+            b, h, w, t, c_g, _ = modality_tokens.shape  # Embed dim is unused
+            if h != w:
+                raise ValueError(
+                    "Currently only square patches are supported for spatial encodings"
+                )
             modality_channel_embed = self.per_modality_channel_embeddings[modality]
             modality_channel_embed = repeat(
                 modality_channel_embed, "c_g d -> b h w t c_g d", b=b, h=h, w=w, t=t
@@ -290,10 +290,6 @@ class FlexiHeliosCompositeEncodings(nn.Module):
 
             gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
 
-            # We also want a 2D space
-            assert (
-                h == w
-            ), "get_2d_sincos_pos_encoding_with_resolution currently requires that h==w"
             current_device = modality_tokens.device
             spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
                 grid_size=h,
@@ -1192,8 +1188,3 @@ if __name__ == "__main__":
         encoded_tokens, timestamps, patch_size, input_res
     )
     print(f"decoded_tokens.s2.shape: {decoded_tokens.s2.shape}")
-
-    # Seperate out into additional files for ease and clarity
-    # Remove the unneeded tokens only class
-    # Add S1 data into the test
-    # SUbmit the PR

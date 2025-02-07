@@ -35,7 +35,11 @@ class TestFlexiHeliosBase:
         B, D = 2, 4
         s2_tokens = torch.randn(B, 2, 1, 1, 2, D)
         s2_mask = torch.randint(0, 2, (B, 2, 1, 1, 2)).float()
-        x = TokensAndMasks(s2=s2_tokens, s2_mask=s2_mask)
+        latlon = torch.randn(B, 2, 1, 1, 2, 2)
+        latlon_mask = torch.randint(0, 2, (B, 2, 1, 1, 2)).float()
+        x = TokensAndMasks(
+            s2=s2_tokens, s2_mask=s2_mask, latlon=latlon, latlon_mask=latlon_mask
+        )
         tokens, masks = flexi_helios_base.collapse_and_combine_hwtc(x)
         assert tokens.shape == (B, 4, D)
         assert masks.shape == (B, 4)
@@ -261,8 +265,12 @@ class TestPredictor:
 
         s2_mask = torch.zeros(B, H, W, T, C_G).float()
         s2_mask[0, 0, 0, 0, 0] = MaskValue.DECODER_ONLY.value
+        latlon = torch.randn(B, 2, 1, 1, 2, 2)
+        latlon_mask = torch.randint(0, 2, (B, 2, 1, 1, 2)).float()
 
-        tokens_and_masks = TokensAndMasks(s2=s2_tokens, s2_mask=s2_mask)
+        tokens_and_masks = TokensAndMasks(
+            s2=s2_tokens, s2_mask=s2_mask, latlon=latlon, latlon_mask=latlon_mask
+        )
 
         replaced_dict = predictor.add_masks(tokens_and_masks)
 
