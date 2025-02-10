@@ -716,6 +716,9 @@ class Encoder(FlexiHeliosBase):
                 other=exited_tokens.detach(),
             )
 
+        # we apply the norm before we add the removed tokens,
+        # so that the norm is only computed against "real" tokens
+        tokens = self.norm(tokens)
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
         tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
@@ -765,7 +768,7 @@ class Encoder(FlexiHeliosBase):
             masked_modality_name = patchified_tokens_and_masks.get_masked_modality_name(
                 modality
             )
-            output_dict[modality] = self.norm(x_modality)
+            output_dict[modality] = x_modality
             output_dict[masked_modality_name] = getattr(
                 patchified_tokens_and_masks, masked_modality_name
             )
