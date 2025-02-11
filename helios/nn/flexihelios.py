@@ -495,6 +495,26 @@ class FlexiHeliosBase(nn.Module):
         return tokens, masks
 
     @staticmethod
+    def _construct_einops_pattern(
+        spatial_dims: tuple[int, ...],
+    ) -> tuple[str, dict[str, int]]:
+        """Given a tuple of spatial dimensions (e.g. [B, H, W, T, ...]).
+
+        build (1) an einops rearrange pattern of the form:
+            "d -> (dim0) (dim1) (dim2)... d"
+        and (2) a dictionary mapping dim0..dimN to the actual sizes.
+
+        This allows reshaping a single-dimensional tensor [D] into
+        [B, H, W, T, ..., D] using einops.
+        """
+        dim_dict = {f"dim{i}": size for i, size in enumerate(spatial_dims)}
+        # e.g., "d -> (dim0) (dim1) (dim2) (dim3) d"
+        pattern_input = (
+            "d -> " + " ".join(f"(dim{i})" for i in range(len(spatial_dims))) + " d"
+        )
+        return pattern_input, dim_dict
+
+    @staticmethod
     def split_and_expand_per_modality(
         x: Tensor, modalities_to_dims_dict: dict[str, tuple]
     ) -> dict[str, Tensor]:
@@ -908,33 +928,36 @@ class Predictor(FlexiHeliosBase):
         self.apply(self._init_weights)
 
     def add_masks(self, tokens_and_masks: TokensAndMasks) -> dict[str, Tensor]:
-        """Replace Tokens that should be decoded with the learnable mask token."""
+        """Replace tokens that should be decoded (MaskValue.DECODER_ONLY) with the learnable mask token.
 
-        def to_kept_boolean(m: torch.Tensor) -> torch.Tensor:
-            # returns a mask where 1 indicates the value should be decoded
-            # (i.e. was 2) and 0 elsewhere
-            return (m == MaskValue.DECODER_ONLY.value).to(dtype=m.dtype)
-
+        in a dimension-agnostic way using einops. We assume the final dimension of each token tensor
+        is the embedding dimension matching self.mask_token's size.
+        """
         output_dict = {}
         for modality in self.modalities_to_channel_groups_dict.keys():
             x_modality = getattr(tokens_and_masks, modality)
             mask_modality = getattr(
                 tokens_and_masks, tokens_and_masks.get_masked_modality_name(modality)
             )
-            if len(x_modality.shape) != 6:
-                raise NotImplementedError(
-                    f"Expected 6 dimensions for modality {modality}, got {x_modality.shape}"
-                )
-            x_modality = x_modality * (1 - to_kept_boolean(mask_modality)).unsqueeze(-1)
-            B, H, W, T, S_T_C, _ = x_modality.shape
-            x_modality_reshaped = repeat(
-                self.mask_token, "d -> b h w t c d", b=B, h=H, w=W, t=T, c=S_T_C
+
+            # A boolean mask: True where tokens must be replaced by the mask token
+            kept_mask = mask_modality == MaskValue.DECODER_ONLY.value
+
+            # Build the einops pattern and dimension dict
+            spatial_dims = x_modality.shape[
+                :-1
+            ]  # all dimensions except the last (embedding)
+            pattern_input, dim_dict = self._construct_einops_pattern(spatial_dims)
+
+            mask_token_broadcasted = repeat(self.mask_token, pattern_input, **dim_dict)
+
+            # Where kept_mask is True, use the broadcasted mask token
+            x_modality = torch.where(
+                kept_mask.unsqueeze(-1).bool(), mask_token_broadcasted, x_modality
             )
-            x_modality_add = x_modality_reshaped * to_kept_boolean(
-                mask_modality
-            ).unsqueeze(-1)
-            x_modality = x_modality + x_modality_add
+
             output_dict[modality] = x_modality
+
         return output_dict
 
     @staticmethod
@@ -1087,6 +1110,8 @@ class Predictor(FlexiHeliosBase):
         decoder_emedded_dict = {}
         for modality in self.modalities_to_channel_groups_dict.keys():
             x_modality = getattr(x, modality)
+            logger.info(f"Applying input norms to modality {modality}")
+            logger.info(f"x_modality.shape: {x_modality.shape}")
             x_modality = self.input_norm(x_modality)
             x_modality = self.encoder_to_decoder_embed(x_modality)
             masked_modality_name = x.get_masked_modality_name(modality)
@@ -1112,14 +1137,13 @@ class Predictor(FlexiHeliosBase):
             # patchify masked data
             per_modality_output_tokens = []
             modality_data = getattr(tokens_and_masks, modality)
-            if len(modality_data.shape) != 6:
-                raise NotImplementedError(
-                    f"Expected 6 dimensions for modality {modality}, got {modality_data.shape}"
-                )
-            B, H, W, T, _, _ = modality_data.shape
+            middle_dims = modality_data.shape[1:-2] if modality_data.ndim > 3 else ()
             for idx in range(len(channel_groups_dict)):
                 if self.is_any_data_to_be_decoded(modality_mask):
-                    per_channel_modality_data = modality_data[:, :, :, :, idx, :]
+                    logger.info(
+                        f"for modality {modality}, idx: {idx}, modality_data.shape: {modality_data.shape}"
+                    )
+                    per_channel_modality_data = modality_data[..., idx, :]
                     output_data = self.to_output_embed(
                         self.norm(per_channel_modality_data)
                     )
@@ -1127,9 +1151,7 @@ class Predictor(FlexiHeliosBase):
                     # If all data should be ignored by encoder, we need to return an empty tensor
                     output_data = torch.empty(
                         modality_data.shape[0],
-                        H,
-                        W,
-                        T,
+                        *middle_dims,
                         self.output_embedding_size,
                         dtype=modality_data.dtype,
                         device=modality_data.device,

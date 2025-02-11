@@ -364,27 +364,29 @@ class TestPredictor:
             output_embedding_size=8,
         )
 
-    def test_predictor_forward(self, predictor: Predictor) -> None:
+    def test_predictor_forward_masked_out_channels(self, predictor: Predictor) -> None:
         """Test the full forward pass of the Predictor."""
         B = 1  # Batch size
         H = 2  # Spatial height
         W = 2  # Spatial width
         T = 3  # Number of timesteps
-        num_groups = 2  # Number of channel groups (as defined in modalities_to_channel_groups_dict)
-
+        num_groups_s2 = len(predictor.modalities_to_channel_groups_dict["s2"].keys())
         embedding_dim = predictor.encoder_to_decoder_embed.in_features
 
-        s2_tokens = torch.randn(B, H, W, T, num_groups, embedding_dim)
+        s2_tokens = torch.randn(B, H, W, T, num_groups_s2, embedding_dim)
 
         s2_mask = torch.full(
-            (B, H, W, T, num_groups),
+            (B, H, W, T, num_groups_s2),
             fill_value=MaskValue.DECODER_ONLY.value,
             dtype=torch.float32,
         )
-
+        s2_mask[:, :, :, :, 0] = MaskValue.ONLINE_ENCODER.value
+        num_groups_latlon = len(
+            predictor.modalities_to_channel_groups_dict["latlon"].keys()
+        )
         # Create dummy latitude and longitude data (and its mask)
-        latlon = torch.randn(B, 2)
-        latlon_mask = torch.zeros(B, 2, dtype=torch.float32)
+        latlon = torch.randn(B, num_groups_latlon, embedding_dim)
+        latlon_mask = torch.zeros(B, num_groups_latlon, dtype=torch.float32)
 
         encoded_tokens = TokensAndMasks(
             s2=s2_tokens, s2_mask=s2_mask, latlon=latlon, latlon_mask=latlon_mask
@@ -399,15 +401,87 @@ class TestPredictor:
 
         output = predictor.forward(encoded_tokens, timestamps, patch_size, input_res)
 
-        expected_token_shape = (B, H, W, T, num_groups, predictor.output_embedding_size)
+        expected_token_shape = (
+            B,
+            H,
+            W,
+            T,
+            num_groups_s2,
+            predictor.output_embedding_size,
+        )
         assert (
             output.s2.shape == expected_token_shape
         ), f"Expected tokens shape {expected_token_shape}, got {output.s2.shape}"
 
-        expected_mask_shape = (B, H, W, T, num_groups)
+        expected_mask_shape = (B, H, W, T, num_groups_s2)
         assert (
             output.s2_mask.shape == expected_mask_shape
         ), f"Expected mask shape {expected_mask_shape}, got {output.s2_mask.shape}"
+        assert output.latlon.shape == (
+            B,
+            num_groups_latlon,
+            predictor.output_embedding_size,
+        )
+        assert output.latlon_mask.shape == (B, num_groups_latlon)
+
+    def test_predictor_forward(self, predictor: Predictor) -> None:
+        """Test the full forward pass of the Predictor."""
+        B = 1  # Batch size
+        H = 2  # Spatial height
+        W = 2  # Spatial width
+        T = 3  # Number of timesteps
+        num_groups_s2 = len(predictor.modalities_to_channel_groups_dict["s2"].keys())
+        embedding_dim = predictor.encoder_to_decoder_embed.in_features
+
+        s2_tokens = torch.randn(B, H, W, T, num_groups_s2, embedding_dim)
+
+        s2_mask = torch.full(
+            (B, H, W, T, num_groups_s2),
+            fill_value=MaskValue.DECODER_ONLY.value,
+            dtype=torch.float32,
+        )
+        num_groups_latlon = len(
+            predictor.modalities_to_channel_groups_dict["latlon"].keys()
+        )
+        # Create dummy latitude and longitude data (and its mask)
+        latlon = torch.randn(B, num_groups_latlon, embedding_dim)
+        latlon_mask = torch.zeros(B, num_groups_latlon, dtype=torch.float32)
+
+        encoded_tokens = TokensAndMasks(
+            s2=s2_tokens, s2_mask=s2_mask, latlon=latlon, latlon_mask=latlon_mask
+        )
+        timestamps = torch.tensor(
+            [[[1, 15, 30], [6, 7, 8], [2018, 2018, 2018]]],
+            dtype=torch.long,
+        )
+
+        patch_size = 4
+        input_res = 1
+
+        output = predictor.forward(encoded_tokens, timestamps, patch_size, input_res)
+
+        expected_token_shape = (
+            B,
+            H,
+            W,
+            T,
+            num_groups_s2,
+            predictor.output_embedding_size,
+        )
+        assert (
+            output.s2.shape == expected_token_shape
+        ), f"Expected tokens shape {expected_token_shape}, got {output.s2.shape}"
+
+        expected_mask_shape = (B, H, W, T, num_groups_s2)
+        assert (
+            output.s2_mask.shape == expected_mask_shape
+        ), f"Expected mask shape {expected_mask_shape}, got {output.s2_mask.shape}"
+        assert output.latlon.shape == (
+            B,
+            num_groups_latlon,
+            predictor.output_embedding_size,
+        )
+        assert output.latlon_mask.shape == (B, num_groups_latlon)
 
 
 def test_end_to_end_with_exit_config() -> None:
