@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 if __name__ == "__main__":
     # Variables to be changed per user
     workdir = UPath("/temp/helios/workdir")  # nosec
-    WANDB_USERNAME = "henryhzog"  # nosec
-    WANDB_PROJECT = "helios-test"
+    WANDB_USERNAME = "eai-ai2"  # nosec
+    WANDB_PROJECT = "helios-debug"
     # PER EXPERIMENT Variables
     GLOBAL_BATCH_SIZE = 8
     RANK_BATCH_SIZE = 4
@@ -156,6 +156,7 @@ if __name__ == "__main__":
         name=run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
+        enabled=False,  # set to False to avoid wandb errors
     )
     callbacks = {
         "speed_monitor": HeliosSpeedMonitorCallback(),

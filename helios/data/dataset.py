@@ -25,26 +25,24 @@ from helios.types import ArrayTensor
 logger = logging.getLogger(__name__)
 
 
+# TODO: Update all bands names, make sure they correspond to the bands in the dataset
+
 class HeliosSample(NamedTuple):
     """A sample of the data from the Helios dataset.
 
     This is a namedtuple that contains the data for a single sample from the Helios dataset.
     For each modality. we have an ArrayTensor named by modality, positions in lat lon of each sample and
     timestamps of each sample.
-
-    Args:
-        s2: ArrayTensor | None = None  # [B, len(S2_bands), T H, W]
-        latlon: ArrayTensor | None = None  # [B, 2]
-        timestamps: ArrayTensor | None = None  # [B, D=3, T], where D=[day, month, year]
     """
-
-    # if an attribute is added here, its bands must also
-    # be added to attribute_to_bands
-
-    # input shape is (B, C, T, H, W)
-    s2: ArrayTensor | None = None  # [B, len(S2_bands), T H, W]
+    # Input shape is (B, C, T, H, W)
+    s1: ArrayTensor | None = None  # [B, len(S1_bands), T, H, W]
+    s2: ArrayTensor | None = None  # [B, len(S2_bands), T, H, W]
+    landsat: ArrayTensor | None = None  # [B, len(LS_bands), T, H, W]
+    naip: ArrayTensor | None = None  # [B, len(NAIP_bands), T, H, W]
+    worldcover: ArrayTensor | None = None  # [B, len(WC_bands), T, H, W]
+    openstreetmap: ArrayTensor | None = None  # [B, len(OSM_bands), T, H, W]
     latlon: ArrayTensor | None = None  # [B, 2]
-    timestamps: ArrayTensor | None = None  # [B, D=3, T], where D=[day, month, year]
+    timestamps: ArrayTensor | None = None  # [B, 3, T], where D=[day, month, year]
 
     def as_dict(self, ignore_nones: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
@@ -74,7 +72,12 @@ class HeliosSample(NamedTuple):
             A new HeliosSample with all tensors moved to the specified device.
         """
         return HeliosSample(
+            s1=self.s1.to(device) if self.s1 is not None else None,
             s2=self.s2.to(device) if self.s2 is not None else None,
+            landsat=self.landsat.to(device) if self.landsat is not None else None,
+            naip=self.naip.to(device) if self.naip is not None else None,
+            worldcover=self.worldcover.to(device) if self.worldcover is not None else None,
+            openstreetmap=self.openstreetmap.to(device) if self.openstreetmap is not None else None,
             latlon=self.latlon.to(device) if self.latlon is not None else None,
             timestamps=(
                 self.timestamps.to(device) if self.timestamps is not None else None
@@ -88,7 +91,10 @@ class HeliosSample(NamedTuple):
         Returns:
             A dictionary mapping attribute names to their corresponding bands.
         """
-        return {"s2": S2_BANDS, "latlon": LATLON_BANDS, "timestamps": TIMESTAMPS}
+        return {
+            "s2": S2_BANDS,  # TODO: double check this, this may be wrong given how different bands are resampled and concatenated together
+            "latlon": LATLON_BANDS, 
+            "timestamps": TIMESTAMPS}
 
     @property
     def b(self) -> int:
@@ -185,21 +191,6 @@ class HeliosDataset(Dataset):
         self._work_dir: Path | None = None  # type: ignore
         self._work_dir_set = False
 
-    def _filter_samples(
-        self, samples: list[SampleInformation]
-    ) -> list[SampleInformation]:
-        """Filter samples to adjust to the HeliosSample format."""
-        # Right now, we only need S2 data with complete year data (12 months)
-        # Later, more modalities can be easily added
-        filtered_samples = []
-        for sample in samples:
-            for modality, image_tile in sample.modalities.items():
-                if modality == Modality.S2 and sample.time_span == TimeSpan.YEAR:
-                    timestamps = [i.start_time for i in image_tile.images]
-                    if len(timestamps) == 12:
-                        filtered_samples.append(sample)
-        return filtered_samples
-
     @property
     def fingerprint_version(self) -> str:
         """The version of the fingerprint."""
@@ -249,20 +240,23 @@ class HeliosDataset(Dataset):
         """Prepare the dataset."""
         len(self)
 
-    def __len__(self) -> int:
-        """Get the length of the dataset."""
-        return len(self.samples)
-
-    def __getitem__(self, index: int) -> HeliosSample:
-        """Get the item at the given index."""
-        sample = self.samples[index]
-        sample_s2 = sample.modalities[Modality.S2]
-        timestamps = [i.start_time for i in sample_s2.images]
-        image = load_image_for_sample(sample_s2, sample)
-        s2_data = rearrange(image, "t c h w -> c t h w")
-        dt = pd.to_datetime(timestamps)
-        # Month is 0 indexed
-        time_data = np.array([dt.day, dt.month - 1, dt.year])  # [3, T]
+    def _filter_samples(
+        self, samples: list[SampleInformation]
+    ) -> list[SampleInformation]:
+        """Filter samples to adjust to the HeliosSample format."""
+        # Right now, we only need S2 data with complete year data (12 months)
+        # Later, more modalities can be easily added
+        filtered_samples = []
+        for sample in samples:
+            for modality, image_tile in sample.modalities.items():
+                if modality == Modality.S2 and sample.time_span == TimeSpan.YEAR:
+                    timestamps = [i.start_time for i in image_tile.images]
+                    if len(timestamps) == 12:
+                        filtered_samples.append(sample)
+        return filtered_samples
+    
+    def _get_latlon(self, sample: SampleInformation) -> np.ndarray:
+        """Get the latlon of the sample."""
         # Get coordinates at projection units, and then transform to latlon
         grid_resolution = sample.grid_tile.resolution_factor * BASE_RESOLUTION
         x, y = (
@@ -273,10 +267,31 @@ class HeliosDataset(Dataset):
             sample.grid_tile.crs, "EPSG:4326", always_xy=True
         )
         lon, lat = transformer.transform(x, y)
-        latlon_data = np.array([lat, lon])
+        return np.array([lat, lon])
+    
+    def _get_timestamps(self, sample: SampleInformation) -> np.ndarray:
+        """Get the timestamps of the sample."""
+        sample_s2 = sample.modalities[Modality.S2]
+        timestamps = [i.start_time for i in sample_s2.images]
+        dt = pd.to_datetime(timestamps)
+        # Note that month should be 0-indexed
+        return np.array([dt.day, dt.month - 1, dt.year])
+
+    def __len__(self) -> int:
+        """Get the length of the dataset."""
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> HeliosSample:
+        """Get the item at the given index."""
+        sample = self.samples[index]
+        sample_s2 = sample.modalities[Modality.S2]
+        image = load_image_for_sample(sample_s2, sample)
+        s2_data = rearrange(image, "t c h w -> c t h w")
+        time_data = self._get_timestamps(sample)  # [3, T]
+        latlon_data = self._get_latlon(sample)  # [2,]
         # TODO: Add normalization and better way of doing dtype
         return HeliosSample(
-            s2=(s2_data / 10000).astype(np.float32),  # make it a float
+            s2=(s2_data / 10000).astype(self.dtype),
             latlon=latlon_data,
             timestamps=time_data,
         )
