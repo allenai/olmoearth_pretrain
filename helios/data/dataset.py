@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -45,6 +46,26 @@ class HeliosSample(NamedTuple):
     s2: ArrayTensor | None = None  # [B, len(S2_bands), T H, W]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, D=3, T], where D=[day, month, year]
+
+    def shape(self, attribute: str) -> Sequence[int]:
+        """Returns the expected shape of an attribute.
+
+        This is useful if you want to know what the shape of a
+        missing attribute would have been for this sample.
+        """
+        attribute_to_shape = {
+            "s2": [
+                self.b,
+                sum(len(b.bands) for b in Modality.S2.band_sets),
+                self.t,
+                self.h,
+                self.w,
+            ],
+            "latlon": [self.b, 2],  # TODO - is this ok to hardcode?
+            "timestamps": [self.b, 3],  # TODO - is this ok to hardcode?
+        }
+
+        return attribute_to_shape[attribute]
 
     def as_dict(self, ignore_nones: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
