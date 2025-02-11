@@ -22,7 +22,6 @@ from helios.train.masking import MaskedHeliosSample, MaskValue
 logger = logging.getLogger(__name__)
 
 
-# TokensAndMasks will pretty much never change so we may want this in a more central location near train module
 class TokensAndMasks(NamedTuple):
     """Output to compute the loss on.
 
@@ -118,6 +117,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                 }
             )
 
+    # TODO: Likely we want a single object that stores all the data related configuration etc per modality including channel grous bands patch size etc
     def apply_embedding_to_modality(
         self, modality: str, input_data: MaskedHeliosSample, patch_size: int
     ) -> tuple[Tensor, Tensor]:
@@ -125,59 +125,34 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         channel_groups_dict = self.modalities_to_channel_groups_dict[modality]
         masked_modality_name = input_data.get_masked_modality_name(modality)
         modality_mask = getattr(input_data, masked_modality_name)
+        modality_data = getattr(input_data, modality)
         modality_tokens, modality_masks = [], []
-        # TODO: Maybe use the leading dimensions in the index
         for idx, (channel_group, channel_band_idxs) in enumerate(
             channel_groups_dict.items()
         ):
-            # TODO: Likely we want a single object that stores all the data related configuration etc per modality including channel grous bands patch size etc
+            modality_specific_kwargs = {}
             if modality == "latlon":
-                modality_masks.append(modality_mask[:, idx])
-                if self.is_any_data_seen_by_encoder(modality_mask):
-                    modality_data = input_data.latlon[:, channel_band_idxs]
-                    embedded_data = self.per_modality_embeddings[modality][
-                        channel_group
-                    ](modality_data)
-                else:
-                    embedded_data = torch.empty(
-                        input_data.latlon.shape[0],
-                        self.embedding_size,
-                        device=input_data.latlon.device,
-                    )
-                modality_tokens.append(embedded_data)
+                token_mask = modality_mask[:, idx]
             else:
-                # TODO: A lot of the ways we build up tensors and all this is very hacky and could be shared sfuncitonaliy
-                # TODO: Unsure if we always want to recaculate height and width here
-                height, width, time_steps = (
-                    input_data.height,
-                    input_data.width,
-                    input_data.time,
+                token_mask = modality_mask[:, 0::patch_size, 0::patch_size, :, idx]
+                modality_specific_kwargs = {"patch_size": patch_size}
+            patchified_dims = token_mask.shape[1:]
+            # Now apply the embedding to
+            if self.is_any_data_seen_by_encoder(token_mask):
+                patchified_data = modality_data[..., channel_band_idxs]
+                patchified_data = self.per_modality_embeddings[modality][channel_group](
+                    patchified_data, **modality_specific_kwargs
                 )
-                new_height, new_width = (
-                    height // patch_size,
-                    width // patch_size,
+            else:
+                patchified_data = torch.empty(
+                    modality_data.shape[0],
+                    *patchified_dims,
+                    self.embedding_size,
+                    dtype=modality_data.dtype,
+                    device=modality_data.device,
                 )
-                patchified_mask = modality_mask[:, 0::patch_size, 0::patch_size, :, idx]
-                modality_masks.append(patchified_mask)
-                modality_data = getattr(input_data, modality)
-                if self.is_any_data_seen_by_encoder(modality_mask):
-                    modality_data = modality_data[:, :, :, :, channel_band_idxs]
-                    patchified_data = self.per_modality_embeddings[modality][
-                        channel_group
-                    ](modality_data, patch_size=patch_size)
-                else:
-                    # If all data should be ignored by encoder, we need to return an empty tensor
-                    # TODO: should we be getting dtype and device from the input data instead of modality_data?
-                    patchified_data = torch.empty(
-                        modality_data.shape[0],
-                        new_height,
-                        new_width,
-                        time_steps,
-                        self.embedding_size,
-                        dtype=modality_data.dtype,
-                        device=modality_data.device,
-                    )
-                modality_tokens.append(patchified_data)
+            modality_tokens.append(patchified_data)
+            modality_masks.append(token_mask)
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
 
     @staticmethod
@@ -469,6 +444,22 @@ class FlexiHeliosBase(nn.Module):
             torch.nn.init.xavier_uniform_(m.weight)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
+
+    @staticmethod
+    def grab_modality_specific_dims(modality_data: Tensor) -> tuple[int, ...]:
+        """Grab the modality specific dimensions from the modality data.
+
+        Assumes [B, ..., C, D]
+
+        Every modality will have a batch dimension, a channel dimension and embedding dimension.
+
+        Args:
+            modality_data: Modality data
+
+        Returns:
+            Modality specific dimensions
+        """
+        return modality_data.shape[1:-2] if modality_data.ndim > 3 else ()
 
     # is naming here confusing if one of these channels can be missing?
     def collapse_and_combine_hwtc(self, x: TokensAndMasks) -> tuple[Tensor, Tensor]:
@@ -1126,7 +1117,7 @@ class Predictor(FlexiHeliosBase):
             # patchify masked data
             per_modality_output_tokens = []
             modality_data = getattr(tokens_and_masks, modality)
-            middle_dims = modality_data.shape[1:-2] if modality_data.ndim > 3 else ()
+            modality_specific_dims = self.grab_modality_specific_dims(modality_data)
             for idx in range(len(channel_groups_dict)):
                 if self.is_any_data_to_be_decoded(modality_mask):
                     per_channel_modality_data = modality_data[..., idx, :]
@@ -1137,7 +1128,7 @@ class Predictor(FlexiHeliosBase):
                     # If all data should be ignored by encoder, we need to return an empty tensor
                     output_data = torch.empty(
                         modality_data.shape[0],
-                        *middle_dims,
+                        *modality_specific_dims,
                         self.output_embedding_size,
                         dtype=modality_data.dtype,
                         device=modality_data.device,
@@ -1284,6 +1275,10 @@ if __name__ == "__main__":
     decoded_tokens = predictor.forward(
         encoded_tokens, timestamps, patch_size, input_res
     )
+    print(f"decoded_tokens.s2.shape: {decoded_tokens.s2.shape}")
+    print(f"decoded_tokens.s2.shape: {decoded_tokens.s2.shape}")
+    print(f"decoded_tokens.s2.shape: {decoded_tokens.s2.shape}")
+    print(f"decoded_tokens.s2.shape: {decoded_tokens.s2.shape}")
     print(f"decoded_tokens.s2.shape: {decoded_tokens.s2.shape}")
     print(f"decoded_tokens.s2.shape: {decoded_tokens.s2.shape}")
     print(f"decoded_tokens.s2.shape: {decoded_tokens.s2.shape}")
