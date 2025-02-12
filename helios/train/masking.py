@@ -49,6 +49,7 @@ class MaskedHeliosSample(NamedTuple):
         latlon_mask: ArrayTensor  # [B, len(latlon_band_groups)]
         timestamps: ArrayTensor  # [B, T, D=3], where D=[day, month, year]
     """
+
     s2: ArrayTensor
     s2_mask: ArrayTensor
     latlon: ArrayTensor  # [B, 2]
@@ -290,7 +291,9 @@ class RandomMaskingStrategy(MaskingStrategy):
             else:
                 return_device = None
             if len(modality.shape) == 5:
-                b, _, t, h, w = modality.shape  # here we still assume the (B, C, T, H, W) shape
+                b, _, t, h, w = (
+                    modality.shape
+                )  # here we still assume the (B, C, T, H, W) shape
 
                 mask = self._create_mask_per_space_time_modality(
                     b,

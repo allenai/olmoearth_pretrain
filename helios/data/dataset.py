@@ -17,8 +17,13 @@ from pyproj import Transformer
 from torch.utils.data import Dataset
 from upath import UPath
 
-from helios.constants import LATLON_BANDS, S2_BANDS, TIMESTAMPS
-from helios.data.constants import BASE_RESOLUTION, IMAGE_TILE_SIZE, Modality, ALL_MODALITIES
+from helios.constants import LATLON_BANDS, TIMESTAMPS
+from helios.data.constants import (
+    ALL_MODALITIES,
+    BASE_RESOLUTION,
+    IMAGE_TILE_SIZE,
+    Modality,
+)
 from helios.dataset.parse import TimeSpan
 from helios.dataset.sample import SampleInformation, load_image_for_sample
 from helios.types import ArrayTensor
@@ -28,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 # TODO: Update all bands names, make sure they correspond to the bands in the dataset
 
+
 class HeliosSample(NamedTuple):
     """A sample of the data from the Helios dataset.
 
@@ -35,6 +41,7 @@ class HeliosSample(NamedTuple):
     For each modality. we have an ArrayTensor named by modality, positions in lat lon of each sample and
     timestamps of each sample.
     """
+
     # Input shape is (B, H, W, T, C)
     s2: ArrayTensor | None = None  # [B, H, W, T, len(S2_bands)]
     s1: ArrayTensor | None = None  # [B, H, W, T, len(S1_bands)]
@@ -127,7 +134,9 @@ class HeliosSample(NamedTuple):
         return HeliosSample(
             s2=self.s2.to(device) if self.s2 is not None else None,
             s1=self.s1.to(device) if self.s1 is not None else None,
-            worldcover=self.worldcover.to(device) if self.worldcover is not None else None,
+            worldcover=self.worldcover.to(device)
+            if self.worldcover is not None
+            else None,
             latlon=self.latlon.to(device) if self.latlon is not None else None,
             timestamps=(
                 self.timestamps.to(device) if self.timestamps is not None else None
@@ -144,10 +153,15 @@ class HeliosSample(NamedTuple):
         return {
             "s2": [band for bandset in Modality.S2.band_sets for band in bandset.bands],
             "s1": [band for bandset in Modality.S1.band_sets for band in bandset.bands],
-            "worldcover": [band for bandset in Modality.WORLDCOVER.band_sets for band in bandset.bands],
-            "latlon": LATLON_BANDS, 
-            "timestamps": TIMESTAMPS}
-    
+            "worldcover": [
+                band
+                for bandset in Modality.WORLDCOVER.band_sets
+                for band in bandset.bands
+            ],
+            "latlon": LATLON_BANDS,
+            "timestamps": TIMESTAMPS,
+        }
+
     @property
     def b(self) -> int:
         """Get the batch size.
@@ -308,11 +322,14 @@ class HeliosDataset(Dataset):
                 continue
             # Check if S1 and S2 have the same number of timestamps
             total_months = 12
-            if len(sample.modalities[Modality.S1].images) != total_months or len(sample.modalities[Modality.S2].images) != total_months:
+            if (
+                len(sample.modalities[Modality.S1].images) != total_months
+                or len(sample.modalities[Modality.S2].images) != total_months
+            ):
                 continue
             filtered_samples.append(sample)
         return filtered_samples
-    
+
     def _get_latlon(self, sample: SampleInformation) -> np.ndarray:
         """Get the latlon of the sample."""
         # Get coordinates at projection units, and then transform to latlon
@@ -326,7 +343,7 @@ class HeliosDataset(Dataset):
         )
         lon, lat = transformer.transform(x, y)
         return np.array([lat, lon])
-    
+
     def _get_timestamps(self, sample: SampleInformation) -> np.ndarray:
         """Get the timestamps of the sample."""
         sample_s2 = sample.modalities[Modality.S2]

@@ -118,4 +118,3 @@ def test_helios_dataset(tmp_path: Path) -> None:
     assert dataset[0].worldcover.shape == (256, 256, 1, 1)  # type: ignore
     assert dataset[0].latlon.shape == (2,)  # type: ignore
     assert dataset[0].timestamps.shape == (12, 3)  # type: ignore
-    

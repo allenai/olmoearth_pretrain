@@ -159,7 +159,7 @@ def load_image_for_sample(
             should be loaded or just a portion of it.
 
     Returns:
-        band_set_images: the image as a numpy array TCHW (time is on the first dimension). 
+        band_set_images: the image as a numpy array TCHW (time is on the first dimension).
         In the future, this may include vector data too, or that may go in a separate
         function.
         bands: the list of bands that were loaded.
