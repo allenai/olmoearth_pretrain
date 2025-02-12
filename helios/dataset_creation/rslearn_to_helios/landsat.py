@@ -7,24 +7,15 @@ import tqdm
 from rslearn.utils.mp import star_imap_unordered
 from upath import UPath
 
-from .multitemporal_raster import BandSet, convert_freq, convert_monthly
+from helios.data.constants import Modality
 
-BAND_SETS = [
-    BandSet(["B8"], 10),
-    BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 20),
-]
+from .multitemporal_raster import convert_freq, convert_monthly
 
 # rslearn layer for frequent data.
 LAYER_FREQ = "landsat_freq"
 
 # rslearn layer prefix for monthly data.
 LAYER_MONTHLY = "landsat"
-
-# Modality for frequent data in the output Helios dataset.
-MODALITY_FREQ = "10_landsat_freq"
-
-# Modality for monthly data in the output Helios dataset.
-MODALITY_MONTHLY = "10_landsat_monthly"
 
 
 def convert_landsat(window_path: UPath, helios_path: UPath) -> None:
@@ -38,13 +29,10 @@ def convert_landsat(window_path: UPath, helios_path: UPath) -> None:
         window_path,
         helios_path,
         LAYER_FREQ,
-        MODALITY_FREQ,
-        BAND_SETS,
+        Modality.LANDSAT,
         missing_okay=True,
     )
-    convert_monthly(
-        window_path, helios_path, LAYER_MONTHLY, MODALITY_MONTHLY, BAND_SETS
-    )
+    convert_monthly(window_path, helios_path, LAYER_MONTHLY, Modality.LANDSAT)
 
 
 if __name__ == "__main__":
