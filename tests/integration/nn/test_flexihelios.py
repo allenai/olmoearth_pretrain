@@ -5,6 +5,7 @@ Any methods that piece together multiple steps or are the entire forward pass fo
 
 import pytest
 import torch
+from einops import rearrange
 
 from helios.nn.flexihelios import (
     Encoder,
@@ -42,10 +43,10 @@ class TestFlexiHeliosPatchEmbeddings:
 
         latlon = torch.randn(B, 2)
         latlon_mask = torch.randint(0, 2, (B, 2), dtype=torch.float32)
-        days = torch.randint(0, 25, (B, 1, T), dtype=torch.long)
-        months = torch.randint(0, 12, (B, 1, T), dtype=torch.long)
-        years = torch.randint(2018, 2020, (B, 1, T), dtype=torch.long)
-        timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
+        days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+        months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+        years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
 
         sample = MaskedHeliosSample(s2, s2_mask, latlon, latlon_mask, timestamps)
         output = patch_embeddings.forward(sample, patch_size)
@@ -119,13 +120,9 @@ class TestEncoder:
             s2=s2_tokens, s2_mask=s2_mask, latlon=latlon, latlon_mask=latlon_mask
         )
 
-        timestamps = (
-            torch.tensor(
-                [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
-            )
-            .unsqueeze(0)
-            .permute(0, 2, 1)
-        )  # [B, 3, T]
+        timestamps = torch.tensor(
+            [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
+        ).unsqueeze(0)
         patch_size = 4
         input_res = 10
 
@@ -163,10 +160,10 @@ class TestEncoder:
         s2_mask = torch.zeros(B, H, W, T, C, dtype=torch.long)
         latlon = torch.randn(B, 2)
         latlon_mask = torch.randint(0, 2, (B, 2), dtype=torch.float32)
-        days = torch.randint(0, 25, (B, 1, T), dtype=torch.long)
-        months = torch.randint(0, 12, (B, 1, T), dtype=torch.long)
-        years = torch.randint(2018, 2020, (B, 1, T), dtype=torch.long)
-        timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
+        days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+        months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+        years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
 
         x = MaskedHeliosSample(s2, s2_mask, latlon, latlon_mask, timestamps)
 
@@ -228,10 +225,10 @@ class TestEncoder:
         latlon = torch.randn(B, 2)
         latlon_mask = torch.zeros((B, 2), dtype=torch.float32)
         # Generate valid timestamps with month in [1, 12]
-        days = torch.randint(0, 25, (B, 1, T), dtype=torch.long)
-        months = torch.randint(0, 12, (B, 1, T), dtype=torch.long)
-        years = torch.randint(2018, 2020, (B, 1, T), dtype=torch.long)
-        timestamps = torch.cat([days, months, years], dim=1)
+        days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+        months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+        years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)
 
         x = MaskedHeliosSample(s2, s2_mask, latlon, latlon_mask, timestamps)
 
@@ -280,10 +277,10 @@ class TestEncoder:
         # Make 1 token in 1 channel group in S2 visible
         s2_mask[0, 0, 0, 0, 0] = 0
         latlon_mask = torch.ones(B, 2, dtype=torch.float32)
-        days = torch.randint(0, 25, (B, 1, T), dtype=torch.long)
-        months = torch.randint(0, 12, (B, 1, T), dtype=torch.long)
-        years = torch.randint(2018, 2020, (B, 1, T), dtype=torch.long)
-        timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
+        days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+        months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+        years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
 
         x = MaskedHeliosSample(s2, s2_mask, latlon, latlon_mask, timestamps)
 
@@ -382,9 +379,12 @@ class TestPredictor:
         encoded_tokens = TokensAndMasks(
             s2=s2_tokens, s2_mask=s2_mask, latlon=latlon, latlon_mask=latlon_mask
         )
-        timestamps = torch.tensor(
-            [[[1, 15, 30], [6, 7, 8], [2018, 2018, 2018]]],
-            dtype=torch.long,
+        timestamps = rearrange(
+            torch.tensor(
+                [[[1, 15, 30], [6, 7, 8], [2018, 2018, 2018]]],
+                dtype=torch.long,
+            ),
+            "b d t -> b t d",
         )
 
         patch_size = 4
@@ -445,9 +445,12 @@ class TestPredictor:
         encoded_tokens = TokensAndMasks(
             s2=s2_tokens, s2_mask=s2_mask, latlon=latlon, latlon_mask=latlon_mask
         )
-        timestamps = torch.tensor(
-            [[[1, 15, 30], [6, 7, 8], [2018, 2018, 2018]]],
-            dtype=torch.long,
+        timestamps = rearrange(
+            torch.tensor(
+                [[[1, 15, 30], [6, 7, 8], [2018, 2018, 2018]]],
+                dtype=torch.long,
+            ),
+            "b d t -> b t d",
         )
 
         patch_size = 4
@@ -497,10 +500,10 @@ def test_end_to_end_with_exit_config(
     # - days: range 1..31,
     # - months: range 1..13,
     # - years: e.g. 2018-2019.
-    days = torch.randint(1, 25, (B, 1, T), dtype=torch.long)
-    months = torch.randint(0, 12, (B, 1, T), dtype=torch.long)
-    years = torch.randint(2018, 2020, (B, 1, T), dtype=torch.long)
-    timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
+    days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+    months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+    years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
+    timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
 
     x = MaskedHeliosSample(s2, s2_mask, latlon, latlon_mask, timestamps)
 

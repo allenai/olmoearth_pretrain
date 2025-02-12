@@ -3,8 +3,9 @@
 import hashlib
 import logging
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -33,20 +34,56 @@ class HeliosSample(NamedTuple):
     timestamps of each sample.
 
     Args:
-        s2: ArrayTensor | None = None  # [B, len(S2_bands), T H, W]
+        s2: ArrayTensor | None = None  # [B, H, W, T, len(S2_bands)]
         latlon: ArrayTensor | None = None  # [B, 2]
-        timestamps: ArrayTensor | None = None  # [B, D=3, T], where D=[day, month, year]
+        timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
     """
 
     # if an attribute is added here, its bands must also
     # be added to attribute_to_bands
 
-    # input shape is (B, C, T, H, W)
-    s2: ArrayTensor | None = None  # [B, len(S2_bands), T H, W]
+    s2: ArrayTensor | None = None  # [B, H, W, T, len(S2_bands)]
     latlon: ArrayTensor | None = None  # [B, 2]
-    timestamps: ArrayTensor | None = None  # [B, D=3, T], where D=[day, month, year]
+    timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
-    def as_dict(self, ignore_nones: bool = True) -> dict[str, Any]:
+    def shape(self, attribute: str, num_channels: int | None = None) -> Sequence[int]:
+        """Returns the expected shape of an attribute.
+
+        This is useful if you want to know what the shape of a
+        missing attribute would have been for this sample.
+        """
+        try:
+            b = [self.b]
+        except ValueError:
+            b = []
+        attribute_to_shape = {
+            "s2": b
+            + [
+                self.h,
+                self.w,
+                self.t,
+                len(self.attribute_to_bands()["s2"])
+                if num_channels is None
+                else num_channels,
+            ],
+            "latlon": b
+            + [
+                len(self.attribute_to_bands()["latlon"])
+                if num_channels is None
+                else num_channels
+            ],
+            "timestamps": b
+            + [
+                self.t,
+                len(self.attribute_to_bands()["timestamps"])
+                if num_channels is None
+                else num_channels,
+            ],
+        }
+
+        return attribute_to_shape[attribute]
+
+    def as_dict(self, ignore_nones: bool = True) -> dict[str, ArrayTensor | None]:
         """Convert the namedtuple to a dictionary.
 
         Args:
@@ -113,7 +150,7 @@ class HeliosSample(NamedTuple):
         """
         if self.s2 is None:
             raise ValueError("S2 is not present in the sample")
-        return self.s2.shape[-3]
+        return self.s2.shape[3]
 
     @property
     def h(self) -> int:
@@ -124,7 +161,7 @@ class HeliosSample(NamedTuple):
         """
         if self.s2 is None:
             raise ValueError("S2 is not present in the sample")
-        return self.s2.shape[-2]
+        return self.s2.shape[1]
 
     @property
     def w(self) -> int:
@@ -135,7 +172,7 @@ class HeliosSample(NamedTuple):
         """
         if self.s2 is None:
             raise ValueError("S2 is not present in the sample")
-        return self.s2.shape[-1]
+        return self.s2.shape[2]
 
 
 def collate_helios(batch: list[HeliosSample]) -> HeliosSample:
@@ -262,7 +299,7 @@ class HeliosDataset(Dataset):
         s2_data = rearrange(image, "t c h w -> c t h w")
         dt = pd.to_datetime(timestamps)
         # Month is 0 indexed
-        time_data = np.array([dt.day, dt.month - 1, dt.year])  # [3, T]
+        time_data = np.array([dt.day, dt.month - 1, dt.year]).T  # [T, 3]
         # Get coordinates at projection units, and then transform to latlon
         grid_resolution = sample.grid_tile.resolution_factor * BASE_RESOLUTION
         x, y = (

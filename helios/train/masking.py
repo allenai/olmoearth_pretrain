@@ -44,10 +44,10 @@ class MaskedHeliosSample(NamedTuple):
 
     Args:
         s2: ArrayTensor  # [B, H, W, T, len(S2_bands)]
-        s2_mask: ArrayTensor  # [B, H, W, T, len(S2_bands)]
+        s2_mask: ArrayTensor  # [B, H, W, T, len(S2_band_groups)]
         latlon: ArrayTensor  # [B, 2]
         latlon_mask: ArrayTensor  # [B, len(latlon_band_groups)]
-        timestamps: ArrayTensor  # [B, D=3, T], where D=[day, month, year]
+        timestamps: ArrayTensor  # [B, T, D=3], where D=[day, month, year]
     """
 
     s2: ArrayTensor
@@ -55,7 +55,7 @@ class MaskedHeliosSample(NamedTuple):
     latlon: ArrayTensor  # [B, 2]
     latlon_mask: ArrayTensor
     timestamps: (
-        ArrayTensor  # [B, D=3, T], where D=[day, month, year] (months are zero indexed)
+        ArrayTensor  # [B, T, D=3], where D=[day, month, year] (months are zero indexed)
     )
 
     def as_dict(self) -> dict[str, Any]:
@@ -89,6 +89,45 @@ class MaskedHeliosSample(NamedTuple):
     def get_masked_modality_name(modality: str) -> str:
         """Get the masked modality name."""
         return f"{modality}_mask"
+
+    @classmethod
+    def from_heliossample(
+        cls,
+        sample: HeliosSample,
+        modalities_to_channel_groups_dict: dict[str, dict[str, list[int]]],
+    ) -> "MaskedHeliosSample":
+        """Transforms a HelioSample into a MaskedHeliosSample.
+
+        This function assumes modalities are uniformly missing.
+        """
+        masked_sample_dict = {}
+        for key, t in sample.as_dict(ignore_nones=False).items():
+            if key == "timestamps":
+                # lets assume timestamps is not None
+                masked_sample_dict[key] = t
+            else:
+                if t is None:
+                    masked_sample_dict[key] = torch.empty(sample.shape(key))
+                    masked_sample_dict[f"{key}_mask"] = (
+                        torch.ones(
+                            sample.shape(
+                                key, len(modalities_to_channel_groups_dict[key])
+                            )
+                        )
+                        * MaskValue.MISSING.value
+                    )
+                else:
+                    masked_sample_dict[key] = t
+                    masked_sample_dict[f"{key}_mask"] = (
+                        torch.ones(
+                            sample.shape(
+                                key, len(modalities_to_channel_groups_dict[key])
+                            )
+                        )
+                        * MaskValue.ONLINE_ENCODER.value
+                    )
+
+        return MaskedHeliosSample(**masked_sample_dict)
 
 
 class MaskingStrategy(ABC):

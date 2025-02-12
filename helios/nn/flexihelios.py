@@ -317,7 +317,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         )
 
         # Month encodings
-        months = timestamps[:, 1, :]
+        months = timestamps[:, :, 1]
         month_embed = self.month_embed(months)
         modality_month_embed = repeat(
             month_embed, "b t d -> b h w t c_g d", h=h, w=w, c_g=c_g

@@ -93,4 +93,4 @@ def test_helios_dataset(tmp_path: Path) -> None:
     assert isinstance(dataset[0], HeliosSample)
     assert dataset[0].s2.shape == (13, 12, 256, 256)  # type: ignore
     assert dataset[0].latlon.shape == (2,)  # type: ignore
-    assert dataset[0].timestamps.shape == (3, 12)  # type: ignore
+    assert dataset[0].timestamps.shape == (12, 3)  # type: ignore
