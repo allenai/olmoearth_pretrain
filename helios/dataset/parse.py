@@ -10,9 +10,9 @@ from upath import UPath
 
 from helios.data.constants import (
     BASE_RESOLUTION,
-    MODALITIES,
     BandSet,
     Modality,
+    ModalitySpec,
 )
 from helios.dataset_creation.util import WindowMetadata, get_modality_fname
 
@@ -102,7 +102,7 @@ class TimeSpan(str, Enum):
 
 
 def parse_modality_csv(
-    helios_path: UPath, modality: Modality, time_span: TimeSpan, csv_path: UPath
+    helios_path: UPath, modality: ModalitySpec, time_span: TimeSpan, csv_path: UPath
 ) -> list[ModalityTile]:
     """Parse CSV for one modality and time span.
 
@@ -180,15 +180,15 @@ def parse_modality_csv(
 
 def parse_helios_dataset(
     helios_path: UPath,
-) -> dict[Modality, dict[TimeSpan, list[ModalityTile]]]:
+) -> dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]]:
     """Parse the various per-modality tiles present in a Helios dataset.
 
     Returns:
         a mapping from modality -> time span (e.g. yearly / two-week) -> list of tiles.
     """
-    tiles: dict[Modality, dict[TimeSpan, list[ModalityTile]]] = {}
+    tiles: dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]] = {}
 
-    for modality in MODALITIES.values():
+    for modality in Modality.values():
         # TODO: there's N/A in the image_idx column for openstreetmap
         if modality.name == "latlon":
             continue

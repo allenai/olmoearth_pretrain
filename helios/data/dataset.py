@@ -20,9 +20,9 @@ from upath import UPath
 from helios.data.constants import (
     BASE_RESOLUTION,
     IMAGE_TILE_SIZE,
-    MODALITIES,
     SUPPORTED_MODALITIES,
     TIMESTAMPS,
+    Modality,
 )
 from helios.dataset.parse import TimeSpan
 from helios.dataset.sample import SampleInformation, load_image_for_sample
@@ -72,19 +72,19 @@ class HeliosSample(NamedTuple):
             if self.sentinel2 is None:
                 raise ValueError("Sentinel2 is not present in the sample")
             attribute_shape = []
-            if MODALITIES[attribute].get_tile_resolution() > 0:
+            if Modality.get(attribute).get_tile_resolution() > 0:
                 attribute_shape += self.sentinel2.shape[
                     :-2
                 ]  # add batch size (if has), height, width
-            if MODALITIES[attribute].is_multitemporal:
+            if Modality.get(attribute).is_multitemporal:
                 attribute_shape += [self.sentinel2.shape[-2]]  # add number of timesteps
             if not mask:
                 attribute_shape += [
-                    MODALITIES[attribute].num_channels
+                    Modality.get(attribute).num_channels
                 ]  # add number of bands
             else:
                 attribute_shape += [
-                    MODALITIES[attribute].num_band_sets
+                    Modality.get(attribute).num_band_sets
                 ]  # add number of band sets
             return attribute_shape
 
@@ -94,7 +94,7 @@ class HeliosSample(NamedTuple):
         if attribute == "timestamps":
             return len(TIMESTAMPS)
         else:
-            return MODALITIES[attribute].num_channels
+            return Modality.get(attribute).num_channels
 
     def as_dict(self, ignore_nones: bool = True) -> dict[str, ArrayTensor | None]:
         """Convert the namedtuple to a dictionary.
@@ -242,23 +242,18 @@ class HeliosDataset(Dataset):
         filtered_samples = []
         # For now, we use sentinel2 as the base grid with resolution factor 16
         # Avoid samples with NAIP which has a resolution factor of 1
-        resolution_factor = MODALITIES["sentinel2"].tile_resolution_factor
+        resolution_factor = Modality.SENTINEL2.tile_resolution_factor
         for sample in samples:
             if sample.grid_tile.resolution_factor != resolution_factor:
                 continue
             # Check if all the modalities are available
             if not all(
-                MODALITIES[modality] in sample.modalities
-                for modality in SUPPORTED_MODALITIES
+                modality in sample.modalities for modality in SUPPORTED_MODALITIES
             ):
                 continue
             # Check if S1 and S2 all have the same 12 months of data
-            sentinel1_months = len(
-                set(sample.modalities[MODALITIES["sentinel1"]].images)
-            )
-            sentinel2_months = len(
-                set(sample.modalities[MODALITIES["sentinel2"]].images)
-            )
+            sentinel1_months = len(set(sample.modalities[Modality.SENTINEL1].images))
+            sentinel2_months = len(set(sample.modalities[Modality.SENTINEL2].images))
             if (
                 sample.time_span != TimeSpan.YEAR
                 or sentinel1_months != sentinel2_months
@@ -285,7 +280,7 @@ class HeliosDataset(Dataset):
 
     def _get_timestamps(self, sample: SampleInformation) -> np.ndarray:
         """Get the timestamps of the sample."""
-        sample_sentinel2 = sample.modalities[MODALITIES["sentinel2"]]
+        sample_sentinel2 = sample.modalities[Modality.SENTINEL2]
         timestamps = [i.start_time for i in sample_sentinel2.images]
         dt = pd.to_datetime(timestamps)
         # Note that month should be 0-indexed
@@ -301,20 +296,20 @@ class HeliosDataset(Dataset):
         sample_dict = {}
         for modality in sample.modalities:
             # Skip modalities that are not supported right now
-            if modality.name not in SUPPORTED_MODALITIES:
+            if modality not in SUPPORTED_MODALITIES:
                 continue
             sample_modality = sample.modalities[modality]
             image = load_image_for_sample(sample_modality, sample)
             modality_data = rearrange(image, "t c h w -> h w t c")
             sample_dict[modality.name] = modality_data.astype(np.float32)
             # Get latlon and timestamps from s2
-            if modality == MODALITIES.get("sentinel2"):
+            if modality == Modality.SENTINEL2:
                 sample_dict["latlon"] = self._get_latlon(sample).astype(np.float32)
                 sample_dict["timestamps"] = self._get_timestamps(sample).astype(
                     np.int32
                 )
             # TODO: fix the bug with sentinel1 data (missing bands)
-            # if modality == MODALITIES.get("sentinel1"):
+            # if modality == Modality.SENTINEL1:
             #     if modality_data.shape[-2] != 12:
             #         logger.info(f"sample.sentinel1.shape: {modality_data.shape}")
             #         logger.info(f"sample.timestamps: {sample}")

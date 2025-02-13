@@ -55,7 +55,7 @@ class BandSet:
 
 
 @dataclass(frozen=True)
-class Modality:
+class ModalitySpec:
     """Modality specification."""
 
     name: str
@@ -99,20 +99,24 @@ class Modality:
         return sum(len(band_set.bands) for band_set in self.band_sets)
 
 
-MODALITIES = {
-    "naip": Modality(
+class Modality:
+    """Enum-like access to ModalitySpecs."""
+
+    NAIP = ModalitySpec(
         name="naip",
         tile_resolution_factor=1,
         band_sets=[BandSet(["R", "G", "B", "IR"], 1)],
         is_multitemporal=False,
-    ),
-    "sentinel1": Modality(
+    )
+
+    SENTINEL1 = ModalitySpec(
         name="sentinel1",
         tile_resolution_factor=16,
         band_sets=[BandSet(["VV", "VH"], 16)],
         is_multitemporal=True,
-    ),
-    "sentinel2": Modality(
+    )
+
+    SENTINEL2 = ModalitySpec(
         name="sentinel2",
         tile_resolution_factor=16,
         band_sets=[
@@ -124,8 +128,9 @@ MODALITIES = {
             BandSet(["B01", "B09", "B10"], 64),
         ],
         is_multitemporal=True,
-    ),
-    "landsat": Modality(
+    )
+
+    LANDSAT = ModalitySpec(
         name="landsat",
         tile_resolution_factor=16,
         band_sets=[
@@ -135,14 +140,16 @@ MODALITIES = {
             BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 16),
         ],
         is_multitemporal=True,
-    ),
-    "worldcover": Modality(
+    )
+
+    WORLDCOVER = ModalitySpec(
         name="worldcover",
         tile_resolution_factor=16,
         band_sets=[BandSet(["B1"], 16)],
         is_multitemporal=False,
-    ),
-    "openstreetmap": Modality(
+    )
+
+    OPENSTREETMAP = ModalitySpec(
         name="openstreetmap",
         tile_resolution_factor=16,
         band_sets=[
@@ -183,18 +190,41 @@ MODALITIES = {
             )
         ],
         is_multitemporal=False,
-    ),
+    )
+
     # TODO: decide if we want to include latlon as a modality
     # The issue is that parse_modality_csv will search for the csv file and relevant ModalityTile
-    "latlon": Modality(
+    LATLON = ModalitySpec(
         name="latlon",
         tile_resolution_factor=0,
         band_sets=[BandSet(["lat", "lon"], 0)],
         is_multitemporal=False,
-    ),
-}
+    )
+
+    @classmethod
+    def get(self, name: str) -> ModalitySpec:
+        """Get the ModalitySpec with the specified name."""
+        modality = getattr(Modality, name.upper())
+        assert modality.name == name
+        return modality
+
+    @classmethod
+    def values(self) -> list[ModalitySpec]:
+        """Get all of the ModalitySpecs."""
+        modalities = []
+        for k in dir(Modality):
+            modality = getattr(Modality, k)
+            if not isinstance(modality, ModalitySpec):
+                continue
+            modalities.append(modality)
+        return modalities
+
 
 # TODO: change this to other name to avoid confusion
-SUPPORTED_MODALITIES = ["sentinel1", "sentinel2", "worldcover"]
+SUPPORTED_MODALITIES = [
+    Modality.SENTINEL1,
+    Modality.SENTINEL2,
+    Modality.WORLDCOVER,
+]
 LATLON = ["lat", "lon"]
 TIMESTAMPS = ["day", "month", "year"]
