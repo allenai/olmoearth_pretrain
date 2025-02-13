@@ -8,12 +8,7 @@ from enum import Enum
 
 from upath import UPath
 
-from helios.data.constants import (
-    BASE_RESOLUTION,
-    BandSet,
-    Modality,
-    ModalitySpec,
-)
+from helios.data.constants import BASE_RESOLUTION, BandSet, Modality, ModalitySpec
 from helios.dataset_creation.util import WindowMetadata, get_modality_fname
 
 logger = logging.getLogger(__name__)
@@ -179,7 +174,7 @@ def parse_modality_csv(
 
 
 def parse_helios_dataset(
-    helios_path: UPath,
+    helios_path: UPath, supported_modalities: list[ModalitySpec] = []
 ) -> dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]]:
     """Parse the various per-modality tiles present in a Helios dataset.
 
@@ -189,9 +184,11 @@ def parse_helios_dataset(
     tiles: dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]] = {}
 
     for modality in Modality.values():
-        # TODO: there's N/A in the image_idx column for openstreetmap
-        if modality.name == "latlon":
+        if modality.ignore_when_parsing:
             continue
+        if modality not in supported_modalities:
+            continue
+        # TODO: there's N/A in the image_idx column for openstreetmap
         if modality.name == "openstreetmap":
             continue
         if modality.is_multitemporal:

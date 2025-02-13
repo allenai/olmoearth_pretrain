@@ -142,6 +142,7 @@ def collate_helios(batch: list[HeliosSample]) -> HeliosSample:
     def stack_or_none(attr: str) -> torch.Tensor | None:
         """Stack the tensors while handling None values."""
         if batch[0].__getattribute__(attr) is None:
+            # TODO: THis will need to updated to handle sometimes missing modalities
             return None
         return torch.stack(
             [torch.from_numpy(getattr(sample, attr)) for sample in batch], dim=0
@@ -302,6 +303,8 @@ class HeliosDataset(Dataset):
         """Get the item at the given index."""
         sample = self.samples[index]
         sample_dict = {}
+        # TODO: we need to be able to handle missing modalities at the sample level
+        # so we should basically do NONE if the modality is not present
         for modality in sample.modalities:
             # Skip modalities that are not supported right now
             if modality not in SUPPORTED_MODALITIES:

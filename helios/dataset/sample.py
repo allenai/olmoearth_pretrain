@@ -41,6 +41,7 @@ class SampleInformation:
 
 def image_tiles_to_samples(
     image_tiles: dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]],
+    supported_modalities: list[ModalitySpec] = Modality.values(),
 ) -> list[SampleInformation]:
     """Compute samples from the parsed per-modality image tiles.
 
@@ -50,10 +51,13 @@ def image_tiles_to_samples(
 
     Args:
         image_tiles: the parsed dataset from parse_helios_dataset.
+        supported_modalities: the modalities to include in the samples. Default is all
+            modalities.
 
     Returns:
         a list of training examples (SampleInformation objects).
     """
+    # TODO: make into separate function
     # Convert from (modality -> time_span -> tile list) to
     # (modality, grid_tile, time_span) -> tile).
     image_tile_index: dict[tuple[ModalitySpec, GridTile, TimeSpan], ModalityTile] = {}
@@ -92,7 +96,12 @@ def image_tiles_to_samples(
         )
 
         # Add modalities one by one.
-        for modality in Modality.values():
+        for modality in image_tiles.keys():
+            if modality not in supported_modalities:
+                logger.warning(
+                    f"ignoring modality {modality.name} not in supported_modalities"
+                )
+                continue
             # We only use modalities that are at an equal or coarser resolution.
             if modality.tile_resolution_factor < sample.grid_tile.resolution_factor:
                 continue
@@ -133,7 +142,6 @@ def image_tiles_to_samples(
     return samples
 
 
-# TODO: add unit test for this image loader
 def load_image_for_sample(
     image_tile: ModalityTile, sample: SampleInformation
 ) -> npt.NDArray:

@@ -1,9 +1,122 @@
 """Unit tests for HeliosSample."""
 
+import calendar
+from collections.abc import Callable
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from helios.data.constants import BandSet, Modality, ModalitySpec
 from helios.data.dataset import HeliosSample
+from helios.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
+from helios.dataset.sample import image_tiles_to_samples
+
+CRS = "EPSG:32610"
 
 
 def test_all_attrs_have_bands() -> None:
     """Test all attributes are described in attribute_to_bands."""
     for attribute_name in HeliosSample._fields:
         _ = HeliosSample.num_bands(attribute_name)
+
+
+@pytest.fixture
+def create_image_tiles(tmp_path: Path) -> Callable:
+    """Create a set of fake image tiles for testing."""
+
+    def _create_image_tiles(
+        data_path: Path,
+    ) -> dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]]:
+        """Create image tiles for the given data path."""
+        image_tiles: dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]] = {}
+        images = []
+        crs = "EPSG:32610"
+        # Create a list of ModalityImage objects for the year 2020
+        start_date = datetime(2020, 1, 1)
+        while start_date.year == 2020:
+            last_day = calendar.monthrange(start_date.year, start_date.month)[1]
+            end_date = datetime(start_date.year, start_date.month, last_day)
+            images.append(ModalityImage(start_date, end_date))
+            start_date = end_date + timedelta(days=1)
+        image_tiles[Modality.SENTINEL2] = {
+            TimeSpan.YEAR: [
+                ModalityTile(
+                    grid_tile=GridTile(
+                        crs=crs, resolution_factor=16, col=165, row=-1968
+                    ),
+                    images=images,
+                    center_time=datetime(2020, 6, 30),
+                    band_sets={
+                        BandSet(["B02", "B03", "B04", "B08"], 16): data_path
+                        / "s2_10m.tif",
+                        BandSet(
+                            ["B05", "B06", "B07", "B8A", "B11", "B12"], 32
+                        ): data_path / "s2_20m.tif",
+                        BandSet(["B01", "B09", "B10"], 64): data_path / "s2_40m.tif",
+                    },
+                ),
+            ]
+        }
+        image_tiles[Modality.SENTINEL1] = {
+            TimeSpan.YEAR: [
+                ModalityTile(
+                    grid_tile=GridTile(
+                        crs=crs, resolution_factor=16, col=165, row=-1968
+                    ),
+                    images=images,
+                    center_time=datetime(2020, 6, 30),
+                    band_sets={
+                        BandSet(["VV", "VH"], 16): data_path / "s1_10m.tif",
+                    },
+                ),
+            ]
+        }
+        return image_tiles
+
+    return _create_image_tiles
+
+
+def test_image_tiles_to_samples(tmp_path: Path, create_image_tiles: Callable) -> None:
+    """Test image_tiles_to_samples with a simple case."""
+    image_tiles = create_image_tiles(tmp_path)
+    samples = image_tiles_to_samples(image_tiles)
+
+    assert len(samples) == 1
+    assert samples[0].grid_tile == GridTile(
+        crs=CRS, resolution_factor=16, col=165, row=-1968
+    )
+    assert samples[0].time_span == TimeSpan.YEAR
+    assert samples[0].modalities.keys() == {Modality.SENTINEL2, Modality.SENTINEL1}
+
+
+def test_image_tiles_to_samples_only_sentinel2(
+    tmp_path: Path, create_image_tiles: Callable
+) -> None:
+    """Test image_tiles_to_samples with only Sentinel-2."""
+    image_tiles = create_image_tiles(tmp_path)
+    supported_modalities = [Modality.SENTINEL2]
+    samples = image_tiles_to_samples(image_tiles, supported_modalities)
+
+    assert len(samples) == 1
+    assert samples[0].grid_tile == GridTile(
+        crs=CRS, resolution_factor=16, col=165, row=-1968
+    )
+    assert samples[0].time_span == TimeSpan.YEAR
+    assert samples[0].modalities.keys() == {Modality.SENTINEL2}
+
+
+def test_image_tiles_to_samples_only_sentinel1(
+    tmp_path: Path, create_image_tiles: Callable
+) -> None:
+    """Test image_tiles_to_samples with only Sentinel-1."""
+    image_tiles = create_image_tiles(tmp_path)
+    supported_modalities = [Modality.SENTINEL1]
+    samples = image_tiles_to_samples(image_tiles, supported_modalities)
+
+    assert len(samples) == 1
+    assert samples[0].grid_tile == GridTile(
+        crs=CRS, resolution_factor=16, col=165, row=-1968
+    )
+    assert samples[0].time_span == TimeSpan.YEAR
+    assert samples[0].modalities.keys() == {Modality.SENTINEL1}
