@@ -8,7 +8,7 @@ import numpy.typing as npt
 import rasterio
 import rasterio.windows
 
-from helios.data.constants import IMAGE_TILE_SIZE, MODALITIES, Modality
+from helios.data.constants import IMAGE_TILE_SIZE, Modality, ModalitySpec
 
 from .parse import GridTile, ModalityTile, TimeSpan
 
@@ -36,11 +36,11 @@ class SampleInformation:
     # The modalities available at this grid tile or coarser ones containing this tile.
     # The time spans from which the ModalityTiles are sourced should either match the
     # time span of the sample, or should be TimeSpan.STATIC.
-    modalities: dict[Modality, ModalityTile]
+    modalities: dict[ModalitySpec, ModalityTile]
 
 
 def image_tiles_to_samples(
-    image_tiles: dict[Modality, dict[TimeSpan, list[ModalityTile]]],
+    image_tiles: dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]],
 ) -> list[SampleInformation]:
     """Compute samples from the parsed per-modality image tiles.
 
@@ -56,7 +56,7 @@ def image_tiles_to_samples(
     """
     # Convert from (modality -> time_span -> tile list) to
     # (modality, grid_tile, time_span) -> tile).
-    image_tile_index: dict[tuple[Modality, GridTile, TimeSpan], ModalityTile] = {}
+    image_tile_index: dict[tuple[ModalitySpec, GridTile, TimeSpan], ModalityTile] = {}
     for modality, modality_tiles in image_tiles.items():
         for time_span, time_span_tiles in modality_tiles.items():
             for tile in time_span_tiles:
@@ -92,7 +92,7 @@ def image_tiles_to_samples(
         )
 
         # Add modalities one by one.
-        for modality in MODALITIES.values():
+        for modality in Modality.values():
             # We only use modalities that are at an equal or coarser resolution.
             if modality.tile_resolution_factor < sample.grid_tile.resolution_factor:
                 continue

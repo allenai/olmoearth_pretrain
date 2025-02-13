@@ -12,7 +12,7 @@ from einops import repeat
 from geobench.dataset import Stats
 from torch.utils.data import Dataset, default_collate
 
-from helios.data.constants import MODALITIES
+from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
 from helios.train.masking import MaskedHeliosSample
 
@@ -44,7 +44,7 @@ def _geobench_band_index_from_helios_name(helios_name: str) -> int:
 
 
 GEOBENCH_TO_HELIOS_S2_BANDS = [
-    _geobench_band_index_from_helios_name(b) for b in MODALITIES["sentinel2"].band_order
+    _geobench_band_index_from_helios_name(b) for b in Modality.SENTINEL2.band_order
 ]
 
 

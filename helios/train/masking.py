@@ -13,7 +13,7 @@ from class_registry import ClassRegistry
 from einops import rearrange, repeat
 from olmo_core.config import Config
 
-from helios.data.constants import MODALITIES
+from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
 from helios.types import ArrayTensor
 
@@ -276,7 +276,7 @@ class RandomMaskingStrategy(MaskingStrategy):
                     return_device = None
                 logger.info(f"Modality name: {modality_name} shape: {modality.shape}")
                 # TODO: Make this decions based on modlaity spec
-                num_channels = MODALITIES[modality_name].num_channels
+                num_channels = Modality.get(modality_name).num_channels
                 if len(modality.shape) == 5:
                     b, h, w, t, c = modality.shape
 
@@ -308,6 +308,7 @@ class RandomMaskingStrategy(MaskingStrategy):
                 logger.info(
                     f" After maskingModality: {modality_name} shape: {modality.shape} mask shape: {mask.shape}"
                 )
+                continue
         return MaskedHeliosSample(**output_dict)
 
 

@@ -9,7 +9,7 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
-from helios.data.constants import MODALITIES, BandSet
+from helios.data.constants import BandSet, Modality
 from helios.data.dataset import HeliosDataset, HeliosSample
 from helios.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
 from helios.dataset.sample import SampleInformation
@@ -69,7 +69,7 @@ def prepare_dataset(data_path: Path) -> HeliosDataset:
             grid_tile=GridTile(crs=crs, resolution_factor=16, col=165, row=-1968),
             time_span=TimeSpan.YEAR,
             modalities={
-                MODALITIES["sentinel2"]: ModalityTile(
+                Modality.SENTINEL2: ModalityTile(
                     grid_tile=GridTile(
                         crs=crs, resolution_factor=16, col=165, row=-1968
                     ),
@@ -84,7 +84,7 @@ def prepare_dataset(data_path: Path) -> HeliosDataset:
                         BandSet(["B01", "B09", "B10"], 64): data_path / "s2_40m.tif",
                     },
                 ),
-                MODALITIES["sentinel1"]: ModalityTile(
+                Modality.SENTINEL1: ModalityTile(
                     grid_tile=GridTile(
                         crs=crs, resolution_factor=16, col=165, row=-1968
                     ),
@@ -94,7 +94,7 @@ def prepare_dataset(data_path: Path) -> HeliosDataset:
                         BandSet(["VV", "VH"], 16): data_path / "s1_10m.tif",
                     },
                 ),
-                MODALITIES["worldcover"]: ModalityTile(
+                Modality.WORLDCOVER: ModalityTile(
                     grid_tile=GridTile(
                         crs=crs, resolution_factor=16, col=165, row=-1968
                     ),
@@ -102,7 +102,7 @@ def prepare_dataset(data_path: Path) -> HeliosDataset:
                     center_time=datetime(2020, 6, 30),
                     band_sets={BandSet(["B1"], 16): data_path / "worldcover.tif"},
                 ),
-                MODALITIES["latlon"]: ModalityTile(
+                Modality.LATLON: ModalityTile(
                     grid_tile=GridTile(
                         crs=crs, resolution_factor=16, col=165, row=-1968
                     ),

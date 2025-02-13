@@ -7,7 +7,7 @@ import pytest
 import torch
 from einops import rearrange
 
-from helios.data.constants import MODALITIES
+from helios.data.constants import Modality
 from helios.nn.flexihelios import (
     Encoder,
     FlexiHeliosPatchEmbeddings,
@@ -28,8 +28,8 @@ def modality_band_set_len_and_total_bands(
     """
     return {
         modality: (
-            len(MODALITIES[modality].band_sets),
-            MODALITIES[modality].num_channels,
+            len(Modality.get(modality).band_sets),
+            Modality.get(modality).num_channels,
         )
         for modality in supported_modalities
     }
