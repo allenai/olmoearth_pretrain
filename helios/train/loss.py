@@ -8,11 +8,11 @@ import torch
 import torch.nn.functional as F
 from class_registry import ClassRegistry
 from einops import rearrange
-from olmo_core.config import Config
-from torch import Tensor
-
+from helios.data.constants import ModalitySpec
 from helios.nn.flexihelios import TokensAndMasks
 from helios.train.masking import MaskValue
+from olmo_core.config import Config
+from torch import Tensor
 
 
 class Loss(ABC):
@@ -33,6 +33,7 @@ class PatchDiscriminationLoss(Loss):
 
     def __init__(
         self,
+        supported_modalities: list[ModalitySpec],
         tau: float = 0.07,
         pred2unit: bool = False,
         mask_other_samples: bool = True,
@@ -49,6 +50,7 @@ class PatchDiscriminationLoss(Loss):
         self.tau = tau
         self.pred2unit = pred2unit
         self.mask_other_samples = mask_other_samples
+        self.supported_modality_names = [m.name for m in supported_modalities]
 
     @staticmethod
     def _flatten(x: Tensor) -> Tensor:
@@ -79,18 +81,18 @@ class PatchDiscriminationLoss(Loss):
         """
         # TODO: How will we deal with only training with some subset of modalities? If we use passed in modalities channels dict to define which modalities is one way but using class directly implies all used
         all_preds = torch.cat(
-            [self._flatten(getattr(predictions, d)) for d in predictions.data_fields],
+            [self._flatten(getattr(predictions, d)) for d in self.supported_modality_names],
             dim=1,
         )
         all_masks = torch.cat(
             [
                 self._flatten(getattr(predictions, f"{d}_mask").unsqueeze(dim=-1))
-                for d in predictions.data_fields
+                for d in self.supported_modality_names
             ],
             dim=1,
         )[:, :, 0]
         all_targets = torch.cat(
-            [self._flatten(getattr(targets, d)) for d in predictions.data_fields],
+            [self._flatten(getattr(targets, d)) for d in self.supported_modality_names],
             dim=1,
         )
         pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)

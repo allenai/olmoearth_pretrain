@@ -202,23 +202,26 @@ class HeliosDataset(Dataset):
             ):
                 continue
             # check if sample modalities have s1 and s2
-            if (
-                Modality.SENTINEL1 in sample.modalities
-                and Modality.SENTINEL2 in sample.modalities
-            ):
-                # Check if S1 and S2 all have the same 12 months of data
+            has_s1 = Modality.SENTINEL1 in sample.modalities
+            has_s2 = Modality.SENTINEL2 in sample.modalities
+            if has_s1:
                 sentinel1_months = len(
                     set(sample.modalities[Modality.SENTINEL1].images)
                 )
+                if sentinel1_months != 12:
+                    continue
+            if has_s2:
                 sentinel2_months = len(
                     set(sample.modalities[Modality.SENTINEL2].images)
                 )
-                if (
-                    sample.time_span != TimeSpan.YEAR
-                    or sentinel1_months != sentinel2_months
-                    or sentinel2_months != 12
-                ):
+                if sentinel2_months != 12:
                     continue
+            if has_s1 and has_s2:
+                # Check if S1 and S2 all have the same 12 months of data
+                if sentinel1_months != sentinel2_months:
+                    continue
+            if sample.time_span != TimeSpan.YEAR:
+                continue
             filtered_samples.append(sample)
         logger.info(f"Number of samples after filtering: {len(filtered_samples)}")
         return filtered_samples
@@ -304,7 +307,10 @@ class HeliosDataset(Dataset):
     ) -> np.ndarray:
         """Load the sample."""
         image = load_image_for_sample(sample_modality, sample)
-        modality_data = rearrange(image, "t c h w -> h w t c")
+        if image.ndim == 4:
+            modality_data = rearrange(image, "t c h w -> h w t c")
+        else:
+            modality_data = rearrange(image, "c h w -> h w c")
         # TODO: THere should be a dict per modality
         return modality_data.astype(dtype)
 
@@ -318,6 +324,10 @@ class HeliosDataset(Dataset):
             sample_dict[modality.name] = image
             # Get latlon and timestamps from s2
             if modality == Modality.SENTINEL2:
+                if image.shape[-2] != 12:
+                    logger.info(f"sample.sentinel2.shape: {image.shape}")
+                    logger.info(f"sample: {sample}")
+                    exit(0)
                 if Modality.LATLON in self.supported_modalities:
                     sample_dict["latlon"] = self._get_latlon(sample).astype(np.float32)
                 sample_dict["timestamps"] = self._get_timestamps(sample).astype(

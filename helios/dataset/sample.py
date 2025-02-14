@@ -215,9 +215,6 @@ def load_image_for_sample(
                     desired_subtile_size,
                     desired_subtile_size,
                 )
-                logger.info(
-                    f"reshaping image from {image.shape} to {shape} for {fname}"
-                )
                 image = image.reshape(shape)
 
                 band_set_images.append(image)

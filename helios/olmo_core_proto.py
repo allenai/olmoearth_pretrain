@@ -69,8 +69,8 @@ if __name__ == "__main__":
     supported_modalities = [
         Modality.SENTINEL2,
         Modality.LATLON,
-        Modality.SENTINEL1,
-        Modality.WORLDCOVER,
+        # Modality.SENTINEL1,
+        # Modality.WORLDCOVER,
     ]
     encoder = Encoder(
         embedding_size=16,
@@ -102,8 +102,8 @@ if __name__ == "__main__":
     model = model.to(device)
     checkpointer_config = CheckpointerConfig(work_dir=workdir)
     optim_config = AdamWConfig()
-    masking_config = MaskingConfig(strategy_config={"type": "random"})
-    loss_config = LossConfig(loss_config={"type": "patch_discrimination"})
+    masking_config = MaskingConfig(strategy_config={"type": "random", })
+    loss_config = LossConfig(loss_config={"type": "patch_discrimination", "supported_modalities": supported_modalities})
     train_module_config = HeliosTrainModuleConfig(
         optim=optim_config,
         masking_config=masking_config,
@@ -115,7 +115,7 @@ if __name__ == "__main__":
 
     # Prepare samples from Helios dataset
     tile_path = UPath(
-        "/weka/dfive-default/helios_sample_data/20250130-sample-dataset-helios/"
+        "/weka/dfive-default/helios/dataset/20250212/"
     )
     tiles = parse_helios_dataset(tile_path, supported_modalities=supported_modalities)
     logger.info(f"Tiles: {len(tiles)}")

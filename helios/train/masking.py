@@ -20,11 +20,12 @@ logger = logging.getLogger(__name__)
 
 
 class MaskValue(Enum):
-    """Masks can take 3 possible values.
+    """Masks can take 4 possible values.
 
     ONLINE_ENCODER: The token is seen by the online encoder
     TARGET_ENCODER_ONLY: The token is seen by the target encoder only
     DECODER_ONLY: The token is seen by the decoder only
+    MISSING: The token is missing
     """
 
     ONLINE_ENCODER = 0
@@ -73,6 +74,15 @@ class MaskedHeliosSample(NamedTuple):
             val = getattr(self, field)
             return_dict[field] = val
         return return_dict
+
+    @property
+    def modalities(self) -> list[str]:
+        """Get the modalities in the MaskedHeliosSample."""
+        return [
+            field
+            for field in self._fields
+            if not field.endswith("_mask") and field != "timestamps"
+        ]
 
     @property
     def height(self) -> int:
@@ -305,58 +315,65 @@ class RandomMaskingStrategy(MaskingStrategy):
         output_dict = {}
         for modality_name in batch._fields:
             modality = getattr(batch, modality_name)
-            if modality_name == "timestamps":
-                output_dict[modality_name] = modality
-                continue
+            if modality is None:
+                # THis is basically happening in 2 places right now
+                logger.info(f"Modality {modality_name} is missing")
+                missing_data_shape = batch.shape(modality_name, mask=False)
+                missing_mask_shape = batch.shape(modality_name, mask=True)
+                # Do we really even want to create a tensor here?
+                output_dict[modality_name] = torch.empty(missing_data_shape)
+                output_dict[
+                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                ] = (torch.ones(missing_mask_shape) * MaskValue.MISSING.value)
+            else:
+                if modality_name == "timestamps":
+                    output_dict[modality_name] = modality
+                    continue
 
-            if isinstance(modality, torch.Tensor):
-                return_device: torch.device | None = modality.device
-            else:
-                return_device = None
-            logger.info(f"Modality name: {modality_name} shape: {modality.shape}")
-            # TODO: Make this decions based on modlaity spec and all the varying dimesnions agnostic
-            num_bands = Modality.get(modality_name).num_bands
-            if modality.ndim == 4:
-                b, h, w, _ = modality.shape
-                mask = self._create_mask_per_space_modality(
-                    b,
-                    h,
-                    w,
-                    encode_ratio,
-                    decode_ratio,
-                    num_bands,
-                    return_device,
-                )
-            elif modality.ndim == 5:
-                b, h, w, t, _ = modality.shape
-                mask = self._create_mask_per_space_time_modality(
-                    b,
-                    h,
-                    w,
-                    t,
-                    encode_ratio,
-                    decode_ratio,
-                    num_bands,
-                    return_device,
-                )
-            elif modality.ndim == 2:
-                b = modality.shape[0]
-                mask = self._create_mask_per_static_modality(
-                    b,
-                    encode_ratio,
-                    decode_ratio,
-                    num_bands,
-                    return_device,
-                )
-            else:
-                raise ValueError(f"Unsupported modality shape {modality.shape}")
-            output_dict[modality_name] = modality
-            output_dict[MaskedHeliosSample.get_masked_modality_name(modality_name)] = (
-                mask
-            )
-            logger.info(
-                f" After maskingModality: {modality_name} shape: {modality.shape} mask shape: {mask.shape}"
-            )
+                if isinstance(modality, torch.Tensor):
+                    return_device: torch.device | None = modality.device
+                else:
+                    return_device = None
+                # TODO: Make this decions based on modlaity spec and all the varying dimesnions agnostic
+                num_bands = Modality.get(modality_name).num_bands
+                if modality.ndim == 4:
+                    b, h, w, _ = modality.shape
+                    mask = self._create_mask_per_space_modality(
+                        b,
+                        h,
+                        w,
+                        encode_ratio,
+                        decode_ratio,
+                        num_bands,
+                        return_device,
+                    )
+                elif modality.ndim == 5:
+                    b, h, w, t, _ = modality.shape
+                    mask = self._create_mask_per_space_time_modality(
+                        b,
+                        h,
+                        w,
+                        t,
+                        encode_ratio,
+                        decode_ratio,
+                        num_bands,
+                        return_device,
+                    )
+                elif modality.ndim == 2:
+                    b = modality.shape[0]
+                    mask = self._create_mask_per_static_modality(
+                        b,
+                        encode_ratio,
+                        decode_ratio,
+                        num_bands,
+                        return_device,
+                    )
+                else:
+                    raise ValueError(f"Unsupported modality shape {modality.shape}")
+                output_dict[modality_name] = modality
+                output_dict[
+                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                ] = mask
         return MaskedHeliosSample(**output_dict)
 
 
