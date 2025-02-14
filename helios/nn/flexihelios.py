@@ -10,11 +10,9 @@ from einops import rearrange, repeat
 from helios.constants import BASE_GSD
 from helios.data.constants import Modality, ModalitySpec
 from helios.nn.attention import Block
-from helios.nn.encodings import (
-    get_1d_sincos_pos_encoding,
-    get_2d_sincos_pos_encoding_with_resolution,
-    get_month_encoding_table,
-)
+from helios.nn.encodings import (get_1d_sincos_pos_encoding,
+                                 get_2d_sincos_pos_encoding_with_resolution,
+                                 get_month_encoding_table)
 from helios.nn.flexi_patch_embed import FlexiPatchEmbed
 from helios.train.masking import MaskedHeliosSample, MaskValue
 from torch import Tensor, nn
@@ -176,11 +174,19 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         """Check if any data is seen by the encoder."""
         return modality_mask.min() == MaskValue.ONLINE_ENCODER.value
 
+    def _get_modalities_to_process(self, input_data: MaskedHeliosSample) -> list[str]:
+        """Get the modalities to process."""
+        available_modalities = input_data.modalities
+        modalities_to_process = set(self.supported_modality_names).intersection(
+            set(available_modalities)
+        )
+        return list(modalities_to_process)
+
     def forward(
         self,
         input_data: MaskedHeliosSample,
         patch_size: int,
-    ) -> TokensAndMasks:
+    ) -> dict[str, Tensor]:
         """Return flexibly patchified embeddings for each modality of the input data.
 
         Given a [B, H, W, (T), C] inputs, returns a [B, H, W, (T), b_s, D] output.
@@ -194,15 +200,19 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         for the H, W dimensions
         """
         output_dict = {}
-        for modality in input_data.modalities:
-            # We handle missing data  in the apply_embedding_to_modality function
+        modalities_to_process = self._get_modalities_to_process(input_data)
+        for modality in modalities_to_process:
+            logger.debug(f"Processing modality {modality}")
             modality_tokens, modality_masks = self.apply_embedding_to_modality(
                 modality, input_data, patch_size
             )
             output_dict[modality] = modality_tokens
             modality_mask_name = input_data.get_masked_modality_name(modality)
             output_dict[modality_mask_name] = modality_masks
-        return TokensAndMasks(**output_dict)
+        assert len(output_dict) == len(
+            modalities_to_process
+        ), f"Expected modalities_to_process {modalities_to_process} to be the same as output_dict {output_dict}"
+        return output_dict
 
 
 class FlexiHeliosCompositeEncodings(nn.Module):

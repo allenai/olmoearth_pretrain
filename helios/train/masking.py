@@ -42,26 +42,19 @@ class MaskedHeliosSample(NamedTuple):
     latlon and timestamps are the same for all modalities.
     For each modality. we have an ArrayTensor named by modality, and a mask for each modality named by modality_mask.
     we also have a mask for the latlon called latlon_mask
-
-    Args:
-        s2: ArrayTensor  # [B, H, W, T, len(S2_bands)]
-        s2_mask: ArrayTensor  # [B, H, W, T, len(S2_band_groups)]
-        latlon: ArrayTensor  # [B, 2]
-        latlon_mask: ArrayTensor  # [B, len(latlon_band_groups)]
-        timestamps: ArrayTensor  # [B, T, D=3], where D=[day, month, year]
     """
 
-    sentinel2: ArrayTensor
-    sentinel2_mask: ArrayTensor
-    sentinel1: ArrayTensor
-    sentinel1_mask: ArrayTensor
-    worldcover: ArrayTensor
-    worldcover_mask: ArrayTensor
-    latlon: ArrayTensor  # [B, 2]
-    latlon_mask: ArrayTensor
     timestamps: (
         ArrayTensor  # [B, T, D=3], where D=[day, month, year] (months are zero indexed)
     )
+    sentinel2: ArrayTensor | None = None
+    sentinel2_mask: ArrayTensor | None = None
+    sentinel1: ArrayTensor | None = None
+    sentinel1_mask: ArrayTensor | None = None
+    worldcover: ArrayTensor | None = None
+    worldcover_mask: ArrayTensor | None = None
+    latlon: ArrayTensor | None = None  # [B, 2]
+    latlon_mask: ArrayTensor | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
@@ -77,11 +70,13 @@ class MaskedHeliosSample(NamedTuple):
 
     @property
     def modalities(self) -> list[str]:
-        """Get the modalities in the MaskedHeliosSample."""
+        """Get the present modalities in this instance of MaskedHeliosSample."""
         return [
             field
             for field in self._fields
-            if not field.endswith("_mask") and field != "timestamps"
+            if not field.endswith("_mask")
+            and field != "timestamps"
+            and getattr(self, field) is not None
         ]
 
     @property
@@ -147,6 +142,7 @@ class MaskedHeliosSample(NamedTuple):
             dict: Dictionary representation of the MaskedHeliosSample.
         """
         return cls(**dict)
+
 
 class MaskingStrategy(ABC):
     """Abstract base class for masking strategies."""
@@ -325,15 +321,11 @@ class RandomMaskingStrategy(MaskingStrategy):
         for modality_name in batch._fields:
             modality = getattr(batch, modality_name)
             if modality is None:
-                # THis is basically happening in 2 places right now
-                logger.info(f"Modality {modality_name} is missing")
-                missing_data_shape = batch.shape(modality_name, mask=False)
-                missing_mask_shape = batch.shape(modality_name, mask=True)
-                # Do we really even want to create a tensor here?
-                output_dict[modality_name] = torch.empty(missing_data_shape)
+                # set modality and mask to None
+                output_dict[modality_name] = None
                 output_dict[
                     MaskedHeliosSample.get_masked_modality_name(modality_name)
-                ] = (torch.ones(missing_mask_shape) * MaskValue.MISSING.value)
+                ] = None
             else:
                 if modality_name == "timestamps":
                     output_dict[modality_name] = modality

@@ -7,12 +7,8 @@ import pytest
 import torch
 from einops import rearrange
 from helios.data.constants import ModalitySpec
-from helios.nn.flexihelios import (
-    Encoder,
-    FlexiHeliosPatchEmbeddings,
-    Predictor,
-    TokensAndMasks,
-)
+from helios.nn.flexihelios import (Encoder, FlexiHeliosPatchEmbeddings,
+                                   Predictor, TokensAndMasks)
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 
@@ -46,13 +42,13 @@ class TestFlexiHeliosPatchEmbeddings:
     @pytest.fixture
     def patch_embeddings(
         self,
-        supported_modality_names: list[str],
     ) -> FlexiHeliosPatchEmbeddings:
         """Create patch embeddings fixture for testing.
 
         Returns:
             FlexiHeliosPatchEmbeddings: Test patch embeddings instance with small test config
         """
+        supported_modality_names = ["sentinel2", "latlon"]
         return FlexiHeliosPatchEmbeddings(
             supported_modality_names=supported_modality_names,
             embedding_size=16,
@@ -83,9 +79,14 @@ class TestFlexiHeliosPatchEmbeddings:
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
         timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
 
-        sample = MaskedHeliosSample(
-            sentinel2, sentinel2_mask, latlon, latlon_mask, timestamps
-        )
+        masked_sample_dict = {
+            "sentinel2": sentinel2,
+            "sentinel2_mask": sentinel2_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+            "timestamps": timestamps,
+        }
+        sample = MaskedHeliosSample(**masked_sample_dict)
         output = patch_embeddings.forward(sample, patch_size)
         embedding_size = patch_embeddings.embedding_size
         assert output.sentinel2.shape == (
@@ -355,9 +356,12 @@ class TestEncoder:
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
         timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
 
-        # We can do empty tensors for parti
         x = MaskedHeliosSample(
-            sentinel2, sentinel2_mask, latlon, latlon_mask, timestamps
+            sentinel2=sentinel2,
+            sentinel2_mask=sentinel2_mask,
+            latlon=latlon,
+            latlon_mask=latlon_mask,
+            timestamps=timestamps,
         )
 
         patch_size = 4
