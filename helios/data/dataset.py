@@ -20,11 +20,13 @@ from upath import UPath
 from helios.data.constants import (
     BASE_RESOLUTION,
     IMAGE_TILE_SIZE,
+    NORMALIZE_STRATEGY,
     SUPPORTED_MODALITIES,
     TIMESTAMPS,
     Modality,
 )
 from helios.data.normalize import Normalizer, Strategy
+from helios.data.utils import convert_to_db
 from helios.dataset.parse import ModalityTile, TimeSpan
 from helios.dataset.sample import SampleInformation, load_image_for_sample
 from helios.types import ArrayTensor
@@ -179,7 +181,7 @@ class HeliosDataset(Dataset):
         self.samples = self._filter_samples(list(samples))
         self.path = path
         self.dtype = dtype
-        # Initialize two normalizers for different modalities
+        # Initialize both normalizers for different modalities
         self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
         self.normalizer_computed = Normalizer(Strategy.COMPUTED)
         self._fs_local_rank = get_fs_local_rank()
@@ -310,14 +312,18 @@ class HeliosDataset(Dataset):
                 continue
             sample_modality = sample.modalities[modality]
             image = self.load_sample(sample_modality, sample, self.dtype)
-            # According to the EE, we need to convert Sentinel1 data to dB using 10*log10(x)
-            # https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S1_GRD#description
+            # Convert Sentinel1 data to dB
             if modality == Modality.SENTINEL1:
-                image = 10 * np.log10(image)
-            # TODO: maybe we can add strategy to the ModalitySpec
-            sample_dict[modality.name] = self.normalizer_predefined.normalize(
-                modality, image
-            )
+                image = convert_to_db(image)
+            # Normalize data using predefined or computed values
+            if NORMALIZE_STRATEGY[modality] == Strategy.PREDEFINED:
+                sample_dict[modality.name] = self.normalizer_predefined.normalize(
+                    modality, image
+                )
+            elif NORMALIZE_STRATEGY[modality] == Strategy.COMPUTED:
+                sample_dict[modality.name] = self.normalizer_computed.normalize(
+                    modality, image
+                )
             # Get latlon and timestamps from Sentinel2 data
             if modality == Modality.SENTINEL2:
                 sample_dict["latlon"] = self._get_latlon(sample)

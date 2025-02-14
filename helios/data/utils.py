@@ -63,3 +63,14 @@ def to_cartesian(lat: float, lon: float) -> np.ndarray:
     x, y, z = compute_cartesian(lat, lon)
 
     return np.array([x, y, z])
+
+
+# According to the EE, we need to convert Sentinel1 data to dB using 10*log10(x)
+# https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S1_GRD#description
+def convert_to_db(data: np.ndarray) -> np.ndarray:
+    """Convert the data to decibels.
+
+    Args:
+        data: The data to convert to decibels.
+    """
+    return 10 * np.log10(data)
