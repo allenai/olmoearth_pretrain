@@ -10,8 +10,8 @@ from upath import UPath
 
 from helios.data.constants import (
     BASE_RESOLUTION,
+    SUPPORTED_MODALITIES,
     BandSet,
-    Modality,
     ModalitySpec,
 )
 from helios.dataset_creation.util import WindowMetadata, get_modality_fname
@@ -188,12 +188,7 @@ def parse_helios_dataset(
     """
     tiles: dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]] = {}
 
-    for modality in Modality.values():
-        # TODO: there's N/A in the image_idx column for openstreetmap
-        if modality.name == "latlon":
-            continue
-        if modality.name == "openstreetmap":
-            continue
+    for modality in SUPPORTED_MODALITIES:
         if modality.is_multitemporal:
             # We need to load the one-year and two-week data separately.
             time_spans = [TimeSpan.YEAR, TimeSpan.TWO_WEEK]
