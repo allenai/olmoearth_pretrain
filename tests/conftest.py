@@ -24,11 +24,11 @@ def set_random_seeds() -> None:
     torch.manual_seed(42)
     random.seed(42)
 
-
+# TODO: not sure this needs to be shared across tests
 @pytest.fixture
-def supported_modalities() -> list[str]:
+def supported_modalities() -> list[ModalitySpec]:
     """Create a list of supported modalities for testing."""
-    return ["sentinel2", "latlon"]
+    return [Modality.SENTINEL2, Modality.LATLON]
 
 
 # TODO: add some create mock data factory functions for all the contracts and different steps

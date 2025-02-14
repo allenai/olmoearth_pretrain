@@ -38,6 +38,7 @@ class HeliosSample(NamedTuple):
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
+    # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
         """Returns the expected shape of an attribute.
 

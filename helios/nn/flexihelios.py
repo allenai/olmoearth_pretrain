@@ -10,9 +10,11 @@ from einops import rearrange, repeat
 from helios.constants import BASE_GSD
 from helios.data.constants import Modality, ModalitySpec
 from helios.nn.attention import Block
-from helios.nn.encodings import (get_1d_sincos_pos_encoding,
-                                 get_2d_sincos_pos_encoding_with_resolution,
-                                 get_month_encoding_table)
+from helios.nn.encodings import (
+    get_1d_sincos_pos_encoding,
+    get_2d_sincos_pos_encoding_with_resolution,
+    get_month_encoding_table,
+)
 from helios.nn.flexi_patch_embed import FlexiPatchEmbed
 from helios.train.masking import MaskedHeliosSample, MaskValue
 from torch import Tensor, nn
@@ -65,7 +67,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
 
     def __init__(
         self,
-        supported_modalities: list[str],
+        supported_modality_names: list[str],
         max_patch_size: int,
         embedding_size: int,
     ):
@@ -80,7 +82,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         super().__init__()
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
-        self.supported_modality_names = supported_modalities
+        self.supported_modality_names = supported_modality_names
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
         for modality in self.supported_modality_names:

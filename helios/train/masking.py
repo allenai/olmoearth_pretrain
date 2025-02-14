@@ -109,6 +109,7 @@ class MaskedHeliosSample(NamedTuple):
         """Get the unmasked modality name."""
         return modality_mask_name.replace("_mask", "")
 
+    # TODO: add unit test because this does modlaity based checking
     @classmethod
     def from_heliossample(
         cls,
@@ -138,6 +139,14 @@ class MaskedHeliosSample(NamedTuple):
 
         return MaskedHeliosSample(**masked_sample_dict)
 
+    @classmethod
+    def from_dict(cls, dict: dict[str, Any]) -> "MaskedHeliosSample":
+        """Create a MaskedHeliosSample from a dictionary, creating empty tensors for missing modalities.
+
+        Args:
+            dict: Dictionary representation of the MaskedHeliosSample.
+        """
+        return cls(**dict)
 
 class MaskingStrategy(ABC):
     """Abstract base class for masking strategies."""

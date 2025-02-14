@@ -6,8 +6,7 @@ Any methods that piece together multiple steps or are the entire forward pass fo
 import pytest
 import torch
 from einops import rearrange
-
-from helios.data.constants import Modality
+from helios.data.constants import ModalitySpec
 from helios.nn.flexihelios import (
     Encoder,
     FlexiHeliosPatchEmbeddings,
@@ -19,7 +18,7 @@ from helios.train.masking import MaskedHeliosSample, MaskValue
 
 @pytest.fixture
 def modality_band_set_len_and_total_bands(
-    supported_modalities: list[str],
+    supported_modalities: list[ModalitySpec],
 ) -> dict[str, tuple[int, int]]:
     """Get the number of band sets and total bands for each modality.
 
@@ -27,12 +26,18 @@ def modality_band_set_len_and_total_bands(
         Dictionary mapping modality name to tuple of (num_band_sets, total_bands)
     """
     return {
-        modality: (
-            len(Modality.get(modality).band_sets),
-            Modality.get(modality).num_bands,
+        modality.name: (
+            len(modality.band_sets),
+            modality.num_bands,
         )
         for modality in supported_modalities
     }
+
+
+@pytest.fixture
+def supported_modality_names(supported_modalities: list[ModalitySpec]) -> list[str]:
+    """Get the names of the supported modalities."""
+    return [modality.name for modality in supported_modalities]
 
 
 class TestFlexiHeliosPatchEmbeddings:
@@ -41,7 +46,7 @@ class TestFlexiHeliosPatchEmbeddings:
     @pytest.fixture
     def patch_embeddings(
         self,
-        supported_modalities: list[str],
+        supported_modality_names: list[str],
     ) -> FlexiHeliosPatchEmbeddings:
         """Create patch embeddings fixture for testing.
 
@@ -49,7 +54,7 @@ class TestFlexiHeliosPatchEmbeddings:
             FlexiHeliosPatchEmbeddings: Test patch embeddings instance with small test config
         """
         return FlexiHeliosPatchEmbeddings(
-            supported_modalities=supported_modalities,
+            supported_modality_names=supported_modality_names,
             embedding_size=16,
             max_patch_size=8,
         )
@@ -110,7 +115,7 @@ class TestEncoder:
     """Integration tests for the Encoder class."""
 
     @pytest.fixture
-    def encoder(self, supported_modalities: list[str]) -> Encoder:
+    def encoder(self, supported_modalities: list[ModalitySpec]) -> Encoder:
         """Create encoder fixture for testing.
 
         Returns:
@@ -248,12 +253,9 @@ class TestEncoder:
             latlon_num_band_sets,
             expected_embedding_size,
         ), f"Expected output latlon shape {latlon.shape}, got {output.latlon.shape}"
-        assert (
-            output.latlon_mask.shape
-            == (
-                B,
-                latlon_num_band_sets,
-            )
+        assert output.latlon_mask.shape == (
+            B,
+            latlon_num_band_sets,
         ), f"Expected output latlon_mask shape {latlon_mask.shape}, got {output.latlon_mask.shape}"
 
     def test_forward_exit_config_exists(
@@ -353,6 +355,7 @@ class TestEncoder:
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
         timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
 
+        # We can do empty tensors for parti
         x = MaskedHeliosSample(
             sentinel2, sentinel2_mask, latlon, latlon_mask, timestamps
         )
@@ -390,12 +393,9 @@ class TestEncoder:
             1,
             expected_embedding_size,
         ), f"Expected output latlon shape {latlon.shape}, got {output.latlon.shape}"
-        assert (
-            output.latlon_mask.shape
-            == (
-                B,
-                1,
-            )
+        assert output.latlon_mask.shape == (
+            B,
+            1,
         ), f"Expected output latlon_mask shape {latlon_mask.shape}, got {output.latlon_mask.shape}"
 
 
@@ -662,4 +662,13 @@ def test_end_to_end_with_exit_config(
         patched_W,
         T,
         sentinel2_num_band_sets,
+    )
+    assert output.latlon.shape == (
+        B,
+        latlon_num_band_sets,
+        predictor.output_embedding_size,
+    )
+    assert output.latlon_mask.shape == (
+        B,
+        latlon_num_band_sets,
     )
