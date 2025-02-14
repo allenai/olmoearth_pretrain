@@ -107,9 +107,7 @@ if __name__ == "__main__":
     dp_process_group = train_module.dp_process_group
 
     # Prepare samples from Helios dataset
-    tile_path = UPath(
-        "/weka/dfive-default/helios_sample_data/20250130-sample-dataset-helios/"
-    )
+    tile_path = UPath("/weka/dfive-default/helios/dataset/20250212/")
     tiles = parse_helios_dataset(tile_path)
     logger.info(f"Tiles: {len(tiles)}")
     samples = image_tiles_to_samples(tiles)
