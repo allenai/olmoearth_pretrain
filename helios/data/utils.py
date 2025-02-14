@@ -72,5 +72,10 @@ def convert_to_db(data: np.ndarray) -> np.ndarray:
 
     Args:
         data: The data to convert to decibels.
+
+    Returns:
+        The data in decibels.
     """
-    return 10 * np.log10(data)
+    safe_data = np.where(data > 0, data, np.finfo(float).eps)
+    result = 10 * np.log10(safe_data)
+    return result

@@ -299,7 +299,7 @@ class HeliosDataset(Dataset):
         """Load the sample."""
         image = load_image_for_sample(sample_modality, sample)
         modality_data = rearrange(image, "t c h w -> h w t c")
-        return modality_data
+        return modality_data.astype(dtype)
 
     def __getitem__(self, index: int) -> HeliosSample:
         """Get the item at the given index."""
