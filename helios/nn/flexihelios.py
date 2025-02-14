@@ -7,6 +7,8 @@ from typing import NamedTuple
 import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
+from torch import Tensor, nn
+
 from helios.constants import BASE_GSD
 from helios.data.constants import Modality, ModalitySpec
 from helios.nn.attention import Block
@@ -15,7 +17,6 @@ from helios.nn.encodings import (get_1d_sincos_pos_encoding,
                                  get_month_encoding_table)
 from helios.nn.flexi_patch_embed import FlexiPatchEmbed
 from helios.train.masking import MaskedHeliosSample, MaskValue
-from torch import Tensor, nn
 
 logger = logging.getLogger(__name__)
 
@@ -209,9 +210,6 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             output_dict[modality] = modality_tokens
             modality_mask_name = input_data.get_masked_modality_name(modality)
             output_dict[modality_mask_name] = modality_masks
-        assert len(output_dict) == len(
-            modalities_to_process
-        ), f"Expected modalities_to_process {modalities_to_process} to be the same as output_dict {output_dict}"
         return output_dict
 
 

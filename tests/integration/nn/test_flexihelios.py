@@ -6,6 +6,7 @@ Any methods that piece together multiple steps or are the entire forward pass fo
 import pytest
 import torch
 from einops import rearrange
+
 from helios.data.constants import ModalitySpec
 from helios.nn.flexihelios import (Encoder, FlexiHeliosPatchEmbeddings,
                                    Predictor, TokensAndMasks)
@@ -89,7 +90,7 @@ class TestFlexiHeliosPatchEmbeddings:
         sample = MaskedHeliosSample(**masked_sample_dict)
         output = patch_embeddings.forward(sample, patch_size)
         embedding_size = patch_embeddings.embedding_size
-        assert output.sentinel2.shape == (
+        assert output.get("sentinel2").shape == (
             B,
             H // patch_size,
             W // patch_size,
@@ -97,19 +98,19 @@ class TestFlexiHeliosPatchEmbeddings:
             sentinel_2_num_band_sets,  # of band sets
             embedding_size,
         )
-        assert output.sentinel2_mask.shape == (
+        assert output.get("sentinel2_mask").shape == (
             B,
             H // patch_size,
             W // patch_size,
             T,
             sentinel_2_num_band_sets,  # of band sets
         )
-        assert output.latlon.shape == (
+        assert output.get("latlon").shape == (
             B,
             latlon_num_band_sets,
             embedding_size,
         )  # B, C_G , D
-        assert output.latlon_mask.shape == (B, latlon_num_band_sets)  # B, C_G
+        assert output.get("latlon_mask").shape == (B, latlon_num_band_sets)  # B, C_G
 
 
 class TestEncoder:
