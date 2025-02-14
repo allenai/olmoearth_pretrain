@@ -25,8 +25,8 @@ def convert_sentinel1(window_path: UPath, helios_path: UPath) -> None:
         window_path: the rslearn window directory to read data from.
         helios_path: Helios dataset path to write to.
     """
-    convert_freq(window_path, helios_path, LAYER_FREQ, Modality.S1)
-    convert_monthly(window_path, helios_path, LAYER_MONTHLY, Modality.S1)
+    convert_freq(window_path, helios_path, LAYER_FREQ, Modality.SENTINEL1)
+    convert_monthly(window_path, helios_path, LAYER_MONTHLY, Modality.SENTINEL1)
 
 
 if __name__ == "__main__":

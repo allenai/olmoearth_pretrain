@@ -67,7 +67,7 @@ def convert_openstreetmap(window_path: UPath, helios_path: UPath) -> None:
     # Upload the data.
     dst_fname = get_modality_fname(
         helios_path,
-        Modality.OSM,
+        Modality.OPENSTREETMAP,
         TimeSpan.STATIC,
         window_metadata,
         RESOLUTION,
@@ -82,7 +82,7 @@ def convert_openstreetmap(window_path: UPath, helios_path: UPath) -> None:
 
     # Create the metadata file for this data.
     metadata_fname = get_modality_temp_meta_fname(
-        helios_path, Modality.OSM, TimeSpan.STATIC, window.name
+        helios_path, Modality.OPENSTREETMAP, TimeSpan.STATIC, window.name
     )
     metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with metadata_fname.open("w") as f:
