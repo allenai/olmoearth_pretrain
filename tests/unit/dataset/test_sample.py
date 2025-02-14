@@ -6,10 +6,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+
 from helios.data.constants import BandSet, Modality, ModalitySpec
 from helios.data.dataset import HeliosSample
-from helios.dataset.parse import (GridTile, ModalityImage, ModalityTile,
-                                  TimeSpan)
+from helios.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
 from helios.dataset.sample import image_tiles_to_samples
 
 CRS = "EPSG:32610"

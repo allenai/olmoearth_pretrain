@@ -12,18 +12,14 @@ from einops import rearrange
 from olmo_core.config import Config
 from torch import Tensor
 
-from helios.data.constants import Modality, ModalitySpec
 from helios.nn.flexihelios import TokensAndMasks
-from helios.train.masking import MaskValue
+from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
 
 class Loss(ABC):
     """Abstract base class for loss functions."""
-
-    def __init__(self, supported_modalities: list[ModalitySpec] = Modality.values()):
-        self.supported_modality_names = [m.name for m in supported_modalities]
 
     @abstractmethod
     def compute(self, predictions: Any, targets: Any, **kwargs: Any) -> float:
@@ -33,6 +29,25 @@ class Loss(ABC):
     @staticmethod
     def _flatten(x: Tensor) -> Tensor:
         return rearrange(x, "b ... d -> b (...) d")
+
+    @classmethod
+    def _flatten_tokens_or_masks(
+        cls, x: TokensAndMasks, is_masks: bool = False
+    ) -> Tensor:
+        flattened_attrs = []
+        for attr_name in x.modalities:
+            if is_masks:
+                attr_name = MaskedHeliosSample.get_masked_modality_name(attr_name)
+            attr = getattr(x, attr_name)
+            if attr is not None:
+                if is_masks:
+                    attr = attr.unsqueeze(dim=-1)
+                flattened_attr = cls._flatten(attr)
+                logger.info(f"flattened_attr: {flattened_attr.shape} for {attr_name}")
+                flattened_attrs.append(flattened_attr)
+
+        flattened_x = torch.cat(flattened_attrs, dim=1)
+        return flattened_x[:, :, 0] if is_masks else flattened_x
 
     @staticmethod
     def _expand_and_reciprocate(t: Tensor) -> Tensor:
@@ -54,7 +69,6 @@ class PatchDiscriminationLoss(Loss):
 
     def __init__(
         self,
-        supported_modalities: list[ModalitySpec],
         tau: float = 0.07,
         pred2unit: bool = False,
         mask_other_samples: bool = True,
@@ -68,7 +82,6 @@ class PatchDiscriminationLoss(Loss):
                 from within a sample (True) or using all other instances in a batch (False).
                 If this is False, then this is the AllDisc loss from the Galileo paper
         """
-        super().__init__(supported_modalities=supported_modalities)
         self.tau = tau
         self.pred2unit = pred2unit
         self.mask_other_samples = mask_other_samples
@@ -86,25 +99,11 @@ class PatchDiscriminationLoss(Loss):
         Returns:
             The computed loss value.
         """
-        # TODO: How will we deal with only training with some subset of modalities? If we use passed in modalities channels dict to define which modalities is one way but using class directly implies all used
-        all_preds = torch.cat(
-            [
-                self._flatten(getattr(predictions, d))
-                for d in self.supported_modality_names
-            ],
-            dim=1,
-        )
-        all_masks = torch.cat(
-            [
-                self._flatten(getattr(predictions, f"{d}_mask").unsqueeze(dim=-1))
-                for d in self.supported_modality_names
-            ],
-            dim=1,
-        )[:, :, 0]
-        all_targets = torch.cat(
-            [self._flatten(getattr(targets, d)) for d in self.supported_modality_names],
-            dim=1,
-        )
+        # TODO: write a function that deals with this
+        all_preds = self._flatten_tokens_or_masks(predictions)
+        all_masks = self._flatten_tokens_or_masks(predictions, is_masks=True)
+        all_targets = self._flatten_tokens_or_masks(targets)
+
         pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
         target = all_targets[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
         bs, nt, _ = pred.shape

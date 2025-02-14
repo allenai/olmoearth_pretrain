@@ -1,13 +1,11 @@
 """Test the HeliosDataloader class."""
 
-from collections.abc import Callable
 from pathlib import Path
 
-from helios.data.constants import Modality
+from torch.utils.data import default_collate
+
 from helios.data.dataloader import HeliosDataLoader
 from helios.data.dataset import HeliosDataset
-from helios.dataset.sample import SampleInformation
-from torch.utils.data import default_collate
 
 
 def test_helios_dataloader(

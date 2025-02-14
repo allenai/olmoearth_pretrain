@@ -10,14 +10,15 @@ from typing import Any
 import numpy as np
 import torch
 from einops import rearrange
-from helios.data.constants import Modality
-from helios.data.dataset import HeliosDataset, HeliosSample
 from olmo_core.data.data_loader import DataLoaderBase
 from olmo_core.data.utils import get_rng, memmap_to_write
 from olmo_core.distributed.utils import barrier
 from olmo_core.utils import roundrobin, threaded_generator
 from torch.utils.data import default_collate
 from upath import UPath
+
+from helios.data.constants import Modality
+from helios.data.dataset import HeliosDataset, HeliosSample
 
 logger = logging.getLogger(__name__)
 

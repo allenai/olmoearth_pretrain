@@ -45,7 +45,14 @@ class TokensAndMasks(NamedTuple):
     @property
     def device(self) -> torch.device:
         """Get the device of the tokens and masks."""
-        return self.sentinel2.device
+        if self.sentinel2 is not None:
+            return self.sentinel2.device
+        else:
+            # look for any other modality that is not None
+            for modality in self._fields:
+                if getattr(self, modality) is not None:
+                    return getattr(self, modality).device
+            raise ValueError("No data to get device from")
 
     # TODO: It seems like we want a lot of our named tuples to have this functionality so we should probably create a utility base class for the named tuples and double subclass
     @classmethod
@@ -75,7 +82,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         """Initialize the patch embeddings.
 
         Args:
-            supported_modalities: Which modalities from Modality this model
+            supported_modality_names: Which modalities from Modality this model
                 instantiation supports
             max_patch_size: Maximum size of patches
             embedding_size: Size of embeddings

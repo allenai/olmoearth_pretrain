@@ -11,9 +11,6 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 import torch.nn as nn
-from helios.data.dataset import HeliosSample
-from helios.train.loss import LossConfig
-from helios.train.masking import MaskedHeliosSample, MaskingConfig
 from olmo_core.config import Config, DType
 from olmo_core.distributed.parallel import (
     DataParallelConfig,
@@ -37,6 +34,10 @@ from torch.distributed.checkpoint.metadata import Metadata
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.tensor import DTensor
 from torch.optim import Optimizer
+
+from helios.data.dataset import HeliosSample
+from helios.train.loss import LossConfig
+from helios.train.masking import MaskedHeliosSample, MaskingConfig
 
 logger = getLogger(__name__)
 

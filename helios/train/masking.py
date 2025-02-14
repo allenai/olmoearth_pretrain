@@ -87,11 +87,15 @@ class MaskedHeliosSample(NamedTuple):
     @property
     def height(self) -> int:
         """Get the height of the data."""
+        if self.sentinel2 is None:
+            raise ValueError("Sentinel2 is not present in this sample")
         return self.sentinel2.shape[1]
 
     @property
     def width(self) -> int:
         """Get the width of the data."""
+        if self.sentinel2 is None:
+            raise ValueError("Sentinel2 is not present in this sample")
         return self.sentinel2.shape[2]
 
     @property
@@ -324,7 +328,7 @@ class RandomMaskingStrategy(MaskingStrategy):
         encode_ratio: float = kwargs["encode_ratio"]
         decode_ratio: float = kwargs["decode_ratio"]
 
-        output_dict = {}
+        output_dict: dict[str, ArrayTensor | None] = {}
         for modality_name in batch._fields:
             modality = getattr(batch, modality_name)
             if modality is None:

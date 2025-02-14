@@ -1,10 +1,7 @@
 """Test the HeliosDataset class."""
 
 import logging
-from collections.abc import Callable
 from pathlib import Path
-
-import numpy as np
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosDataset, HeliosSample
