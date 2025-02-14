@@ -5,10 +5,14 @@ import csv
 
 from upath import UPath
 
-from .util import get_modality_temp_meta_dir
+from helios.data.constants import Modality, ModalitySpec, TimeSpan
+
+from .util import get_modality_dir, get_modality_temp_meta_dir
 
 
-def make_meta_summary(helios_path: UPath, modality: str) -> None:
+def make_meta_summary(
+    helios_path: UPath, modality: ModalitySpec, time_span: TimeSpan
+) -> None:
     """Create the concatenated metadata file for the specified modality.
 
     The data files and per-example temporary metadata files must be populated for the
@@ -18,12 +22,14 @@ def make_meta_summary(helios_path: UPath, modality: str) -> None:
     Args:
         helios_path: Helios dataset path.
         modality: modality to write summary for.
+        time_span: time span to write summary for.
     """
     # Concatenate the CSVs while keeping the header only from the first file that we
     # read.
     column_names: list[str] | None = None
     csv_rows = []
-    meta_dir = get_modality_temp_meta_dir(helios_path, modality)
+    modality_dir = get_modality_dir(helios_path, modality, time_span)
+    meta_dir = get_modality_temp_meta_dir(helios_path, modality, time_span)
     for fname in meta_dir.iterdir():
         with fname.open() as f:
             reader = csv.DictReader(f)
@@ -37,7 +43,7 @@ def make_meta_summary(helios_path: UPath, modality: str) -> None:
     if column_names is None:
         raise ValueError(f"did not find any files in {meta_dir}")
 
-    with (helios_path / f"{modality}.csv").open("w") as f:
+    with (helios_path / f"{modality_dir.name}.csv").open("w") as f:
         writer = csv.DictWriter(f, fieldnames=column_names)
         writer.writeheader()
         writer.writerows(csv_rows)
@@ -59,5 +65,13 @@ if __name__ == "__main__":
         help="Modality to summarize",
         required=True,
     )
+    parser.add_argument(
+        "--time_span",
+        type=str,
+        help="Time span to use (defaults to static)",
+        default=TimeSpan.STATIC.value,
+    )
     args = parser.parse_args()
-    make_meta_summary(UPath(args.helios_path), args.modality)
+
+    modality = Modality.get(args.modality)
+    make_meta_summary(UPath(args.helios_path), modality, TimeSpan(args.time_span))

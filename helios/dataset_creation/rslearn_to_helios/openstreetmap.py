@@ -21,8 +21,10 @@ from rslearn.utils.mp import star_imap_unordered
 from rslearn.utils.vector_format import GeojsonCoordinateMode, GeojsonVectorFormat
 from upath import UPath
 
+from helios.data.constants import Modality, TimeSpan
+
 from ..constants import METADATA_COLUMNS
-from ..util import get_modality_fname, get_modality_temp_meta_fname, parse_window_name
+from ..util import get_modality_fname, get_modality_temp_meta_fname, get_window_metadata
 
 # Placeholder time range for OpenStreetMap.
 START_TIME = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -30,9 +32,6 @@ END_TIME = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "openstreetmap"
-
-# Modality in the output Helios dataset.
-MODALITY = "10_openstreetmap"
 
 RESOLUTION = 0.625
 # Coordinates of OSM features are 16x zoomed in from the 10 m/pixel tiles.
@@ -47,7 +46,7 @@ def convert_openstreetmap(window_path: UPath, helios_path: UPath) -> None:
         helios_path: Helios dataset path to write to.
     """
     window = Window.load(window_path)
-    window_metadata = parse_window_name(window.name)
+    window_metadata = get_window_metadata(window)
     vector_format = GeojsonVectorFormat(coordinate_mode=GeojsonCoordinateMode.CRS)
 
     if not window.is_layer_completed(LAYER_NAME):
@@ -67,7 +66,12 @@ def convert_openstreetmap(window_path: UPath, helios_path: UPath) -> None:
 
     # Upload the data.
     dst_fname = get_modality_fname(
-        helios_path, MODALITY, window_metadata, RESOLUTION, "geojson"
+        helios_path,
+        Modality.OPENSTREETMAP,
+        TimeSpan.STATIC,
+        window_metadata,
+        RESOLUTION,
+        "geojson",
     )
     dst_fname.parent.mkdir(parents=True, exist_ok=True)
     vector_format.encode_to_file(
@@ -77,7 +81,9 @@ def convert_openstreetmap(window_path: UPath, helios_path: UPath) -> None:
     )
 
     # Create the metadata file for this data.
-    metadata_fname = get_modality_temp_meta_fname(helios_path, MODALITY, window.name)
+    metadata_fname = get_modality_temp_meta_fname(
+        helios_path, Modality.OPENSTREETMAP, TimeSpan.STATIC, window.name
+    )
     metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with metadata_fname.open("w") as f:
         writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)

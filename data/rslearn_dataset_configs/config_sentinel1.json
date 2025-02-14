@@ -26,7 +26,7 @@
           }
         },
         "query_config": {
-          "max_matches": 9999,
+          "max_matches": 8,
           "space_mode": "INTERSECTS"
         }
       },

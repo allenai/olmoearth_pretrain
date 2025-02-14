@@ -84,3 +84,11 @@ Finally create the overall index CSV that lists the examples and which modalitie
 available for each example:
 
     python make_index.py --helios_path gs://ai2-helios/data/.../
+
+
+Beaker
+------
+
+```
+beaker session create --budget ai2/d5 --workspace ai2/earth-systems --priority high --gpus 1 --shared-memory 128GiB --bare --mount weka://dfive-default=/dfive-default
+```

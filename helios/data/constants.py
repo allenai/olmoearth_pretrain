@@ -5,6 +5,7 @@ Warning: this is only developed for raster data currently.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 
 # The highest resolution that we are working at.
 # Everything else is a factor (which is a power of 2) coarser than this resolution.
@@ -52,6 +53,40 @@ class BandSet:
     def get_resolution(self) -> float:
         """Compute the resolution."""
         return get_resolution(self.resolution_factor)
+
+    def get_expected_image_size(self, modality_resolution_factor: int) -> int:
+        """Get the expected size of images containing these bands.
+
+        Args:
+            modality_resolution_factor: the resolution factor of the modality.
+
+        Returns:
+            the expected image size.
+        """
+        return IMAGE_TILE_SIZE // (self.resolution_factor // modality_resolution_factor)
+
+
+class TimeSpan(str, Enum):
+    """Enum to distinguish data that is valid for different time ranges."""
+
+    # Only one data point (not time series).
+    STATIC = "static"
+
+    # Monthly over one year.
+    YEAR = "year"
+
+    # Every data point in a two-week period.
+    TWO_WEEK = "two_week"
+
+    def get_suffix(self) -> str:
+        """Returns the suffix used for this timespan in raw Helios dataset."""
+        if self == TimeSpan.STATIC:
+            return ""
+        if self == TimeSpan.YEAR:
+            return "_monthly"
+        if self == TimeSpan.TWO_WEEK:
+            return "_freq"
+        raise ValueError("invalid TimeSpan")
 
 
 @dataclass(frozen=True)
@@ -113,7 +148,7 @@ class Modality:
     SENTINEL1 = ModalitySpec(
         name="sentinel1",
         tile_resolution_factor=16,
-        band_sets=[BandSet(["VV", "VH"], 16)],
+        band_sets=[BandSet(["vv", "vh"], 16)],
         is_multitemporal=True,
     )
 

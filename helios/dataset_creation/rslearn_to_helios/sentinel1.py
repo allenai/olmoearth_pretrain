@@ -7,23 +7,15 @@ import tqdm
 from rslearn.utils.mp import star_imap_unordered
 from upath import UPath
 
-from .multitemporal_raster import BandSet, convert_freq, convert_monthly
+from helios.data.constants import Modality
 
-BAND_SETS = [
-    BandSet(["vv", "vh"], 10),
-]
+from .multitemporal_raster import convert_freq, convert_monthly
 
 # rslearn layer for frequent data.
 LAYER_FREQ = "sentinel1_freq"
 
 # rslearn layer prefix for monthly data.
 LAYER_MONTHLY = "sentinel1"
-
-# Modality for frequent data in the output Helios dataset.
-MODALITY_FREQ = "10_sentinel1_freq"
-
-# Modality for monthly data in the output Helios dataset.
-MODALITY_MONTHLY = "10_sentinel1_monthly"
 
 
 def convert_sentinel1(window_path: UPath, helios_path: UPath) -> None:
@@ -33,10 +25,8 @@ def convert_sentinel1(window_path: UPath, helios_path: UPath) -> None:
         window_path: the rslearn window directory to read data from.
         helios_path: Helios dataset path to write to.
     """
-    convert_freq(window_path, helios_path, LAYER_FREQ, MODALITY_FREQ, BAND_SETS)
-    convert_monthly(
-        window_path, helios_path, LAYER_MONTHLY, MODALITY_MONTHLY, BAND_SETS
-    )
+    convert_freq(window_path, helios_path, LAYER_FREQ, Modality.SENTINEL1)
+    convert_monthly(window_path, helios_path, LAYER_MONTHLY, Modality.SENTINEL1)
 
 
 if __name__ == "__main__":

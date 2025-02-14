@@ -30,9 +30,10 @@
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "query_config": {
-          "max_matches": 9999,
+          "max_matches": 8,
           "space_mode": "INTERSECTS"
-        }
+        },
+        "sort_by": "cloud_cover"
       },
       "type": "raster"
     },

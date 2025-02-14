@@ -10,19 +10,16 @@ from rslearn.dataset import Window
 from rslearn.utils.mp import star_imap_unordered
 from upath import UPath
 
-from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
-from ..util import get_modality_fname, get_modality_temp_meta_fname, parse_window_name
+from helios.data.constants import Modality, TimeSpan
 
-BANDS = ["B1"]
-RESOLUTION = 10
+from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
+from ..util import get_modality_fname, get_modality_temp_meta_fname, get_window_metadata
+
 START_TIME = datetime(2021, 1, 1, tzinfo=timezone.utc)
 END_TIME = datetime(2022, 1, 1, tzinfo=timezone.utc)
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "worldcover"
-
-# Modality in the output Helios dataset.
-MODALITY = "10_worldcover"
 
 
 def convert_worldcover(window_path: UPath, helios_path: UPath) -> None:
@@ -33,15 +30,22 @@ def convert_worldcover(window_path: UPath, helios_path: UPath) -> None:
         helios_path: Helios dataset path to write to.
     """
     window = Window.load(window_path)
-    window_metadata = parse_window_name(window.name)
+    window_metadata = get_window_metadata(window)
 
     if not window.is_layer_completed(LAYER_NAME):
         return
 
-    raster_dir = window.get_raster_dir(LAYER_NAME, BANDS)
+    assert len(Modality.WORLDCOVER.band_sets) == 1
+    band_set = Modality.WORLDCOVER.band_sets[0]
+    raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
     image = GEOTIFF_RASTER_FORMAT.decode_raster(raster_dir, window.bounds)
     dst_fname = get_modality_fname(
-        helios_path, MODALITY, window_metadata, RESOLUTION, "tif"
+        helios_path,
+        Modality.WORLDCOVER,
+        TimeSpan.STATIC,
+        window_metadata,
+        band_set.get_resolution(),
+        "tif",
     )
     GEOTIFF_RASTER_FORMAT.encode_raster(
         path=dst_fname.parent,
@@ -50,7 +54,9 @@ def convert_worldcover(window_path: UPath, helios_path: UPath) -> None:
         array=image,
         fname=dst_fname.name,
     )
-    metadata_fname = get_modality_temp_meta_fname(helios_path, MODALITY, window.name)
+    metadata_fname = get_modality_temp_meta_fname(
+        helios_path, Modality.WORLDCOVER, TimeSpan.STATIC, window.name
+    )
     metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with metadata_fname.open("w") as f:
         writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)

@@ -24,10 +24,11 @@ from helios.data.constants import (
     TIMESTAMPS,
     Modality,
     ModalitySpec,
+    TimeSpan,
 )
 from helios.data.normalize import NORMALIZE_STRATEGY, Normalizer, Strategy
 from helios.data.utils import convert_to_db
-from helios.dataset.parse import ModalityTile, TimeSpan
+from helios.dataset.parse import ModalityTile
 from helios.dataset.sample import SampleInformation, load_image_for_sample
 from helios.types import ArrayTensor
 

@@ -40,10 +40,11 @@
         "modality": "L1C",
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "query_config": {
-          "max_matches": 9999,
+          "max_matches": 8,
           "space_mode": "INTERSECTS"
         },
-        "use_rtree_index": false
+        "sort_by": "cloud_cover",
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -89,7 +90,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "-180d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -135,7 +136,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "-150d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -181,7 +182,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "-120d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -227,7 +228,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "-90d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -273,7 +274,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "-60d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -319,7 +320,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "-30d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -365,7 +366,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "0d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -411,7 +412,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "30d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -457,7 +458,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "60d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -503,7 +504,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "90d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -549,7 +550,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "120d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     },
@@ -595,7 +596,7 @@
         "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "sort_by": "cloud_cover",
         "time_offset": "150d",
-        "use_rtree_index": false
+        "use_rtree_index": true
       },
       "type": "raster"
     }

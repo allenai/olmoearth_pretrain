@@ -1,8 +1,8 @@
 """Helper functions to convert multitemporal rasters into Helios dataset."""
 
 import csv
+import logging
 from datetime import timedelta
-from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -10,78 +10,22 @@ from rslearn.data_sources import Item
 from rslearn.dataset import Window
 from upath import UPath
 
+from helios.data.constants import BandSet, ModalitySpec, TimeSpan
+
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
-from ..util import get_modality_fname, get_modality_temp_meta_fname, parse_window_name
+from ..util import get_modality_fname, get_modality_temp_meta_fname, get_window_metadata
 
 PIXELS_PER_TILE = 256
 EPSILON = 1e-6
 
-
-class BandSet:
-    """A band set to store together in the Helios dataset.
-
-    This should correspond to a set of bands stored together in the rslearn dataset, as
-    defined by the per-modality rslearn dataset configuration file.
-
-    It just specifies the band names, along with the resolution at which they should be
-    stored.
-    """
-
-    def __init__(self, bands: list[str], resolution: float):
-        """Create a new BandSet.
-
-        Args:
-            bands: the list of band names for this set.
-            resolution: the resolution at which these bands should be stored.
-        """
-        self.bands = bands
-        self.resolution = resolution
-
-    def get_factor(self, window_resolution: float) -> int:
-        """Get how much lower in resolution these bands are than the window.
-
-        The window's resolution should be based on the highest resolution band(s) for
-        each modality.
-
-        Args:
-            window_resolution: the resolution of the window.
-
-        Returns:
-            the factor by which these bands are lower, which should be a power of 2.
-        """
-        return round(self.resolution / window_resolution)
-
-    def get_expected_image_size(self, window_resolution: float) -> int:
-        """Get the expected size of images containing these bands.
-
-        Args:
-            window_resolution: the resolution of the window.
-
-        Returns:
-            the expected image size.
-        """
-        return PIXELS_PER_TILE // self.get_factor(window_resolution)
-
-    def __hash__(self) -> int:
-        """Compute hash."""
-        return hash(("_".join(self.bands), self.resolution))
-
-    def __eq__(self, other: Any) -> bool:
-        """Returns whether this BandSet is the same as other."""
-        if not isinstance(other, BandSet):
-            return False
-        return (
-            self.bands == other.bands
-            and abs(self.resolution - other.resolution) < EPSILON
-        )
+logger = logging.getLogger(__name__)
 
 
 def convert_freq(
     window_path: UPath,
     helios_path: UPath,
     layer_name: str,
-    modality_name: str,
-    band_sets: list[BandSet],
+    modality: ModalitySpec,
     missing_okay: bool = False,
 ) -> None:
     """Add frequent (two-week) data from this window to the Helios dataset.
@@ -93,20 +37,27 @@ def convert_freq(
             dataset. It should be configured to individually store each item from the
             two-week period that spatially intersects with the window, i.e.
             space_mode=intersects, max_matches=9999.
-        modality_name: the name of the modality in the output Helios dataset.
-        band_sets: the band sets.
+        modality: the modality.
         missing_okay: whether it is okay if some images that appear in items.json are
             missing. This should only be enabled if there are unresolvable errors
             during ingestion.
     """
     window = Window.load(window_path)
-    window_metadata = parse_window_name(window.name)
+    window_metadata = get_window_metadata(window)
     layer_datas = window.load_layer_datas()
+
+    if abs(window_metadata.resolution - modality.get_tile_resolution()) > EPSILON:
+        raise ValueError(
+            f"window ({window_metadata.resolution}) must have same "
+            + f"resolution as modality ({modality.get_tile_resolution()})"
+        )
 
     # We read the individual images and their timestamps, then write the stacked
     # images and CSV.
     # Map from band set to the images for that band set.
-    images: dict[BandSet, list[npt.NDArray]] = {band_set: [] for band_set in band_sets}
+    images: dict[BandSet, list[npt.NDArray]] = {
+        band_set: [] for band_set in modality.band_sets
+    }
     timestamps = []
     for group_idx, group in enumerate(layer_datas[layer_name].serialized_item_groups):
         if len(group) != 1:
@@ -118,9 +69,9 @@ def convert_freq(
         timestamp = item.geometry.time_range[0]
         cur_images: dict[BandSet, npt.NDArray] = {}
 
-        for band_set in band_sets:
+        for band_set in modality.band_sets:
             # Compute bounds of this raster adjusted for the resolution.
-            factor = band_set.get_factor(window_metadata.resolution)
+            factor = band_set.resolution_factor // modality.tile_resolution_factor
             adjusted_bounds = (
                 window.bounds[0] // factor,
                 window.bounds[1] // factor,
@@ -135,12 +86,15 @@ def convert_freq(
                 continue
 
             raster_dir = window.get_raster_dir(layer_name, band_set.bands, group_idx)
-            image = GEOTIFF_RASTER_FORMAT.decode_raster(raster_dir, adjusted_bounds)
-            print(
-                f"bounds={window.bounds} adjusted={adjusted_bounds} source={raster_dir} max={image.max()}"
+            logger.debug(
+                "reading raster from %s with orig_bounds=%s adjusted_bounds=%s",
+                raster_dir,
+                window.bounds,
+                adjusted_bounds,
             )
+            image = GEOTIFF_RASTER_FORMAT.decode_raster(raster_dir, adjusted_bounds)
             expected_image_size = band_set.get_expected_image_size(
-                window_metadata.resolution
+                window_metadata.get_resolution_factor()
             )
             if (
                 image.shape[1] != expected_image_size
@@ -152,7 +106,7 @@ def convert_freq(
 
             cur_images[band_set] = image
 
-        if len(cur_images) < len(band_sets):
+        if len(cur_images) < len(modality.band_sets):
             continue
 
         # Sometimes the images are blank because the window actually does not intersect
@@ -171,7 +125,12 @@ def convert_freq(
         for band_set, band_set_images in images.items():
             stacked_image = np.concatenate(band_set_images, axis=0)
             dst_fname = get_modality_fname(
-                helios_path, modality_name, window_metadata, band_set.resolution, "tif"
+                helios_path,
+                modality,
+                TimeSpan.TWO_WEEK,
+                window_metadata,
+                band_set.get_resolution(),
+                "tif",
             )
             GEOTIFF_RASTER_FORMAT.encode_raster(
                 path=dst_fname.parent,
@@ -182,7 +141,7 @@ def convert_freq(
             )
 
         metadata_fname = get_modality_temp_meta_fname(
-            helios_path, modality_name, window.name
+            helios_path, modality, TimeSpan.TWO_WEEK, window.name
         )
         metadata_fname.parent.mkdir(parents=True, exist_ok=True)
         with metadata_fname.open("w") as f:
@@ -206,8 +165,7 @@ def convert_monthly(
     window_path: UPath,
     helios_path: UPath,
     layer_prefix: str,
-    modality_name: str,
-    band_sets: list[BandSet],
+    modality: ModalitySpec,
 ) -> None:
     """Add monthly (one-year) data from this window to the Helios dataset.
 
@@ -218,17 +176,25 @@ def convert_monthly(
             rslearn dataset. The layers should be named with suffixes "_mo01", "_mo02",
             ..., "_mo12", where each layer contains a single mosaic for that month.
         bands: the band names.
-        modality_name: the name of the modality in the output Helios dataset.
+        modality: the modality.
         band_sets: the band sets.
     """
     window = Window.load(window_path)
-    window_metadata = parse_window_name(window.name)
+    window_metadata = get_window_metadata(window)
+
+    if abs(window_metadata.resolution - modality.get_tile_resolution()) > EPSILON:
+        raise ValueError(
+            f"window ({window_metadata.resolution}) must have same "
+            + f"resolution as modality ({modality.get_tile_resolution()})"
+        )
 
     # The monthly images are stored in different layers, so we read one image per
     # layer. Then we reconstruct the time range to match the dataset configuration. And
     # finally stack the images and write them along with CSV.
     # Map from band set to list of images for that band set.
-    images: dict[BandSet, list[npt.NDArray]] = {band_set: [] for band_set in band_sets}
+    images: dict[BandSet, list[npt.NDArray]] = {
+        band_set: [] for band_set in modality.band_sets
+    }
     time_ranges = []
     for month_idx in range(1, 13):
         layer_name = f"{layer_prefix}_mo{month_idx:02d}"
@@ -237,9 +203,9 @@ def convert_monthly(
 
         cur_images: dict[BandSet, npt.NDArray] = {}
 
-        for band_set in band_sets:
+        for band_set in modality.band_sets:
             # Compute bounds of this raster adjusted for the resolution.
-            factor = band_set.get_factor(window_metadata.resolution)
+            factor = band_set.resolution_factor // modality.tile_resolution_factor
             adjusted_bounds = (
                 window.bounds[0] // factor,
                 window.bounds[1] // factor,
@@ -257,7 +223,7 @@ def convert_monthly(
 
             image = GEOTIFF_RASTER_FORMAT.decode_raster(raster_dir, adjusted_bounds)
             expected_image_size = band_set.get_expected_image_size(
-                window_metadata.resolution
+                modality.tile_resolution_factor
             )
             if (
                 image.shape[1] != expected_image_size
@@ -269,18 +235,23 @@ def convert_monthly(
 
             cur_images[band_set] = image
 
-        if len(cur_images) < len(band_sets):
+        if len(cur_images) < len(modality.band_sets):
             continue
 
         for band_set, image in cur_images.items():
             images[band_set].append(image)
         time_ranges.append((start_time.isoformat(), end_time.isoformat()))
 
-    if len(images) > 0:
+    if len(images[modality.band_sets[0]]) > 0:
         for band_set, band_set_images in images.items():
             stacked_image = np.concatenate(band_set_images, axis=0)
             dst_fname = get_modality_fname(
-                helios_path, modality_name, window_metadata, band_set.resolution, "tif"
+                helios_path,
+                modality,
+                TimeSpan.YEAR,
+                window_metadata,
+                band_set.get_resolution(),
+                "tif",
             )
             GEOTIFF_RASTER_FORMAT.encode_raster(
                 path=dst_fname.parent,
@@ -291,7 +262,7 @@ def convert_monthly(
             )
 
         metadata_fname = get_modality_temp_meta_fname(
-            helios_path, modality_name, window.name
+            helios_path, modality, TimeSpan.YEAR, window.name
         )
         metadata_fname.parent.mkdir(parents=True, exist_ok=True)
         with metadata_fname.open("w") as f:

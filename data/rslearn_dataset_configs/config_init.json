@@ -1,0 +1,70 @@
+{
+  "layers": {
+    "naip": {
+      "band_sets": [
+        {
+          "bands": [
+            "R",
+            "G",
+            "B",
+            "IR"
+          ],
+          "dtype": "uint8"
+        }
+      ],
+      "data_source": {
+        "index_cache_dir": "cache/naip",
+        "name": "rslearn.data_sources.aws_open_data.Naip",
+        "use_rtree_index": true
+      },
+      "type": "raster"
+    },
+    "sentinel2_freq": {
+      "alias": "sentinel2",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09",
+            "B10"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "harmonize": true,
+        "index_cache_dir": "cache/sentinel2",
+        "modality": "L1C",
+        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
+        "query_config": {
+          "max_matches": 9999,
+          "space_mode": "INTERSECTS"
+        },
+        "use_rtree_index": true
+      },
+      "type": "raster"
+    }
+  }
+}
