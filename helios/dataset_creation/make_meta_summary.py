@@ -73,13 +73,5 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    modality = None
-    for cur_modality in Modality.get_all_modalities():
-        if cur_modality.name != args.modality:
-            continue
-        modality = cur_modality
-
-    if modality is None:
-        raise ValueError(f"could not find modality matching {args.modality}")
-
+    modality = Modality.get(args.modality)
     make_meta_summary(UPath(args.helios_path), modality, TimeSpan(args.time_span))
