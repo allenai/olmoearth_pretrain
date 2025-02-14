@@ -56,22 +56,25 @@ if __name__ == "__main__":
     # for distributed training use torchrun
     # Uncomment this line to use distributed training
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
-
     # for distributed training use torchrun
     if dp_config is not None:
         prepare_training_environment(seed=42)
     else:
         prepare_training_environment(seed=42, backend=None)
-    # set log level to debug
     logger.setLevel(logging.DEBUG)
     logger.info("Starting Helios training")
 
+<<<<<<< HEAD
     supported_modalities = [
         Modality.SENTINEL2,
         Modality.LATLON,
         Modality.SENTINEL1,
         # Modality.WORLDCOVER,
     ]
+=======
+    #################### Configs for model ####################
+    supported_modalities = ["sentinel2", "latlon"]
+>>>>>>> add blocks for different configs
     encoder = Encoder(
         embedding_size=16,
         max_patch_size=8,
@@ -99,6 +102,8 @@ if __name__ == "__main__":
     logger.info(f"Using device: {device}")
     # Ideally though this should be handled by the Model COnfig and build
     model = model.to(device)
+
+    #################### Configs for train module ####################
     checkpointer_config = CheckpointerConfig(work_dir=workdir)
     optim_config = AdamWConfig()
     masking_config = MaskingConfig(
@@ -120,6 +125,7 @@ if __name__ == "__main__":
     train_module = train_module_config.build(model=model)
     dp_process_group = train_module.dp_process_group
 
+    #################### Configs for dataloader ####################
     dataset_config = HeliosDatasetConfig(
         tile_path=UPath("/weka/dfive-default/helios/dataset/20250212/"),
         dtype=np.dtype("float32"),
@@ -141,6 +147,7 @@ if __name__ == "__main__":
         collator=collate_helios,
     )
 
+    #################### Configs for trainer ####################
     run_name = f"test-debug-{str(uuid.uuid4())[:8]}"
     wandb_callback = WandBCallback(
         name=run_name,
@@ -171,6 +178,7 @@ if __name__ == "__main__":
     )
     trainer.fit()
 
+    #################### Eval ####################
     # eval. Currently this will fail because by default our model ingests 4 timesteps.
     # we should update the model architecture to ingest variable numbers of timesteps
     from torch.utils.data import DataLoader
