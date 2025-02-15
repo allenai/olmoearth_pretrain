@@ -71,17 +71,18 @@ if __name__ == "__main__":
         Modality.SENTINEL1,
         # Modality.WORLDCOVER,
     ]
-    encoder_embedding_size = 16
-    decoder_embedding_size = 16
+    encoder_embedding_size = 128
+    decoder_embedding_size = 128
+    patch_size = 16
     encoder = Encoder(
         embedding_size=encoder_embedding_size,
-        max_patch_size=8,
-        num_heads=2,
-        depth=2,
+        max_patch_size=patch_size,
+        num_heads=4,
+        depth=6,
         mlp_ratio=1.0,
         drop_path=0.1,
         max_sequence_length=12,
-        base_patch_size=8,
+        base_patch_size=patch_size,
         use_channel_embs=True,
         supported_modalities=supported_modalities,
     )
@@ -92,7 +93,7 @@ if __name__ == "__main__":
         mlp_ratio=1.0,
         num_heads=4,
         max_sequence_length=12,
-        max_patch_size=8,
+        max_patch_size=patch_size,
         supported_modalities=supported_modalities,
     )
     model = LatentMIMStyle(encoder, decoder)

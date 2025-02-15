@@ -190,7 +190,7 @@ class FlexiPatchEmbed(nn.Module):
             patch_size = self.patch_size
 
         patch_size = self.to_2tuple(patch_size)
-        logger.info(f"patch size: {patch_size}")
+        logger.debug(f"patch size: {patch_size}")
         assert (
             isinstance(patch_size, tuple) and len(patch_size) == 2
         ), "patch_size must be a 2-tuple"

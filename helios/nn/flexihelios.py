@@ -536,12 +536,15 @@ class FlexiHeliosBase(nn.Module):
             masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
-            tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
-            masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
+            flattened_tokens = rearrange(x_modality, "b ... d -> b (...) d")
+            flattened_masks = rearrange(x_modality_mask, "b ... -> b (...)")
+            num_tokens = flattened_tokens.shape[1]
+            logger.debug(f"Modality {modality} has {num_tokens} tokens")
+            tokens.append(flattened_tokens)
+            masks.append(flattened_masks)
         tokens = torch.cat(tokens, dim=1)
         masks = torch.cat(masks, dim=1)
         # TODO: We should return the number of unmasked tokens processed by the encoder
-        logger.info(f"number of tokens {tokens.shape[1]} dim {tokens.shape[2]}")
         return tokens, masks
 
     @staticmethod

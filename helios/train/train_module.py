@@ -11,6 +11,9 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 import torch.nn as nn
+from helios.data.dataset import HeliosSample
+from helios.train.loss import LossConfig
+from helios.train.masking import MaskedHeliosSample, MaskingConfig
 from olmo_core.config import Config, DType
 from olmo_core.distributed.parallel import (
     DataParallelConfig,
@@ -34,10 +37,6 @@ from torch.distributed.checkpoint.metadata import Metadata
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.tensor import DTensor
 from torch.optim import Optimizer
-
-from helios.data.dataset import HeliosSample
-from helios.train.loss import LossConfig
-from helios.train.masking import MaskedHeliosSample, MaskingConfig
 
 logger = getLogger(__name__)
 
@@ -373,7 +372,7 @@ class HeliosTrainModule(TrainModule):
         batch = batch.to_device(self.device)
         # TODO: ENsure patch size stuff is the same between encoder and target encoder
         # TODO: Need to make this dynamic and configurable
-        kwargs = {"patch_size": 16, "encode_ratio": 0.5, "decode_ratio": 0.5}
+        kwargs = {"encode_ratio": 0.5, "decode_ratio": 0.5}
         masked_batch = self.masking_strategy.apply_mask(batch, **kwargs)
 
         # Run Encoder and decoder on the augmented input
@@ -485,7 +484,7 @@ class HeliosTrainModule(TrainModule):
         batch: MaskedHeliosSample,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         """Run a forward pass."""
-        patch_size = 8
+        patch_size = self.model.encoder.base_patch_size
         with self._model_forward_context():
             with torch.no_grad():
                 target_output = self.model.target_encoder.forward(
@@ -570,11 +569,6 @@ class HeliosTrainModule(TrainModule):
                     total_norm, op=dist.ReduceOp.SUM, group=pp_mesh.get_group()
                 )
                 total_norm **= 1.0 / norm_type
-
-        torch.nn.utils.clip_grads_with_norm_(
-            parameters, max_grad_norm, total_norm, foreach=foreach
-        )
-        return total_norm
 
         torch.nn.utils.clip_grads_with_norm_(
             parameters, max_grad_norm, total_norm, foreach=foreach
