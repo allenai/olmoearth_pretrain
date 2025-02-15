@@ -7,6 +7,8 @@ from typing import NamedTuple
 import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
+from torch import Tensor, nn
+
 from helios.constants import BASE_GSD
 from helios.data.constants import Modality, ModalitySpec
 from helios.nn.attention import Block
@@ -17,7 +19,6 @@ from helios.nn.encodings import (
 )
 from helios.nn.flexi_patch_embed import FlexiPatchEmbed
 from helios.train.masking import MaskedHeliosSample, MaskValue
-from torch import Tensor, nn
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,11 @@ class TokensAndMasks(NamedTuple):
     def get_shape_dict(self) -> dict[str, tuple]:
         """Return a dictionary of the shapes of the fields."""
         return {x: getattr(self, x).shape for x in self._fields}
+
+    @property
+    def data_fields(self) -> list[str]:
+        """Return all data fields."""
+        return [x for x in self._fields if not x.endswith("mask")]
 
 
 class FlexiHeliosPatchEmbeddings(nn.Module):

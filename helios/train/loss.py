@@ -9,10 +9,11 @@ import torch
 import torch.nn.functional as F
 from class_registry import ClassRegistry
 from einops import rearrange
-from helios.nn.flexihelios import TokensAndMasks
-from helios.train.masking import MaskedHeliosSample, MaskValue
 from olmo_core.config import Config
 from torch import Tensor
+
+from helios.nn.flexihelios import TokensAndMasks
+from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,16 @@ class PatchDiscriminationLoss(Loss):
         self.pred2unit = pred2unit
         self.mask_other_samples = mask_other_samples
 
+    @staticmethod
+    def _expand_and_reciprocate(t: Tensor) -> Tensor:
+        """As described in the name.
+
+        >>> _expand_and_reciprocate(torch.tensor([1, 2, 3]))
+        tensor([1.0000, 0.5000, 0.5000, 0.3333, 0.3333, 0.3333])
+        """
+        reciprocals = torch.reciprocal(t.float())
+        return torch.repeat_interleave(reciprocals, t)
+
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
     ) -> float:
@@ -139,6 +150,82 @@ class PatchDiscriminationLoss(Loss):
         loss_multiplier = self._expand_and_reciprocate(count)
         loss = (loss * loss_multiplier).sum() / bs
         return loss
+
+
+@LOSS_REGISTRY.register("l1")
+class L1Loss(Loss):
+    """Loss function for L1 (mean average error)."""
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> float:
+        """Compute L1 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds = torch.cat(
+            [self._flatten(getattr(predictions, d)) for d in predictions.data_fields],
+            dim=1,
+        )
+        all_masks = torch.cat(
+            [
+                self._flatten(getattr(predictions, f"{d}_mask").unsqueeze(dim=-1))
+                for d in predictions.data_fields
+            ],
+            dim=1,
+        )[:, :, 0]
+        all_targets = torch.cat(
+            [self._flatten(getattr(targets, d)) for d in predictions.data_fields],
+            dim=1,
+        )
+        pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
+        target = all_targets[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
+
+        return F.l1_loss(pred, target)
+
+
+@LOSS_REGISTRY.register("l2")
+class L2Loss(Loss):
+    """Loss function for L2 (mean squared error)."""
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> float:
+        """Compute L2 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds = torch.cat(
+            [self._flatten(getattr(predictions, d)) for d in predictions.data_fields],
+            dim=1,
+        )
+        all_masks = torch.cat(
+            [
+                self._flatten(getattr(predictions, f"{d}_mask").unsqueeze(dim=-1))
+                for d in predictions.data_fields
+            ],
+            dim=1,
+        )[:, :, 0]
+        all_targets = torch.cat(
+            [self._flatten(getattr(targets, d)) for d in predictions.data_fields],
+            dim=1,
+        )
+        pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
+        target = all_targets[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
+
+        return F.mse_loss(pred, target)
 
 
 @dataclass

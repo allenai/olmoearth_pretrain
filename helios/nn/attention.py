@@ -89,7 +89,10 @@ class Attention(nn.Module):
         Returns:
             Output tensor of shape (B, H, N, D)
         """
-        logger.info(f"sequence length: {n}")
+        logger.info(
+            f"scaled dot product attention(q={q.shape}, k={k.shape}, v={v.shape}, n={n}"
+        )
+        logger.info(f"pre {torch.cuda.memory_allocated()}")
         if self.fast_attn:
             if attn_mask is not None:
                 attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
@@ -110,6 +113,7 @@ class Attention(nn.Module):
             attn = attn.softmax(dim=-1)
             attn = self.attn_drop(attn)
             x = attn @ v
+        logger.info(f"post {torch.cuda.memory_allocated()}")
 
         return x
 
