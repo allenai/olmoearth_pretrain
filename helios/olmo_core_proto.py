@@ -43,7 +43,7 @@ if __name__ == "__main__":
     # PER EXPERIMENT Variables
     GLOBAL_BATCH_SIZE = 1
     RANK_BATCH_SIZE = 1
-    MAX_DURATION = Duration.epochs(10)
+    MAX_DURATION = Duration.epochs(200)
     NUM_WORKERS = 0
     NUM_THREADS = 0
     METRICS_COLLECT_INTERVAL = 1
@@ -103,7 +103,7 @@ if __name__ == "__main__":
     # Ideally though this should be handled by the Model COnfig and build
     model = model.to(device)
     checkpointer_config = CheckpointerConfig(work_dir=workdir)
-    optim_config = AdamWConfig(lr=1e-3)
+    optim_config = AdamWConfig()
     masking_config = MaskingConfig(
         strategy_config={
             "type": "random",
@@ -154,7 +154,7 @@ if __name__ == "__main__":
         name=run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
-        enabled=False,
+        enabled=True,
     )
     # Let us not use garbage collector fallback
     trainer_config = (
