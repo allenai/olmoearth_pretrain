@@ -4,6 +4,7 @@ Extended from: https://github.com/huggingface/pytorch-image-models/blob/main/tim
 by https://github.com/bwconrad/flexivit/
 """
 
+import logging
 from collections.abc import Iterable, Sequence
 from typing import Any
 
@@ -13,6 +14,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor, vmap
+
+logger = logging.getLogger(__name__)
 
 
 class FlexiPatchEmbed(nn.Module):
@@ -187,6 +190,7 @@ class FlexiPatchEmbed(nn.Module):
             patch_size = self.patch_size
 
         patch_size = self.to_2tuple(patch_size)
+        logger.info(f"patch size: {patch_size}")
         assert (
             isinstance(patch_size, tuple) and len(patch_size) == 2
         ), "patch_size must be a 2-tuple"

@@ -9,11 +9,10 @@ import torch
 import torch.nn.functional as F
 from class_registry import ClassRegistry
 from einops import rearrange
-from olmo_core.config import Config
-from torch import Tensor
-
 from helios.nn.flexihelios import TokensAndMasks
 from helios.train.masking import MaskedHeliosSample, MaskValue
+from olmo_core.config import Config
+from torch import Tensor
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,6 @@ class Loss(ABC):
                 if is_masks:
                     attr = attr.unsqueeze(dim=-1)
                 flattened_attr = cls._flatten(attr)
-                logger.info(f"flattened_attr: {flattened_attr.shape} for {attr_name}")
                 flattened_attrs.append(flattened_attr)
 
         flattened_x = torch.cat(flattened_attrs, dim=1)

@@ -1,10 +1,14 @@
 """Attention Components for Helios."""
 
+import logging
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from torch.jit import Final
+
+logger = logging.getLogger(__name__)
 
 
 class Attention(nn.Module):
@@ -85,6 +89,7 @@ class Attention(nn.Module):
         Returns:
             Output tensor of shape (B, H, N, D)
         """
+        logger.info(f"sequence length: {n}")
         if self.fast_attn:
             if attn_mask is not None:
                 attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))

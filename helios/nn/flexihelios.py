@@ -7,8 +7,6 @@ from typing import NamedTuple
 import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
-from torch import Tensor, nn
-
 from helios.constants import BASE_GSD
 from helios.data.constants import Modality, ModalitySpec
 from helios.nn.attention import Block
@@ -19,6 +17,7 @@ from helios.nn.encodings import (
 )
 from helios.nn.flexi_patch_embed import FlexiPatchEmbed
 from helios.train.masking import MaskedHeliosSample, MaskValue
+from torch import Tensor, nn
 
 logger = logging.getLogger(__name__)
 
@@ -541,6 +540,8 @@ class FlexiHeliosBase(nn.Module):
             masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
         tokens = torch.cat(tokens, dim=1)
         masks = torch.cat(masks, dim=1)
+        # TODO: We should return the number of unmasked tokens processed by the encoder
+        logger.info(f"number of tokens {tokens.shape[1]} dim {tokens.shape[2]}")
         return tokens, masks
 
     @staticmethod
