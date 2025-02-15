@@ -13,7 +13,7 @@
       ],
       "data_source": {
         "ingest": false,
-        "name": "rslearn.data_sources.azure_sentinel1.Sentinel1",
+        "name": "rslearn.data_sources.planetary_computer.Sentinel1",
         "query": {
           "sar:instrument_mode": {
             "eq": "IW"
