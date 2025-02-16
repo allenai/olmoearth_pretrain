@@ -4,6 +4,20 @@ import logging
 import uuid
 
 import numpy as np
+from olmo_core.distributed.parallel import DataParallelConfig, DataParallelType
+from olmo_core.distributed.utils import get_fs_local_rank, get_rank, get_world_size
+from olmo_core.optim import AdamWConfig
+from olmo_core.train import prepare_training_environment, teardown_training_environment
+from olmo_core.train.callbacks import (
+    GPUMemoryMonitorCallback,
+    WandBCallback,
+)
+from olmo_core.train.checkpoint import CheckpointerConfig
+from olmo_core.train.common import Duration, LoadStrategy
+from olmo_core.train.config import TrainerConfig
+from olmo_core.utils import get_default_device
+from upath import UPath
+
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoader
 from helios.data.dataset import HeliosDataset, collate_helios
@@ -15,19 +29,6 @@ from helios.train.callbacks.speed_monitor import HeliosSpeedMonitorCallback
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module import HeliosTrainModuleConfig
-from olmo_core.distributed.parallel import DataParallelConfig, DataParallelType
-from olmo_core.distributed.utils import (get_fs_local_rank, get_rank,
-                                         get_world_size)
-from olmo_core.optim import AdamWConfig
-from olmo_core.train import (prepare_training_environment,
-                             teardown_training_environment)
-from olmo_core.train.callbacks import (GPUMemoryMonitorCallback,
-                                       ProfilerCallback, WandBCallback)
-from olmo_core.train.checkpoint import CheckpointerConfig
-from olmo_core.train.common import Duration, LoadStrategy
-from olmo_core.train.config import TrainerConfig
-from olmo_core.utils import get_default_device
-from upath import UPath
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,8 @@ if __name__ == "__main__":
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "helios-debug"
     # PER EXPERIMENT Variables
-    GLOBAL_BATCH_SIZE = 1
-    RANK_BATCH_SIZE = 1
+    GLOBAL_BATCH_SIZE = 4
+    RANK_BATCH_SIZE = 4
     MAX_DURATION = Duration.epochs(200)
     NUM_WORKERS = 0
     NUM_THREADS = 0
@@ -67,18 +68,17 @@ if __name__ == "__main__":
 
     supported_modalities = [
         Modality.SENTINEL2,
-        Modality.LATLON,
         Modality.SENTINEL1,
         # Modality.WORLDCOVER,
     ]
-    encoder_embedding_size = 192
-    decoder_embedding_size = 192
+    encoder_embedding_size = 1024
+    decoder_embedding_size = 1024
     patch_size = 16
     encoder = Encoder(
         embedding_size=encoder_embedding_size,
         max_patch_size=patch_size,
-        num_heads=4,
-        depth=12,
+        num_heads=32,
+        depth=6,
         mlp_ratio=1.0,
         drop_path=0.1,
         max_sequence_length=12,
@@ -89,9 +89,9 @@ if __name__ == "__main__":
     decoder = Predictor(
         encoder_embedding_size=encoder_embedding_size,
         decoder_embedding_size=decoder_embedding_size,
-        depth=12,
+        depth=4,
         mlp_ratio=1.0,
-        num_heads=4,
+        num_heads=32,
         max_sequence_length=12,
         max_patch_size=patch_size,
         supported_modalities=supported_modalities,
@@ -103,7 +103,7 @@ if __name__ == "__main__":
     # Ideally though this should be handled by the Model COnfig and build
     model = model.to(device)
     checkpointer_config = CheckpointerConfig(work_dir=workdir)
-    optim_config = AdamWConfig()
+    optim_config = AdamWConfig(lr=1e-4)
     masking_config = MaskingConfig(
         strategy_config={
             "type": "random",
@@ -111,7 +111,7 @@ if __name__ == "__main__":
     )
     loss_config = LossConfig(
         loss_config={
-            "type": "patch_discrimination",
+            "type": "l2",
         }
     )
     train_module_config = HeliosTrainModuleConfig(
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     dp_process_group = train_module.dp_process_group
 
     # Prepare samples from Helios dataset
-    tile_path = UPath("/weka/dfive-default/helios/dataset/20250212/")
+    tile_path = UPath("/dfive-default/helios/dataset/20250212/")
 
     tiles = parse_helios_dataset(tile_path, supported_modalities=supported_modalities)
 

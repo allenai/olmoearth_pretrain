@@ -17,7 +17,6 @@ from helios.nn.encodings import (
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
 )
-from helios.nn.flexi_patch_embed import FlexiPatchEmbed
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
@@ -72,7 +71,59 @@ class TokensAndMasks(NamedTuple):
     @property
     def data_fields(self) -> list[str]:
         """Return all data fields."""
-        return [x for x in self._fields if not x.endswith("mask")]
+        return [
+            x
+            for x in self._fields
+            if not x.endswith("mask") and getattr(self, x) is not None
+        ]
+
+
+class FlattenEmbed(nn.Module):
+    """Embedding that flattens the input pixels."""
+
+    def __init__(
+        self,
+        in_chans: int,
+        embedding_size: int,
+    ):
+        """Create a new FlattenEmbed.
+
+        Args:
+            in_chans: number of input channels.
+            embedding_size: the depth of the embedding.
+        """
+        super().__init__()
+        self.in_chans = in_chans
+        self.embedding_size = embedding_size
+
+    def forward(self, x: Tensor, patch_size: int) -> Tensor:
+        """Compute patch embeddings by flattening the pixel values in the patch.
+
+        Args:
+            x: Input tensor with shape [b, h, w, t, c]
+            patch_size: patch size to use.
+        """
+        h_patches = x.shape[1] // patch_size
+        w_patches = x.shape[2] // patch_size
+        # Put c first here so that if c*hps*wps > embedding_size, at least we keep an
+        # entire channel rather than missing some parts of the patch fully.
+        flat_x = rearrange(
+            x,
+            "b (hp hps) (wp wps) t c -> b hp wp t (c hps wps)",
+            hp=h_patches,
+            wp=w_patches,
+            hps=patch_size,
+            wps=patch_size,
+        )
+        # Adjust to match embedding size.
+        logger.info(
+            f"compare the flat_x={flat_x.shape} to the embedding_size={self.embedding_size}"
+        )
+        if flat_x.shape[-1] > self.embedding_size:
+            flat_x = flat_x[:, :, :, :, 0 : self.embedding_size]
+        elif flat_x.shape[-1] < self.embedding_size:
+            flat_x = F.pad(flat_x, (0, self.embedding_size - flat_x.shape[-1]))
+        return flat_x
 
 
 class FlexiHeliosPatchEmbeddings(nn.Module):
@@ -114,35 +165,17 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
     def _get_patch_embedding_module_for_modality(self, modality: str) -> nn.Module:
         """Get the patch embedding module for a modality."""
         modality_spec = Modality.get(modality)
-        # Based on the modality name we choose the way to embed the data
-
-        # I likely will need to know about what the embedding strategy is in the forward as well
-        # Static modality
-        if modality_spec.get_tile_resolution() == 0:
-            # static in space
-            return nn.ModuleDict(
-                {
-                    self._get_embedding_module_name(modality, idx): nn.Linear(
-                        len(channel_set_idxs), self.embedding_size
-                    )
-                    for idx, channel_set_idxs in enumerate(
-                        modality_spec.bandsets_as_indices()
-                    )
-                }
-            )
-        else:
-            return nn.ModuleDict(
-                {
-                    self._get_embedding_module_name(modality, idx): FlexiPatchEmbed(
-                        in_chans=len(channel_set_idxs),
-                        embedding_size=self.embedding_size,
-                        patch_size=self.max_patch_size,
-                    )
-                    for idx, channel_set_idxs in enumerate(
-                        modality_spec.bandsets_as_indices()
-                    )
-                }
-            )
+        return nn.ModuleDict(
+            {
+                self._get_embedding_module_name(modality, idx): FlattenEmbed(
+                    in_chans=len(channel_set_idxs),
+                    embedding_size=self.embedding_size,
+                )
+                for idx, channel_set_idxs in enumerate(
+                    modality_spec.bandsets_as_indices()
+                )
+            }
+        )
 
     # TODO: Likely we want a single object that stores all the data related configuration etc per modality including channel grous bands patch size etc
     def apply_embedding_to_modality(
@@ -553,6 +586,62 @@ class FlexiHeliosBase(nn.Module):
         # TODO: We should return the number of unmasked tokens processed by the encoder
         return tokens, masks
 
+    def collapse_and_combine_tc(self, x: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
+        """Collapse the tokens and masks, respectively, into two tensors.
+
+        This combines the batch/height/width dimensions so that attention is applied
+        temporally but not spatially.
+        """
+        tokens, masks = [], []
+        for modality in self.supported_modality_names:
+            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            x_modality = x[modality]
+            x_modality_mask = x[masked_modality_name]
+            flattened_tokens = rearrange(
+                x_modality, "b h w t b_s d -> (b h w) (t b_s) d"
+            )
+            flattened_masks = rearrange(
+                x_modality_mask, "b h w t b_s -> (b h w) (t b_s)"
+            )
+            num_tokens = flattened_tokens.shape[1]
+            logger.debug(f"Modality {modality} has {num_tokens} tokens")
+            tokens.append(flattened_tokens)
+            masks.append(flattened_masks)
+
+        # Concatenate along temporal (token) dimension.
+        # This only works when h/w are consistent across modalities.
+        tokens = torch.cat(tokens, dim=1)
+        masks = torch.cat(masks, dim=1)
+        return tokens, masks
+
+    def collapse_and_combine_hw(self, x: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
+        """Collapse the tokens and masks, respectively, into two tensors.
+
+        This combines the batch/time dimensions so that attention is applied spatially
+        but not temporally.
+        """
+        tokens, masks = [], []
+        for modality in self.supported_modality_names:
+            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            x_modality = x[modality]
+            x_modality_mask = x[masked_modality_name]
+            flattened_tokens = rearrange(
+                x_modality, "b h w t b_s d -> (b t b_s) (h w) d"
+            )
+            flattened_masks = rearrange(
+                x_modality_mask, "b h w t b_s -> (b t b_s) (h w)"
+            )
+            num_tokens = flattened_tokens.shape[1]
+            logger.debug(f"Modality {modality} has {num_tokens} tokens")
+            tokens.append(flattened_tokens)
+            masks.append(flattened_masks)
+
+        # Concatenate along temporal (batch) dimension.
+        # This only works when h/w are consistent across modalities.
+        tokens = torch.cat(tokens, dim=0)
+        masks = torch.cat(masks, dim=0)
+        return tokens, masks
+
     @staticmethod
     def _construct_einops_pattern(
         spatial_dims: tuple[int, ...],
@@ -622,6 +711,95 @@ class FlexiHeliosBase(nn.Module):
 
         return tokens_only_dict
 
+    @staticmethod
+    def split_and_expand_per_modality_tc(
+        x: Tensor, modalities_to_dims_dict: dict[str, tuple]
+    ) -> dict[str, Tensor]:
+        """Split and expand the tokens per modality.
+
+        This is for tokens that were collapsed using collapse_and_combine_tc (for doing
+        temporal attention only).
+
+        Args:
+            x: Tokens to split and expand (b*h*w t*b_s d)
+            modalities_to_dims_dict: Dictionary mapping modalities to their dimensions
+        Returns:
+            tokens_only_dict: mapping modalities to their tokens
+        """
+        tokens_only_dict = {}
+        tokens_reshaped = 0
+        for modality, dims in modalities_to_dims_dict.items():
+            # For now we only support 5D BHWTD data.
+            batch, h, w, t, b_s, d = dims
+
+            # Extract tokens for this modality (b*h*w t*b_s d).
+            # Modalities are stacked on the temporal (token) axis.
+            num_tokens_for_modality = t * b_s
+            modality_tokens = x[
+                :, tokens_reshaped : tokens_reshaped + num_tokens_for_modality, :
+            ]
+
+            # Reshape to original dimensions.
+            x_modality = rearrange(
+                modality_tokens,
+                "(b h w) (t b_s) d -> b h w t b_s d",
+                b=batch,
+                h=h,
+                w=w,
+                t=t,
+                b_s=b_s,
+            )
+
+            tokens_reshaped += num_tokens_for_modality
+            tokens_only_dict[modality] = x_modality
+
+        return tokens_only_dict
+
+    @staticmethod
+    def split_and_expand_per_modality_hw(
+        x: Tensor, modalities_to_dims_dict: dict[str, tuple]
+    ) -> dict[str, Tensor]:
+        """Split and expand the tokens per modality.
+
+        This is for tokens that were collapsed using collapse_and_combine_hw (for doing
+        spatial attention only).
+
+        Args:
+            x: Tokens to split and expand (b*t*b_s h*w d)
+            modalities_to_dims_dict: Dictionary mapping modalities to their dimensions
+        Returns:
+            tokens_only_dict: mapping modalities to their tokens
+        """
+        tokens_only_dict = {}
+        tokens_reshaped = 0
+        for modality, dims in modalities_to_dims_dict.items():
+            # For now we only support 5D BHWTD data.
+            batch, h, w, t, b_s, d = dims
+
+            # Extract tokens for this modality (b*t*b_s h*w d).
+            # Modalities are stacked on the temporal axis, which is part of the batch
+            # dimension.
+            num_tokens_for_modality = batch * t * b_s
+            modality_tokens = x[
+                tokens_reshaped : tokens_reshaped + num_tokens_for_modality, :, :
+            ]
+
+            # Reshape to original dimensions.
+            x_modality = rearrange(
+                modality_tokens,
+                "(b t b_s) (h w) d -> b h w t b_s d",
+                b=batch,
+                h=h,
+                w=w,
+                t=t,
+                b_s=b_s,
+            )
+
+            tokens_reshaped += num_tokens_for_modality
+            tokens_only_dict[modality] = x_modality
+
+        return tokens_only_dict
+
 
 class Encoder(FlexiHeliosBase):
     """Encoder module that processes masked input samples into token representations."""
@@ -672,21 +850,9 @@ class Encoder(FlexiHeliosBase):
             embedding_size,
         )
         self.norm = nn.LayerNorm(embedding_size)
+        self.pre_composite_embed = nn.Linear(embedding_size, embedding_size, bias=True)
+        self.post_composite_embed = nn.Linear(embedding_size, embedding_size, bias=True)
         self.apply(self._init_weights)
-
-    def create_token_exit_ids(
-        self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
-    ) -> dict[str, Tensor]:
-        """Create the token exit ids for # of layers of attention for each band group.
-
-        Assumes modality channel groups are in the second to last dimension of the tokens.
-        """
-        exit_ids_per_modality_dict = {}
-        for modality in self.supported_modality_names:
-            num_exit_layers = token_exit_cfg[modality]
-            exit_seq_modality = torch.full_like(x[modality], fill_value=num_exit_layers)
-            exit_ids_per_modality_dict[modality] = exit_seq_modality
-        return exit_ids_per_modality_dict
 
     @staticmethod
     def remove_masked_tokens(x: Tensor, mask: Tensor) -> tuple[Tensor, Tensor, Tensor]:
@@ -710,6 +876,7 @@ class Encoder(FlexiHeliosBase):
         """
         org_mask_dtype = mask.dtype
         mask = mask.bool()
+        mask = torch.zeros_like(mask)
         # At this point when we flip the mask 1 means keep 0 means remove
         sorted_mask, indices = torch.sort(
             (~mask).int(), dim=1, descending=True, stable=True
@@ -728,13 +895,6 @@ class Encoder(FlexiHeliosBase):
         updated_mask = 1 - sorted_mask[:, :max_length]
 
         return x, indices, updated_mask.to(dtype=org_mask_dtype)
-
-    @staticmethod
-    def should_exit(i_blk: int, exit_after_n_layers: int | None) -> bool:
-        """Determine if the current block should exit the attention layers."""
-        if exit_after_n_layers is None:
-            return False
-        return i_blk >= exit_after_n_layers
 
     @staticmethod
     def add_removed_tokens(
@@ -778,51 +938,22 @@ class Encoder(FlexiHeliosBase):
         # Values that were masked out are not returned but the values that are still there are returned to the original positions
         return out, full_mask
 
-    def create_exit_seqs_and_tokens(
-        self,
-        tokens_only_dict: dict[str, Tensor],
-        mask_only_dict: dict[str, Tensor],
-        token_exit_cfg: dict[str, int] | None,
-    ) -> tuple[Tensor | None, Tensor | None]:
-        """Create the exit sequences and tokens."""
-        # Check that tokens_only_dict doesn't contain any mask keys
-        assert all(
-            not key.endswith("_mask") for key in tokens_only_dict
-        ), "tokens_only_dict should not contain mask keys"
-        if token_exit_cfg:
-            exit_ids_per_modality = self.create_token_exit_ids(
-                tokens_only_dict, token_exit_cfg
-            )
-            logger.info(f"exit_ids_per_modality: {exit_ids_per_modality}")
-            logger.info(f"mask_only_dict: {mask_only_dict}")
-            mask_only_dict.update(exit_ids_per_modality)
-            exit_ids_per_modality = mask_only_dict
-            # Exit ids seqs tells us which layer to exit each token
-            exit_ids_seq, _ = self.collapse_and_combine_hwtc(exit_ids_per_modality)
-            # The exit tokens are the tensor that store tokens that exit early from the encoder
-            exited_tokens, _ = self.collapse_and_combine_hwtc(exit_ids_per_modality)
-        else:
-            exit_ids_seq = None
-            exited_tokens = None
-        return exit_ids_seq, exited_tokens
-
     def apply_attn(
         self,
         x: dict[str, Tensor],
         timestamps: Tensor,
         patch_size: int,
         input_res: int,
-        token_exit_cfg: dict[str, int] | None = None,
-        exit_after_n_layers: int | None = None,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
 
-        exit_ids_seq, exited_tokens = self.create_exit_seqs_and_tokens(
-            tokens_only_dict, original_masks_dict, token_exit_cfg
-        )
+        for modality in self.supported_modality_names:
+            tokens_only_dict[modality] = self.pre_composite_embed(
+                tokens_only_dict[modality]
+            )
 
         tokens_dict = self.composite_encodings.forward(
             tokens_only_dict,
@@ -831,70 +962,70 @@ class Encoder(FlexiHeliosBase):
             input_res,
         )
         x.update(tokens_dict)
-        x, mask = self.collapse_and_combine_hwtc(x)
 
-        new_mask = mask >= MaskValue.TARGET_ENCODER_ONLY.value
+        for modality in self.supported_modality_names:
+            x[modality] = self.post_composite_embed(x[modality])
 
-        tokens, indices, new_mask = self.remove_masked_tokens(x, new_mask)
-        if exit_ids_seq is not None:
-            exit_ids_seq, _, _ = self.remove_masked_tokens(exit_ids_seq, mask)
-            # still linear projections
-            exited_tokens, _, _ = self.remove_masked_tokens(exited_tokens, mask)
+        print(
+            "initial",
+            x["sentinel2"][0, 0:5, 0:5, 0, 0, 0],
+            x["sentinel2_mask"][0, 0:5, 0:5, 0, 0],
+        )
 
         # Apply attn with varying encoder depths
-        for i_blk, blk in enumerate(self.blocks):
-            if self.should_exit(i_blk, exit_after_n_layers):
-                # if exit_after is N, then we exit after the Nth layer
-                # if exit_after is 0, then all layers are skipped
-                break
+        for block_idx, block in enumerate(self.blocks):
+            # On even blocks, do temporal attention.
+            # On odd blocks, do spatial attention.
+            is_temporal_block = block_idx % 2 == 0
 
-            # skip the 0th block since this is just the linear
-            # projection
-            if (exit_ids_seq is not None) and (i_blk > 0):
-                assert exited_tokens is not None
-                # If a token should exit, then we update the exit token with the current token at the same position
-                exited_tokens = torch.where(
-                    condition=(exit_ids_seq == i_blk),
-                    input=tokens.detach(),
-                    other=exited_tokens.detach(),
-                )
+            if is_temporal_block:
+                x, mask = self.collapse_and_combine_tc(x)
+            else:
+                x, mask = self.collapse_and_combine_hw(x)
+
+            new_mask = mask >= MaskValue.TARGET_ENCODER_ONLY.value
+            tokens, indices, new_mask = self.remove_masked_tokens(x, new_mask)
+
             # we take the inverse of the mask because a value
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
-            tokens = blk(x=tokens, y=None, attn_mask=~new_mask.bool())
+            tokens = block(x=tokens, y=None, attn_mask=~new_mask.bool())
 
-        if exit_ids_seq is not None:
-            assert exited_tokens is not None
-            # full depth
-            # IMPORTANT: write this to x
-            tokens = torch.where(
-                condition=(exit_ids_seq == (i_blk + 1)),  # 2 for full depth
-                input=tokens.detach(),
-                other=exited_tokens.detach(),
+            # we apply the norm before we add the removed tokens,
+            # so that the norm is only computed against "real" tokens
+            tokens = self.norm(tokens)
+
+            # we don't care about the mask returned by add_removed_tokens, since we will
+            # just use the original, unclipped mask here
+            tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
+
+            if is_temporal_block:
+                x = self.split_and_expand_per_modality_tc(
+                    tokens, modalities_to_dims_dict
+                )
+            else:
+                x = self.split_and_expand_per_modality_hw(
+                    tokens, modalities_to_dims_dict
+                )
+
+            # merge original masks and the processed tokens
+            x.update(original_masks_dict)
+
+            print(
+                f"block {block_idx}",
+                x["sentinel2"][0, 0:5, 0:5, 0, 0, 0],
+                x["sentinel2_mask"][0, 0:5, 0:5, 0, 0],
+                x["sentinel2"].shape,
             )
 
-        # we apply the norm before we add the removed tokens,
-        # so that the norm is only computed against "real" tokens
-        tokens = self.norm(tokens)
-        # we don't care about the mask returned by add_removed_tokens, since we will
-        # just use the original, unclipped mask here
-        tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
-        tokens_per_modality_dict = self.split_and_expand_per_modality(
-            tokens, modalities_to_dims_dict
-        )
-
-        # merge original masks and the processed tokens
-        tokens_per_modality_dict.update(original_masks_dict)
-        return tokens_per_modality_dict
+        return x
 
     def forward(
         self,
         x: MaskedHeliosSample,
         patch_size: int,
         input_res: int = BASE_GSD,
-        exit_after_n_layers: int | None = None,
-        token_exit_cfg: dict | None = None,
     ) -> TokensAndMasks:
         """Process masked input samples into token representations.
 
@@ -902,23 +1033,17 @@ class Encoder(FlexiHeliosBase):
             x: Masked input sample containing the data to be encoded
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
-            exit_after_n_layers: Layer to exit after
-            token_exit_cfg: Configuration for token exit
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
         """
-        # TODO: Add step to validate the exit config is valid
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
-        if (exit_after_n_layers is None) or (exit_after_n_layers > 0):
-            patchified_tokens_and_masks = self.apply_attn(
-                x=patchified_tokens_and_masks,
-                timestamps=x.timestamps,
-                patch_size=patch_size,
-                input_res=input_res,
-                exit_after_n_layers=exit_after_n_layers,
-                token_exit_cfg=token_exit_cfg,
-            )
+        patchified_tokens_and_masks = self.apply_attn(
+            x=patchified_tokens_and_masks,
+            timestamps=x.timestamps,
+            patch_size=patch_size,
+            input_res=input_res,
+        )
         if any(
             patchified_tokens_and_masks[modality] is None
             for modality in self.supported_modality_names
@@ -1123,18 +1248,35 @@ class Predictor(FlexiHeliosBase):
             tokens_only_dict, timestamps, patch_size, input_res
         )
         x.update(tokens_dict)
-        x, mask = self.collapse_and_combine_hwtc(x)
-        x, y, x_mask, y_mask, indices = self.split_x_y(x, mask)
-        for blk in self.blocks:
+
+        for block_idx, block in enumerate(self.blocks):
+            # On even blocks, do temporal attention.
+            # On odd blocks, do spatial attention.
+            is_temporal_block = block_idx % 2 == 0
+
+            if is_temporal_block:
+                x, mask = self.collapse_and_combine_tc(x)
+            else:
+                x, mask = self.collapse_and_combine_hw(x)
+
+            x, y, x_mask, y_mask, indices = self.split_x_y(x, mask)
+
             # note that we are not taking the inverse of the mask, since split_x_y gives us
             # true values for values we want to take part in attention
-            x = blk(x=x, y=y, attn_mask=y_mask.bool())
-        x = self.combine_x_y(x, y, x_mask, y_mask, indices)
-        tokens_per_modality_dict = self.split_and_expand_per_modality(
-            x, modalities_to_dims_dict
-        )
-        tokens_per_modality_dict.update(original_masks_dict)
-        return tokens_per_modality_dict
+            x = block(x=x, y=y, attn_mask=y_mask.bool())
+
+            x = self.combine_x_y(x, y, x_mask, y_mask, indices)
+
+            if is_temporal_block:
+                x = self.split_and_expand_per_modality_tc(x, modalities_to_dims_dict)
+            else:
+                x = self.split_and_expand_per_modality_hw(x, modalities_to_dims_dict)
+
+            x.update(original_masks_dict)
+
+            print(f"predictor block {block_idx}", x["sentinel2"][0, 0:5, 0:5, 0, 0, 0])
+
+        return x
 
     def is_any_data_to_be_decoded(self, modality_mask: Tensor) -> bool:
         """Check if any data is to be decoded for a given modality."""
@@ -1184,24 +1326,15 @@ class Predictor(FlexiHeliosBase):
             # patchify masked data
             per_modality_output_tokens = []
             modality_data = tokens_and_masks[modality]
-            modality_specific_dims = self.grab_modality_specific_dims(modality_data)
+            # modality_specific_dims = self.grab_modality_specific_dims(modality_data)
 
             band_sets = Modality.get(modality).band_sets
             for idx in range(len(band_sets)):
-                if self.is_any_data_to_be_decoded(modality_mask):
-                    per_channel_modality_data = modality_data[..., idx, :]
-                    output_data = self.to_output_embed(
-                        self.norm(per_channel_modality_data)
-                    )
-                else:
-                    # If all data should be ignored by encoder, we need to return an empty tensor
-                    output_data = torch.empty(
-                        modality_data.shape[0],
-                        *modality_specific_dims,
-                        self.output_embedding_size,
-                        dtype=modality_data.dtype,
-                        device=modality_data.device,
-                    )
+                per_channel_modality_data = modality_data[..., idx, :]
+                output_data = self.to_output_embed(
+                    # self.norm(per_channel_modality_data)
+                    per_channel_modality_data
+                )
                 per_modality_output_tokens.append(output_data)
             output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
             output_dict[masked_modality_name] = modality_mask

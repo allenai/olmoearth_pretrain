@@ -207,6 +207,12 @@ class L2Loss(Loss):
         Returns:
             The computed loss value.
         """
+        assert predictions.sentinel2 is not None and targets.sentinel2 is not None
+        print(
+            "loss function",
+            predictions.sentinel2[0, 0:5, 0:5, 0, 0, 0],
+            targets.sentinel2[0, 0:5, 0:5, 0, 0, 0],
+        )
         all_preds = torch.cat(
             [self._flatten(getattr(predictions, d)) for d in predictions.data_fields],
             dim=1,

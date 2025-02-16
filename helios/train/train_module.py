@@ -11,9 +11,6 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 import torch.nn as nn
-from helios.data.dataset import HeliosSample
-from helios.train.loss import LossConfig
-from helios.train.masking import MaskedHeliosSample, MaskingConfig
 from olmo_core.config import Config, DType
 from olmo_core.distributed.parallel import (
     DataParallelConfig,
@@ -37,6 +34,11 @@ from torch.distributed.checkpoint.metadata import Metadata
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.tensor import DTensor
 from torch.optim import Optimizer
+
+from helios.data.dataset import HeliosSample
+from helios.nn.flexihelios import TokensAndMasks
+from helios.train.loss import LossConfig
+from helios.train.masking import MaskedHeliosSample, MaskingConfig
 
 logger = getLogger(__name__)
 
@@ -387,15 +389,6 @@ class HeliosTrainModule(TrainModule):
         # Backpropagate and optimize
         if loss is not None:
             loss.backward()
-        # Update target encoder with EMA this should be a callback
-        with torch.no_grad():
-            for param, target_param in zip(
-                self.model.encoder.parameters(), self.model.target_encoder.parameters()
-            ):
-                target_param.data = (
-                    self.ema_decay * target_param.data
-                    + (1 - self.ema_decay) * param.data
-                )
 
         del batch  # In case this helps with memory utilization.
 
@@ -486,15 +479,16 @@ class HeliosTrainModule(TrainModule):
         """Run a forward pass."""
         patch_size = self.model.encoder.base_patch_size
         with self._model_forward_context():
-            with torch.no_grad():
-                target_output = self.model.target_encoder.forward(
-                    batch, patch_size=patch_size
-                )
+            patchified_tokens_and_masks = self.model.encoder.patch_embeddings(
+                batch, patch_size=patch_size
+            )
+            target_output = TokensAndMasks(**patchified_tokens_and_masks)
 
             # Run Encoder and decoder on the augmented input
             # TODO: Needs to be cleaned up so patch size is gen randomly different datasets should be able to have different patch sizes
             decoded = self.model.forward(batch, patch_size=patch_size)
             loss = self.loss_fn(decoded, target_output)
+            print(f"got loss {loss}")
             return decoded, loss
 
     @contextlib.contextmanager
