@@ -381,24 +381,10 @@ class HeliosTrainModule(TrainModule):
 
         subsampled_batch = subsampled_batch.to_device(self.device)
         logger.info(f"subsampled batch: input {subsampled_batch.sentinel2.shape}")
-        kwargs = {"patch_size": patch_size, "encode_ratio": 0.5, "decode_ratio": 0.5}
-        masked_batch = self.masking_strategy.apply_mask(subsampled_batch, **kwargs)
-<<<<<<< HEAD
+        masked_batch = self.masking_strategy.apply_mask(subsampled_batch)
         logger.info(
             f"masked batch: input {masked_batch.sentinel2.shape} and mask {masked_batch.sentinel2_mask.shape}"
         )
-=======
-=======
-        batch = batch.to_device(self.device)
-<<<<<<< HEAD
-        # TODO: Fix patch size that handcoded in different places
-        kwargs = {"patch_size": 8, "encode_ratio": 0.5, "decode_ratio": 0.5}
-        masked_batch = self.masking_strategy.apply_mask(batch, **kwargs)
->>>>>>> fix latentmin
-=======
-        masked_batch = self.masking_strategy.apply_mask(batch)
->>>>>>> remove unused BASE_GSD
->>>>>>> remove unused BASE_GSD
 
         # Run Encoder and decoder on the augmented input
         decoded, loss = self.model_forward(masked_batch, patch_size)

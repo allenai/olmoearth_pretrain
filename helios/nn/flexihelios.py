@@ -1282,3 +1282,6 @@ class PredictorConfig(Config):
             output_embedding_size=self.output_embedding_size,
             supported_modalities=self.supported_modalities,
         )
+
+
+# TODO: add multiple combo of variables for encoder and predictor, and being able to build them directly, no need to specify each parameter, e.g., encoder_tiny, encoder_small, encoder_base, encoder_large, etc.

@@ -59,6 +59,8 @@ if __name__ == "__main__":
         # Modality.WORLDCOVER,
     ]
     PATCH_SIZE = 8
+    ENCODE_RATIO = 0.5
+    DECODE_RATIO = 0.5
 
     #################### Setup environment ####################
     dp_config = None
@@ -74,6 +76,7 @@ if __name__ == "__main__":
     logger.info("Starting Helios training")
 
     #################### Configs for model ####################
+    # TODO: build encoder_small, encoder_base, encoder_large, etc. Same for decoder
     encoder_config = EncoderConfig(
         supported_modalities=SUPPORTED_MODALITIES,
         embedding_size=16,
@@ -114,6 +117,8 @@ if __name__ == "__main__":
     masking_config = MaskingConfig(
         strategy_config={
             "type": "random",
+            "encode_ratio": ENCODE_RATIO,
+            "decode_ratio": DECODE_RATIO,
         }
     )
     loss_config = LossConfig(
