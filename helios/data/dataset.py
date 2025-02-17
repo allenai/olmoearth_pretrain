@@ -293,13 +293,9 @@ class HeliosDataset(Dataset):
 
     def __init__(
         self,
-        *samples: SampleInformation | None,
-<<<<<<< HEAD
-        path: UPath,
         supported_modalities: list[ModalitySpec],
-=======
         tile_path: UPath,
->>>>>>> mypy
+        *samples: SampleInformation | None,
         dtype: np.dtype = np.float32,
     ):
         """Initialize the dataset.
@@ -321,11 +317,7 @@ class HeliosDataset(Dataset):
         if len(samples) == 0:
             raise ValueError("No samples provided")
         self.samples = self._filter_samples(samples)  # type: ignore
-<<<<<<< HEAD
         self.supported_modalities = supported_modalities
-        self.path = path
-=======
->>>>>>> mypy
         self.dtype = dtype
 
         # Initialize both normalizers for different modalities

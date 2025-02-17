@@ -27,12 +27,12 @@ class LatentMIM(nn.Module):
             patch_size: The patch size to use.
         """
         super().__init__()
-        self.patch_size = patch_size
         self.encoder = encoder
         self.decoder = decoder
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
+        self.patch_size = patch_size
 
     def forward(
         self,
@@ -62,8 +62,6 @@ class LatentMIMConfig(Config):
             != self.decoder_config.supported_modalities
         ):
             raise ValueError("Encoder and decoder must support the same modalities")
-        if self.encoder_config.base_patch_size != self.decoder_config.base_patch_size:
-            raise ValueError("Encoder and decoder must have the same base patch size")
         if (
             self.encoder_config.max_sequence_length
             != self.decoder_config.max_sequence_length
