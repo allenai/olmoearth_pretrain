@@ -22,7 +22,7 @@ from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig, collate_helios
 from helios.nn.flexihelios import EncoderConfig, PredictorConfig
-from helios.nn.latent_predictor import LatentPredictorConfig
+from helios.nn.latent_predictor import LatentMIMConfig
 from helios.train.callbacks.speed_monitor import HeliosSpeedMonitorCallback
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
@@ -94,7 +94,7 @@ if __name__ == "__main__":
         max_patch_size=8,
         supported_modalities=SUPPORTED_MODALITIES,
     )
-    model_config = LatentPredictorConfig(
+    model_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
     )

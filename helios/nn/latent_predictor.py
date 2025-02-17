@@ -10,7 +10,7 @@ from helios.nn.flexihelios import EncoderConfig, PredictorConfig, TokensAndMasks
 from helios.train.masking import MaskedHeliosSample
 
 
-class LatentMIMStyle(nn.Module):
+class LatentMIM(nn.Module):
     """Latent MIM Style."""
 
     def __init__(self, encoder: nn.Module, decoder: nn.Module):
@@ -40,7 +40,7 @@ class LatentMIMStyle(nn.Module):
 
 
 @dataclass
-class LatentPredictorConfig(Config):
+class LatentMIMConfig(Config):
     """Configuration for the Latent Predictor."""
 
     encoder_config: EncoderConfig
@@ -70,8 +70,8 @@ class LatentPredictorConfig(Config):
         ):
             raise ValueError("Encoder and decoder must have the same embedding size")
 
-    def build(self) -> "LatentMIMStyle":
+    def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
         encoder = self.encoder_config.build()
         decoder = self.decoder_config.build()
-        return LatentMIMStyle(encoder, decoder)
+        return LatentMIM(encoder, decoder)
