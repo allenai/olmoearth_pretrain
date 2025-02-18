@@ -341,6 +341,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             )
 
         if modality_tokens.ndim == 5:
+            logger.info(f" Worldcover shape: {modality_tokens.shape}")
             raise NotImplementedError(
                 f"Modality {modality} has no time dimension, not implemented"
             )

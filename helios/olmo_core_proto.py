@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 # Data Loader
 # Model
 
+
 if __name__ == "__main__":
     # Variables to be changed per user
     workdir = UPath("/temp/helios/workdir")  # nosec
@@ -43,7 +44,7 @@ if __name__ == "__main__":
     # PER EXPERIMENT Variables
     GLOBAL_BATCH_SIZE = 1
     RANK_BATCH_SIZE = 1
-    MAX_DURATION = Duration.epochs(200)
+    MAX_DURATION = Duration.epochs(10)
     NUM_WORKERS = 0
     NUM_THREADS = 0
     METRICS_COLLECT_INTERVAL = 1
@@ -68,32 +69,29 @@ if __name__ == "__main__":
     supported_modalities = [
         Modality.SENTINEL2,
         Modality.LATLON,
-        Modality.SENTINEL1,
-        # Modality.WORLDCOVER,
+        # Modality.SENTINEL1,
+        Modality.WORLDCOVER,
     ]
-    encoder_embedding_size = 192
-    decoder_embedding_size = 192
-    patch_size = 16
     encoder = Encoder(
-        embedding_size=encoder_embedding_size,
-        max_patch_size=patch_size,
-        num_heads=4,
-        depth=12,
+        embedding_size=16,
+        max_patch_size=16,
+        num_heads=2,
+        depth=2,
         mlp_ratio=1.0,
         drop_path=0.1,
         max_sequence_length=12,
-        base_patch_size=patch_size,
+        base_patch_size=16,
         use_channel_embs=True,
         supported_modalities=supported_modalities,
     )
     decoder = Predictor(
-        encoder_embedding_size=encoder_embedding_size,
-        decoder_embedding_size=decoder_embedding_size,
-        depth=12,
+        encoder_embedding_size=16,
+        decoder_embedding_size=16,
+        depth=2,
         mlp_ratio=1.0,
-        num_heads=4,
+        num_heads=2,
         max_sequence_length=12,
-        max_patch_size=patch_size,
+        max_patch_size=16,
         supported_modalities=supported_modalities,
     )
     model = LatentMIMStyle(encoder, decoder)
@@ -154,7 +152,7 @@ if __name__ == "__main__":
         name=run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
-        enabled=True,
+        enabled=False,  # set to False to avoid wandb errors
     )
     # Let us not use garbage collector fallback
     trainer_config = (
@@ -171,44 +169,44 @@ if __name__ == "__main__":
         .with_callback("wandb", wandb_callback)
         .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
         .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
-        # .with_callback("profiler", ProfilerCallback())
+        .with_callback("profiler", ProfilerCallback())
     )
     trainer = trainer_config.build(
         train_module=train_module,
         data_loader=dataloader,
     )
     trainer.fit()
-    teardown_training_environment()
+
     # eval. Currently this will fail because by default our model ingests 4 timesteps.
     # we should update the model architecture to ingest variable numbers of timesteps
-    # from helios.evals.datasets import GeobenchDataset
-    # from helios.evals.embeddings import get_embeddings
-    # from helios.evals.knn import run_knn
-    # from torch.utils.data import DataLoader
+    from helios.evals.datasets import GeobenchDataset
+    from helios.evals.embeddings import get_embeddings
+    from helios.evals.knn import run_knn
+    from torch.utils.data import DataLoader
 
-    # geobench_dir = UPath("/weka/skylight-default/presto-geobench/dataset/geobench")
+    geobench_dir = UPath("/weka/skylight-default/presto-geobench/dataset/geobench")
 
-    # common_args = {"geobench_dir": geobench_dir, "dataset": "m-eurosat"}
-    # train_ds = GeobenchDataset(geobench_dir, "m-eurosat", "train", "default")
-    # train_loader = DataLoader(train_ds, collate_fn=GeobenchDataset.collate_fn)
-    # val_loader = DataLoader(
-    #     GeobenchDataset(geobench_dir, "m-eurosat", "valid", "default"),
-    #     collate_fn=GeobenchDataset.collate_fn,
-    # )
-    # # TODO: this should use target encoder
-    # train_embeddings, train_labels = get_embeddings(
-    #     data_loader=train_loader, model=encoder
-    # )
-    # val_embeddings, test_labels = get_embeddings(data_loader=val_loader, model=encoder)
-    # val_result = run_knn(
-    #     eval_type="KNN-20",
-    #     train_embeddings=train_embeddings,
-    #     train_labels=train_labels,
-    #     test_embeddings=val_embeddings,
-    #     test_labels=test_labels,
-    #     num_classes=train_ds.num_classes,
-    #     is_multilabel=train_ds.is_multilabel,
-    #     device=device,
-    # )
-    # logger.info(val_result)
-    # teardown_training_environment()
+    common_args = {"geobench_dir": geobench_dir, "dataset": "m-eurosat"}
+    train_ds = GeobenchDataset(geobench_dir, "m-eurosat", "train", "default")
+    train_loader = DataLoader(train_ds, collate_fn=GeobenchDataset.collate_fn)
+    val_loader = DataLoader(
+        GeobenchDataset(geobench_dir, "m-eurosat", "valid", "default"),
+        collate_fn=GeobenchDataset.collate_fn,
+    )
+    # TODO: this should use target encoder
+    train_embeddings, train_labels = get_embeddings(
+        data_loader=train_loader, model=encoder
+    )
+    val_embeddings, test_labels = get_embeddings(data_loader=val_loader, model=encoder)
+    val_result = run_knn(
+        eval_type="KNN-20",
+        train_embeddings=train_embeddings,
+        train_labels=train_labels,
+        test_embeddings=val_embeddings,
+        test_labels=test_labels,
+        num_classes=train_ds.num_classes,
+        is_multilabel=train_ds.is_multilabel,
+        device=device,
+    )
+    logger.info(val_result)
+    teardown_training_environment()
