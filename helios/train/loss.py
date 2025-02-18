@@ -162,8 +162,8 @@ class L1Loss(Loss):
         all_preds = self._flatten_tokens_or_masks(predictions)
         all_masks = self._flatten_tokens_or_masks(predictions, is_masks=True)
         all_targets = self._flatten_tokens_or_masks(targets)
-        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value]
+        target = all_targets[all_masks == MaskValue.DECODER_ONLY.value]
 
         return F.l1_loss(pred, target)
 
@@ -188,10 +188,38 @@ class L2Loss(Loss):
         all_preds = self._flatten_tokens_or_masks(predictions)
         all_masks = self._flatten_tokens_or_masks(predictions, is_masks=True)
         all_targets = self._flatten_tokens_or_masks(targets)
-        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value]
+        target = all_targets[all_masks == MaskValue.DECODER_ONLY.value]
 
         return F.mse_loss(pred, target)
+
+
+@LOSS_REGISTRY.register("cross_entropy")
+class CrossEntropyLoss(Loss):
+    """Loss function for cross entropy."""
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> float:
+        """Compute cross entropy between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds = self._flatten_tokens_or_masks(predictions)
+        all_masks = self._flatten_tokens_or_masks(predictions, is_masks=True)
+        all_targets = self._flatten_tokens_or_masks(targets)
+        pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value]
+        target = all_targets[all_masks == MaskValue.DECODER_ONLY.value]
+        print(pred.shape)
+        print(target.shape)
+
+        return F.cross_entropy(pred, target.squeeze())
 
 
 @dataclass
