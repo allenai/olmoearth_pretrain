@@ -113,7 +113,6 @@ if __name__ == "__main__":
     loss_config = LossConfig(
         loss_config={
             "type": "patch_discrimination",
-            "supported_modalities": supported_modalities,
         }
     )
     train_module_config = HeliosTrainModuleConfig(

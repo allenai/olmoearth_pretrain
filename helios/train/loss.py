@@ -30,10 +30,6 @@ class Loss(ABC):
         """Compute the loss between predictions and targets."""
         pass
 
-    @staticmethod
-    def _flatten(x: Tensor) -> Tensor:
-        return rearrange(x, "b ... d -> b (...) d")
-
     @classmethod
     def _flatten_tokens_or_masks(
         cls, x: TokensAndMasks, is_masks: bool = False
@@ -164,21 +160,9 @@ class L1Loss(Loss):
         Returns:
             The computed loss value.
         """
-        all_preds = torch.cat(
-            [self._flatten(getattr(predictions, d)) for d in predictions.data_fields],
-            dim=1,
-        )
-        all_masks = torch.cat(
-            [
-                self._flatten(getattr(predictions, f"{d}_mask").unsqueeze(dim=-1))
-                for d in predictions.data_fields
-            ],
-            dim=1,
-        )[:, :, 0]
-        all_targets = torch.cat(
-            [self._flatten(getattr(targets, d)) for d in predictions.data_fields],
-            dim=1,
-        )
+        all_preds = self._flatten_tokens_or_masks(predictions)
+        all_masks = self._flatten_tokens_or_masks(predictions, is_masks=True)
+        all_targets = self._flatten_tokens_or_masks(targets)
         pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
         target = all_targets[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
 
@@ -202,21 +186,9 @@ class L2Loss(Loss):
         Returns:
             The computed loss value.
         """
-        all_preds = torch.cat(
-            [self._flatten(getattr(predictions, d)) for d in predictions.data_fields],
-            dim=1,
-        )
-        all_masks = torch.cat(
-            [
-                self._flatten(getattr(predictions, f"{d}_mask").unsqueeze(dim=-1))
-                for d in predictions.data_fields
-            ],
-            dim=1,
-        )[:, :, 0]
-        all_targets = torch.cat(
-            [self._flatten(getattr(targets, d)) for d in predictions.data_fields],
-            dim=1,
-        )
+        all_preds = self._flatten_tokens_or_masks(predictions)
+        all_masks = self._flatten_tokens_or_masks(predictions, is_masks=True)
+        all_targets = self._flatten_tokens_or_masks(targets)
         pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
         target = all_targets[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
 
