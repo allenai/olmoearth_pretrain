@@ -37,11 +37,12 @@ logger = logging.getLogger(__name__)
 class HeliosSample(NamedTuple):
     """A sample of the data from the Helios dataset.
 
+    We always require sentinel2 data.
     This is a namedtuple that contains the data of a single sample or a batch of samples from the Helios dataset.
     For each modality, we have an ArrayTensor named by the modality, along with the latlon and timestamps.
     """
 
-    sentinel2: ArrayTensor | None = None  # [B, H, W, T, len(S2_bands)]
+    sentinel2: ArrayTensor  # [B, H, W, T, len(S2_bands)]
     sentinel1: ArrayTensor | None = None  # [B, H, W, T, len(S1_bands)]
     worldcover: ArrayTensor | None = None  # [B, H, W, len(WC_bands)]
     latlon: ArrayTensor | None = None  # [B, 2]

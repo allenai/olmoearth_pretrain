@@ -39,6 +39,7 @@ class MaskValue(Enum):
 class MaskedHeliosSample(NamedTuple):
     """A masked sample of the data from the Helios dataset.
 
+    We always require sentinel2 data.
     This is a namedtuple that contains the data for a single sample from the Helios dataset.
     latlon and timestamps are the same for all modalities.
     For each modality. we have an ArrayTensor named by modality, and a mask for each modality named by modality_mask.
@@ -48,8 +49,8 @@ class MaskedHeliosSample(NamedTuple):
     timestamps: (
         ArrayTensor  # [B, T, D=3], where D=[day, month, year] (months are zero indexed)
     )
-    sentinel2: ArrayTensor | None = None
-    sentinel2_mask: ArrayTensor | None = None
+    sentinel2: ArrayTensor
+    sentinel2_mask: ArrayTensor
     sentinel1: ArrayTensor | None = None
     sentinel1_mask: ArrayTensor | None = None
     worldcover: ArrayTensor | None = None
