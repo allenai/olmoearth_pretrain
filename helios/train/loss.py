@@ -216,8 +216,6 @@ class CrossEntropyLoss(Loss):
         all_targets = self._flatten_tokens_or_masks(targets)
         pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value]
         target = all_targets[all_masks == MaskValue.DECODER_ONLY.value]
-        print(pred.shape)
-        print(target.shape)
 
         return F.cross_entropy(pred, target.squeeze())
 
