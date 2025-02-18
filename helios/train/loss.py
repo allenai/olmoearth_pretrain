@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 class Loss(ABC):
     """Abstract base class for loss functions."""
 
+    @staticmethod
+    def _flatten(x: Tensor) -> Tensor:
+        return rearrange(x, "b ... d -> b (...) d")
+
     @abstractmethod
     def compute(self, predictions: Any, targets: Any, **kwargs: Any) -> float:
         """Compute the loss between predictions and targets."""
@@ -141,6 +145,82 @@ class PatchDiscriminationLoss(Loss):
         loss_multiplier = self._expand_and_reciprocate(count)
         loss = (loss * loss_multiplier).sum() / bs
         return loss
+
+
+@LOSS_REGISTRY.register("l1")
+class L1Loss(Loss):
+    """Loss function for L1 (mean average error)."""
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> float:
+        """Compute L1 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds = torch.cat(
+            [self._flatten(getattr(predictions, d)) for d in predictions.data_fields],
+            dim=1,
+        )
+        all_masks = torch.cat(
+            [
+                self._flatten(getattr(predictions, f"{d}_mask").unsqueeze(dim=-1))
+                for d in predictions.data_fields
+            ],
+            dim=1,
+        )[:, :, 0]
+        all_targets = torch.cat(
+            [self._flatten(getattr(targets, d)) for d in predictions.data_fields],
+            dim=1,
+        )
+        pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
+        target = all_targets[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
+
+        return F.l1_loss(pred, target)
+
+
+@LOSS_REGISTRY.register("l2")
+class L2Loss(Loss):
+    """Loss function for L2 (mean squared error)."""
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> float:
+        """Compute L2 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds = torch.cat(
+            [self._flatten(getattr(predictions, d)) for d in predictions.data_fields],
+            dim=1,
+        )
+        all_masks = torch.cat(
+            [
+                self._flatten(getattr(predictions, f"{d}_mask").unsqueeze(dim=-1))
+                for d in predictions.data_fields
+            ],
+            dim=1,
+        )[:, :, 0]
+        all_targets = torch.cat(
+            [self._flatten(getattr(targets, d)) for d in predictions.data_fields],
+            dim=1,
+        )
+        pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
+        target = all_targets[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
+
+        return F.mse_loss(pred, target)
 
 
 @dataclass
