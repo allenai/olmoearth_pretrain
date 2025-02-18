@@ -11,9 +11,10 @@ from rslearn.dataset import Window
 from upath import UPath
 
 from helios.data.constants import BandSet, ModalitySpec, TimeSpan
+from helios.dataset.util import get_modality_fname
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
-from ..util import get_modality_fname, get_modality_temp_meta_fname, get_window_metadata
+from ..util import get_modality_temp_meta_fname, get_window_metadata
 
 PIXELS_PER_TILE = 256
 EPSILON = 1e-6

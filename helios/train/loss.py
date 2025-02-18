@@ -1,5 +1,6 @@
 """Loss functions for training."""
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -12,7 +13,9 @@ from olmo_core.config import Config
 from torch import Tensor
 
 from helios.nn.flexihelios import TokensAndMasks
-from helios.train.masking import MaskValue
+from helios.train.masking import MaskedHeliosSample, MaskValue
+
+logger = logging.getLogger(__name__)
 
 
 class Loss(ABC):
@@ -26,6 +29,35 @@ class Loss(ABC):
     def compute(self, predictions: Any, targets: Any, **kwargs: Any) -> float:
         """Compute the loss between predictions and targets."""
         pass
+
+    @classmethod
+    def _flatten_tokens_or_masks(
+        cls, x: TokensAndMasks, is_masks: bool = False
+    ) -> Tensor:
+        flattened_attrs = []
+        for attr_name in x.modalities:
+            if is_masks:
+                attr_name = MaskedHeliosSample.get_masked_modality_name(attr_name)
+            attr = getattr(x, attr_name)
+            if attr is not None:
+                if is_masks:
+                    attr = attr.unsqueeze(dim=-1)
+                flattened_attr = cls._flatten(attr)
+                logger.info(f"flattened_attr: {flattened_attr.shape} for {attr_name}")
+                flattened_attrs.append(flattened_attr)
+
+        flattened_x = torch.cat(flattened_attrs, dim=1)
+        return flattened_x[:, :, 0] if is_masks else flattened_x
+
+    @staticmethod
+    def _expand_and_reciprocate(t: Tensor) -> Tensor:
+        """As described in the name.
+
+        >>> _expand_and_reciprocate(torch.tensor([1, 2, 3]))
+        tensor([1.0000, 0.5000, 0.5000, 0.3333, 0.3333, 0.3333])
+        """
+        reciprocals = torch.reciprocal(t.float())
+        return torch.repeat_interleave(reciprocals, t)
 
 
 LOSS_REGISTRY = ClassRegistry[Loss]()
@@ -54,16 +86,6 @@ class PatchDiscriminationLoss(Loss):
         self.pred2unit = pred2unit
         self.mask_other_samples = mask_other_samples
 
-    @staticmethod
-    def _expand_and_reciprocate(t: Tensor) -> Tensor:
-        """As described in the name.
-
-        >>> _expand_and_reciprocate(torch.tensor([1, 2, 3]))
-        tensor([1.0000, 0.5000, 0.5000, 0.3333, 0.3333, 0.3333])
-        """
-        reciprocals = torch.reciprocal(t.float())
-        return torch.repeat_interleave(reciprocals, t)
-
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
     ) -> float:
@@ -77,22 +99,11 @@ class PatchDiscriminationLoss(Loss):
         Returns:
             The computed loss value.
         """
-        # TODO: How will we deal with only training with some subset of modalities? If we use passed in modalities channels dict to define which modalities is one way but using class directly implies all used
-        all_preds = torch.cat(
-            [self._flatten(getattr(predictions, d)) for d in predictions.data_fields],
-            dim=1,
-        )
-        all_masks = torch.cat(
-            [
-                self._flatten(getattr(predictions, f"{d}_mask").unsqueeze(dim=-1))
-                for d in predictions.data_fields
-            ],
-            dim=1,
-        )[:, :, 0]
-        all_targets = torch.cat(
-            [self._flatten(getattr(targets, d)) for d in predictions.data_fields],
-            dim=1,
-        )
+        # TODO: write a function that deals with this
+        all_preds = self._flatten_tokens_or_masks(predictions)
+        all_masks = self._flatten_tokens_or_masks(predictions, is_masks=True)
+        all_targets = self._flatten_tokens_or_masks(targets)
+
         pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
         target = all_targets[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
         bs, nt, _ = pred.shape
@@ -115,7 +126,8 @@ class PatchDiscriminationLoss(Loss):
                 end = start + c
                 logit_mask[:, start:end, start:end] = 0
                 start += c
-
+            logger.info(f"logit_mask: {logit_mask.shape}")
+            logger.info(f"scores: {scores.shape}")
             scores = scores + logit_mask
 
         labels = torch.arange(nt, dtype=torch.long, device=pred.device)[None].repeat(
@@ -148,21 +160,9 @@ class L1Loss(Loss):
         Returns:
             The computed loss value.
         """
-        all_preds = torch.cat(
-            [self._flatten(getattr(predictions, d)) for d in predictions.data_fields],
-            dim=1,
-        )
-        all_masks = torch.cat(
-            [
-                self._flatten(getattr(predictions, f"{d}_mask").unsqueeze(dim=-1))
-                for d in predictions.data_fields
-            ],
-            dim=1,
-        )[:, :, 0]
-        all_targets = torch.cat(
-            [self._flatten(getattr(targets, d)) for d in predictions.data_fields],
-            dim=1,
-        )
+        all_preds = self._flatten_tokens_or_masks(predictions)
+        all_masks = self._flatten_tokens_or_masks(predictions, is_masks=True)
+        all_targets = self._flatten_tokens_or_masks(targets)
         pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
         target = all_targets[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
 
@@ -186,21 +186,9 @@ class L2Loss(Loss):
         Returns:
             The computed loss value.
         """
-        all_preds = torch.cat(
-            [self._flatten(getattr(predictions, d)) for d in predictions.data_fields],
-            dim=1,
-        )
-        all_masks = torch.cat(
-            [
-                self._flatten(getattr(predictions, f"{d}_mask").unsqueeze(dim=-1))
-                for d in predictions.data_fields
-            ],
-            dim=1,
-        )[:, :, 0]
-        all_targets = torch.cat(
-            [self._flatten(getattr(targets, d)) for d in predictions.data_fields],
-            dim=1,
-        )
+        all_preds = self._flatten_tokens_or_masks(predictions)
+        all_masks = self._flatten_tokens_or_masks(predictions, is_masks=True)
+        all_targets = self._flatten_tokens_or_masks(targets)
         pred = all_preds[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
         target = all_targets[all_masks == MaskValue.DECODER_ONLY.value].unsqueeze(dim=0)
 

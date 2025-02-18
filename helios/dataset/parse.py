@@ -9,12 +9,13 @@ from upath import UPath
 
 from helios.data.constants import (
     BASE_RESOLUTION,
-    SUPPORTED_MODALITIES,
     BandSet,
+    Modality,
     ModalitySpec,
     TimeSpan,
 )
-from helios.dataset_creation.util import WindowMetadata, get_modality_fname
+
+from .util import WindowMetadata, get_modality_fname
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ def parse_modality_csv(
 
 
 def parse_helios_dataset(
-    helios_path: UPath,
+    helios_path: UPath, supported_modalities: list[ModalitySpec] = Modality.values()
 ) -> dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]]:
     """Parse the various per-modality tiles present in a Helios dataset.
 
@@ -165,7 +166,18 @@ def parse_helios_dataset(
     """
     tiles: dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]] = {}
 
-    for modality in SUPPORTED_MODALITIES:
+    for modality in Modality.values():
+        if modality.ignore_when_parsing:
+            continue
+        if modality not in supported_modalities:
+            logger.warning(
+                f"ignoring modality {modality.name} not in supported_modalities"
+            )
+            continue
+        # TODO: there's N/A in the image_idx column for openstreetmap
+        if modality.name == "openstreetmap":
+            continue
+
         if modality.is_multitemporal:
             # We need to load the one-year and two-week data separately.
             time_spans = [TimeSpan.YEAR, TimeSpan.TWO_WEEK]

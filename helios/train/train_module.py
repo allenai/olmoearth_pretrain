@@ -193,6 +193,8 @@ class HeliosTrainModule(TrainModule):
         super().__init__()
         self.ema_decay = ema_decay
         self.model = model
+        num_params = sum(p.numel() for p in self.model.parameters())
+        logger.info(f"number of parameters: {num_params:,d}")
         self.device = device or get_default_device()
         self.world_mesh = build_device_mesh(dp=dp_config, device_type=self.device.type)
         logger.info(
@@ -369,7 +371,9 @@ class HeliosTrainModule(TrainModule):
         # Move tensors to the right device.
         # we may want to modify this
         batch = batch.to_device(self.device)
-        kwargs = {"patch_size": 8, "encode_ratio": 0.5, "decode_ratio": 0.5}
+        # TODO: ENsure patch size stuff is the same between encoder and target encoder
+        # TODO: Need to make this dynamic and configurable
+        kwargs = {"patch_size": 16, "encode_ratio": 0.5, "decode_ratio": 0.5}
         masked_batch = self.masking_strategy.apply_mask(batch, **kwargs)
 
         # Run Encoder and decoder on the augmented input

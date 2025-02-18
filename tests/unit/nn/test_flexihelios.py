@@ -4,18 +4,19 @@ import pytest
 import torch
 from einops import repeat
 
-from helios.nn.flexihelios import Encoder, FlexiHeliosBase, Predictor, TokensAndMasks
+from helios.data.constants import ModalitySpec
+from helios.nn.flexihelios import Encoder, FlexiHeliosBase, Predictor
 from helios.train.masking import MaskValue
 
 
-# TODO: we should more easily bea ble to Test on only certain modalities maybe we want a make encoder
-#  method that gives us an encoder based on the modlaities we want to support
 # TODO: Add tests for when the inputs are completely masked or different dims or something
 class TestFlexiHeliosBase:
     """Unit tests for the FlexiHeliosBase class."""
 
     @pytest.fixture
-    def flexi_helios_base(self, supported_modalities: list[str]) -> FlexiHeliosBase:
+    def flexi_helios_base(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> FlexiHeliosBase:
         """Create encoder fixture for testing."""
         flexi_helios_base = FlexiHeliosBase(
             embedding_size=8,
@@ -39,12 +40,12 @@ class TestFlexiHeliosBase:
         sentinel2_mask = torch.randint(0, 2, (B, 2, 1, 1, 2)).float()
         latlon = torch.randn(B, 1, D)
         latlon_mask = torch.randint(0, 2, (B, 1)).float()
-        x = TokensAndMasks(
-            sentinel2=sentinel2_tokens,
-            sentinel2_mask=sentinel2_mask,
-            latlon=latlon,
-            latlon_mask=latlon_mask,
-        )
+        x = {
+            "sentinel2": sentinel2_tokens,
+            "sentinel2_mask": sentinel2_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+        }
         tokens, masks = flexi_helios_base.collapse_and_combine_hwtc(x)
         assert tokens.shape == (B, 5, D)
         assert masks.shape == (B, 5)
@@ -93,7 +94,7 @@ class TestEncoder:
     """Unit tests for the Encoder class."""
 
     @pytest.fixture
-    def encoder(self, supported_modalities: list[str]) -> Encoder:
+    def encoder(self, supported_modalities: list[ModalitySpec]) -> Encoder:
         """Create encoder fixture for testing.
 
         Returns:
@@ -242,7 +243,7 @@ class TestPredictor:
     """Unit tests for the Predictor class."""
 
     @pytest.fixture
-    def predictor(self, supported_modalities: list[str]) -> Predictor:
+    def predictor(self, supported_modalities: list[ModalitySpec]) -> Predictor:
         """Create predictor fixture for testing."""
         return Predictor(
             supported_modalities=supported_modalities,
@@ -268,13 +269,12 @@ class TestPredictor:
         latlon = torch.randn(B, 1, D)
         latlon_mask = torch.randint(0, 2, (B, 1)).float()
 
-        tokens_and_masks = TokensAndMasks(
-            sentinel2=sentinel2_tokens,
-            sentinel2_mask=sentinel2_mask,
-            latlon=latlon,
-            latlon_mask=latlon_mask,
-        )
-
+        tokens_and_masks = {
+            "sentinel2": sentinel2_tokens,
+            "sentinel2_mask": sentinel2_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+        }
         replaced_dict = predictor.add_masks(tokens_and_masks)
 
         # We expect replaced_dict to have the key "sentinel2", shaped like sentinel2_tokens

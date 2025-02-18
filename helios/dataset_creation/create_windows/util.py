@@ -21,8 +21,9 @@ from rslearn.utils.get_utm_ups_crs import get_utm_ups_projection
 from rslearn.utils.mp import StarImapUnorderedWrapper
 from upath import UPath
 
+from helios.dataset.util import WindowMetadata
+
 from ..constants import WINDOW_DURATION, WINDOW_RESOLUTIONS, WINDOW_SIZE
-from ..util import WindowMetadata
 
 # Resolution to use if high-resolution imagery is available.
 HIGH_RESOLUTION = 0.625

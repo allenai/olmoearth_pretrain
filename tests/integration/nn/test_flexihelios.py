@@ -7,7 +7,7 @@ import pytest
 import torch
 from einops import rearrange
 
-from helios.data.constants import Modality
+from helios.data.constants import ModalitySpec
 from helios.nn.flexihelios import (
     Encoder,
     FlexiHeliosPatchEmbeddings,
@@ -19,7 +19,7 @@ from helios.train.masking import MaskedHeliosSample, MaskValue
 
 @pytest.fixture
 def modality_band_set_len_and_total_bands(
-    supported_modalities: list[str],
+    supported_modalities: list[ModalitySpec],
 ) -> dict[str, tuple[int, int]]:
     """Get the number of band sets and total bands for each modality.
 
@@ -27,12 +27,18 @@ def modality_band_set_len_and_total_bands(
         Dictionary mapping modality name to tuple of (num_band_sets, total_bands)
     """
     return {
-        modality: (
-            len(Modality.get(modality).band_sets),
-            Modality.get(modality).num_bands,
+        modality.name: (
+            len(modality.band_sets),
+            modality.num_bands,
         )
         for modality in supported_modalities
     }
+
+
+@pytest.fixture
+def supported_modality_names(supported_modalities: list[ModalitySpec]) -> list[str]:
+    """Get the names of the supported modalities."""
+    return [modality.name for modality in supported_modalities]
 
 
 class TestFlexiHeliosPatchEmbeddings:
@@ -41,15 +47,15 @@ class TestFlexiHeliosPatchEmbeddings:
     @pytest.fixture
     def patch_embeddings(
         self,
-        supported_modalities: list[str],
     ) -> FlexiHeliosPatchEmbeddings:
         """Create patch embeddings fixture for testing.
 
         Returns:
             FlexiHeliosPatchEmbeddings: Test patch embeddings instance with small test config
         """
+        supported_modality_names = ["sentinel2", "latlon"]
         return FlexiHeliosPatchEmbeddings(
-            supported_modalities=supported_modalities,
+            supported_modality_names=supported_modality_names,
             embedding_size=16,
             max_patch_size=8,
         )
@@ -78,12 +84,17 @@ class TestFlexiHeliosPatchEmbeddings:
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
         timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
 
-        sample = MaskedHeliosSample(
-            sentinel2, sentinel2_mask, latlon, latlon_mask, timestamps
-        )
+        masked_sample_dict = {
+            "sentinel2": sentinel2,
+            "sentinel2_mask": sentinel2_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+            "timestamps": timestamps,
+        }
+        sample = MaskedHeliosSample(**masked_sample_dict)
         output = patch_embeddings.forward(sample, patch_size)
         embedding_size = patch_embeddings.embedding_size
-        assert output.sentinel2.shape == (
+        assert output["sentinel2"].shape == (
             B,
             H // patch_size,
             W // patch_size,
@@ -91,26 +102,26 @@ class TestFlexiHeliosPatchEmbeddings:
             sentinel_2_num_band_sets,  # of band sets
             embedding_size,
         )
-        assert output.sentinel2_mask.shape == (
+        assert output["sentinel2_mask"].shape == (
             B,
             H // patch_size,
             W // patch_size,
             T,
             sentinel_2_num_band_sets,  # of band sets
         )
-        assert output.latlon.shape == (
+        assert output["latlon"].shape == (
             B,
             latlon_num_band_sets,
             embedding_size,
         )  # B, C_G , D
-        assert output.latlon_mask.shape == (B, latlon_num_band_sets)  # B, C_G
+        assert output["latlon_mask"].shape == (B, latlon_num_band_sets)  # B, C_G
 
 
 class TestEncoder:
     """Integration tests for the Encoder class."""
 
     @pytest.fixture
-    def encoder(self, supported_modalities: list[str]) -> Encoder:
+    def encoder(self, supported_modalities: list[ModalitySpec]) -> Encoder:
         """Create encoder fixture for testing.
 
         Returns:
@@ -150,12 +161,12 @@ class TestEncoder:
         )
 
         # Construct the TokensAndMasks namedtuple with mock modality data + mask.
-        x = TokensAndMasks(
-            sentinel2=sentinel2_tokens,
-            sentinel2_mask=sentinel2_mask,
-            latlon=latlon,
-            latlon_mask=latlon_mask,
-        )
+        x = {
+            "sentinel2": sentinel2_tokens,
+            "sentinel2_mask": sentinel2_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+        }
 
         timestamps = torch.tensor(
             [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
@@ -167,21 +178,18 @@ class TestEncoder:
             x=x, timestamps=timestamps, patch_size=patch_size, input_res=input_res
         )
 
-        assert isinstance(
-            output, TokensAndMasks
-        ), "apply_attn should return a TokensAndMasks object."
-
         # Ensure shape is preserved in the output tokens.
         assert (
-            output.sentinel2.shape == sentinel2_tokens.shape
-        ), f"Expected output 'sentinel2' shape {sentinel2_tokens.shape}, got {output.sentinel2.shape}."
+            output["sentinel2"].shape == sentinel2_tokens.shape
+        ), f"Expected output 'sentinel2' shape {sentinel2_tokens.shape}, got {output['sentinel2'].shape}."
 
         # Confirm the mask was preserved and that masked tokens are zeroed out in the output.
         assert (
-            output.sentinel2_mask == sentinel2_mask
+            output["sentinel2_mask"] == sentinel2_mask
         ).all(), "Mask should be preserved in output"
         assert (
-            output.sentinel2[sentinel2_mask >= MaskValue.TARGET_ENCODER_ONLY.value] == 0
+            output["sentinel2"][sentinel2_mask >= MaskValue.TARGET_ENCODER_ONLY.value]
+            == 0
         ).all(), "Masked tokens should be 0 in output"
 
     def test_forward_exit_config_none(
@@ -210,9 +218,14 @@ class TestEncoder:
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
         timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
 
-        x = MaskedHeliosSample(
-            sentinel2, sentinel2_mask, latlon, latlon_mask, timestamps
-        )
+        masked_sample_dict = {
+            "sentinel2": sentinel2,
+            "sentinel2_mask": sentinel2_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+            "timestamps": timestamps,
+        }
+        x = MaskedHeliosSample(**masked_sample_dict)
 
         patch_size = 4
         input_res = 1
@@ -235,6 +248,10 @@ class TestEncoder:
             sentinel2_num_band_sets,
             expected_embedding_size,
         )
+        assert output.sentinel2 is not None
+        assert output.sentinel2_mask is not None
+        assert output.latlon is not None
+        assert output.latlon_mask is not None
         assert (
             output.sentinel2.shape == expected_shape
         ), f"Expected output sentinel2 shape {expected_shape}, got {output.sentinel2.shape}"
@@ -282,9 +299,14 @@ class TestEncoder:
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
         timestamps = torch.cat([days, months, years], dim=-1)
 
-        x = MaskedHeliosSample(
-            sentinel2, sentinel2_mask, latlon, latlon_mask, timestamps
-        )
+        masked_sample_dict = {
+            "sentinel2": sentinel2,
+            "sentinel2_mask": sentinel2_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+            "timestamps": timestamps,
+        }
+        x = MaskedHeliosSample(**masked_sample_dict)
 
         patch_size = 4
         input_res = 1
@@ -311,6 +333,10 @@ class TestEncoder:
             sentinel2_num_band_sets,
             expected_embedding_size,
         )
+        assert output.sentinel2 is not None
+        assert output.sentinel2_mask is not None
+        assert output.latlon is not None
+        assert output.latlon_mask is not None
         assert (
             output.sentinel2.shape == expected_shape_sentinel2
         ), f"Expected output sentinel2 shape {expected_shape_sentinel2}, got {output.sentinel2.shape}"
@@ -353,9 +379,14 @@ class TestEncoder:
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
         timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
 
-        x = MaskedHeliosSample(
-            sentinel2, sentinel2_mask, latlon, latlon_mask, timestamps
-        )
+        masked_sample_dict = {
+            "sentinel2": sentinel2,
+            "sentinel2_mask": sentinel2_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+            "timestamps": timestamps,
+        }
+        x = MaskedHeliosSample(**masked_sample_dict)
 
         patch_size = 4
         input_res = 1
@@ -377,6 +408,10 @@ class TestEncoder:
             sentinel2_num_band_sets,
             expected_embedding_size,
         )
+        assert output.sentinel2 is not None
+        assert output.sentinel2_mask is not None
+        assert output.latlon is not None
+        assert output.latlon_mask is not None
         assert (
             output.sentinel2.shape == expected_shape
         ), f"Expected output sentinel2 shape {expected_shape}, got {output.sentinel2.shape}"
@@ -403,7 +438,7 @@ class TestPredictor:
     """Integration tests for the Predictor class."""
 
     @pytest.fixture
-    def predictor(self, supported_modalities: list[str]) -> Predictor:
+    def predictor(self, supported_modalities: list[ModalitySpec]) -> Predictor:
         """Create predictor fixture for testing.
 
         Returns:
@@ -478,6 +513,10 @@ class TestPredictor:
             sentinel2_num_band_sets,
             predictor.output_embedding_size,
         )
+        assert output.sentinel2 is not None
+        assert output.sentinel2_mask is not None
+        assert output.latlon is not None
+        assert output.latlon_mask is not None
         assert (
             output.sentinel2.shape == expected_token_shape
         ), f"Expected tokens shape {expected_token_shape}, got {output.sentinel2.shape}"
@@ -551,6 +590,10 @@ class TestPredictor:
             sentinel2_num_band_sets,
             predictor.output_embedding_size,
         )
+        assert output.sentinel2 is not None
+        assert output.sentinel2_mask is not None
+        assert output.latlon is not None
+        assert output.latlon_mask is not None
         assert (
             output.sentinel2.shape == expected_token_shape
         ), f"Expected tokens shape {expected_token_shape}, got {output.sentinel2.shape}"
@@ -568,7 +611,7 @@ class TestPredictor:
 
 
 def test_end_to_end_with_exit_config(
-    supported_modalities: list[str],
+    supported_modalities: list[ModalitySpec],
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """Test the full end to end forward pass of the model with an exit configuration."""
@@ -601,7 +644,14 @@ def test_end_to_end_with_exit_config(
     years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
     timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
 
-    x = MaskedHeliosSample(sentinel2, sentinel2_mask, latlon, latlon_mask, timestamps)
+    masked_sample_dict = {
+        "sentinel2": sentinel2,
+        "sentinel2_mask": sentinel2_mask,
+        "latlon": latlon,
+        "latlon_mask": latlon_mask,
+        "timestamps": timestamps,
+    }
+    x = MaskedHeliosSample(**masked_sample_dict)
 
     patch_size = 4
     input_res = 1
@@ -648,6 +698,10 @@ def test_end_to_end_with_exit_config(
     output = predictor.forward(output, timestamps, patch_size, input_res)
     patched_H = H // patch_size
     patched_W = W // patch_size
+    assert output.sentinel2 is not None
+    assert output.sentinel2_mask is not None
+    assert output.latlon is not None
+    assert output.latlon_mask is not None
     assert output.sentinel2.shape == (
         B,
         patched_H,
@@ -662,4 +716,13 @@ def test_end_to_end_with_exit_config(
         patched_W,
         T,
         sentinel2_num_band_sets,
+    )
+    assert output.latlon.shape == (
+        B,
+        latlon_num_band_sets,
+        predictor.output_embedding_size,
+    )
+    assert output.latlon_mask.shape == (
+        B,
+        latlon_num_band_sets,
     )

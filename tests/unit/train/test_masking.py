@@ -37,6 +37,8 @@ def test_random_masking() -> None:
         if modality_name.endswith("mask"):
             mask = getattr(masked_sample, modality_name)
             logger.info(f"Mask name: {modality_name}")
+            if mask is None:
+                continue
             total_elements = mask.numel()
             num_encoder = len(mask[mask == MaskValue.ONLINE_ENCODER.value])
             num_decoder = len(mask[mask == MaskValue.DECODER_ONLY.value])

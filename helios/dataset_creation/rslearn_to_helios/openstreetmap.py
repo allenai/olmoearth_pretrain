@@ -22,9 +22,10 @@ from rslearn.utils.vector_format import GeojsonCoordinateMode, GeojsonVectorForm
 from upath import UPath
 
 from helios.data.constants import Modality, TimeSpan
+from helios.dataset.util import get_modality_fname
 
 from ..constants import METADATA_COLUMNS
-from ..util import get_modality_fname, get_modality_temp_meta_fname, get_window_metadata
+from ..util import get_modality_temp_meta_fname, get_window_metadata
 
 # Placeholder time range for OpenStreetMap.
 START_TIME = datetime(2020, 1, 1, tzinfo=timezone.utc)

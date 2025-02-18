@@ -1,7 +1,6 @@
 """Test the HeliosDataset class."""
 
 import logging
-from collections.abc import Callable
 from pathlib import Path
 
 from helios.data.constants import Modality
@@ -13,11 +12,16 @@ logger = logging.getLogger(__name__)
 
 
 def test_helios_dataset(
-    tmp_path: Path, prepare_samples: Callable[[Path], list[SampleInformation]]
+    tmp_path: Path, prepare_samples_and_supported_modalities: tuple
 ) -> None:
     """Test the HeliosDataset class."""
+    prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
     samples = prepare_samples(tmp_path)
-    dataset = HeliosDataset(*samples, path=tmp_path)
+    dataset = HeliosDataset(
+        *samples,
+        path=tmp_path,
+        supported_modalities=supported_modalities,
+    )
     dataset.prepare()
 
     assert len(dataset) == 1
@@ -33,10 +37,15 @@ class TestHeliosDataset:
     """Test the HeliosDataset class."""
 
     def test_load_sample_correct_band_order(
-        self, tmp_path: Path, prepare_samples: Callable[[Path], list[SampleInformation]]
+        self,
+        tmp_path: Path,
+        prepare_samples_and_supported_modalities: tuple,
+        set_random_seeds: None,  # calls the fixture
     ) -> None:
         """Test the load_sample method."""
+        prepare_samples, _ = prepare_samples_and_supported_modalities
         samples = prepare_samples(tmp_path)
+        logger.info(f"samples: {len(samples)}")
         sample: SampleInformation = samples[0]
         sample_modality: ModalityTile = sample.modalities[Modality.SENTINEL2]
         image = HeliosDataset.load_sample(sample_modality, sample)

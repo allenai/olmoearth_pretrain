@@ -21,11 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 class MaskValue(Enum):
-    """Masks can take 3 possible values.
+    """Masks can take 4 possible values.
 
     ONLINE_ENCODER: The token is seen by the online encoder
     TARGET_ENCODER_ONLY: The token is seen by the target encoder only
     DECODER_ONLY: The token is seen by the decoder only
+    MISSING: The token is missing
     """
 
     ONLINE_ENCODER = 0
@@ -38,28 +39,26 @@ class MaskValue(Enum):
 class MaskedHeliosSample(NamedTuple):
     """A masked sample of the data from the Helios dataset.
 
+    We always require sentinel2 data.
     This is a namedtuple that contains the data for a single sample from the Helios dataset.
     latlon and timestamps are the same for all modalities.
     For each modality. we have an ArrayTensor named by modality, and a mask for each modality named by modality_mask.
     we also have a mask for the latlon called latlon_mask
-
-    Args:
-        s2: ArrayTensor  # [B, H, W, T, len(S2_bands)]
-        s2_mask: ArrayTensor  # [B, H, W, T, len(S2_band_groups)]
-        latlon: ArrayTensor  # [B, 2]
-        latlon_mask: ArrayTensor  # [B, len(latlon_band_groups)]
-        timestamps: ArrayTensor  # [B, T, D=3], where D=[day, month, year]
     """
 
-    sentinel2: ArrayTensor
-    sentinel2_mask: ArrayTensor
-    latlon: ArrayTensor  # [B, 2]
-    latlon_mask: ArrayTensor
     timestamps: (
         ArrayTensor  # [B, T, D=3], where D=[day, month, year] (months are zero indexed)
     )
+    sentinel2: ArrayTensor
+    sentinel2_mask: ArrayTensor
+    sentinel1: ArrayTensor | None = None
+    sentinel1_mask: ArrayTensor | None = None
+    worldcover: ArrayTensor | None = None
+    worldcover_mask: ArrayTensor | None = None
+    latlon: ArrayTensor | None = None  # [B, 2]
+    latlon_mask: ArrayTensor | None = None
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self, return_none: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
 
         Returns:
@@ -68,17 +67,36 @@ class MaskedHeliosSample(NamedTuple):
         return_dict = {}
         for field in self._fields:
             val = getattr(self, field)
-            return_dict[field] = val
+            if return_none:
+                return_dict[field] = val
+            else:
+                if val is not None:
+                    return_dict[field] = val
         return return_dict
+
+    @property
+    def modalities(self) -> list[str]:
+        """Get the present modalities in this instance of MaskedHeliosSample."""
+        return [
+            field
+            for field in self._fields
+            if not field.endswith("_mask")
+            and field != "timestamps"
+            and getattr(self, field) is not None
+        ]
 
     @property
     def height(self) -> int:
         """Get the height of the data."""
+        if self.sentinel2 is None:
+            raise ValueError("Sentinel2 is not present in this sample")
         return self.sentinel2.shape[1]
 
     @property
     def width(self) -> int:
         """Get the width of the data."""
+        if self.sentinel2 is None:
+            raise ValueError("Sentinel2 is not present in this sample")
         return self.sentinel2.shape[2]
 
     @property
@@ -96,6 +114,7 @@ class MaskedHeliosSample(NamedTuple):
         """Get the unmasked modality name."""
         return modality_mask_name.replace("_mask", "")
 
+    # TODO: add unit test because this does modlaity based checking
     @classmethod
     def from_heliossample(
         cls,
@@ -110,20 +129,31 @@ class MaskedHeliosSample(NamedTuple):
             if key == "timestamps":
                 # lets assume timestamps is not None
                 masked_sample_dict[key] = t
-            elif key == "latlon" or key == "sentinel2":
+            else:
                 if t is None:
-                    masked_sample_dict[key] = torch.empty(sample.shape(key))
-                    masked_sample_dict[f"{key}_mask"] = (
-                        torch.ones(sample.shape(key, mask=True))
-                        * MaskValue.MISSING.value
-                    )
+                    masked_sample_dict[key] = None
+                    masked_sample_dict[
+                        MaskedHeliosSample.get_masked_modality_name(key)
+                    ] = None
                 else:
                     masked_sample_dict[key] = t
-                    masked_sample_dict[f"{key}_mask"] = (
+                    masked_sample_dict[
+                        MaskedHeliosSample.get_masked_modality_name(key)
+                    ] = (
                         torch.ones(sample.shape(key, mask=False))
-                    ) * MaskValue.ONLINE_ENCODER.value
+                        * MaskValue.ONLINE_ENCODER.value
+                    )
 
         return MaskedHeliosSample(**masked_sample_dict)
+
+    @classmethod
+    def from_dict(cls, dict: dict[str, Any]) -> "MaskedHeliosSample":
+        """Create a MaskedHeliosSample from a dictionary, creating empty tensors for missing modalities.
+
+        Args:
+            dict: Dictionary representation of the MaskedHeliosSample.
+        """
+        return cls(**dict)
 
 
 class MaskingStrategy(ABC):
@@ -229,6 +259,51 @@ class RandomMaskingStrategy(MaskingStrategy):
         else:
             return space_time_mask
 
+    # TODO: We should be able to do this agnostic of dimensionality
+    @staticmethod
+    def _create_mask_per_space_modality(
+        b: int,
+        h: int,
+        w: int,
+        encode_ratio: float,
+        decode_ratio: float,
+        num_bands: int,
+        return_tensor_device: torch.device | None = None,
+    ) -> ArrayTensor:
+        """Create a mask for a space modality."""
+        num_tokens_per_instance = int(h * w * num_bands)
+        num_encode_tokens = int(num_tokens_per_instance * encode_ratio)
+        num_decode_tokens = int(num_tokens_per_instance * decode_ratio)
+        num_target_encode_tokens = int(
+            num_tokens_per_instance - (num_encode_tokens + num_decode_tokens)
+        )
+
+        # we do this as a numpy array to take advantage of
+        # numpy's permuted function
+        flat_mask_tokens = np.concatenate(
+            (
+                np.ones(num_target_encode_tokens, dtype=np.int_),
+                np.ones(num_decode_tokens, dtype=np.int_) * 2,
+                np.zeros(num_encode_tokens, dtype=np.int_),
+            )
+        )
+        b_flat_tokens = repeat(flat_mask_tokens, "t -> b t", b=b)
+        # hopefully this will allow for reproducibility, since random is seeded
+        rng = np.random.default_rng(random.randint(0, 100))
+        b_flat_tokens = rng.permuted(b_flat_tokens, axis=1)
+        space_time_mask = rearrange(
+            b_flat_tokens,
+            "b (h w c) -> b h w c",
+            h=h,
+            w=w,
+            c=num_bands,
+        )
+
+        if return_tensor_device:
+            return torch.as_tensor(space_time_mask, device=return_tensor_device)
+        else:
+            return space_time_mask
+
     def apply_mask(self, batch: HeliosSample, **kwargs: Any) -> MaskedHeliosSample:
         """Apply random masking to the input data.
 
@@ -254,54 +329,64 @@ class RandomMaskingStrategy(MaskingStrategy):
         encode_ratio: float = kwargs["encode_ratio"]
         decode_ratio: float = kwargs["decode_ratio"]
 
-        output_dict = {}
+        output_dict: dict[str, ArrayTensor | None] = {}
         for modality_name in batch._fields:
-            # TODO: remove this later after integrating S1 and WorldCover into MaskedHelios
-            if modality_name == "sentinel1" or modality_name == "worldcover":
-                continue
             modality = getattr(batch, modality_name)
-            if modality_name == "timestamps":
+            if modality is None:
+                # set modality and mask to None
+                output_dict[modality_name] = None
+                output_dict[
+                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                ] = None
+            else:
+                if modality_name == "timestamps":
+                    output_dict[modality_name] = modality
+                    continue
+
+                if isinstance(modality, torch.Tensor):
+                    return_device: torch.device | None = modality.device
+                else:
+                    return_device = None
+                # TODO: Make this decions based on modlaity spec and all the varying dimesnions agnostic
+                num_bands = Modality.get(modality_name).num_bands
+                if modality.ndim == 4:
+                    b, h, w, _ = modality.shape
+                    mask = self._create_mask_per_space_modality(
+                        b,
+                        h,
+                        w,
+                        encode_ratio,
+                        decode_ratio,
+                        num_bands,
+                        return_device,
+                    )
+                elif modality.ndim == 5:
+                    b, h, w, t, _ = modality.shape
+                    mask = self._create_mask_per_space_time_modality(
+                        b,
+                        h,
+                        w,
+                        t,
+                        encode_ratio,
+                        decode_ratio,
+                        num_bands,
+                        return_device,
+                    )
+                elif modality.ndim == 2:
+                    b = modality.shape[0]
+                    mask = self._create_mask_per_static_modality(
+                        b,
+                        encode_ratio,
+                        decode_ratio,
+                        num_bands,
+                        return_device,
+                    )
+                else:
+                    raise ValueError(f"Unsupported modality shape {modality.shape}")
                 output_dict[modality_name] = modality
-                continue
-
-            if isinstance(modality, torch.Tensor):
-                return_device: torch.device | None = modality.device
-            else:
-                return_device = None
-            logger.info(f"Modality name: {modality_name} shape: {modality.shape}")
-            # TODO: Make this decions based on modlaity spec
-            num_bands = Modality.get(modality_name).num_bands
-            if len(modality.shape) == 5:
-                b, h, w, t, c = modality.shape
-
-                mask = self._create_mask_per_space_time_modality(
-                    b,
-                    h,
-                    w,
-                    t,
-                    encode_ratio,
-                    decode_ratio,
-                    num_bands,
-                    return_device,
-                )
-            elif len(modality.shape) == 2:
-                b = modality.shape[0]
-                mask = self._create_mask_per_static_modality(
-                    b,
-                    encode_ratio,
-                    decode_ratio,
-                    num_bands,
-                    return_device,
-                )
-            else:
-                raise ValueError(f"Unsupported modality shape {modality.shape}")
-            output_dict[modality_name] = modality
-            output_dict[MaskedHeliosSample.get_masked_modality_name(modality_name)] = (
-                mask
-            )
-            logger.info(
-                f" After maskingModality: {modality_name} shape: {modality.shape} mask shape: {mask.shape}"
-            )
+                output_dict[
+                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                ] = mask
         return MaskedHeliosSample(**output_dict)
 
 

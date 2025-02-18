@@ -11,9 +11,10 @@ from rslearn.utils.mp import star_imap_unordered
 from upath import UPath
 
 from helios.data.constants import Modality, TimeSpan
+from helios.dataset.util import get_modality_fname
 
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
-from ..util import get_modality_fname, get_modality_temp_meta_fname, get_window_metadata
+from ..util import get_modality_temp_meta_fname, get_window_metadata
 
 START_TIME = datetime(2021, 1, 1, tzinfo=timezone.utc)
 END_TIME = datetime(2022, 1, 1, tzinfo=timezone.utc)

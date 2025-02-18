@@ -8,13 +8,18 @@ from olmo_core.distributed.parallel import DataParallelConfig, DataParallelType
 from olmo_core.distributed.utils import get_fs_local_rank, get_rank, get_world_size
 from olmo_core.optim import AdamWConfig
 from olmo_core.train import prepare_training_environment, teardown_training_environment
-from olmo_core.train.callbacks.wandb import WandBCallback
+from olmo_core.train.callbacks import (
+    GPUMemoryMonitorCallback,
+    ProfilerCallback,
+    WandBCallback,
+)
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 from olmo_core.utils import get_default_device
 from upath import UPath
 
+from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoader
 from helios.data.dataset import HeliosDataset, collate_helios
 from helios.dataset.parse import parse_helios_dataset
@@ -64,7 +69,12 @@ if __name__ == "__main__":
     logger.setLevel(logging.DEBUG)
     logger.info("Starting Helios training")
 
-    supported_modalities = ["sentinel2", "latlon"]
+    supported_modalities = [
+        Modality.SENTINEL2,
+        Modality.LATLON,
+        Modality.SENTINEL1,
+        # Modality.WORLDCOVER,
+    ]
     encoder = Encoder(
         embedding_size=16,
         max_patch_size=8,
@@ -95,8 +105,16 @@ if __name__ == "__main__":
     model = model.to(device)
     checkpointer_config = CheckpointerConfig(work_dir=workdir)
     optim_config = AdamWConfig()
-    masking_config = MaskingConfig(strategy_config={"type": "random"})
-    loss_config = LossConfig(loss_config={"type": "patch_discrimination"})
+    masking_config = MaskingConfig(
+        strategy_config={
+            "type": "random",
+        }
+    )
+    loss_config = LossConfig(
+        loss_config={
+            "type": "patch_discrimination",
+        }
+    )
     train_module_config = HeliosTrainModuleConfig(
         optim=optim_config,
         masking_config=masking_config,
@@ -108,15 +126,18 @@ if __name__ == "__main__":
 
     # Prepare samples from Helios dataset
     tile_path = UPath("/weka/dfive-default/helios/dataset/20250212/")
-    tiles = parse_helios_dataset(tile_path)
+
+    tiles = parse_helios_dataset(tile_path, supported_modalities=supported_modalities)
+
     logger.info(f"Tiles: {len(tiles)}")
-    samples = image_tiles_to_samples(tiles)
+    samples = image_tiles_to_samples(tiles, supported_modalities=supported_modalities)
     logger.info(f"Samples: {len(samples)}")
     # Create HeliosDataLoader
     dataloader = HeliosDataLoader(
         dataset=HeliosDataset(
             *samples,
             path=tile_path,
+            supported_modalities=supported_modalities,
             dtype=np.dtype("float32"),
         ),
         collator=collate_helios,
@@ -136,20 +157,22 @@ if __name__ == "__main__":
         entity=WANDB_USERNAME,
         enabled=False,  # set to False to avoid wandb errors
     )
-    callbacks = {
-        "speed_monitor": HeliosSpeedMonitorCallback(),
-        "wandb": wandb_callback,
-    }
-    trainer_config = TrainerConfig(
-        work_dir=workdir,
-        load_strategy=LOAD_STRATEGY,
-        device=device,
-        save_folder=SAVE_FOLDER,
-        callbacks=callbacks,
-        cancel_check_interval=CANCEL_CHECK_INTERVAL,
-        metrics_collect_interval=METRICS_COLLECT_INTERVAL,
-        max_duration=MAX_DURATION,
-        checkpointer=checkpointer_config,
+    # Let us not use garbage collector fallback
+    trainer_config = (
+        TrainerConfig(
+            work_dir=workdir,
+            load_strategy=LOAD_STRATEGY,
+            device=device,
+            save_folder=SAVE_FOLDER,
+            cancel_check_interval=CANCEL_CHECK_INTERVAL,
+            metrics_collect_interval=METRICS_COLLECT_INTERVAL,
+            max_duration=MAX_DURATION,
+            checkpointer=checkpointer_config,
+        )
+        .with_callback("wandb", wandb_callback)
+        .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
+        .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
+        .with_callback("profiler", ProfilerCallback())
     )
     trainer = trainer_config.build(
         train_module=train_module,
