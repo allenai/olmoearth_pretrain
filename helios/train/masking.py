@@ -24,13 +24,13 @@ class MaskValue(Enum):
 
     ONLINE_ENCODER: The token is seen by the online encoder
     TARGET_ENCODER_ONLY: The token is seen by the target encoder only
-    DECODER_ONLY: The token is seen by the decoder only
+    DECODER: The token is seen by the decoder only
     MISSING: The token is missing
     """
 
     ONLINE_ENCODER = 0
     TARGET_ENCODER_ONLY = 1
-    DECODER_ONLY = 2
+    DECODER = 2
     MISSING = 3
 
 
@@ -72,6 +72,24 @@ class MaskedHeliosSample(NamedTuple):
                 if val is not None:
                     return_dict[field] = val
         return return_dict
+
+    def unmask(self) -> "MaskedHeliosSample":
+        """Return an unmasked MaskedHelioSample.
+
+        All mask values are MaskValue.ONLINE_ENCODER except for MaskValue.MISSING,
+        which remain MISSING.
+        """
+        return_dict: dict[str, ArrayTensor] = {}
+        for key, val in self.as_dict().items():
+            if val is None:
+                continue
+            if key.endswith("mask"):
+                # 1s where it is missing, 0 elsewhere
+                all_but_missing = val == MaskValue.MISSING
+                return_dict[key] = val * all_but_missing
+            else:
+                return_dict[key] = val
+        return MaskedHeliosSample(**return_dict)
 
     @property
     def modalities(self) -> list[str]:

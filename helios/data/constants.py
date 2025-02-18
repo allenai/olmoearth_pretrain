@@ -135,6 +135,26 @@ class ModalitySpec:
         """
         return sum(len(band_set.bands) for band_set in self.band_sets)
 
+    @property
+    def is_spacetime_varying(self) -> bool:
+        """Does the modality vary in space and time."""
+        return self.get_tile_resolution() > 0 and self.is_multitemporal
+
+    @property
+    def is_space_only_varying(self) -> bool:
+        """Does the modality vary in space and not time."""
+        return self.get_tile_resolution() > 0 and not self.is_multitemporal
+
+    @property
+    def is_time_only_varying(self) -> bool:
+        """Does the modality vary in time and not space."""
+        return self.get_tile_resolution() == 0 and self.is_multitemporal
+
+    @property
+    def is_static_in_space_and_time(self) -> bool:
+        """Does the modality vary in neither space or space."""
+        return self.get_tile_resolution() == 0 and not self.is_multitemporal
+
 
 class Modality:
     """Enum-like access to ModalitySpecs."""

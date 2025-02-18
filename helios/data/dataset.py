@@ -4,7 +4,9 @@ import hashlib
 import logging
 import tempfile
 from collections.abc import Sequence
+from math import floor
 from pathlib import Path
+from random import choice
 from typing import NamedTuple
 
 import numpy as np
@@ -43,10 +45,10 @@ class HeliosSample(NamedTuple):
     """
 
     sentinel2: ArrayTensor  # [B, H, W, T, len(S2_bands)]
-    sentinel1: ArrayTensor | None = None  # [B, H, W, T, len(S1_bands)]
-    worldcover: ArrayTensor | None = None  # [B, H, W, len(WC_bands)]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
+    sentinel1: ArrayTensor | None = None  # [B, H, W, T, len(S1_bands)]
+    worldcover: ArrayTensor | None = None  # [B, H, W, len(WC_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
@@ -136,6 +138,126 @@ class HeliosSample(NamedTuple):
         return HeliosSample(
             **{key: maybe_move_to_device(val) for key, val in self.as_dict().items()}
         )
+
+    @property
+    def height(self) -> int:
+        """Get the height of the data."""
+        return self.sentinel2.shape[1]
+
+    @property
+    def width(self) -> int:
+        """Get the width of the data."""
+        return self.sentinel2.shape[2]
+
+    @property
+    def time(self) -> int:
+        """Get the number of time steps in the data."""
+        if self.timestamps is None:
+            raise ValueError("Timestamps are not present in the sample")
+        return self.timestamps.shape[1]
+
+    def _get_max_t_within_token_budget(
+        self, h_w_p: int, max_tokens_per_instance: int
+    ) -> int:
+        """Find max t possible when subsetting.
+
+        Given a sampled h_w_p (the number of tokens along the h and w dimensions)
+        return the maximum t allowed within the
+        max_tokens budget so that the patchified
+        HeliosSample will have fewer than max_tokens tokens.
+
+        This function assumes we apply (H, W, T=1 patchifying)
+        """
+        used_tokens = 0
+        time_multiply_tokens = 0
+        for attribute in self.as_dict(ignore_nones=True).keys():
+            if attribute == "timestamps":
+                continue
+            modality_spec = Modality.get(attribute)
+            if modality_spec.is_spacetime_varying:
+                # for now, lets assume fixed resolution
+                time_multiply_tokens += (h_w_p**2) * modality_spec.num_band_sets
+            elif modality_spec.is_space_only_varying:
+                # for now, lets assume fixed resolution
+                used_tokens += (h_w_p**2) * modality_spec.num_band_sets
+            elif modality_spec.is_time_only_varying:
+                time_multiply_tokens += modality_spec.num_band_sets
+            elif modality_spec.is_static_in_space_and_time:
+                used_tokens += modality_spec.num_band_sets
+        if time_multiply_tokens == 0:
+            # no time-varying inputs, so our return value of t
+            # doesn't matter
+            return 1
+        remaining_tokens = max_tokens_per_instance - used_tokens
+        max_t_within_budget = remaining_tokens / time_multiply_tokens
+        if max_t_within_budget < 1:
+            raise ValueError("patch_size too small for this sample and budget")
+        return min(floor(max_t_within_budget), self.time)
+
+    def subset(
+        self, patch_size: int, max_tokens_per_instance: int, hw_to_sample: list[int]
+    ) -> "HeliosSample":
+        """Subset a HelioSample.
+
+        patch_size: the patch size being applied to this sample
+        max_tokens_per_instance: the token budget when subsetting. This is used
+            to determine the maximum number of timesteps possible for a given
+            height and width
+        hw_to_sample: possible values for the number of tokens in the height and width
+            dimensions.
+
+        The returned sample will have shape:
+            height = hw_t * patch_size
+            width = hw_t * patch_size
+            time = max_t
+        where hw_t is sampled from hw_to_sample and max_t is the maximum number
+        of timesteps allowable so that the total tokens (per instance) is >=
+        max_tokens_per_instance
+        """
+        max_height_width = max(self.height, self.width)
+        max_height_width_tokens = int(max_height_width / patch_size)
+        hw_to_sample = [x for x in hw_to_sample if x <= max_height_width_tokens]
+        if len(hw_to_sample) == 0:
+            raise ValueError(
+                "max height/width allowed by sample smaller than values in hw_to_sample"
+            )
+
+        sampled_hw_p = choice(hw_to_sample)
+        max_t = self._get_max_t_within_token_budget(
+            sampled_hw_p, max_tokens_per_instance
+        )
+        sampled_hw = sampled_hw_p * patch_size
+
+        start_h = np.random.choice(self.height - sampled_hw_p + 1)
+        start_w = np.random.choice(self.width - sampled_hw_p + 1)
+        start_t = np.random.choice(self.time - max_t + 1)
+
+        new_data_dict: dict[str, ArrayTensor] = {}
+        for attribute, modality in self.as_dict(ignore_nones=True).items():
+            assert modality is not None
+            if attribute == "timestamps":
+                new_data_dict[attribute] = modality[:, start_t : start_t + max_t]
+                continue
+
+            modality_spec = Modality.get(attribute)
+            if modality_spec.is_spacetime_varying:
+                # for now, lets assume fixed resolution
+                new_data_dict[attribute] = modality[
+                    :,
+                    start_h : start_h + sampled_hw,
+                    start_w : start_w + sampled_hw,
+                    start_t : start_t + max_t,
+                ]
+            elif modality_spec.is_space_only_varying:
+                # for now, lets assume fixed resolution
+                new_data_dict[attribute] = modality[
+                    :, start_h : start_h + sampled_hw, start_w : start_w + sampled_hw
+                ]
+            elif modality_spec.is_time_only_varying:
+                new_data_dict[attribute] = modality[:, start_t : start_t + max_t]
+            elif modality_spec.is_static_in_space_and_time:
+                new_data_dict[attribute] = modality
+        return HeliosSample(**new_data_dict)
 
 
 def collate_helios(batch: list[HeliosSample]) -> HeliosSample:

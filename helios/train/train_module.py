@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from logging import getLogger
 from typing import Any, cast
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
@@ -370,14 +371,18 @@ class HeliosTrainModule(TrainModule):
 
         # Move tensors to the right device.
         # we may want to modify this
-        batch = batch.to_device(self.device)
-        # TODO: ENsure patch size stuff is the same between encoder and target encoder
-        # TODO: Need to make this dynamic and configurable
-        kwargs = {"patch_size": 16, "encode_ratio": 0.5, "decode_ratio": 0.5}
-        masked_batch = self.masking_strategy.apply_mask(batch, **kwargs)
+        token_budget = 1500
+        h_w_to_sample = list(range(1, 13))
+
+        patch_size = np.random.choice(self.model.encoder.max_patch_size)
+        subsampled_batch = batch.subset(patch_size, token_budget, h_w_to_sample)
+
+        subsampled_batch = subsampled_batch.to_device(self.device)
+        kwargs = {"patch_size": patch_size, "encode_ratio": 0.5, "decode_ratio": 0.5}
+        masked_batch = self.masking_strategy.apply_mask(subsampled_batch, **kwargs)
 
         # Run Encoder and decoder on the augmented input
-        decoded, loss = self.model_forward(masked_batch)
+        decoded, loss = self.model_forward(masked_batch, patch_size)
 
         self.trainer.record_metric(
             TRAIN_PATCH_DISC_LOSS_METRIC,
@@ -481,20 +486,17 @@ class HeliosTrainModule(TrainModule):
             self.float8_handler.precompute_float8_dynamic_scale_for_fsdp(self.model)
 
     def model_forward(
-        self,
-        batch: MaskedHeliosSample,
+        self, batch: MaskedHeliosSample, patch_size: int
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         """Run a forward pass."""
-        patch_size = 8
         with self._model_forward_context():
+            decoded = self.model.forward(batch, patch_size=patch_size)
+
             with torch.no_grad():
                 target_output = self.model.target_encoder.forward(
-                    batch, patch_size=patch_size
+                    batch.unmask(), patch_size=patch_size
                 )
 
-            # Run Encoder and decoder on the augmented input
-            # TODO: Needs to be cleaned up so patch size is gen randomly different datasets should be able to have different patch sizes
-            decoded = self.model.forward(batch, patch_size=patch_size)
             loss = self.loss_fn(decoded, target_output)
             return decoded, loss
 
@@ -570,11 +572,6 @@ class HeliosTrainModule(TrainModule):
                     total_norm, op=dist.ReduceOp.SUM, group=pp_mesh.get_group()
                 )
                 total_norm **= 1.0 / norm_type
-
-        torch.nn.utils.clip_grads_with_norm_(
-            parameters, max_grad_norm, total_norm, foreach=foreach
-        )
-        return total_norm
 
         torch.nn.utils.clip_grads_with_norm_(
             parameters, max_grad_norm, total_norm, foreach=foreach

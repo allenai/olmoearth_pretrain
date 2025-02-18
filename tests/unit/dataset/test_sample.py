@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+import torch
 
 from helios.data.constants import BandSet, Modality, ModalitySpec
 from helios.data.dataset import HeliosSample
@@ -130,3 +131,50 @@ def test_supporting_latlon(tmp_path: Path, create_image_tiles: Callable) -> None
     samples = image_tiles_to_samples(image_tiles, supported_modalities)
     assert len(samples) == 1
     assert samples[0].modalities.keys() == {Modality.SENTINEL2}
+
+
+def test_subsetting() -> None:
+    """Test subsetting works."""
+    (
+        b,
+        h,
+        w,
+        t,
+    ) = 1, 16, 16, 100
+    sample = HeliosSample(
+        sentinel2=torch.ones((b, h, w, t, HeliosSample.num_bands("sentinel2"))),
+        timestamps=torch.ones((b, t, HeliosSample.num_bands("timestamps"))),
+    )
+    subsetted_sample = sample.subset(
+        patch_size=4, max_tokens_per_instance=100, hw_to_sample=[4]
+    )
+
+    # 16 / 4 = 4 tokens along the height and width dimension
+    # total s2 tokens = t * 4 * 4 * 3 (band sets) = 48
+    # so a token budget of floor(100 / 48) = 2
+    assert subsetted_sample.time == 2
+
+
+def test_subsetting_worldcover_too() -> None:
+    """Test subsetting works."""
+    (
+        b,
+        h,
+        w,
+        t,
+    ) = 1, 16, 16, 100
+    sample = HeliosSample(
+        sentinel2=torch.ones((b, h, w, t, HeliosSample.num_bands("sentinel2"))),
+        worldcover=torch.ones((b, h, w, HeliosSample.num_bands("worldcover"))),
+        timestamps=torch.ones((b, t, HeliosSample.num_bands("timestamps"))),
+    )
+    subsetted_sample = sample.subset(
+        patch_size=4, max_tokens_per_instance=100, hw_to_sample=[4]
+    )
+
+    # 16 / 4 = 4 tokens along the height and width dimension
+    # total s2 tokens = t * 4 * 4 * 3 (band sets) = 48
+    # total worldcover tokens = 4 * 4 * 1 (band set) = 16
+    # so a token budget of floor((100 - 16) / 48 = 1)
+
+    assert subsetted_sample.time == 1

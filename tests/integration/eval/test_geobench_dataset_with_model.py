@@ -38,7 +38,6 @@ def test_geobench_dataset(geobench_dir: Path) -> None:
         mlp_ratio=1.0,
         drop_path=0.1,
         max_sequence_length=12,
-        base_patch_size=8,
         use_channel_embs=True,
         supported_modalities=supported_modalities,
     )
