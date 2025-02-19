@@ -1199,7 +1199,6 @@ class Predictor(FlexiHeliosBase):
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
-        logger.info(f"Modalities to process: {modalities_to_process}")
         for modality in modalities_to_process:
             x_modality = getattr(x, modality)
             x_modality = self.input_norm(x_modality)
