@@ -14,22 +14,14 @@ import numpy as np
 import pandas as pd
 import torch
 from einops import rearrange
-from helios.data.constants import (
-    BASE_RESOLUTION,
-    IMAGE_TILE_SIZE,
-    TIMESTAMPS,
-    Modality,
-    ModalitySpec,
-    TimeSpan,
-)
+from helios.data.constants import (BASE_RESOLUTION, IMAGE_TILE_SIZE,
+                                   TIMESTAMPS, Modality, ModalitySpec,
+                                   TimeSpan)
 from helios.data.normalize import NORMALIZE_STRATEGY, Normalizer, Strategy
 from helios.data.utils import convert_to_db
 from helios.dataset.parse import ModalityTile, parse_helios_dataset
-from helios.dataset.sample import (
-    SampleInformation,
-    image_tiles_to_samples,
-    load_image_for_sample,
-)
+from helios.dataset.sample import (SampleInformation, image_tiles_to_samples,
+                                   load_image_for_sample)
 from helios.types import ArrayTensor
 from olmo_core.aliases import PathOrStr
 from olmo_core.config import Config
@@ -237,10 +229,8 @@ class HeliosSample(NamedTuple):
             sampled_hw_p, max_tokens_per_instance
         )
         sampled_hw = sampled_hw_p * patch_size
-        max_start_h = self.height - sampled_hw + 1
-        start_h = np.random.choice(max_start_h)
-        # TODO: FORCE h == w for now other option is to update 2d pos encoding
-        start_w = start_h  # np.random.choice(self.width - sampled_hw_p + 1)
+        start_h = np.random.choice(self.height - sampled_hw + 1)
+        start_w = np.random.choice(self.width - sampled_hw + 1)
         start_t = np.random.choice(self.time - max_t + 1)
         new_data_dict: dict[str, ArrayTensor] = {}
         for attribute, modality in self.as_dict(ignore_nones=True).items():
@@ -468,6 +458,7 @@ class HeliosDataset(Dataset):
             filtered_samples.append(sample)
         logger.info(f"Number of samples after filtering: {len(filtered_samples)}")
         logger.info(f"Distribution of samples after filtering:")
+        filtered_samples = filtered_samples[:2]
         self._log_modality_distribution(filtered_samples)
         return filtered_samples
 

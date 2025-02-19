@@ -38,6 +38,7 @@ if __name__ == "__main__":
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "helios-debug"
     # PER EXPERIMENT Variables
+    LR = 1e-4
     GLOBAL_BATCH_SIZE = 32
     RANK_BATCH_SIZE = 32
     MAX_DURATION = Duration.epochs(10)
@@ -114,7 +115,7 @@ if __name__ == "__main__":
 
     #################### Configs for train module ####################
     checkpointer_config = CheckpointerConfig(work_dir=workdir)
-    optim_config = AdamWConfig()
+    optim_config = AdamWConfig(lr=LR)
     masking_config = MaskingConfig(
         strategy_config={
             "type": "random",
@@ -163,7 +164,7 @@ if __name__ == "__main__":
         name=run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
-        enabled=False,  # set to False to avoid wandb errors
+        enabled=True,  # set to False to avoid wandb errors
     )
     # Let us not use garbage collector fallback
     trainer_config = (
