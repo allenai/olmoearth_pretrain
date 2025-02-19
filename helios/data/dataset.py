@@ -4,6 +4,7 @@ import hashlib
 import logging
 import tempfile
 from collections.abc import Sequence
+from dataclasses import dataclass
 from math import floor
 from pathlib import Path
 from random import choice
@@ -14,6 +15,7 @@ import pandas as pd
 import torch
 from einops import rearrange
 from olmo_core.aliases import PathOrStr
+from olmo_core.config import Config
 from olmo_core.distributed.utils import get_fs_local_rank
 from pyproj import Transformer
 from torch.utils.data import Dataset
@@ -29,8 +31,12 @@ from helios.data.constants import (
 )
 from helios.data.normalize import NORMALIZE_STRATEGY, Normalizer, Strategy
 from helios.data.utils import convert_to_db
-from helios.dataset.parse import ModalityTile
-from helios.dataset.sample import SampleInformation, load_image_for_sample
+from helios.dataset.parse import ModalityTile, parse_helios_dataset
+from helios.dataset.sample import (
+    SampleInformation,
+    image_tiles_to_samples,
+    load_image_for_sample,
+)
 from helios.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
@@ -202,7 +208,7 @@ class HeliosSample(NamedTuple):
         patch_size: the patch size being applied to this sample
         max_tokens_per_instance: the token budget when subsetting. This is used
             to determine the maximum number of timesteps possible for a given
-            height and width
+            height and width.
         hw_to_sample: possible values for the number of tokens in the height and width
             dimensions.
 
@@ -276,7 +282,7 @@ def collate_helios(batch: list[HeliosSample]) -> HeliosSample:
     return HeliosSample(
         sentinel2=stack_or_none("sentinel2"),
         sentinel1=stack_or_none("sentinel1"),
-        worldcover=stack_or_none("worldcover"),
+        # worldcover=stack_or_none("worldcover"),
         latlon=stack_or_none("latlon"),
         timestamps=stack_or_none("timestamps"),
     )
@@ -287,10 +293,10 @@ class HeliosDataset(Dataset):
 
     def __init__(
         self,
-        *samples: SampleInformation,
-        path: UPath,
+        tile_path: UPath,
         supported_modalities: list[ModalitySpec],
         dtype: np.dtype = np.float32,
+        samples: list[SampleInformation] | None = None,
     ):
         """Initialize the dataset.
 
@@ -300,21 +306,84 @@ class HeliosDataset(Dataset):
             :meth:`prepare()` in the main process before doing anything else.
 
         Args:
-            samples: The samples to include in the dataset.
-            path: The path to the dataset root directory.
             supported_modalities: The modalities to include in the dataset.
+            tile_path: The path to the raw dataset (image tile directory).
+            samples: The samples to include in the dataset.
             dtype: The dtype of the data.
         """
+        self.tile_path = tile_path
         self.supported_modalities = supported_modalities
-        self.samples = self._filter_samples(list(samples))
-        self.path = path
+        # Note: if samples are provided, use them, if not, get them from the tile directory
+        if not samples:
+            samples = self._get_samples()  # type: ignore
+        if len(samples) == 0:
+            raise ValueError("No samples provided")
+        self.samples = self._filter_samples(samples)  # type: ignore
         self.dtype = dtype
+
         # Initialize both normalizers for different modalities
         self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
         self.normalizer_computed = Normalizer(Strategy.COMPUTED)
         self._fs_local_rank = get_fs_local_rank()
         self._work_dir: Path | None = None  # type: ignore
         self._work_dir_set = False
+
+    @property
+    def fingerprint_version(self) -> str:
+        """The version of the fingerprint."""
+        return "v0.1"
+
+    @property
+    def fingerprint(self) -> str:
+        """Can be used to identify/compare a dataset."""
+        sha256_hash = hashlib.sha256()
+        sha256_hash.update(
+            f"tile_path={self.tile_path},"
+            f"sample_size={len(self.samples)},"
+            f"dtype={self.dtype}".encode()
+        )
+        return sha256_hash.hexdigest()
+
+    @property
+    def fs_local_rank(self) -> int:
+        """Get the fs local rank."""
+        return self._fs_local_rank
+
+    @fs_local_rank.setter
+    def fs_local_rank(self, _fs_local_rank: int) -> None:
+        """Set the fs local rank."""
+        self._fs_local_rank = _fs_local_rank
+
+    @property
+    def work_dir(self) -> Path:
+        """Get the working directory."""
+        if self._work_dir is not None:
+            return self._work_dir
+        else:
+            return Path(tempfile.gettempdir())
+
+    @work_dir.setter
+    def work_dir(self, _work_dir: PathOrStr) -> None:
+        """Set the working directory."""
+        self._work_dir = Path(_work_dir)
+        self._work_dir_set = True
+
+    @property
+    def work_dir_set(self) -> bool:
+        """Check if the working directory was explicitly set."""
+        return self._work_dir_set
+
+    def prepare(self) -> None:
+        """Prepare the dataset."""
+        len(self)
+
+    def _get_samples(self) -> list[SampleInformation]:
+        """Get the samples from the raw dataset (image tile directory)."""
+        tiles = parse_helios_dataset(self.tile_path)
+        logger.info(f"Total tiles: {len(tiles)}")
+        samples = image_tiles_to_samples(tiles)
+        logger.info(f"Total samples: {len(samples)}")
+        return samples
 
     def _filter_samples(
         self, samples: list[SampleInformation]
@@ -359,55 +428,6 @@ class HeliosDataset(Dataset):
             filtered_samples.append(sample)
         logger.info(f"Number of samples after filtering: {len(filtered_samples)}")
         return filtered_samples
-
-    @property
-    def fingerprint_version(self) -> str:
-        """The version of the fingerprint."""
-        return "v0.1"
-
-    @property
-    def fingerprint(self) -> str:
-        """Can be used to identify/compare a dataset."""
-        sha256_hash = hashlib.sha256()
-        sha256_hash.update(
-            f"path={self.path},"
-            f"sample_size={len(self.samples)},"
-            f"dtype={self.dtype}".encode()
-        )
-        return sha256_hash.hexdigest()
-
-    @property
-    def fs_local_rank(self) -> int:
-        """Get the fs local rank."""
-        return self._fs_local_rank
-
-    @fs_local_rank.setter
-    def fs_local_rank(self, _fs_local_rank: int) -> None:
-        """Set the fs local rank."""
-        self._fs_local_rank = _fs_local_rank
-
-    @property
-    def work_dir(self) -> Path:
-        """Get the working directory."""
-        if self._work_dir is not None:
-            return self._work_dir
-        else:
-            return Path(tempfile.gettempdir())
-
-    @work_dir.setter
-    def work_dir(self, _work_dir: PathOrStr) -> None:
-        """Set the working directory."""
-        self._work_dir = Path(_work_dir)
-        self._work_dir_set = True
-
-    @property
-    def work_dir_set(self) -> bool:
-        """Check if the working directory was explicitly set."""
-        return self._work_dir_set
-
-    def prepare(self) -> None:
-        """Prepare the dataset."""
-        len(self)
 
     def _get_latlon(self, sample: SampleInformation) -> np.ndarray:
         """Get the latlon of the sample."""
@@ -477,3 +497,37 @@ class HeliosDataset(Dataset):
                 sample_dict["timestamps"] = self._get_timestamps(sample)
 
         return HeliosSample(**sample_dict)
+
+
+@dataclass
+class HeliosDatasetConfig(Config):
+    """Configuration for the HeliosDataset."""
+
+    tile_path: UPath
+    supported_modalities: list[ModalitySpec]
+    samples: list[SampleInformation] | None = None
+    dtype: np.dtype = np.float32
+
+    def validate(self) -> None:
+        """Validate the configuration.
+
+        Raises:
+            ValueError: If the configuration is invalid.
+        """
+        # Check if not or not exists
+        if self.tile_path is None:
+            raise ValueError("Tile directory is not set")
+        if not self.tile_path.exists():
+            raise ValueError("Tile directory does not exist")
+        if not self.supported_modalities:
+            raise ValueError("Supported modalities are not set")
+
+    def build(self) -> "HeliosDataset":
+        """Build the dataset."""
+        self.validate()
+        return HeliosDataset(
+            tile_path=self.tile_path,
+            supported_modalities=self.supported_modalities,
+            samples=self.samples,
+            dtype=self.dtype,
+        )

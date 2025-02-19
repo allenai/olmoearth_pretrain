@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from logging import getLogger
 from typing import Any, cast
 
-import numpy as np
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
@@ -25,7 +24,6 @@ from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.float8 import Float8Config, Float8Handler
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
-from olmo_core.train.common import ReduceType
 from olmo_core.train.train_module import EvalBatchSizeUnit, EvalBatchSpec, TrainModule
 from olmo_core.train.train_module.transformer import (
     TransformerActivationCheckpointingConfig,
@@ -35,10 +33,6 @@ from torch.distributed.checkpoint.metadata import Metadata
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.tensor import DTensor
 from torch.optim import Optimizer
-
-from helios.data.dataset import HeliosSample
-from helios.train.loss import LossConfig
-from helios.train.masking import MaskedHeliosSample, MaskingConfig
 
 logger = getLogger(__name__)
 
@@ -62,13 +56,10 @@ class HeliosTrainModuleConfig(Config):
         scheduler: Optional learning rate scheduler.
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
-        ema_decay: EMA decay rate for target encoder (default: 0.99).
     """
 
     rank_batch_size: int
     optim: OptimConfig
-    masking_config: MaskingConfig
-    loss_config: LossConfig
 
     # Model settings
     compile_model: bool = False
@@ -89,9 +80,6 @@ class HeliosTrainModuleConfig(Config):
     # Checkpoint settings
     state_dict_save_opts: dict[str, Any] | None = None
     state_dict_load_opts: dict[str, Any] | None = None
-
-    # Helios specific settings
-    ema_decay: float = 0.99
 
     def build(
         self,
@@ -153,8 +141,6 @@ class HeliosTrainModule(TrainModule):
         self,
         model: Any,
         optim: OptimConfig,
-        masking_config: MaskingConfig,
-        loss_config: LossConfig,
         rank_batch_size: int,
         compile_model: bool = False,
         float8_config: Float8Config | None = None,
@@ -167,21 +153,17 @@ class HeliosTrainModule(TrainModule):
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
-        ema_decay: float = 0.99,
     ):
         """Initialize the training module.
 
         Args:
             model: The transformer model to train.
             optim: The corresponding optimizer config.
-            masking_config: The masking configuration for the model.
-            loss_config: The loss configuration for the model.
             rank_batch_size: The rank batch size in instances.
             compile_model: Whether to compile to the model.
             float8_config: Float8 configuration for the model.
             dp_config: Data parallel configuration for the model.
             ac_config: Activation checkpointing configuration for the model.
-            loss_fn: Loss function to use.
             compile_loss: Whether to compile the loss function.
             autocast_precision: Enable AMP with this data type.
             max_grad_norm: Clip gradient norms to this value.
@@ -189,10 +171,8 @@ class HeliosTrainModule(TrainModule):
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
-            ema_decay: EMA decay rate for target encoder (default: 0.99).
         """
         super().__init__()
-        self.ema_decay = ema_decay
         self.model = model
         num_params = sum(p.numel() for p in self.model.parameters())
         logger.info(f"number of parameters: {num_params:,d}")
@@ -201,11 +181,6 @@ class HeliosTrainModule(TrainModule):
         logger.info(
             f"Data parallel world size = {get_world_size(self.dp_process_group):,d}"
         )
-        self.base_loss = loss_config.build()
-        self.masking_strategy = masking_config.build()
-
-        # if compile_loss:
-        #     self.base_loss_fn = torch.compile(self.base_loss_fn)
 
         self.float8_handler: Float8Handler | None = None
         # float8_enabled = False
@@ -311,15 +286,6 @@ class HeliosTrainModule(TrainModule):
                 return param.dtype
         raise RuntimeError("Should not get here")
 
-    # TODO: Do we always want tokens and masks?
-    def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
-        """Compute the loss between the predicted and target tensors."""
-        return self.base_loss.compute(pred, targets)
-
-    def eval_loss_fn(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        """Compute the loss between the predicted and target tensors."""
-        raise NotImplementedError("eval loss fn not implemented")
-
     def on_attach(self) -> None:
         """Called when the train module is attached to the trainer."""
         # Validate batch size.
@@ -362,66 +328,6 @@ class HeliosTrainModule(TrainModule):
     def zero_grads(self) -> None:
         """Zero the gradients."""
         self.optimizer.zero_grad(set_to_none=True)
-
-    def train_batch(self, batch: HeliosSample, dry_run: bool = False) -> None:
-        """Train a batch."""
-        # Record how many instances are going to be skipped (masked out).
-        # if (instance_mask := batch.get("instance_mask")) is not None and not dry_run:
-        #     self.record_metric("train/masked instances", (~instance_mask).sum(), ReduceType.sum)
-
-        # Move tensors to the right device.
-        # we may want to modify this
-        token_budget = 1500
-        # Smallest h /w must be bigger than the smallest patch size
-        h_w_to_sample = list(range(2, 13))
-
-        patch_size = np.random.choice(np.arange(1, self.model.encoder.max_patch_size))
-        logger.info(f"Patch size: {patch_size}")
-        subsampled_batch = batch.subset(patch_size, token_budget, h_w_to_sample)
-
-        subsampled_batch = subsampled_batch.to_device(self.device)
-        logger.info(f"subsampled batch: input {subsampled_batch.sentinel2.shape}")
-        kwargs = {"patch_size": patch_size, "encode_ratio": 0.5, "decode_ratio": 0.5}
-        masked_batch = self.masking_strategy.apply_mask(subsampled_batch, **kwargs)
-        logger.info(
-            f"masked batch: input {masked_batch.sentinel2.shape} and mask {masked_batch.sentinel2_mask.shape}"
-        )
-
-        # Run Encoder and decoder on the augmented input
-        decoded, loss = self.model_forward(masked_batch, patch_size)
-
-        self.trainer.record_metric(
-            TRAIN_PATCH_DISC_LOSS_METRIC,
-            loss / get_world_size(self.dp_process_group),
-            ReduceType.sum,
-        )
-
-        # Backpropagate and optimize
-        if loss is not None:
-            loss.backward()
-        # Update target encoder with EMA this should be a callback
-        with torch.no_grad():
-            for param, target_param in zip(
-                self.model.encoder.parameters(), self.model.target_encoder.parameters()
-            ):
-                target_param.data = (
-                    self.ema_decay * target_param.data
-                    + (1 - self.ema_decay) * param.data
-                )
-
-        del batch  # In case this helps with memory utilization.
-
-        if dry_run:
-            self._clear_loss_buffers()
-            return
-
-        self._clear_loss_buffers()
-
-    def eval_batch(
-        self, batch: dict[str, Any], labels: torch.Tensor | None = None
-    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        """Evaluate a batch."""
-        raise NotImplementedError("eval batch not implemented")
 
     def optim_step(self) -> None:
         """Optimize the model."""
@@ -490,22 +396,6 @@ class HeliosTrainModule(TrainModule):
         # For FSDP2 this issues a single all-reduce for all parameters at once.
         if self.float8_handler is not None:
             self.float8_handler.precompute_float8_dynamic_scale_for_fsdp(self.model)
-
-    def model_forward(
-        self, batch: MaskedHeliosSample, patch_size: int
-    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        """Run a forward pass."""
-        with self._model_forward_context():
-            decoded = self.model.forward(batch, patch_size=patch_size)
-
-            with torch.no_grad():
-                logger.info("target encoder running here")
-                target_output = self.model.target_encoder.forward(
-                    batch.unmask(), patch_size=patch_size
-                )
-
-            loss = self.loss_fn(decoded, target_output)
-            return decoded, loss
 
     @contextlib.contextmanager
     def _train_microbatch_context(

@@ -451,7 +451,6 @@ class TestPredictor:
             mlp_ratio=4.0,
             num_heads=2,
             max_sequence_length=12,
-            max_patch_size=8,
             drop_path=0.1,
             learnable_channel_embeddings=True,
             output_embedding_size=8,
@@ -683,7 +682,6 @@ def test_end_to_end_with_exit_config(
         mlp_ratio=MLP_RATIO,
         num_heads=NUM_HEADS,
         max_sequence_length=MAX_SEQ_LENGTH,
-        max_patch_size=MAX_PATCH_SIZE,
         drop_path=DROP_PATH,
     )
     output = encoder.forward(

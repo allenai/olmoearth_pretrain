@@ -27,10 +27,11 @@ def test_random_masking_and_unmask() -> None:
         timestamps=timestamps,
     )
     encode_ratio, decode_ratio = 0.25, 0.5
-    masked_sample = RandomMaskingStrategy().apply_mask(
-        batch,
+    masked_sample = RandomMaskingStrategy(
         encode_ratio=encode_ratio,
         decode_ratio=decode_ratio,
+    ).apply_mask(
+        batch,
     )
     # check that each modality has the right masking ratio
     for modality_name in masked_sample._fields:

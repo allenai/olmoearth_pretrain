@@ -19,7 +19,6 @@ class TestFlexiHeliosBase:
     ) -> FlexiHeliosBase:
         """Create encoder fixture for testing."""
         flexi_helios_base = FlexiHeliosBase(
-            max_patch_size=8,
             embedding_size=8,
             num_heads=2,
             mlp_ratio=4.0,
@@ -102,13 +101,13 @@ class TestEncoder:
         """
         return Encoder(
             embedding_size=8,
-            max_patch_size=8,
             num_heads=2,
             mlp_ratio=4.0,
             depth=2,
             drop_path=0.1,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
+            max_patch_size=8,
             use_channel_embs=True,
         )
 
@@ -252,7 +251,6 @@ class TestPredictor:
             mlp_ratio=4.0,
             num_heads=2,
             max_sequence_length=12,
-            max_patch_size=8,
             drop_path=0.1,
             learnable_channel_embeddings=True,
             output_embedding_size=8,

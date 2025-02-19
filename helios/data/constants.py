@@ -200,7 +200,7 @@ class Modality:
             BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 16),
         ],
         is_multitemporal=True,
-        ignore_when_parsing=False,
+        ignore_when_parsing=True,
     )
 
     WORLDCOVER = ModalitySpec(
@@ -252,7 +252,7 @@ class Modality:
             )
         ],
         is_multitemporal=False,
-        ignore_when_parsing=False,
+        ignore_when_parsing=True,
     )
 
     LATLON = ModalitySpec(
@@ -280,6 +280,11 @@ class Modality:
                 continue
             modalities.append(modality)
         return modalities
+
+    @classmethod
+    def names(self) -> list[str]:
+        """Get all of the modality names."""
+        return [modality.name for modality in self.values()]
 
 
 # Modalities to ingest image tiles

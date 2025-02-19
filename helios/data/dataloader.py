@@ -3,6 +3,7 @@
 import logging
 import math
 from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 import numpy as np
 import torch
 from einops import rearrange
+from olmo_core.config import Config
 from olmo_core.data.data_loader import DataLoaderBase
 from olmo_core.data.utils import get_rng, memmap_to_write
 from olmo_core.distributed.utils import barrier
@@ -362,4 +364,49 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
         )
 
 
-# TODO: we will also need a configuration class for HeliosDataLoader
+@dataclass
+class HeliosDataLoaderConfig(Config):
+    """Configuration for the HeliosDataLoader."""
+
+    work_dir: UPath
+    global_batch_size: int = 1
+    dp_world_size: int = 1
+    dp_rank: int = 0
+    fs_local_rank: int = 0
+    seed: int = 0
+    shuffle: bool = True
+    num_threads: int | None = None
+    num_workers: int = 0
+    prefetch_factor: int | None = None
+    target_device_type: str = "cpu"
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        if self.work_dir is None:
+            raise ValueError("Work directory is not set")
+
+    def build(
+        self, dataset: HeliosDataset, collator: Callable = default_collate
+    ) -> "HeliosDataLoader":
+        """Build the HeliosDataLoader."""
+        self.validate()
+
+        if not isinstance(dataset, HeliosDataset):
+            raise ValueError("Dataset must be a HeliosDataset")
+        dataset.prepare()
+
+        return HeliosDataLoader(
+            dataset=dataset,
+            work_dir=self.work_dir,
+            global_batch_size=self.global_batch_size,
+            dp_world_size=self.dp_world_size,
+            dp_rank=self.dp_rank,
+            fs_local_rank=self.fs_local_rank,
+            seed=self.seed,
+            shuffle=self.shuffle,
+            num_threads=self.num_threads,
+            num_workers=self.num_workers,
+            prefetch_factor=self.prefetch_factor,
+            target_device_type=self.target_device_type,
+            collator=collator,
+        )
