@@ -369,11 +369,12 @@ class HeliosTrainModule(TrainModule):
         # if (instance_mask := batch.get("instance_mask")) is not None and not dry_run:
         #     self.record_metric("train/masked instances", (~instance_mask).sum(), ReduceType.sum)
 
-        # Move tensors to the right device.
         # we may want to modify this
-        token_budget = 1500
+        token_budget = self.model.token_budget
         # Smallest h /w must be bigger than the smallest patch size
-        h_w_to_sample = list(range(2, 13))
+        h_w_to_sample = list(
+            range(self.model.h_w_to_sample_min, self.model.h_w_to_sample_max)
+        )
 
         patch_size = np.random.choice(np.arange(1, self.model.encoder.max_patch_size))
         logger.info(f"Patch size: {patch_size}")

@@ -41,7 +41,7 @@ if __name__ == "__main__":
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "helios-debug"
 
-    # Training Variables
+    # Experiment Variables
     GLOBAL_BATCH_SIZE = 1
     RANK_BATCH_SIZE = 1
     MAX_DURATION = Duration.epochs(10)
@@ -52,7 +52,6 @@ if __name__ == "__main__":
     SAVE_FOLDER = workdir / "save_folder"
     LOAD_STRATEGY = LoadStrategy.if_available
 
-    # Other Variables
     TILE_PATH = UPath("/weka/dfive-default/helios/dataset/20250212/")
     DTYPE = np.dtype("float32")
     SUPPORTED_MODALITIES = [
@@ -64,6 +63,9 @@ if __name__ == "__main__":
     MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
     ENCODE_RATIO = 0.5
     DECODE_RATIO = 0.5
+    TOKEN_BUDGET = 1500
+    H_W_TO_SAMPLE_MIN = 2
+    H_W_TO_SAMPLE_MAX = 13
 
     #################### Setup environment ####################
     dp_config = None
@@ -103,6 +105,9 @@ if __name__ == "__main__":
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
+        token_budget=TOKEN_BUDGET,
+        h_w_to_sample_min=H_W_TO_SAMPLE_MIN,
+        h_w_to_sample_max=H_W_TO_SAMPLE_MAX,
     )
     model = model_config.build()
 

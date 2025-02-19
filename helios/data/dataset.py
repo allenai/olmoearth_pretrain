@@ -282,7 +282,7 @@ def collate_helios(batch: list[HeliosSample]) -> HeliosSample:
     return HeliosSample(
         sentinel2=stack_or_none("sentinel2"),
         sentinel1=stack_or_none("sentinel1"),
-        worldcover=stack_or_none("worldcover"),
+        # worldcover=stack_or_none("worldcover"),
         latlon=stack_or_none("latlon"),
         timestamps=stack_or_none("timestamps"),
     )
