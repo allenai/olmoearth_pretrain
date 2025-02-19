@@ -2,6 +2,7 @@
 
 import json
 from enum import Enum
+from pathlib import Path
 
 import numpy as np
 
@@ -22,6 +23,8 @@ NORMALIZE_STRATEGY = {
     Modality.SENTINEL2: Strategy.PREDEFINED,
     Modality.WORLDCOVER: Strategy.PREDEFINED,
 }
+
+PATH_TO_NORM_CONFIGS = Path(__file__).parents[2] / "data/norm_configs"
 
 
 class Normalizer:
@@ -57,12 +60,12 @@ class Normalizer:
 
     def _load_predefined_config(self) -> dict:
         """Load the predefined config."""
-        with open("data/norm_configs/predefined.json") as f:
+        with (PATH_TO_NORM_CONFIGS / "predefined.json").open("r") as f:
             return json.load(f)
 
     def _load_computed_config(self) -> dict:
         """Load the computed config."""
-        with open("data/norm_configs/computed.json") as f:
+        with (PATH_TO_NORM_CONFIGS / "computed.json").open("r") as f:
             return json.load(f)
 
     def _normalize_predefined(
