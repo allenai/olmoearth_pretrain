@@ -191,7 +191,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         self.trainer.record_metric(
             TRAIN_PATCH_DISC_LOSS_METRIC,
             loss / get_world_size(self.dp_process_group),
-            ReduceType.sum,
+            ReduceType.mean,
         )
 
         # Backpropagate and optimize
