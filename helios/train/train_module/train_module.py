@@ -102,7 +102,7 @@ class HeliosTrainModuleConfig(Config):
                 **state_dict_save_opts
             )
         if (
-            state_dict_load_opts := kwargs.popp("state_dict_load_opts", None)
+            state_dict_load_opts := kwargs.pop("state_dict_load_opts", None)
         ) is not None:
             kwargs["state_dict_load_opts"] = dist_cp_sd.StateDictOptions(
                 **state_dict_load_opts

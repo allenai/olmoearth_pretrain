@@ -1,6 +1,6 @@
 """Training and optimizer abstraction for Helios."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from logging import getLogger
 from typing import Any
 
@@ -40,8 +40,8 @@ class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
         ema_decay: EMA decay rate for target encoder (default: 0.99).
     """
 
-    loss_config: LossConfig = field(init=False)
-    masking_config: MaskingConfig = field(init=False)
+    loss_config: LossConfig = LossConfig(loss_config={"type": "patch_discrimination"})
+    masking_config: MaskingConfig = MaskingConfig(strategy_config={"type": "random"})
     ema_decay: float = 0.99
 
     def build(
@@ -55,13 +55,11 @@ class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
             model: The model to train.
             device: The device to train on.
         """
-        base_module = super().build(model, device)
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
         return LatentMIMTrainModule(
             model=model,
             device=device,
-            loss_config=self.loss_config,
-            masking_config=self.masking_config,
-            **base_module.__dict__,
+            **kwargs,
         )
 
 
