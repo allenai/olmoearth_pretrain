@@ -1,6 +1,6 @@
 """Training and optimizer abstraction for Helios."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
 
@@ -40,8 +40,12 @@ class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
         ema_decay: EMA decay rate for target encoder (default: 0.99).
     """
 
-    loss_config: LossConfig = LossConfig(loss_config={"type": "patch_discrimination"})
-    masking_config: MaskingConfig = MaskingConfig(strategy_config={"type": "random"})
+    loss_config: LossConfig = field(
+        default_factory=lambda: LossConfig(loss_config={"type": "patch_discrimination"})
+    )
+    masking_config: MaskingConfig = field(
+        default_factory=lambda: MaskingConfig(strategy_config={"type": "random"})
+    )
     ema_decay: float = 0.99
 
     def build(
