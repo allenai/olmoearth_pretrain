@@ -1303,7 +1303,7 @@ class PredictorConfig(Config):
     num_heads: int = 2
     max_sequence_length: int = 12
     drop_path: float = 0.0
-    learnable_channel_embeddings: bool = False
+    learnable_channel_embeddings: bool = True
     output_embedding_size: int | None = None
 
     def validate(self) -> None:

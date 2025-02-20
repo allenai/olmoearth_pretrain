@@ -138,7 +138,8 @@ class PatchDiscriminationLoss(Loss):
 
         # emulate averaging across the batch dimension
         loss_multiplier = self._expand_and_reciprocate(count)
-        loss = (loss * loss_multiplier).sum() / bs
+        # can't use bs here since this is after the unsqueezing, so bs == 1
+        loss = (loss * loss_multiplier).sum() / all_preds.shape[0]
         return loss
 
 

@@ -107,6 +107,7 @@ if __name__ == "__main__":
         num_heads=DECODER_NUM_HEADS,
         max_sequence_length=12,
         supported_modalities=SUPPORTED_MODALITIES,
+        learnable_channel_embeddings=True,
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
