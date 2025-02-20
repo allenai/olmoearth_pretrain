@@ -55,7 +55,6 @@ if __name__ == "__main__":
     SAVE_FOLDER = workdir / "save_folder"
     LOAD_STRATEGY = LoadStrategy.if_available
 
-
     TILE_PATH = UPath("/weka/dfive-default/helios/dataset/20250212/")
     DTYPE = np.dtype("float32")
     SUPPORTED_MODALITIES = [
@@ -78,6 +77,9 @@ if __name__ == "__main__":
     ENCODER_NUM_HEADS = 8
     DECODER_NUM_HEADS = 8
     MLP_RATIO = 4.0
+
+    EVAL_INTERVAL = 20
+
     #################### Setup environment ####################
     dp_config = None
     # for distributed training use torchrun
@@ -202,7 +204,7 @@ if __name__ == "__main__":
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
                 tasks=["m-eurosat"],
-                eval_interval=1,
+                eval_interval=EVAL_INTERVAL,
             ),
         )
     )
