@@ -1,14 +1,15 @@
 """Trying to prototype fitting everything into olmo core."""
 
 import logging
-import uuid
 from os import environ
 
 import numpy as np
-from olmo_core.distributed.utils import get_fs_local_rank, get_rank, get_world_size
+from olmo_core.distributed.utils import (get_fs_local_rank, get_rank,
+                                         get_world_size)
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import ConstantWithWarmup
-from olmo_core.train import prepare_training_environment, teardown_training_environment
+from olmo_core.train import (prepare_training_environment,
+                             teardown_training_environment)
 from olmo_core.train.callbacks import GPUMemoryMonitorCallback, WandBCallback
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
@@ -38,7 +39,8 @@ if __name__ == "__main__":
 
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "helios-debug"
-    run_name = f"helios-test-no-worldcover-2M-{str(uuid.uuid4())[:8]}"
+    # PLEASE CHANGE IF THIS IS A NEW EXPERIMENT
+    run_name = "helios-test-new"
     # PER EXPERIMENT Variables
     LR = 0.0001
     GLOBAL_BATCH_SIZE = 32
