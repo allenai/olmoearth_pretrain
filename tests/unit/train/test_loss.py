@@ -26,7 +26,47 @@ def test_patch_disc_loss() -> None:
     loss_value = loss.compute(preds, targets)
     # not very good! since they are all the same
     # predictions and values
-    assert loss_value > 1
+    assert loss_value > 0.5
+
+
+def test_patch_disc_loss_averaged_over_batch_size() -> None:
+    """Test it doesn't scale with batch size."""
+    b, t_h, t_w, t, d = 3, 4, 4, 2, 2
+
+    preds = TokensAndMasks(
+        sentinel2=torch.ones((b, t_h, t_w, t, d)),
+        sentinel2_mask=torch.ones((b, t_h, t_w, t)) * 2,
+        latlon=torch.ones((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * 2,
+    )
+    targets = TokensAndMasks(
+        sentinel2=torch.ones((b, t_h, t_w, t, d)),
+        sentinel2_mask=torch.zeros((b, t_h, t_w, t)),
+        latlon=torch.ones((b, 1, d)),
+        latlon_mask=torch.zeros((b, 1)),
+    )
+    loss = PatchDiscriminationLoss()
+    loss_value = loss.compute(preds, targets)
+
+    # now, use a larger batch size
+    b, t_h, t_w, t, d = 8, 4, 4, 2, 2
+
+    preds = TokensAndMasks(
+        sentinel2=torch.ones((b, t_h, t_w, t, d)),
+        sentinel2_mask=torch.ones((b, t_h, t_w, t)) * 2,
+        latlon=torch.ones((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * 2,
+    )
+    targets = TokensAndMasks(
+        sentinel2=torch.ones((b, t_h, t_w, t, d)),
+        sentinel2_mask=torch.zeros((b, t_h, t_w, t)),
+        latlon=torch.ones((b, 1, d)),
+        latlon_mask=torch.zeros((b, 1)),
+    )
+    loss_value_8 = loss.compute(preds, targets)
+    # not very good! since they are all the same
+    # predictions and values
+    assert torch.isclose(loss_value, loss_value_8)
 
 
 def test_l1_loss() -> None:

@@ -46,9 +46,8 @@ class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     masking_config: MaskingConfig = field(
         default_factory=lambda: MaskingConfig(strategy_config={"type": "random"})
     )
-    ema_decay: float = 0.99
-    # TODO: currently causes runs to fail
-    # max_grad_norm: float = 1.0
+    ema_decay: float = 0.999
+    max_grad_norm: float = 1.0
 
     def build(
         self,
