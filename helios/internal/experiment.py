@@ -6,20 +6,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
-from olmo_core.config import Config, StrEnum
-from olmo_core.train import (
-    TrainerConfig,
-    prepare_training_environment,
-    teardown_training_environment,
-)
-from olmo_core.train.callbacks import ConfigSaverCallback, WandBCallback
-from olmo_core.utils import get_default_device, prepare_cli_environment, seed_all
-
 from helios.data.constants import ModalitySpec
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig, collate_helios
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from olmo_core.config import Config, StrEnum
+from olmo_core.train import (TrainerConfig, prepare_training_environment,
+                             teardown_training_environment)
+from olmo_core.train.callbacks import ConfigSaverCallback, WandBCallback
+from olmo_core.utils import (get_default_device, prepare_cli_environment,
+                             seed_all)
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +76,12 @@ def build_config(
         train_module=train_module_config,
         trainer=trainer_config,
     )
-    config = config.merge(overrides)
+    logger.info("Config: %s", config)
+    logger.info("Overrides: %s", overrides)
+    if len(overrides) > 0:
+        # also there are some unerlying dataclasses we don't want to be able to overide and are not actually part of config
+        # OmegaConf merge does not support all types we use so we would have to do some mods to make this work https://omegaconf.readthedocs.io/en/2.2_branch/structured_config.html
+        config = config.merge(overrides)
     return config
 
 
@@ -185,7 +187,7 @@ def main(
     """Main entry point for Helios experiments.
 
     overrides:  A list of field attributes with dot notation, e.g. ``foo.bar=1``.
-    Current usage:
+    Current usage: torchrun script.py train
 
     """
     usage = f"""
@@ -204,13 +206,13 @@ def main(
 $ [i]python {sys.argv[0]} {SubCmd.launch} run01 ai2/pluto-cirrascale --launch.num_nodes=2[/]
     """.strip()
 
-    if len(sys.argv) < 2 or sys.argv[0] not in set(SubCmd):
+    if len(sys.argv) < 2 or sys.argv[1] not in set(SubCmd):
         import rich
 
         rich.get_console().print(usage, highlight=False)
         sys.exit(1)
 
-    cmd, *overrides = sys.argv
+    script_name, cmd, *overrides = sys.argv
     common = common_components_builder()
 
     cmd = SubCmd(cmd)

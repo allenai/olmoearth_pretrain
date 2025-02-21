@@ -39,7 +39,7 @@ class BandSet:
     """
 
     # List of band names.
-    bands: Sequence[str]
+    bands: list[str]
 
     # Resolution is BASE_RESOLUTION * resolution_factor.
     # If resolution == 0, this means the data
@@ -95,7 +95,7 @@ class ModalitySpec:
 
     name: str
     tile_resolution_factor: int
-    band_sets: Sequence[BandSet]
+    band_sets: list[BandSet]
     is_multitemporal: bool
     ignore_when_parsing: bool  # If true this modality is not parsed from the csv file and not loaded form a file
 
