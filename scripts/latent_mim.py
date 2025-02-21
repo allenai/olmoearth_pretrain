@@ -84,7 +84,7 @@ if __name__ == "__main__":
 
     LOSS_TYPE = "patch_discrimination"
 
-    EVAL_INTERVAL = 20
+    EVAL_INTERVAL_EPOCHS = 1
     EVAL_TASKS = ["m-eurosat"]
 
     #################### Setup environment ####################
@@ -214,7 +214,7 @@ if __name__ == "__main__":
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
                 tasks=EVAL_TASKS,
-                eval_interval=EVAL_INTERVAL,
+                eval_interval=EVAL_INTERVAL_EPOCHS * steps_per_epoch,
             ),
         )
     )
