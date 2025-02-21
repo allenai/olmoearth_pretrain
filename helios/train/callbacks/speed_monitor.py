@@ -14,6 +14,9 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
     def pre_step(self, batch: Any) -> None:
         """Pre-step callback for the speed monitor."""
         self._batch_load_time = time.perf_counter() - self._batch_load_start
+        # We right now don't know how many masked and unmasked tokens are avalaible at this point
+        # May want to save the values directly to the trainer to update global train tokens seen
+        # also may want to do more speciifc clacls
 
         ## These tokens might be needed to go in pre_optim_step
         self._step_tokens = batch["input_ids"].numel() // self._parallel_degree
