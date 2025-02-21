@@ -40,10 +40,6 @@ if __name__ == "__main__":
     if environ.get("USE_OUTPUT_FOLDER"):
         workdir = UPath(environ["USE_OUTPUT_FOLDER"]) / "helios" / "workdir"
 
-    WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "helios-debug"
-    run_name = f"helios-test-no-worldcover-2M-{str(uuid.uuid4())[:8]}"
-
     # PER EXPERIMENT Variables
     LR = 0.0001
     GLOBAL_BATCH_SIZE = 32
@@ -82,10 +78,14 @@ if __name__ == "__main__":
     DROP_PATH = 0.1
     MAX_GRAD_NORM = 1.0
 
-    LOSS_TYPE = "patch_discrimination"
+    LOSS_TYPE = "l2"  # "patch_discrimination"
 
     EVAL_INTERVAL_EPOCHS = 1
     EVAL_TASKS = ["m-eurosat"]
+
+    WANDB_USERNAME = "eai-ai2"  # nosec
+    WANDB_PROJECT = "helios-debug"
+    run_name = f"helios-{LOSS_TYPE}-{MAX_DURATION.value}-{LR}-{str(uuid.uuid4())[:8]}"
 
     #################### Setup environment ####################
     dp_config = None
