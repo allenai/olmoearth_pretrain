@@ -3,9 +3,10 @@
 import logging
 
 import matplotlib.pyplot as plt
+from olmo_core.train.callbacks.wandb import WandBCallback
+
 from helios.data.dataloader import HeliosDataLoader
 from helios.data.utils import plot_latlon_distribution
-from olmo_core.train.callbacks.wandb import WandBCallback
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ class HeliosWandBCallback(WandBCallback):
 
     upload_dataset_distribution_pre_train: bool = True
 
-    def pre_train(self):
+    def pre_train(self) -> None:
         """Pre-train callback for the wandb callback."""
         super().pre_train()
         if self.upload_dataset_distribution_pre_train:
@@ -29,5 +30,7 @@ class HeliosWandBCallback(WandBCallback):
                 latlons, "Geographic Distribution of Dataset"
             )
             # Log to wandb
-            self.wandb.log({"dataset/pretraining_geographic_distribution": self.wandb.Image(fig)})
+            self.wandb.log(
+                {"dataset/pretraining_geographic_distribution": self.wandb.Image(fig)}
+            )
             plt.close(fig)

@@ -86,11 +86,7 @@ def convert_to_db(data: np.ndarray) -> np.ndarray:
 
 
 def plot_latlon_distribution(latlons: np.ndarray, title: str) -> plt.Figure:
-    """Plot the geographic distribution of the data.
-
-    Args:
-        latlons: The latitude and longitude of the data.
-    """
+    """Plot the geographic distribution of the data."""
     fig = plt.figure(figsize=(12, 8))
     ax = plt.axes(projection=ccrs.PlateCarree())
 
