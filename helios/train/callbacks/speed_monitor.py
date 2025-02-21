@@ -15,6 +15,11 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         """Pre-step callback for the speed monitor."""
         self._batch_load_time = time.perf_counter() - self._batch_load_start
 
+        ## These tokens might be needed to go in pre_optim_step
+        self._step_tokens = batch["input_ids"].numel() // self._parallel_degree
+        self._total_steps += 1
+        self._total_tokens += self._step_tokens
+
     def post_step(self) -> None:
         """Post-step callback for the speed monitor."""
         counter = time.perf_counter()
@@ -38,10 +43,14 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         bps = 1 / step_time
         bps_avg = self._total_steps / total_time
         data_pct = 100 * self._batch_load_time / step_time
+        tps = self._step_tokens / step_time
+        tps_avg = self._total_tokens / total_time
 
         self.trainer.record_metric(
             "throughput/total tokens", self.trainer.global_train_tokens_seen
         )
+        self.trainer.record_metric("throughput/device/TPS", tps)
+        self.trainer.record_metric("throughput/device/TPS (actual avg)", tps_avg)
         self.trainer.record_metric("throughput/device/data loading (%)", data_pct)
         self.trainer.record_metric("throughput/device/BPS", bps)
         self.trainer.record_metric("throughput/device/BPS (actual avg)", bps_avg)

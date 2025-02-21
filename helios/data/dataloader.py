@@ -245,6 +245,14 @@ class HeliosDataLoader(DataLoaderBase):
                 parts.append(f"{key}{value}")
         return "_".join(parts)
 
+    def global_num_tokens_in_batch(self, batch: HeliosSample) -> int:
+        """Get the global number of tokens in a batch."""
+        return (
+            batch.sentinel2.shape[0]
+            * batch.sentinel2.shape[1]
+            * batch.sentinel2.shape[2]
+        )
+
     def get_mock_batch(self) -> HeliosSample:
         """Get a mock batch, for dry-run of forward and backward pass."""
         logger.info("Getting mock batch NOT FROM DATASET")
