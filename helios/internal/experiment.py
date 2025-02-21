@@ -1,20 +1,25 @@
 """Code for configuring and running Helios experiments."""
 
 import logging
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
+
+from olmo_core.config import Config, StrEnum
+from olmo_core.train import (
+    TrainerConfig,
+    prepare_training_environment,
+    teardown_training_environment,
+)
+from olmo_core.train.callbacks import ConfigSaverCallback, WandBCallback
+from olmo_core.utils import get_default_device, prepare_cli_environment, seed_all
 
 from helios.data.constants import ModalitySpec
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig, collate_helios
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
-from olmo_core.config import Config
-from olmo_core.train import (TrainerConfig, prepare_training_environment,
-                             teardown_training_environment)
-from olmo_core.train.callbacks import ConfigSaverCallback, WandBCallback
-from olmo_core.utils import get_default_device, seed_all
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +60,10 @@ def build_config(
     dataloader_config_builder: Callable[[CommonComponents], HeliosDataLoaderConfig],
     trainer_config_builder: Callable[[CommonComponents], TrainerConfig],
     train_module_config_builder: Callable[
-        [CommonComponents], LatentMIMTrainModuleConfig
+        [CommonComponents],
+        LatentMIMTrainModuleConfig,
     ],
+    overrides: list[str],
 ) -> HeliosExperimentConfig:
     """Build a Helios experiment configuration."""
     model_config = model_config_builder(common)
@@ -72,6 +79,7 @@ def build_config(
         train_module=train_module_config,
         trainer=trainer_config,
     )
+    config = config.merge(overrides)
     return config
 
 
@@ -101,15 +109,70 @@ def train(config: HeliosExperimentConfig) -> None:
     trainer.fit()
 
 
-def run(config: HeliosExperimentConfig) -> None:
-    """Run an experiment."""
-    try:
-        train(config)
-    finally:
-        teardown_training_environment()
+class SubCmd(StrEnum):
+    """Subcommands for Helios experiments.
+
+    modeled after olmo-core experiment.py potentially olmo-core might support this directly
+    """
+
+    launch = "launch"
+    train = "train"
+    train_single = "train_single"
+    prep = "prep"
+    launch_prep = "launch_prep"
+    dry_run = "dry_run"
+
+    def prepare_environment(self) -> None:
+        """Prepare the environment for the given subcommand."""
+        if self in (SubCmd.launch, SubCmd.dry_run, SubCmd.prep, SubCmd.launch_prep):
+            prepare_cli_environment()
+        elif self == SubCmd.train:
+            prepare_training_environment()
+        elif self == SubCmd.train_single:
+            prepare_training_environment(backend=None)
+        else:
+            raise NotImplementedError(self)
+
+    def run(self, config: HeliosExperimentConfig) -> None:
+        """Run the given subcommand."""
+        # if get_local_rank() == 0:
+        #     print(config)
+        #     print(
+        #         "\n"
+        #         f"[b blue]Total parameters:[/]                {config.model.num_params:,d}\n"
+        #         f"[b blue]Non-embedding parameters:[/]        {config.model.num_non_embedding_params:,d}"
+        #     )
+
+        if self == SubCmd.launch:
+            raise NotImplementedError
+        elif self == SubCmd.dry_run:
+            pass
+        elif self == SubCmd.train:
+            try:
+                train(config)
+            finally:
+                teardown_training_environment()
+        elif self == SubCmd.train_single:
+            if config.train_module.dp_config is not None:
+                logger.warning(
+                    "'dp_config' is set to %s, but you can't use data parallelism when running on a single node. Disabling.",
+                    config.train_module.dp_config,
+                )
+                config.train_module.dp_config = None
+            try:
+                train(config)
+            finally:
+                teardown_training_environment()
+        elif self == SubCmd.prep:
+            raise NotImplementedError
+        elif self == SubCmd.launch_prep:
+            raise NotImplementedError
+        else:
+            raise NotImplementedError(self)
 
 
 def main(
+    *,
     common_components_builder: Callable[[], CommonComponents],
     model_config_builder: Callable[[CommonComponents], LatentMIMConfig],
     dataset_config_builder: Callable[[CommonComponents], HeliosDatasetConfig],
@@ -119,8 +182,39 @@ def main(
         [CommonComponents], LatentMIMTrainModuleConfig
     ],
 ) -> None:
-    """Main entry point for Helios experiments."""
+    """Main entry point for Helios experiments.
+
+    overrides:  A list of field attributes with dot notation, e.g. ``foo.bar=1``.
+    Current usage:
+
+    """
+    usage = f"""
+[yellow]Usage:[/] [i blue]python[/] [i cyan]{sys.argv[0]}[/] [i b magenta]{'|'.join(SubCmd)}[/] [i b]RUN_NAME CLUSTER[/] [i][OVERRIDES...][/]
+
+[b]Subcommands[/]
+[b magenta]launch:[/]     Not Implemented. Launch the script on Beaker with the [b magenta]train[/] subcommand.
+[b magenta]train:[/]       Run the trainer. You usually shouldn't invoke the script with this subcommand directly.
+             Instead use [b magenta]launch[/] or run it with torchrun.
+[b magenta]train_single:[/]       Run the trainer on a single device (GPU, CPU, MPS). num_nodes is ignored.
+[b magenta]prep:[/]       Not Implemented. Prepare the dataset ahead of training to save GPU time.
+[b magenta]launch_prep:[/] Not Implemented. Launch the script on Beaker with the [b magenta]prep[/] subcommand.
+[b magenta]dry_run:[/]     Pretty print the config and exit.
+
+[b]Examples[/]
+$ [i]python {sys.argv[0]} {SubCmd.launch} run01 ai2/pluto-cirrascale --launch.num_nodes=2[/]
+    """.strip()
+
+    if len(sys.argv) < 2 or sys.argv[0] not in set(SubCmd):
+        import rich
+
+        rich.get_console().print(usage, highlight=False)
+        sys.exit(1)
+
+    cmd, *overrides = sys.argv
     common = common_components_builder()
+
+    cmd = SubCmd(cmd)
+    cmd.prepare_environment()
     config = build_config(
         common=common,
         model_config_builder=model_config_builder,
@@ -128,29 +222,7 @@ def main(
         dataloader_config_builder=dataloader_config_builder,
         trainer_config_builder=trainer_config_builder,
         train_module_config_builder=train_module_config_builder,
+        overrides=overrides,
     )
 
-    prepare_training_environment(seed=config.init_seed)
-
-    # Used for single GPU training
-    # prepare_training_environment(seed=config.init_seed, backend=None)
-
-    run(config)
-
-
-# train
-
-# a run method that does all this
-
-
-# actually make this config
-# set up the logic for each different experiment
-
-
-# ask pete to make it more agnostic from language modeling
-# Support logging all configs to WandB and to have an experiment config
-
-
-# Extra features
-# Parameter overrides
-# debug modes
+    cmd.run(config)
