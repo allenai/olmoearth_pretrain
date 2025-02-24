@@ -2,6 +2,9 @@
 
 import math
 
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.pyplot as plt
 import numpy as np
 
 
@@ -80,3 +83,28 @@ def convert_to_db(data: np.ndarray) -> np.ndarray:
     data = np.clip(data, 1e-10, None)
     result = 10 * np.log10(data)
     return result
+
+
+def plot_latlon_distribution(latlons: np.ndarray, title: str) -> plt.Figure:
+    """Plot the geographic distribution of the data."""
+    fig = plt.figure(figsize=(12, 8))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+
+    # Add map features
+    ax.add_feature(cfeature.COASTLINE)
+    ax.add_feature(cfeature.LAND, alpha=0.1)
+    ax.add_feature(cfeature.OCEAN, alpha=0.1)
+
+    # Plot the data points
+    ax.scatter(
+        latlons[:, 1],
+        latlons[:, 0],
+        transform=ccrs.PlateCarree(),
+        alpha=0.5,
+        s=1,
+    )
+
+    ax.set_global()  # Show the entire globe
+    ax.gridlines()
+    ax.set_title(title)
+    return fig

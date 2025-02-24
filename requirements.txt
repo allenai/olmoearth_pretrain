@@ -1,9 +1,11 @@
 ai2-olmo-core @ git+https://github.com/allenai/olmo-core.git@v2
+cartopy
 class-registry
 einops==0.7.0
 gcsfs
 geobench
 interrogate
+matplotlib
 numpy
 pandas
 pandera

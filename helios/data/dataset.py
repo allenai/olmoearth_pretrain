@@ -24,6 +24,7 @@ from upath import UPath
 from helios.data.constants import (
     BASE_RESOLUTION,
     IMAGE_TILE_SIZE,
+    PROJECTION_CRS,
     TIMESTAMPS,
     Modality,
     ModalitySpec,
@@ -292,6 +293,8 @@ def collate_helios(batch: list[HeliosSample]) -> HeliosSample:
 class HeliosDataset(Dataset):
     """Helios dataset."""
 
+    PROJECTION_CRS = PROJECTION_CRS
+
     def __init__(
         self,
         tile_path: UPath,
@@ -483,10 +486,24 @@ class HeliosDataset(Dataset):
             (sample.grid_tile.row + 0.5) * -grid_resolution * IMAGE_TILE_SIZE,
         )
         transformer = Transformer.from_crs(
-            sample.grid_tile.crs, "EPSG:4326", always_xy=True
+            sample.grid_tile.crs, self.PROJECTION_CRS, always_xy=True
         )
         lon, lat = transformer.transform(x, y)
         return np.array([lat, lon])
+
+    def get_geographic_distribution(self) -> np.ndarray:
+        """Get the geographic distribution of the dataset.
+
+        Returns:
+            numpy.ndarray: Array of shape (N, 2) containing [latitude, longitude]
+            coordinates for each of the N samples in the dataset.
+        """
+        latlons = []
+        for sample in self.samples:
+            latlon = self._get_latlon(sample)
+            latlons.append(latlon)
+        latlons = np.vstack(latlons)
+        return latlons
 
     def _get_timestamps(self, sample: SampleInformation) -> np.ndarray:
         """Get the timestamps of the sample."""

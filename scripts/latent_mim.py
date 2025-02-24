@@ -10,11 +10,7 @@ from olmo_core.distributed.parallel.data_parallel import (
 )
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
-from olmo_core.train.callbacks import (
-    ConfigSaverCallback,
-    GPUMemoryMonitorCallback,
-    WandBCallback,
-)
+from olmo_core.train.callbacks import ConfigSaverCallback, GPUMemoryMonitorCallback
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
@@ -29,6 +25,7 @@ from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
+    HeliosWandBCallback,
 )
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
@@ -166,7 +163,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "helios-debug"
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
-    wandb_callback = WandBCallback(
+    wandb_callback = HeliosWandBCallback(
         name=common.run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
