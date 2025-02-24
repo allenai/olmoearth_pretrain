@@ -30,6 +30,10 @@ def get_embeddings(
                     masked_helios_sample_dict[key] = val.to(
                         device=device, dtype=torch.bfloat16
                     )
+                    dims_to_reduce = list(range(val.ndim - 1))
+                    logger.info(
+                        f"{key}: mean: {val.mean(dims_to_reduce)}, std: {val.std(dims_to_reduce)}"
+                    )
             masked_helios_sample = MaskedHeliosSample.from_dict(
                 masked_helios_sample_dict
             )

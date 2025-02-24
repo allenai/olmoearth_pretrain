@@ -172,7 +172,11 @@ class LatentMIMTrainModule(HeliosTrainModule):
         subsampled_batch = batch.subset(patch_size, token_budget, h_w_to_sample)
         subsampled_batch = subsampled_batch.to_device(self.device)
         masked_batch = self.masking_strategy.apply_mask(subsampled_batch)
-
+        for key, val in masked_batch.as_dict(return_none=False).items():
+            dims_to_reduce = list(range(val.ndim - 1))
+            logger.info(
+                f"{key}: mean: {val.mean(dims_to_reduce)}, std: {val.std(dims_to_reduce)}"
+            )
         # Run Encoder and decoder on the augmented input
         decoded, loss = self.model_forward(masked_batch, patch_size)
 

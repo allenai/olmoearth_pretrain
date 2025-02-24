@@ -7,7 +7,7 @@ tasks:
     image:
       # You will want to replace `username` below with your Beaker username
       beaker: henryh/henryh-helios-20250219-real-model-size-2
-    command: [ torchrun , latent_mim.py ]
+    command: [ python , latent_mim.py , train ]
     result:
       # Beaker will capture anything that's written to this location and store it in the results
       # dataset. This location is required to be a directory, not a file.
