@@ -1,0 +1,565 @@
+{
+  "layers": {
+    "sentinel2_l2a_freq": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "query_config": {
+          "max_matches": 8,
+          "space_mode": "INTERSECTS"
+        },
+        "sort_by": "eo:cloud_cover"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo01": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "-180d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo02": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "-150d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo03": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "-120d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo04": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "-90d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo05": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "-60d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo06": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "-30d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo07": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "0d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo08": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "30d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo09": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "60d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo10": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "90d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo11": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "120d"
+      },
+      "type": "raster"
+    },
+    "sentinel2_l2a_mo12": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B08"
+          ],
+          "dtype": "uint16"
+        },
+        {
+          "bands": [
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -1
+        },
+        {
+          "bands": [
+            "B01",
+            "B09"
+          ],
+          "dtype": "uint16",
+          "zoom_offset": -2
+        }
+      ],
+      "data_source": {
+        "duration": "30d",
+        "harmonize": true,
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.Sentinel2",
+        "sort_by": "eo:cloud_cover",
+        "time_offset": "150d"
+      },
+      "type": "raster"
+    }
+  }
+}
