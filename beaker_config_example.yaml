@@ -6,20 +6,20 @@ tasks:
   - name: training
     image:
       # You will want to replace `username` below with your Beaker username
-      beaker: henryh/henryh-helios-20250219-real-model-size-2
-    command: [ torchrun , latent_mim.py ]
+      beaker: henryh/henryh-helios-2025024
+    command: [ torchrun , latent_mim.py, train]
     result:
       # Beaker will capture anything that's written to this location and store it in the results
       # dataset. This location is required to be a directory, not a file.
       path: /outputs
     resources:
       gpuCount: 1
-      sharedMemory: 64 GiB
+      sharedMemory: 128GiB
     context:
-      priority: normal
+      priority: high
       preemptible: true
     constraints:
-      cluster: [ ai2/jupiter-cirrascale-2, ai2/saturn-cirrascale, ai2/neptune-cirrascale ]
+      cluster: [ ai2/jupiter-cirrascale-2, ai2/saturn-cirrascale]
       # Ensure secrets match your user names for them
     datasets:
       - mountPath: /weka/dfive-default
