@@ -133,6 +133,20 @@ class ModalitySpec:
         The number of channels is the sum of the number of bands in all the band sets.
         """
         return sum(len(band_set.bands) for band_set in self.band_sets)
+    
+    @property
+    def is_space_varying(self) -> bool:
+        """Does the modality vary across channels, i.e. not LATLON"""
+        return self.get_tile_resolution()
+
+    @property
+    def is_time_varying(self) -> bool:
+        """Does the modality vary across channels, i.e. not LATLON"""
+        return self.is_multitemporal
+
+    @property
+    def is_channel_varying(self) -> bool:
+        return self.name.upper() != 'LATLON' # TODO there's certainly a better way to do this
 
     @property
     def is_spacetime_varying(self) -> bool:
