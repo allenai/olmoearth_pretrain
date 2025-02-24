@@ -24,6 +24,7 @@ from upath import UPath
 from helios.data.constants import (
     BASE_RESOLUTION,
     IMAGE_TILE_SIZE,
+    PROJECTION_CRS,
     TIMESTAMPS,
     Modality,
     ModalitySpec,
@@ -292,7 +293,7 @@ def collate_helios(batch: list[HeliosSample]) -> HeliosSample:
 class HeliosDataset(Dataset):
     """Helios dataset."""
 
-    PROJECTION_CRS = "EPSG:4326"
+    PROJECTION_CRS = PROJECTION_CRS
 
     def __init__(
         self,

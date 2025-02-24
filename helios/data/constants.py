@@ -15,6 +15,8 @@ BASE_RESOLUTION = 0.625
 # resolution that the grid is based on.
 IMAGE_TILE_SIZE = 256
 
+PROJECTION_CRS = "EPSG:4326"
+
 
 def get_resolution(resolution_factor: int) -> float | int:
     """Compute the resolution.
