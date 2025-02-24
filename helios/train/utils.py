@@ -4,9 +4,9 @@ from helios.data.dataset import HeliosSample
 
 
 def split_batch(batch: HeliosSample, microbatch_size: int) -> list[HeliosSample]:
-    """
-    Split a 'batch' HeliosSample into a list of micro-batches, each with
-    batch dimension up to microbatch_size.
+    """Split a 'batch' HeliosSample into a list of micro-batches.
+
+    Each micro-batch has a batch dimension up to microbatch_size.
 
     Args:
         batch (HeliosSample): A HeliosSample object whose first dimension (B) is the batch size.
@@ -35,6 +35,7 @@ def split_batch(batch: HeliosSample, microbatch_size: int) -> list[HeliosSample]
         # Create a new dict for the sliced data
         microbatch_dict = {}
         for field_name, data in batch_dict.items():
+            assert data is not None
             # Otherwise, assume the first dimension is batch dimension and slice it
             microbatch_dict[field_name] = data[start:end]
 

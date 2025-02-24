@@ -152,6 +152,14 @@ class HeliosSample(NamedTuple):
         )
 
     @property
+    def batch_size(self) -> int:
+        """Get the batch size of the data."""
+        if len(self.sentinel2.shape) == 5:
+            return self.sentinel2.shape[0]
+        else:
+            return 1
+
+    @property
     def height(self) -> int:
         """Get the height of the data."""
         return self.sentinel2.shape[1]

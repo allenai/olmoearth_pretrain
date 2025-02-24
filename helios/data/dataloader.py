@@ -188,6 +188,7 @@ class HeliosDataLoader(DataLoaderBase):
     def _get_local_instance_indices(self, indices: np.ndarray) -> Iterable[int]:
         """Get local instance indices."""
         # NOTE:'indices' are global instance indices.
+        # TODO: This isn't super clear
         instances_per_batch = self.global_batch_size
         indices = indices.reshape(-1, instances_per_batch)
 

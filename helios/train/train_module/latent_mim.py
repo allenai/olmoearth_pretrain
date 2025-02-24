@@ -24,6 +24,7 @@ from helios.train.train_module.train_module import (
     HeliosTrainModule,
     HeliosTrainModuleConfig,
 )
+from helios.train.utils import split_batch
 
 logger = getLogger(__name__)
 
@@ -74,7 +75,9 @@ class LatentMIMTrainModule(HeliosTrainModule):
     Args:
         model: The transformer model to train.
         optim: The corresponding optimizer config.
-        rank_batch_size: The rank batch size in instances.
+        masking_config: The masking configuration for the model.
+        loss_config: The loss configuration for the model.
+        rank_microbatch_size: The rank microbatch size in instances.
         compile_model: Whether to compile to the model.
         float8_config: Float8 configuration for the model.
         dp_config: Data parallel configuration for the model.
@@ -95,7 +98,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         optim: OptimConfig,
         masking_config: MaskingConfig,
         loss_config: LossConfig,
-        rank_batch_size: int,
+        rank_microbatch_size: int,
         compile_model: bool = False,
         float8_config: Float8Config | None = None,
         dp_config: DataParallelConfig | None = None,
@@ -116,7 +119,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
             optim: The corresponding optimizer config.
             masking_config: The masking configuration for the model.
             loss_config: The loss configuration for the model.
-            rank_batch_size: The rank batch size in instances.
+            rank_microbatch_size: The rank microbatch size in instances.
             compile_model: Whether to compile to the model.
             float8_config: Float8 configuration for the model.
             dp_config: Data parallel configuration for the model.
@@ -134,7 +137,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         super().__init__(
             model=model,
             optim=optim,
-            rank_batch_size=rank_batch_size,
+            rank_microbatch_size=rank_microbatch_size,
             compile_model=compile_model,
             float8_config=float8_config,
             dp_config=dp_config,
@@ -159,32 +162,8 @@ class LatentMIMTrainModule(HeliosTrainModule):
         """Compute the loss between the predicted and target tensors."""
         raise NotImplementedError("eval loss fn not implemented")
 
-    def train_batch(self, batch: HeliosSample, dry_run: bool = False) -> None:
-        """Train a batch."""
-        # Set the maximum number of tokens
-        token_budget = self.model.token_budget
-        # Smallest h /w must be bigger than the smallest patch size
-        h_w_to_sample = list(
-            range(self.model.h_w_to_sample_min, self.model.h_w_to_sample_max)
-        )
-        patch_size = np.random.choice(np.arange(1, self.model.encoder.max_patch_size))
-        batch = self.model.transform.apply(batch)
-        subsampled_batch = batch.subset(patch_size, token_budget, h_w_to_sample)
-        subsampled_batch = subsampled_batch.to_device(self.device)
-        masked_batch = self.masking_strategy.apply_mask(subsampled_batch)
-
-        # Run Encoder and decoder on the augmented input
-        decoded, loss = self.model_forward(masked_batch, patch_size)
-
-        self.trainer.record_metric(
-            f"train/{self.base_loss.name}",
-            loss / get_world_size(self.dp_process_group),
-            ReduceType.mean,
-        )
-
-        # Backpropagate and optimize
-        if loss is not None:
-            loss.backward()
+    def update_target_encoder(self) -> None:
+        """Update the target encoder."""
         # Update target encoder with EMA this should be a callback
         cur_ema_value = (
             self.start_ema
@@ -201,7 +180,44 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     cur_ema_value * target_param.data + (1 - cur_ema_value) * param.data
                 )
 
+    def train_batch(self, batch: HeliosSample, dry_run: bool = False) -> None:
+        """Train a batch."""
+        # Set the maximum number of tokens
+        token_budget = self.model.token_budget
+
+        loss = torch.tensor(0.0, device=self.device)
+        # Split into micro-batches.
+        microbatches = split_batch(batch, self.rank_microbatch_size)
+        for microbatch_idx, microbatch in enumerate(microbatches):
+            with self._train_microbatch_context(microbatch_idx, len(microbatches)):
+                # Smallest h /w must be bigger than the smallest patch size
+                h_w_to_sample = list(
+                    range(self.model.h_w_to_sample_min, self.model.h_w_to_sample_max)
+                )
+                patch_size = np.random.choice(
+                    np.arange(1, self.model.encoder.max_patch_size)
+                )
+                batch = self.model.transform.apply(microbatch)
+                subsampled_batch = batch.subset(patch_size, token_budget, h_w_to_sample)
+                subsampled_batch = subsampled_batch.to_device(self.device)
+                masked_batch = self.masking_strategy.apply_mask(subsampled_batch)
+
+                # Run Encoder and decoder on the augmented input
+                decoded, target_output = self.model_forward(masked_batch, patch_size)
+                loss += self.loss_fn(decoded, target_output)
+                del decoded, target_output
+                loss.backward()
+
+        self.trainer.record_metric(
+            f"train/{self.base_loss.name}",
+            loss / get_world_size(self.dp_process_group),
+            ReduceType.mean,
+        )
+
+        self.update_target_encoder()
+
         del batch  # In case this helps with memory utilization.
+        del masked_batch
         if dry_run:
             self._clear_loss_buffers()
             return
@@ -224,5 +240,4 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 target_output = self.model.target_encoder.forward(
                     batch.unmask(), patch_size=patch_size
                 )
-            loss = self.loss_fn(decoded, target_output)
-            return decoded, loss
+            return decoded, target_output
