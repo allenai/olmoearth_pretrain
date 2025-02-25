@@ -329,7 +329,7 @@ class TestEncoder:
         patch_size = 4
         input_res = 1
 
-        token_exit_cfg = {"sentinel2": 1, "latlon": 0}
+        token_exit_cfg = {"sentinel2": 0, "latlon": 0}
         exit_after_n_layers = 1
 
         output = encoder.forward(
@@ -371,6 +371,20 @@ class TestEncoder:
         assert (
             output.latlon.shape == expected_shape_latlon
         ), f"Expected output latlon shape {expected_shape_latlon}, got {output.latlon.shape}"
+
+        # test the gradients are correct too
+        output.sentinel2.sum().backward()
+        for name, param in encoder.named_parameters():
+            # the composite_encodings is a bug which will be fixed now
+            if not any(
+                ignore_param in name
+                for ignore_param in [
+                    "pos_embed",
+                    "month_embed",
+                    "composite_encodings.per_modality_channel_embeddings.latlon",
+                ]
+            ):
+                assert param.grad is not None, name
 
     def test_entire_modality_masked(
         self,
