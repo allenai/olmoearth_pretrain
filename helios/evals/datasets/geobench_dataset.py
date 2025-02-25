@@ -82,6 +82,7 @@ class GeobenchDataset(Dataset):
         split: str,
         partition: str,
         norm_method: str = "norm_no_clip",
+        visualize_samples: bool = False,
     ):
         """Init GeoBench dataset."""
         config = DATASET_TO_CONFIG[dataset]
@@ -128,6 +129,7 @@ class GeobenchDataset(Dataset):
         self.mean, self.std = self._get_norm_stats(imputed_band_info)
         self.active_indices = range(int(len(self.dataset)))
         self.norm_method = norm_method
+        self.visualize_samples = visualize_samples
 
     @staticmethod
     def _get_norm_stats(
@@ -243,7 +245,8 @@ class GeobenchDataset(Dataset):
         x_list = self._impute_bands(x_list, self.band_names, self.config.imputes)
 
         x = np.stack(x_list, axis=2)  # (h, w, 13)
-        self.visualize_sample_bands(x, "./output/geobench_bands_after_imputation")
+        if self.visualize_samples:
+            self.visualize_sample_bands(x, f"./visualizations/sample_{idx}")
         assert (
             x.shape[-1] == 13
         ), f"All datasets must have 13 channels, not {x.shape[-1]}"
@@ -304,25 +307,27 @@ class GeobenchDataset(Dataset):
         for band_idx in range(x.shape[-1]):
             # Take the band slice
             band_data = x[..., band_idx]
-            # If we have a name for this band, use it; otherwise provide a fallback
             band_title = (
                 self.band_names[band_idx]
                 if band_idx < len(self.band_names)
                 else f"Band_{band_idx}"
             )
 
-            plt.figure()
-            plt.imshow(band_data, cmap="gray")
-            plt.title(band_title)
-            plt.colorbar(label="Pixel Value")
+            # Create figure & axis
+            fig, ax = plt.subplots(figsize=(6, 4))
+            im = ax.imshow(band_data, cmap="gray")
+            ax.set_title(band_title)
 
-            # Create a filename-safe string for the band title
+            cbar = fig.colorbar(im, ax=ax)
+            cbar.set_label("Pixel Value")
+
+            # Create target filename
             filename = f"{band_title.replace(' ', '_').replace('/', '_')}.png"
             save_path = os.path.join(output_dir, filename)
 
-            # Save as PNG and close
-            plt.savefig(save_path, bbox_inches="tight")
-            plt.close()
+            # Save and close
+            fig.savefig(save_path, bbox_inches="tight")
+            plt.close(fig)
 
 
 if __name__ == "__main__":

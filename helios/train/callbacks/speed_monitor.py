@@ -30,7 +30,6 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
             self._step_last_logged = counter
             self._first_step = False
             return
-
         step_time = counter - self._step_last_logged
         total_time = counter - self._start_time
         self._step_last_logged = counter
