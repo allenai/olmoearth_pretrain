@@ -241,13 +241,11 @@ class HeliosSample(NamedTuple):
             raise ValueError(
                 "max height/width allowed by sample smaller than values in hw_to_sample"
             )
-        # Want to make sure that the sampled_hw_p is not unnecessarily small
         sampled_hw_p = choice(hw_to_sample)
         max_t = self._get_max_t_within_token_budget(
             sampled_hw_p, max_tokens_per_instance
         )
         sampled_hw = sampled_hw_p * patch_size
-        logger.info(f"sampled_hw: {sampled_hw_p}, max_t: {max_t}")
         start_h = np.random.choice(self.height - sampled_hw + 1)
         start_w = np.random.choice(self.width - sampled_hw + 1)
         start_t = np.random.choice(self.time - max_t + 1)
