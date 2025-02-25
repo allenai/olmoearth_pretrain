@@ -8,6 +8,7 @@ import numpy as np
 import numpy.typing as npt
 from rslearn.data_sources import Item
 from rslearn.dataset import Window
+from rslearn.utils.geometry import PixelBounds, Projection
 from upath import UPath
 
 from helios.data.constants import BandSet, ModalitySpec, TimeSpan
@@ -22,12 +23,52 @@ EPSILON = 1e-6
 logger = logging.getLogger(__name__)
 
 
+def get_adjusted_projection_and_bounds(
+    modality: ModalitySpec,
+    band_set: BandSet,
+    projection: Projection,
+    window_bounds: PixelBounds,
+) -> tuple[Projection, PixelBounds]:
+    """Compute projection and bounds adjusted for this band set's resolution.
+
+    Some bands may be stored at lower resolutions than the window bounds. So given the
+    window projection and bounds, we compute the coarser projection corresponding to
+    the band set, as well as the appropriate bounds in pixel coordinates under that
+    projection.
+
+    Args:
+        modality: the ModalitySpec. It specifies a grid resolution.
+        band_set: the BandSet. It specifies an resolution for the images that may be
+            lower than the one used for the grid.
+        projection: the projection of the window.
+        window_bounds: the bounds of the window (which matches the modality's grid
+            resolution).
+
+    Returns:
+        updated bounds at the resolution of the BandSet.
+    """
+    factor = band_set.resolution_factor // modality.tile_resolution_factor
+    adjusted_projection = Projection(
+        projection.crs,
+        projection.x_resolution * factor,
+        projection.y_resolution * factor,
+    )
+    adjusted_bounds = (
+        window_bounds[0] // factor,
+        window_bounds[1] // factor,
+        window_bounds[2] // factor,
+        window_bounds[3] // factor,
+    )
+    return adjusted_projection, adjusted_bounds
+
+
 def convert_freq(
     window_path: UPath,
     helios_path: UPath,
     layer_name: str,
     modality: ModalitySpec,
     missing_okay: bool = False,
+    unprepared_okay: bool = False,
 ) -> None:
     """Add frequent (two-week) data from this window to the Helios dataset.
 
@@ -42,6 +83,8 @@ def convert_freq(
         missing_okay: whether it is okay if some images that appear in items.json are
             missing. This should only be enabled if there are unresolvable errors
             during ingestion.
+        unprepared_okay: whether we should ignore the case where the window hasn't been
+            prepared.
     """
     window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
@@ -51,6 +94,16 @@ def convert_freq(
         raise ValueError(
             f"window ({window_metadata.resolution}) must have same "
             + f"resolution as modality ({modality.get_tile_resolution()})"
+        )
+
+    # Check if the layer is missing from the window's layer datas.
+    # If unprepared_okay is set, then we return immediately since there is no work to
+    # do for this window.
+    if layer_name not in layer_datas:
+        if unprepared_okay:
+            return
+        raise ValueError(
+            f"layer {layer_name} is missing from layer datas for window {window.name}"
         )
 
     # We read the individual images and their timestamps, then write the stacked
@@ -72,12 +125,8 @@ def convert_freq(
 
         for band_set in modality.band_sets:
             # Compute bounds of this raster adjusted for the resolution.
-            factor = band_set.resolution_factor // modality.tile_resolution_factor
-            adjusted_bounds = (
-                window.bounds[0] // factor,
-                window.bounds[1] // factor,
-                window.bounds[2] // factor,
-                window.bounds[3] // factor,
+            _, adjusted_bounds = get_adjusted_projection_and_bounds(
+                modality, band_set, window.projection, window.bounds
             )
 
             is_completed = window.is_layer_completed(layer_name, group_idx)
@@ -124,6 +173,11 @@ def convert_freq(
 
     if len(timestamps) > 0:
         for band_set, band_set_images in images.items():
+            # Compute bounds of this raster adjusted for the resolution.
+            adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
+                modality, band_set, window.projection, window.bounds
+            )
+
             stacked_image = np.concatenate(band_set_images, axis=0)
             dst_fname = get_modality_fname(
                 helios_path,
@@ -135,8 +189,8 @@ def convert_freq(
             )
             GEOTIFF_RASTER_FORMAT.encode_raster(
                 path=dst_fname.parent,
-                projection=window.projection,
-                bounds=window.bounds,
+                projection=adjusted_projection,
+                bounds=adjusted_bounds,
                 array=stacked_image,
                 fname=dst_fname.name,
             )
@@ -206,12 +260,8 @@ def convert_monthly(
 
         for band_set in modality.band_sets:
             # Compute bounds of this raster adjusted for the resolution.
-            factor = band_set.resolution_factor // modality.tile_resolution_factor
-            adjusted_bounds = (
-                window.bounds[0] // factor,
-                window.bounds[1] // factor,
-                window.bounds[2] // factor,
-                window.bounds[3] // factor,
+            _, adjusted_bounds = get_adjusted_projection_and_bounds(
+                modality, band_set, window.projection, window.bounds
             )
 
             raster_dir = window.get_raster_dir(layer_name, band_set.bands)
@@ -245,6 +295,11 @@ def convert_monthly(
 
     if len(images[modality.band_sets[0]]) > 0:
         for band_set, band_set_images in images.items():
+            # Compute bounds of this raster adjusted for the resolution.
+            adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
+                modality, band_set, window.projection, window.bounds
+            )
+
             stacked_image = np.concatenate(band_set_images, axis=0)
             dst_fname = get_modality_fname(
                 helios_path,
@@ -256,8 +311,8 @@ def convert_monthly(
             )
             GEOTIFF_RASTER_FORMAT.encode_raster(
                 path=dst_fname.parent,
-                projection=window.projection,
-                bounds=window.bounds,
+                projection=adjusted_projection,
+                bounds=adjusted_bounds,
                 array=stacked_image,
                 fname=dst_fname.name,
             )

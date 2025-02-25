@@ -137,24 +137,29 @@ class ModalitySpec:
         return sum(len(band_set.bands) for band_set in self.band_sets)
 
     @property
+    def is_spatial(self) -> bool:
+        """Does the modality have spatial data."""
+        return self.get_tile_resolution() > 0
+
+    @property
     def is_spacetime_varying(self) -> bool:
         """Does the modality vary in space and time."""
-        return self.get_tile_resolution() > 0 and self.is_multitemporal
+        return self.is_spatial and self.is_multitemporal
 
     @property
     def is_space_only_varying(self) -> bool:
         """Does the modality vary in space and not time."""
-        return self.get_tile_resolution() > 0 and not self.is_multitemporal
+        return self.is_spatial and not self.is_multitemporal
 
     @property
     def is_time_only_varying(self) -> bool:
         """Does the modality vary in time and not space."""
-        return self.get_tile_resolution() == 0 and self.is_multitemporal
+        return not self.is_spatial and self.is_multitemporal
 
     @property
     def is_static_in_space_and_time(self) -> bool:
         """Does the modality vary in neither space or space."""
-        return self.get_tile_resolution() == 0 and not self.is_multitemporal
+        return not self.is_spatial and not self.is_multitemporal
 
 
 class Modality:
@@ -191,6 +196,21 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    SENTINEL2_L2A = ModalitySpec(
+        name="sentinel2_l2a",
+        tile_resolution_factor=16,
+        band_sets=[
+            # 10 m/pixel bands.
+            BandSet(["B02", "B03", "B04", "B08"], 16),
+            # 20 m/pixel bands.
+            BandSet(["B05", "B06", "B07", "B8A", "B11", "B12"], 32),
+            # 60 m/pixel bands that we store at 40 m/pixel.
+            BandSet(["B01", "B09"], 64),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+    )
+
     LANDSAT = ModalitySpec(
         name="landsat",
         tile_resolution_factor=16,
@@ -198,7 +218,7 @@ class Modality:
             # 15 m/pixel bands that we store at 10 m/pixel.
             BandSet(["B8"], 16),
             # 30 m/pixel bands that we store at 20 m/pixel.
-            BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 16),
+            BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 32),
         ],
         is_multitemporal=True,
         ignore_when_parsing=True,

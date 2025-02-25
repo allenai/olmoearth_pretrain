@@ -13,9 +13,17 @@
         }
       ],
       "data_source": {
-        "index_cache_dir": "cache/naip",
-        "name": "rslearn.data_sources.aws_open_data.Naip",
-        "use_rtree_index": true
+        "asset_bands": {
+          "image": [
+            "R",
+            "G",
+            "B",
+            "IR"
+          ]
+        },
+        "collection_name": "naip",
+        "ingest": false,
+        "name": "rslearn.data_sources.planetary_computer.PlanetaryComputer"
       },
       "type": "raster"
     }

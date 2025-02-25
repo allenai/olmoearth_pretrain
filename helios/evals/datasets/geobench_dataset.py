@@ -1,11 +1,13 @@
 """GeoBench datasets, returning data in the Helios format."""
 
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from types import MethodType
 from typing import NamedTuple
 
 import geobench
+import matplotlib.pyplot as plt
 import numpy as np
 import torch.multiprocessing
 from einops import repeat
@@ -80,6 +82,7 @@ class GeobenchDataset(Dataset):
         partition: str,
         norm_stats_from_pretrained: bool = False,
         norm_method: str = "norm_no_clip",
+        visualize_samples: bool = False,
     ):
         """Init GeoBench dataset.
 
@@ -90,6 +93,7 @@ class GeobenchDataset(Dataset):
             partition: Partition to use
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
+            visualize_samples: Whether to visualize samples
         """
         config = DATASET_TO_CONFIG[dataset]
         self.config = config
@@ -139,6 +143,7 @@ class GeobenchDataset(Dataset):
         self.mean, self.std = self._get_norm_stats(imputed_band_info)
         self.active_indices = range(int(len(self.dataset)))
         self.norm_method = norm_method
+        self.visualize_samples = visualize_samples
 
     @staticmethod
     def _get_norm_stats(
@@ -244,13 +249,13 @@ class GeobenchDataset(Dataset):
         sample = self.dataset[idx]
         label = sample.label
 
-        x_list = []
-        for band_idx in self.band_indices:
-            x_list.append(sample.bands[band_idx].data)
+        x_list = [sample.bands[band_idx].data for band_idx in self.band_indices]
 
         x_list = self._impute_bands(x_list, self.band_names, self.config.imputes)
 
         x = np.stack(x_list, axis=2)  # (h, w, 13)
+        if self.visualize_samples:
+            self.visualize_sample_bands(x, f"./visualizations/sample_{idx}")
         assert (
             x.shape[-1] == 13
         ), f"All datasets must have 13 channels, not {x.shape[-1]}"
@@ -303,3 +308,39 @@ class GeobenchDataset(Dataset):
         )
         collated_target = default_collate([t for t in targets])
         return MaskedHeliosSample(**collated_sample), collated_target
+
+    def visualize_sample_bands(self, x: np.ndarray, output_dir: str) -> None:
+        """Visualize each band from a given array, saving each plot as a PNG file in the specified output_dir.
+
+        Args:
+            x (np.ndarray): Array of shape (H, W, #bands).
+            output_dir (str): Directory path where plots will be saved.
+        """
+        # Ensure the directory exists; if not, create it.
+        os.makedirs(output_dir, exist_ok=True)
+
+        # For each band in x
+        for band_idx in range(x.shape[-1]):
+            # Take the band slice
+            band_data = x[..., band_idx]
+            band_title = (
+                self.band_names[band_idx]
+                if band_idx < len(self.band_names)
+                else f"Band_{band_idx}"
+            )
+
+            # Create figure & axis
+            fig, ax = plt.subplots(figsize=(6, 4))
+            im = ax.imshow(band_data, cmap="gray")
+            ax.set_title(band_title)
+
+            cbar = fig.colorbar(im, ax=ax)
+            cbar.set_label("Pixel Value")
+
+            # Create target filename
+            filename = f"{band_title.replace(' ', '_').replace('/', '_')}.png"
+            save_path = os.path.join(output_dir, filename)
+
+            # Save and close
+            fig.savefig(save_path, bbox_inches="tight")
+            plt.close(fig)

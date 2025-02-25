@@ -485,7 +485,7 @@ class HeliosDataset(Dataset):
         self._log_modality_distribution(filtered_samples)
         return filtered_samples
 
-    def _get_latlon(self, sample: SampleInformation) -> np.ndarray:
+    def get_latlon(self, sample: SampleInformation) -> np.ndarray:
         """Get the latlon of the sample."""
         # Get coordinates at projection units, and then transform to latlon
         grid_resolution = sample.grid_tile.resolution_factor * BASE_RESOLUTION
@@ -563,7 +563,7 @@ class HeliosDataset(Dataset):
             sample_dict[modality.name] = image.astype(self.dtype)
             # Get latlon and timestamps from Sentinel2 data
             if modality == Modality.SENTINEL2:
-                sample_dict["latlon"] = self._get_latlon(sample).astype(self.dtype)
+                sample_dict["latlon"] = self.get_latlon(sample).astype(self.dtype)
                 sample_dict["timestamps"] = self._get_timestamps(sample)
         return HeliosSample(**sample_dict)
 

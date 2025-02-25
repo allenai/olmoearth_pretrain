@@ -4,21 +4,22 @@ Create Windows
 The first step is to create windows in an rslearn dataset based on one or more sampling
 strategies.
 
-The sampling strategies will be developed outside of the dataset creation code, but for
-now we create windows based on some hand-chosen locations.
+Currently only random sampling is supported. Currently the sampling is tied to
+populating the rslearn dataset with windows, but we may separate it so the sampling
+creates a CSV of locations and there is a different script to create the windows from
+that CSV.
 
-Make a new folder for the dataset and copy one of the dataset configuration files:
+Make a new folder for the dataset and copy the dataset configuration files that is used
+for initializing the dataset (it has NAIP and Sentinel-2 data sources configured, which
+are used to pick the window timestamp and filter out windows that don't have Sentinel-2
+coverage).
 
     mkdir dataset/
-    cp data/rslearn_dataset_configs/config_sentinel2.json dataset/config.json
+    cp data/rslearn_dataset_configs/config_init.json dataset/config.json
 
-Run one or more of the window creation scripts:
+Run the random sampling strategy:
 
-    python -m helios.dataset.create_windows.random --ds_path dataset/
-    python -m helios.dataset.create_windows.naip --ds_path dataset/
-
-`create_windows.random` creates windows with a random timestamp, while
-`create_windows.naip` creates them based on the timestamp of a NAIP image.
+    python -m helios.dataset_creation.create_windows.random --ds_path dataset/ --count 1000
 
 
 Materialize Data
