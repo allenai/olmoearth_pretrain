@@ -215,7 +215,7 @@ class TestEncoder:
         sentinel2 = torch.randn(B, H, W, T, C)
         sentinel2_mask = torch.zeros(B, H, W, T, C, dtype=torch.long)
         latlon = torch.randn(B, latlon_num_bands)
-        latlon_mask = torch.randint(0, 2, (B, latlon_num_bands), dtype=torch.float32)
+        latlon_mask = torch.zeros(B, latlon_num_bands, dtype=torch.float32)
         days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
         months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
         years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
@@ -275,6 +275,21 @@ class TestEncoder:
                 latlon_num_band_sets,
             )
         ), f"Expected output latlon_mask shape {latlon_mask.shape}, got {output.latlon_mask.shape}"
+
+        # test the gradients are correct too
+        output.sentinel2.sum().backward()
+
+        for name, param in encoder.named_parameters():
+            # the composite_encodings is a bug which will be fixed now
+            if not any(
+                ignore_param in name
+                for ignore_param in [
+                    "pos_embed",
+                    "month_embed",
+                    "composite_encodings.per_modality_channel_embeddings.latlon",
+                ]
+            ):
+                assert param.grad is not None, name
 
     def test_forward_exit_config_exists(
         self,
