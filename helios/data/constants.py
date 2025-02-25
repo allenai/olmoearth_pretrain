@@ -191,6 +191,21 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    SENTINEL2_L2A = ModalitySpec(
+        name="sentinel2_l2a",
+        tile_resolution_factor=16,
+        band_sets=[
+            # 10 m/pixel bands.
+            BandSet(["B02", "B03", "B04", "B08"], 16),
+            # 20 m/pixel bands.
+            BandSet(["B05", "B06", "B07", "B8A", "B11", "B12"], 32),
+            # 60 m/pixel bands that we store at 40 m/pixel.
+            BandSet(["B01", "B09"], 64),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+    )
+
     LANDSAT = ModalitySpec(
         name="landsat",
         tile_resolution_factor=16,
@@ -198,7 +213,7 @@ class Modality:
             # 15 m/pixel bands that we store at 10 m/pixel.
             BandSet(["B8"], 16),
             # 30 m/pixel bands that we store at 20 m/pixel.
-            BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 16),
+            BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 32),
         ],
         is_multitemporal=True,
         ignore_when_parsing=True,

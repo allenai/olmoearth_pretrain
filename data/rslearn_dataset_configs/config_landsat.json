@@ -27,6 +27,7 @@
         }
       ],
       "data_source": {
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "query_config": {
@@ -65,6 +66,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
@@ -100,6 +102,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
@@ -135,6 +138,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
@@ -170,6 +174,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
@@ -205,6 +210,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
@@ -240,6 +246,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
@@ -275,6 +282,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
@@ -310,6 +318,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
@@ -345,6 +354,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
@@ -380,6 +390,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
@@ -415,6 +426,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
@@ -450,6 +462,7 @@
       ],
       "data_source": {
         "duration": "30d",
+        "ingest": false,
         "metadata_cache_dir": "cache/landsat",
         "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "sort_by": "cloud_cover",
