@@ -500,7 +500,7 @@ class HeliosDataset(Dataset):
         """
         latlons = []
         for sample in self.samples:
-            latlon = self._get_latlon(sample)
+            latlon = self.get_latlon(sample)
             latlons.append(latlon)
         latlons = np.vstack(latlons)
         return latlons
