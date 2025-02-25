@@ -335,7 +335,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         """
         super().__init__()
         self.embedding_size = embedding_size
-        self.supported_modality = supported_modalities
+        self.supported_modalities = supported_modalities
         self.supported_modality_names = [
             modality.name for modality in supported_modalities
         ]
@@ -365,7 +365,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             args = {"requires_grad": False}
 
         self.per_modality_channel_embeddings = nn.ParameterDict()
-        for modality in self.supported_modality:
+        for modality in self.supported_modalities:
             shape = (len(modality.band_sets), self.embedding_dim_per_embedding_type)
             if random_channel_embs:
                 channel_embeddings = nn.Parameter(torch.rand(shape), **args)
@@ -525,7 +525,7 @@ class FlexiHeliosBase(nn.Module):
         super().__init__()
 
         self.embedding_size = embedding_size
-        self.supported_modality = supported_modalities
+        self.supported_modalities = supported_modalities
         self.supported_modality_names = [x.name for x in supported_modalities]
         logger.info(f"modalities being used by model: {self.supported_modality_names}")
 
@@ -549,7 +549,7 @@ class FlexiHeliosBase(nn.Module):
 
         self.composite_encodings = FlexiHeliosCompositeEncodings(
             embedding_size,
-            self.supported_modality,
+            self.supported_modalities,
             max_sequence_length,
             use_channel_embs,
         )
