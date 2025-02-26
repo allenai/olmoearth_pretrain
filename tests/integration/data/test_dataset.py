@@ -21,6 +21,7 @@ def test_helios_dataset(
         samples=samples,
         tile_path=tmp_path,
         supported_modalities=supported_modalities,
+        dtype="float32",
     )
     dataset.prepare()
 

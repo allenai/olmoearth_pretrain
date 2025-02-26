@@ -18,6 +18,7 @@ def test_helios_dataloader(
         samples=samples,
         tile_path=tmp_path,
         supported_modalities=supported_modalities,
+        dtype="float32",
     )
     assert isinstance(dataset, HeliosDataset)
     dataloader = HeliosDataLoader(

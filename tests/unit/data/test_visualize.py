@@ -20,6 +20,7 @@ def test_visualize_sample(
         samples=samples,
         supported_modalities=supported_modalities,
         tile_path=tmp_path,
+        dtype="float32",
     )
     for i in range(len(samples)):
         visualize_sample(
