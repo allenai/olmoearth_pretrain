@@ -178,6 +178,7 @@ class HeliosDataLoader(DataLoaderBase):
             prefetch_factor=self.prefetch_factor,
             persistent_workers=False,
             timeout=0,
+            drop_last=True,
         )
 
     @property
