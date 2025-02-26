@@ -213,8 +213,11 @@ class RandomMaskingStrategy(MaskingStrategy):
         shape: torch.Size,
         return_device: torch.device | None = None,
     ) -> ArrayTensor:
-        b = shape[0]
-        num_tokens_per_instance = np.prod(shape[1:-1]) * modality.num_bands
+        if modality.is_spatial or modality.is_multitemporal:
+            b = shape[0]
+            num_tokens_per_instance = np.prod(shape[1:-1]) * modality.num_bands
+        else:
+            num_tokens_per_instance = np.prod(shape[:-1]) * modality.num_bands
         num_encode_tokens = int(num_tokens_per_instance * self.encode_ratio)
         num_decode_tokens = int(num_tokens_per_instance * self.decode_ratio)
         num_target_encode_tokens = int(
@@ -230,10 +233,13 @@ class RandomMaskingStrategy(MaskingStrategy):
                 np.zeros(num_encode_tokens, dtype=np.int_),
             )
         )
-        b_flat_tokens = repeat(flat_mask_tokens, "t -> b t", b=b)
-        b_flat_tokens = self.generator.permuted(b_flat_tokens, axis=1)
+        if modality.is_spatial or modality.is_multitemporal:
+            flat_mask_tokens = repeat(flat_mask_tokens, "t -> b t", b=b)
+            flat_mask_tokens = self.generator.permuted(flat_mask_tokens, axis=1)
+        else:
+            flat_mask_tokens = self.generator.permuted(flat_mask_tokens)
 
-        mask = torch.as_tensor(b_flat_tokens, device=return_device)
+        mask = torch.as_tensor(flat_mask_tokens, device=return_device)
         mask = mask.view(*shape[:-1], modality.num_bands)
         return mask
 
