@@ -4,7 +4,6 @@ import logging
 import time
 from typing import Any
 
-
 from olmo_core.train.callbacks.speed_monitor import SpeedMonitorCallback
 
 from helios.data.dataset import HeliosSample
