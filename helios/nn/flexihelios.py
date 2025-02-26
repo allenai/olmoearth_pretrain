@@ -438,7 +438,9 @@ class FlexiHeliosCompositeEncodings(nn.Module):
 
         # Channel embeddings
         channel_embed = self.per_modality_channel_embeddings[modality.name]
-        channel_embed = repeat(channel_embed, f"b_s d -> {ein_string}", **ein_dict).to(device)
+        channel_embed = repeat(channel_embed, f"b_s d -> {ein_string}", **ein_dict).to(
+            device
+        )
         modality_embed[..., :n] += channel_embed
 
         if modality.is_multitemporal:
