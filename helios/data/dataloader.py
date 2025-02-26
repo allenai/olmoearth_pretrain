@@ -388,6 +388,11 @@ class HeliosDataLoaderConfig(Config):
         if self.work_dir is None:
             raise ValueError("Work directory is not set")
 
+    @property
+    def work_dir_upath(self) -> UPath:
+        """Get the work directory."""
+        return UPath(self.work_dir)
+
     def build(
         self,
         dataset: HeliosDataset,
@@ -396,16 +401,13 @@ class HeliosDataLoaderConfig(Config):
     ) -> "HeliosDataLoader":
         """Build the HeliosDataLoader."""
         self.validate()
-
         if not isinstance(dataset, HeliosDataset):
             raise ValueError("Dataset must be a HeliosDataset")
-
-        self.work_dir = UPath(self.work_dir)
         dataset.prepare()
 
         return HeliosDataLoader(
             dataset=dataset,
-            work_dir=self.work_dir,
+            work_dir=self.work_dir_upath,
             global_batch_size=self.global_batch_size,
             dp_world_size=get_world_size(dp_process_group),
             dp_rank=get_rank(dp_process_group),

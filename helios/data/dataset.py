@@ -580,10 +580,10 @@ class HeliosDatasetConfig(Config):
             ValueError: If any arguments are invalid
         """
         # Validate tile_path
-        if not isinstance(self.tile_path, UPath):
+        if not isinstance(self.tile_upath, UPath):
             raise ValueError("tile_path must be a UPath")
-        if not self.tile_path.exists():
-            raise ValueError(f"tile_path {self.tile_path} does not exist")
+        if not self.tile_upath.exists():
+            raise ValueError(f"tile_path {self.tile_upath} does not exist")
 
         # Validate supported_modalities
         if not isinstance(self.supported_modalities, list):
@@ -593,12 +593,18 @@ class HeliosDatasetConfig(Config):
                 "All elements in supported_modalities must be ModalitySpec"
             )
 
+    @property
+    def supported_modalities(self) -> list[ModalitySpec]:
+        """Get the supported modalities."""
+        return get_modality_specs_from_names(self.supported_modality_names)
+
+    @property
+    def tile_upath(self) -> UPath:
+        """Get the tile path."""
+        return UPath(self.tile_path)
+
     def build(self) -> "HeliosDataset":
         """Build the dataset."""
-        self.tile_path = UPath(self.tile_path)
         self.validate()
-        self.supported_modalities = get_modality_specs_from_names(
-            self.supported_modality_names
-        )
         kwargs = self.as_dict(exclude_none=True, recurse=False)
-        return HeliosDataset(**kwargs)
+        return HeliosDataset(tile_path=self.tile_upath, **kwargs)

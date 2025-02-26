@@ -1326,14 +1326,17 @@ class EncoderConfig(Config):
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
 
+    @property
+    def supported_modalities(self) -> list[ModalitySpec]:
+        """Get the supported modalities."""
+        return get_modality_specs_from_names(self.supported_modality_names)
+
     def build(self) -> "Encoder":
         """Build the encoder."""
-        self.supported_modalities = get_modality_specs_from_names(
-            self.supported_modality_names
-        )
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
-        return Encoder(**kwargs)
+        logger.info(f"kwargs: {kwargs}")
+        return Encoder(supported_modalities=self.supported_modalities, **kwargs)
 
 
 @dataclass
@@ -1360,24 +1363,17 @@ class PredictorConfig(Config):
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
 
+    @property
+    def supported_modalities(self) -> list[ModalitySpec]:
+        """Get the supported modalities."""
+        return get_modality_specs_from_names(self.supported_modality_names)
+
     def build(self) -> "Predictor":
         """Build the predictor."""
-        self.supported_modalities = get_modality_specs_from_names(
-            self.supported_modality_names
-        )
         self.validate()
-        return Predictor(
-            encoder_embedding_size=self.encoder_embedding_size,
-            decoder_embedding_size=self.decoder_embedding_size,
-            depth=self.depth,
-            mlp_ratio=self.mlp_ratio,
-            num_heads=self.num_heads,
-            max_sequence_length=self.max_sequence_length,
-            drop_path=self.drop_path,
-            learnable_channel_embeddings=self.learnable_channel_embeddings,
-            output_embedding_size=self.output_embedding_size,
-            supported_modalities=self.supported_modalities,
-        )
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        logger.info(f"kwargs: {kwargs}")
+        return Predictor(supported_modalities=self.supported_modalities, **kwargs)
 
 
 # TODO: add multiple combo of variables for encoder and predictor, and being able to build them directly, no need to specify each parameter, e.g., encoder_tiny, encoder_small, encoder_base, encoder_large, etc.

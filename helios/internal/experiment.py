@@ -111,7 +111,8 @@ def build_config(
     # Overide common components
     common_overrides, overrides = split_common_overrides(overrides)
     logger.info("Common overrides: %s", common_overrides)
-    common.merge(common_overrides)
+    common = common.merge(common_overrides)
+    logger.info("Common: %s", common)
     model_config = model_config_builder(common)
     dataset_config = dataset_config_builder(common)
     dataloader_config = dataloader_config_builder(common)

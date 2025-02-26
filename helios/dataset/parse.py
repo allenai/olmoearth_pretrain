@@ -15,7 +15,7 @@ from helios.data.constants import (
     TimeSpan,
 )
 
-from .util import WindowMetadata, get_modality_fname
+from .utils import WindowMetadata, get_modality_fname
 
 logger = logging.getLogger(__name__)
 
