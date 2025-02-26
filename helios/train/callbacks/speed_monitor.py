@@ -4,6 +4,7 @@ import logging
 import time
 from typing import Any
 
+
 from olmo_core.train.callbacks.speed_monitor import SpeedMonitorCallback
 
 from helios.data.dataset import HeliosSample
@@ -22,12 +23,16 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         """Pre-train callback for the speed monitor."""
         super().pre_train()
         train_module = self.trainer.train_module
+
         if isinstance(train_module, LatentMIMTrainModule):
-            self._token_budget = train_module.model.token_budget
-            self._encoder_ratio = train_module.model.encoder_ratio
-            self._decoder_ratio = train_module.model.decoder_ratio
+            # Unwrap if the model is in DDP
+            model = train_module.model
+            self._token_budget = model.token_budget
+            self._encoder_ratio = train_module.masking_strategy.encode_ratio
+            self._decoder_ratio = train_module.masking_strategy.decode_ratio
             logger.warning(
-                "Speed monitor callback bases token input based on token budget, encoder ratio, and decoder ratio"
+                "Speed monitor callback bases token input based on token budget, "
+                "encoder ratio, and decoder ratio"
             )
         else:
             logger.warning(
@@ -50,7 +55,7 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
             self._step_tokens_decoded = (
                 batch.batch_size * self._decoder_ratio * self._token_budget
             )
-        self._step_seq_len = batch["input_ids"].shape[1]
+
         self._total_steps += 1
         self._total_tokens_encoded += self._step_tokens_encoded
         self._total_tokens_decoded += self._step_tokens_decoded
@@ -84,10 +89,10 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         tps_decoded_avg = self._total_tokens_decoded / total_time
 
         self.trainer.record_metric(
-            "throughput/total tokens encoded", self._total_tokens_encoded
+            "throughput/total tokens encoded-since-restart", self._total_tokens_encoded
         )
         self.trainer.record_metric(
-            "throughput/total tokens decoded", self._total_tokens_decoded
+            "throughput/total tokens decoded-since-restart", self._total_tokens_decoded
         )
         self.trainer.record_metric("throughput/device/TPS Encoded", tps_encoded)
         self.trainer.record_metric(
