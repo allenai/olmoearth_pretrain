@@ -1,4 +1,5 @@
-# Generates a csv file with the class pixel amount for each grid in ESA WorldCover map
+"""Generates a csv file with the class pixel amount for each grid in ESA WorldCover map."""
+
 # Requires: pip install geopandas rioxarray tqdm -q
 # Usage: python3 generate_grid.py
 # Output: esa_grid.csv
@@ -7,6 +8,7 @@
 # gcloud storage acl ch -u AllUsers:R gs://lem-assets/esa_grid.csv
 # Author: Ivan Zvonkov
 from pathlib import Path
+
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -16,7 +18,7 @@ from tqdm import tqdm
 TILE_SIZE = 100
 
 # this should match to the results folder in beaker_entrypoints.py
-GRID_PATH = Path("/outputs/esa_grid_granular.csv")
+GRID_PATH = Path("esa_grid_granular.csv")
 
 legend = {
     10: "Trees",
