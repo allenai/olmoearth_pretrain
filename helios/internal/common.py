@@ -2,9 +2,13 @@
 
 from olmo_core.internal.common import get_beaker_username
 from olmo_core.io import is_url
-from olmo_core.launch.beaker import (BeakerEnvSecret, BeakerEnvVar,
-                                     BeakerLaunchConfig, BeakerWekaBucket,
-                                     OLMoCoreBeakerImage)
+from olmo_core.launch.beaker import (
+    BeakerEnvSecret,
+    BeakerEnvVar,
+    BeakerLaunchConfig,
+    BeakerWekaBucket,
+    OLMoCoreBeakerImage,
+)
 from olmo_core.utils import generate_uuid
 
 BUDGET = "ai2/d5"
