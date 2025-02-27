@@ -118,7 +118,7 @@ def minimal_train_module_config_builder(
     """Return a minimal LatentMIMTrainModuleConfig."""
     LR = 0.002
     WD = 0.02
-    RANK_BATCH_SIZE = 16
+    RANK_MICRO_BATCH_SIZE = 16
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
 
@@ -142,7 +142,7 @@ def minimal_train_module_config_builder(
         masking_config=masking_config,
         loss_config=loss_config,
         token_exit_cfg=token_exit_cfg,
-        rank_batch_size=RANK_BATCH_SIZE,
+        rank_microbatch_size=RANK_MICRO_BATCH_SIZE,
         max_grad_norm=1.0,
     )
     return train_module_config
