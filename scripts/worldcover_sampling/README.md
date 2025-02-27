@@ -20,3 +20,11 @@ Note that the output directory must be on a shared filesystem.
 Once the file is created, we use a k-means clustering algorithm to find the centroids of k clusters, where k corresponds to the number of points we want to export.
 
 Two strategies are adopted - one where we sample 50 points per tile (this is saved in `"esa_grid_subsampled.csv"`) and one where we take k points globally (this is saved in `"esa_grid_subsampled_global.csv"` and takes far longer to run).
+
+```
+# Concatenate the CSVs.
+cd /weka/dfive-default/helios/dataset_creation/worldcover_histogram_csvs/
+{head -n 1 N00E006.csv; tail -n+2 *.csv} | cat > ../worldcover_histogram_csvs_concat.csv
+# Run the K-means.
+python worldcover_kmeans.py --csv_fname /weka/dfive-default/helios/dataset_creation/worldcover_histogram_csvs_concat.csv --subsampled_grid_path /weka/dfive-default/helios/dataset_creation/esa_grid_subsampled.csv --subsampled_global_grid_path /weka/dfive-default/helios/dataset_creation/esa_grid_subsampled_global.csv
+```
