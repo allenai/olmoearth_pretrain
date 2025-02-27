@@ -21,7 +21,6 @@ from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig, collate_helios
 from helios.data.normalize import Normalizer, Strategy
 from helios.data.visualize import visualize_sample
-from helios.internal.beaker import HeliosBeakerLaunchConfig
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
@@ -30,7 +29,6 @@ logger = logging.getLogger(__name__)
 # TODO: Make this more agnostic to the training setup
 # TODO: Add support for different model configs
 # TODO: Add support for different train module configs
-# TODO: Add support for overrides
 
 
 # maybe this build common components can be the same function for every experiment
@@ -41,7 +39,7 @@ class CommonComponents(Config):
     run_name: str
     save_folder: str
     supported_modality_names: list[str]
-    launch: HeliosBeakerLaunchConfig
+    launch: BeakerLaunchConfig
     # callbacks: dict[str, Callback]
 
     def validate(self) -> None:
@@ -71,7 +69,7 @@ class HeliosExperimentConfig(Config):
     """Configuration for a Helios experiment."""
 
     run_name: str
-    launch: HeliosBeakerLaunchConfig
+    launch: BeakerLaunchConfig
     model: LatentMIMConfig  # TODO: make this agnostic to training setup
     dataset: HeliosDatasetConfig  # will likely be fixed for us
     data_loader: HeliosDataLoaderConfig  # will likely be fixed for us
@@ -134,10 +132,7 @@ def build_config(
         launch=common.launch,
     )
     logger.info("Overrides: %s", overrides)
-    if len(overrides) > 0:
-        # also there are some unerlying dataclasses we don't want to be able to overide and are not actually part of config
-        # OmegaConf merge does not support all types we use so we would have to do some mods to make this work https://omegaconf.readthedocs.io/en/2.2_branch/structured_config.html
-        config = config.merge(overrides)
+    config = config.merge(overrides)
     return config
 
 

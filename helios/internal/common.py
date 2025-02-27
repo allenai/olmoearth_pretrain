@@ -5,11 +5,9 @@ import logging
 from olmo_core.internal.common import get_beaker_username
 from olmo_core.io import is_url
 from olmo_core.launch.beaker import (BeakerEnvSecret, BeakerEnvVar,
-                                     BeakerPriority, BeakerWekaBucket,
-                                     OLMoCoreBeakerImage)
+                                     BeakerLaunchConfig, BeakerPriority,
+                                     BeakerWekaBucket, OLMoCoreBeakerImage)
 from olmo_core.utils import generate_uuid
-
-from helios.internal.beaker import HeliosBeakerLaunchConfig
 
 logger = logging.getLogger(__name__)
 BUDGET = "ai2/d5"
@@ -39,7 +37,7 @@ def build_launch_config(
     workspace: str = WORKSPACE,
     budget: str = BUDGET,
     nccl_debug: bool = False,
-) -> HeliosBeakerLaunchConfig:
+) -> BeakerLaunchConfig:
     weka_buckets: list[BeakerWekaBucket] = [DEFAULT_HELIOS_WEKA_BUCKET]
     if root_dir.startswith("/weka/"):
         # I am pretty sure we check this cuz it might be augusta or something
@@ -47,7 +45,7 @@ def build_launch_config(
 
     beaker_user = get_beaker_username()
 
-    return HeliosBeakerLaunchConfig(
+    return BeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",
         budget=budget,
         cmd=cmd,
