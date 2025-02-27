@@ -612,4 +612,8 @@ class HeliosDatasetConfig(Config):
         """Build the dataset."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
-        return HeliosDataset(tile_path=self.tile_upath, **kwargs)
+        kwargs["tile_path"] = self.tile_upath
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"HeliosDataset kwargs: {kwargs}")
+        return HeliosDataset(**kwargs)
