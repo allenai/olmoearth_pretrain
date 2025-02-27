@@ -53,6 +53,7 @@ class HeliosDataLoader(DataLoaderBase):
         prefetch_factor: int | None = None,
         collator: Callable = default_collate,
         target_device_type: str = "cpu",
+        drop_last: bool = True,
     ):
         """Initialize the HeliosDataLoader."""
         super().__init__(
@@ -71,7 +72,7 @@ class HeliosDataLoader(DataLoaderBase):
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
         self.target_device_type = target_device_type
-
+        self.drop_last = drop_last
         self._global_indices: np.ndarray | None = None
 
     @property
@@ -178,7 +179,6 @@ class HeliosDataLoader(DataLoaderBase):
             prefetch_factor=self.prefetch_factor,
             persistent_workers=False,
             timeout=0,
-            drop_last=True,
         )
 
     @property
@@ -279,32 +279,32 @@ class HeliosDataLoader(DataLoaderBase):
 
 
 def iter_batched(
-    iterable: Iterable[HeliosSample], batch_size: int
+    iterable: Iterable[HeliosSample], batch_size: int, drop_last: bool = True
 ) -> Iterable[tuple[HeliosSample, ...]]:
     """Iterate over the dataset in batches.
 
     This is a modified version of olmo_core.data.data_loader.iter_batched that creates batches
     of size local_batch_size for the local rank from an iterator of items.
 
+
     Args:
         iterable: The iterator of items to batch.
         batch_size: The size of the batches to create for the local rank.
+        drop_last: Whether to drop the last batch if it's not full.
 
     Returns:
         An iterator of batches of items.
     """
+    assert batch_size > 0
     batch: list[HeliosSample] = []
-    instances = 0
-    for x in iterable:
-        if instances >= batch_size:
+    for item in iterable:
+        batch.append(item)
+        if len(batch) == batch_size:
             yield tuple(batch)
             batch.clear()
-            instances = 0
 
-        batch.append(x)
-        instances += 1
-
-    if batch:
+    # If there's a partial batch left over, yield it if `drop_last` is False
+    if not drop_last and batch:
         yield tuple(batch)
 
 
@@ -366,7 +366,9 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
         return (
             self.data_loader.collator(batch)
             for batch in iter_batched(
-                instance_iterator, self.data_loader.rank_batch_size
+                instance_iterator,
+                self.data_loader.rank_batch_size,
+                self.data_loader.drop_last,
             )
         )
 
@@ -383,6 +385,7 @@ class HeliosDataLoaderConfig(Config):
     num_workers: int = 0
     prefetch_factor: int | None = None
     target_device_type: str = "cpu"
+    drop_last: bool = True
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -416,4 +419,5 @@ class HeliosDataLoaderConfig(Config):
             prefetch_factor=self.prefetch_factor,
             target_device_type=self.target_device_type,
             collator=collator,
+            drop_last=self.drop_last,
         )
