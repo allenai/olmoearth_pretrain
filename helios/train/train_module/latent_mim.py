@@ -231,7 +231,9 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 masked_batch = self.masking_strategy.apply_mask(subsampled_batch)
 
                 # Run Encoder and decoder on the augmented input
-                decoded, target_output = self.model_forward(masked_batch, patch_size, self.token_exit_cfg)
+                decoded, target_output = self.model_forward(
+                    masked_batch, patch_size, self.token_exit_cfg
+                )
                 loss = self.loss_fn(decoded, target_output)
                 # Scale loss by number of microbatches
                 loss = loss / num_microbatches
@@ -239,7 +241,6 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 total_batch_loss += loss_val
                 del decoded, target_output
                 loss.backward()
-
 
         self.trainer.record_metric(
             f"train/{self.base_loss.name}",
