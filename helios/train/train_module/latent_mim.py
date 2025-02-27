@@ -143,7 +143,6 @@ class LatentMIMTrainModule(HeliosTrainModule):
         """
         super().__init__(
             model=model,
-
             optim_config=optim_config,
             rank_microbatch_size=rank_microbatch_size,
             compile_model=compile_model,

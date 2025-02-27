@@ -59,7 +59,6 @@ class HeliosTrainModuleConfig(Config):
     optim_config: OptimConfig
     rank_microbatch_size: int
 
-
     # Model settings
     compile_model: bool = False
     float8_config: Float8Config | None = None  # UNTESTED for helios
