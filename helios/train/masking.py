@@ -188,6 +188,20 @@ class MaskingStrategy(ABC):
         """
         pass
 
+    @property
+    def encode_ratio(self) -> float:
+        """Get the encode ratio."""
+        if not hasattr(self, "_encode_ratio"):
+            raise AttributeError("Encode ratio not set")
+        return self._encode_ratio
+
+    @property
+    def decode_ratio(self) -> float:
+        """Get the decode ratio."""
+        if not hasattr(self, "_decode_ratio"):
+            raise AttributeError("Decode ratio not set")
+        return self._decode_ratio
+
 
 MASKING_STRATEGY_REGISTRY = ClassRegistry[MaskingStrategy]()
 
@@ -203,8 +217,8 @@ class RandomMaskingStrategy(MaskingStrategy):
         decode_ratio: float = 0.5,
     ) -> None:
         """Initialize the masking strategy."""
-        self.encode_ratio = encode_ratio
-        self.decode_ratio = decode_ratio
+        self._encode_ratio = encode_ratio
+        self._decode_ratio = decode_ratio
         self.generator = np.random.default_rng(0)
 
     def _create_mask_per_modality(
