@@ -20,7 +20,7 @@ WORKSPACE = "ai2/earth-systems"
 DEFAULT_HELIOS_WEKA_BUCKET = BeakerWekaBucket("dfive-default", "/weka/dfive-default")
 PROJECT_NAME = "helios"
 
-WEKA_CLUSTERS = ["jupiter", "saturn", "neptune", "ceres", "triton"]
+WEKA_CLUSTER_NAMES = ["jupiter", "saturn", "neptune", "ceres", "triton"]
 
 
 def get_root_dir(cluster: str) -> str:
@@ -28,7 +28,7 @@ def get_root_dir(cluster: str) -> str:
 
     This is where the save_folder will be stored
     """
-    if cluster in WEKA_CLUSTERS:
+    if any(weka_cluster_name in cluster for weka_cluster_name in WEKA_CLUSTER_NAMES):
         root_dir = f"/weka/{DEFAULT_HELIOS_WEKA_BUCKET.bucket}/{PROJECT_NAME}"
     elif "augusta" in cluster:
         raise ValueError("Augusta is not supported yet")
