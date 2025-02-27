@@ -5,4 +5,4 @@ FROM python:3.10
 WORKDIR /stage/
 COPY requirements.txt /stage/
 RUN pip install --no-cache-dir -r requirements.txt
-COPY 20250122_worldcover_sampling.py /stage/
+COPY compute_worldcover_histograms.py /stage/
