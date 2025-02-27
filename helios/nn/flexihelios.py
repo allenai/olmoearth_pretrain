@@ -1298,8 +1298,11 @@ class EncoderConfig(Config):
         """Build the encoder."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
-        logger.info(f"kwargs: {kwargs}")
-        return Encoder(supported_modalities=self.supported_modalities, **kwargs)
+        # supported_modality_names is replaced by supported_modalities
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"Encoder kwargs: {kwargs}")
+        return Encoder(**kwargs)
 
 
 @dataclass
@@ -1336,8 +1339,11 @@ class PredictorConfig(Config):
         """Build the predictor."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
-        logger.info(f"kwargs: {kwargs}")
-        return Predictor(supported_modalities=self.supported_modalities, **kwargs)
+        # supported_modality_names is replaced by supported_modalities
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"Predictor kwargs: {kwargs}")
+        return Predictor(**kwargs)
 
 
 # TODO: add multiple combo of variables for encoder and predictor, and being able to build them directly, no need to specify each parameter, e.g., encoder_tiny, encoder_small, encoder_base, encoder_large, etc.

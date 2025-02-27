@@ -7,10 +7,12 @@ from einops import repeat
 from helios.data.constants import Modality, ModalitySpec
 from helios.nn.flexihelios import (
     Encoder,
+    EncoderConfig,
     FlexiHeliosBase,
     FlexiHeliosCompositeEncodings,
     PoolingType,
     Predictor,
+    PredictorConfig,
     TokensAndMasks,
 )
 from helios.train.masking import MaskValue
@@ -338,6 +340,12 @@ class TestEncoder:
         assert torch.equal(out, expected_out)
         assert torch.equal(full_mask, expected_mask)
 
+    def test_encoder_config(self, supported_modalities: list[ModalitySpec]) -> None:
+        """Tests we can build with default args."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = EncoderConfig(supported_modality_names)
+        _ = config.build()
+
 
 class TestPredictor:
     """Unit tests for the Predictor class."""
@@ -431,6 +439,12 @@ class TestPredictor:
                 [[5, 6, 7, 8, 0, 0, 14, 15, 16], [5, 6, 7, 0, 0, 0, 0, 15, 16]]
             ).unsqueeze(-1),
         )
+
+    def test_predictor_config(self, supported_modalities: list[ModalitySpec]) -> None:
+        """Tests we can build with default args."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        config = PredictorConfig(supported_modality_names)
+        _ = config.build()
 
 
 class TestTokensAndMasks:
