@@ -66,8 +66,11 @@ def train_probe(
     device: torch.device,
     eval_type: EvalType,
     patch_size: int,
+    warmup_epochs_ratio: float = 0.1,
+    min_lr: float = 1.0e-5,
 ) -> nn.Module:
     """Train a linear probe."""
+    warmup_epochs = int(epochs * warmup_epochs_ratio)
     if eval_type == EvalType.classifciaton:
         probe = nn.Sequential(
             nn.BatchNorm1d(in_features), nn.Linear(in_features, num_classes)
@@ -78,12 +81,6 @@ def train_probe(
 
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
 
-    sched_config = {
-        "lr": lr,
-        "warmup_epochs": int(epochs * 0.1),
-        "min_lr": 1.0e-5,
-        "epochs": int(epochs),
-    }
     probe = probe.train()
 
     loss_function = nn.CrossEntropyLoss()
@@ -120,10 +117,10 @@ def train_probe(
             _adjust_learning_rate(
                 optimizer=opt,
                 epoch=int(epoch + (i / len(data_loader))),
-                total_epochs=int(sched_config["epochs"]),
-                warmup_epochs=int(sched_config["warmup_epochs"]),
-                max_lr=sched_config["lr"],
-                min_lr=sched_config["min_lr"],
+                total_epochs=epochs,
+                warmup_epochs=warmup_epochs,
+                max_lr=lr,
+                min_lr=min_lr,
             )
 
             opt.step()
