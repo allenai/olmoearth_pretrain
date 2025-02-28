@@ -278,7 +278,7 @@ class GalileoTrainModule(HeliosTrainModule):
                 loss.backward()
 
         self.trainer.record_metric(
-            f"train/{self.base_loss.name}",
+            f"train/{self.base_loss_a.name}+{self.base_loss_b.name}",
             total_batch_loss / get_world_size(self.dp_process_group),
             ReduceType.mean,
         )
