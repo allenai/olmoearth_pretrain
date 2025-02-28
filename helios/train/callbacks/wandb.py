@@ -53,18 +53,22 @@ class HeliosWandBCallback(WandBCallback):
                 runid_file.write_text(self.run.id)
 
             self._run_path = self.run.path  # type: ignore
-        if self.upload_dataset_distribution_pre_train:
-            assert isinstance(self.trainer.data_loader, HeliosDataLoader)
-            dataset = self.trainer.data_loader.dataset
-            logger.info("Gathering locations of entire dataset")
-            latlons = dataset.get_geographic_distribution()
-            # this should just be a general utility function
-            logger.info(f"Uploading dataset distribution to wandb: {latlons.shape}")
-            fig = plot_latlon_distribution(
-                latlons, "Geographic Distribution of Dataset"
-            )
-            # Log to wandb
-            self.wandb.log(
-                {"dataset/pretraining_geographic_distribution": self.wandb.Image(fig)}
-            )
-            plt.close(fig)
+            if self.upload_dataset_distribution_pre_train:
+                assert isinstance(self.trainer.data_loader, HeliosDataLoader)
+                dataset = self.trainer.data_loader.dataset
+                logger.info("Gathering locations of entire dataset")
+                latlons = dataset.get_geographic_distribution()
+                # this should just be a general utility function
+                logger.info(f"Uploading dataset distribution to wandb: {latlons.shape}")
+                fig = plot_latlon_distribution(
+                    latlons, "Geographic Distribution of Dataset"
+                )
+                # Log to wandb
+                self.wandb.log(
+                    {
+                        "dataset/pretraining_geographic_distribution": self.wandb.Image(
+                            fig
+                        )
+                    }
+                )
+                plt.close(fig)
