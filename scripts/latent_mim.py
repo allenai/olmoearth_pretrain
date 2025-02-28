@@ -242,6 +242,7 @@ def build_common_components(
         cmd=[script, cmd_to_launch, run_name, cluster, *overrides],
         clusters=cluster,
         workspace="ai2/joer",
+        beaker_image="henryh/olmo-core-tch260cu124",
         nccl_debug=False,
     )
     root_dir = get_root_dir(cluster)
