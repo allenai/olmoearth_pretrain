@@ -1,7 +1,6 @@
 """GeoBench datasets, returning data in the Helios format."""
 
 import os
-from collections.abc import Sequence
 from pathlib import Path
 from types import MethodType
 from typing import NamedTuple
@@ -12,10 +11,10 @@ import numpy as np
 import torch.multiprocessing
 from einops import repeat
 from geobench.dataset import Stats
-from torch.utils.data import Dataset, default_collate
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
+from helios.evals.datasets.base import BaseEvalDataset, EvalType
 from helios.train.masking import MaskedHeliosSample
 
 torch.multiprocessing.set_sharing_strategy("file_system")
@@ -70,7 +69,7 @@ DATASET_TO_CONFIG = {
 }
 
 
-class GeobenchDataset(Dataset):
+class GeobenchDataset(BaseEvalDataset):
     """GeoBench dataset, returning data in the Helios format."""
 
     default_day_month_year = [1, 6, 2020]
@@ -100,6 +99,11 @@ class GeobenchDataset(Dataset):
         self.config = config
         self.num_classes = config.num_classes
         self.is_multilabel = config.is_multilabel
+        self.class_or_seg = (
+            EvalType.classifciaton
+            if "classification" in config.benchmark_name
+            else EvalType.segmentation
+        )
 
         if split not in ["train", "valid", "test"]:
             raise ValueError(
@@ -296,19 +300,6 @@ class GeobenchDataset(Dataset):
     def __len__(self) -> int:
         """Length of dataset."""
         return len(self.dataset)
-
-    @staticmethod
-    def collate_fn(
-        batch: Sequence[tuple[MaskedHeliosSample, torch.Tensor]],
-    ) -> tuple[MaskedHeliosSample, torch.Tensor]:
-        """Collate function for DataLoaders."""
-        samples, targets = zip(*batch)
-        # we assume that the same values are consistently None
-        collated_sample = default_collate(
-            [s.as_dict(return_none=False) for s in samples]
-        )
-        collated_target = default_collate([t for t in targets])
-        return MaskedHeliosSample(**collated_sample), collated_target
 
     def visualize_sample_bands(self, x: np.ndarray, output_dir: str) -> None:
         """Visualize each band from a given array, saving each plot as a PNG file in the specified output_dir.
