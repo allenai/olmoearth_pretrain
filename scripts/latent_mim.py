@@ -241,6 +241,7 @@ def build_common_components(
         name=f"{run_name}-{cmd_to_launch}",
         cmd=[script, cmd_to_launch, run_name, cluster, *overrides],
         clusters=cluster,
+        workspace="ai2/joer",
         nccl_debug=False,
     )
     root_dir = get_root_dir(cluster)
