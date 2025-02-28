@@ -52,9 +52,13 @@ Add additional overides as needed.
 
 ### Sessions
 
+Be sure your session creation has included the following args
+ - `  --secret-env WANDB_API_KEY=WANDB_API_KEY
+    --secret-env BEAKER_TOKEN=henryh_BEAKER_TOKEN `
+
 When launching runs in Sessions for debugging, use the following command,
 
-`torchrun scripts/latent_mim.py train`
+`torchrun scripts/latent_mim.py train test_run local`
 
 Add additional overides as needed.
 
