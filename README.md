@@ -21,20 +21,15 @@ launching training runs on beaker
     - write:org
     - read:project
 
-    Be sure to authorize this token for the allenai org.
-
-2. Set the following Beaker Secrets:
+    Authorize this token for the allenai org. by clicking on the Configure SSO drop down in [here](https://github.com/settings/tokens) for the token you created.
+2. Set your default Beaker workspace
+    `beaker config set default_workspace ai2/earth-systems`
+3. Set the following Beaker Secrets:
     - `beaker secret write WANDB_API_KEY <your_key>`
     - `beaker secret write <your_beaker_username>_BEAKER_TOKEN <your_token>`
     - `beaker secret write GITHUB_TOKEN <your_key>`
 
-4. Set `WANDB_API_KEY` api key environment variable (or povide it via `--secret-env` flag when you start your beaker session)
-
-    ```bash
-    export WANDB_API_KEY=<your-key>
-    ```
-
-5. Create a script based on scripts/latent_mim.py and configure your experiment (you can override specific changes)
+4. Create a script based on scripts/latent_mim.py and configure your experiment (you can override specific changes)
 
 
 ## Launch
