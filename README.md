@@ -7,13 +7,14 @@ Earth system foundation model: data, training, and evaluation
 launching training runs on beaker
 ## General Setup
 
-1. Create a virtual environment in prefered directory with python 3.10 `python3.10 -m venv .venv-helios`
+1. Create a virtual environment in prefered directory with python 3.12 `python3.12 -m venv .venv-helios`
 2. Activate the virtual environment `source .venv-helios/bin/activate`
 3. Navigate to root directory of this repo and run `pip install -e .`
-4. Run `pre-commit install`
+4. Run `pip install pre-commit`
+5. Run `pre-commit install`
 
 ## Training Setup
-1. Create a Github Token that is able to clone this repo on beaker. Following permissions are sufficient
+1. Create a Github Token that is able to clone this repo on beaker. You can generate a token [here](https://github.com/settings/tokens) Following permissions are sufficient
     - repo
     - read:packages
     - read:org
