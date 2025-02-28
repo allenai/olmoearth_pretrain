@@ -65,7 +65,13 @@ DATASET_TO_CONFIG = {
         imputes=[],
         num_classes=10,
         is_multilabel=False,
-    )
+    ),
+    "m-cashew-plant": GeoBenchConfig(
+        benchmark_name="segmentation_v1.0",
+        imputes=[("11 - SWIR", "10 - SWIR - Cirrus")],
+        num_classes=7,
+        is_multilabel=False,
+    ),
 }
 
 
