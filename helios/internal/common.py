@@ -48,6 +48,7 @@ def build_launch_config(
     workspace: str = WORKSPACE,
     budget: str = BUDGET,
     nccl_debug: bool = False,
+    beaker_image: str = OLMoCoreBeakerImage.stable,
 ) -> BeakerLaunchConfig:
     """Build a launch config for a helios experiment.
 
@@ -65,7 +66,7 @@ def build_launch_config(
         workspace=workspace,
         clusters=clusters if isinstance(clusters, list) else [clusters],
         weka_buckets=weka_buckets,
-        beaker_image=OLMoCoreBeakerImage.stable,
+        beaker_image=beaker_image,
         num_nodes=1,
         num_gpus=1,
         shared_filesystem=True,  # We only use Weka for now
