@@ -10,13 +10,11 @@ import numpy as np
 from olmo_core.config import Config, StrEnum
 from olmo_core.distributed.utils import get_local_rank
 from olmo_core.launch.beaker import BeakerLaunchConfig
-from olmo_core.train import (
-    TrainerConfig,
-    prepare_training_environment,
-    teardown_training_environment,
-)
+from olmo_core.train import (TrainerConfig, prepare_training_environment,
+                             teardown_training_environment)
 from olmo_core.train.callbacks import ConfigSaverCallback, WandBCallback
-from olmo_core.utils import get_default_device, prepare_cli_environment, seed_all
+from olmo_core.utils import (get_default_device, prepare_cli_environment,
+                             seed_all)
 
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
@@ -170,7 +168,12 @@ def visualize(config: HeliosExperimentConfig) -> None:
     logger.info("Visualizing the dataset")
     if config.visualize_config is None:
         raise ValueError("visualize_config is not set")
+    global_step = 3686
     dataset = config.dataset.build()
+    data_loader = config.data_loader.build(
+        dataset, collator=collate_helios, dp_process_group=None
+    )
+    logger.info(f"number of steps per epoch: {data_loader.total_size}")
     if config.visualize_config.sample_indices is not None:
         sample_indices = config.visualize_config.sample_indices
     else:
@@ -242,6 +245,7 @@ class SubCmd(StrEnum):
         elif self == SubCmd.dry_run:
             pass
         elif self == SubCmd.visualize:
+            seed_all(config.init_seed)
             visualize(config)
         elif self == SubCmd.train:
             try:
