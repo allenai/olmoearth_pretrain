@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 from olmo_core.config import Config, StrEnum
@@ -72,10 +72,12 @@ class HeliosExperimentConfig(Config):
 
     run_name: str
     launch: BeakerLaunchConfig
-    model: LatentMIMConfig  # TODO: make this agnostic to training setup
+    model: Any  # TODO: make this agnostic to training setup
     dataset: HeliosDatasetConfig  # will likely be fixed for us
     data_loader: HeliosDataLoaderConfig  # will likely be fixed for us
-    train_module: LatentMIMTrainModuleConfig  # we will want to support different train module model combinations
+    train_module: (
+        Any  # we will want to support different train module model combinations
+    )
     trainer: TrainerConfig
     visualize_config: HeliosVisualizeConfig | None = None
     init_seed: int = 12536
