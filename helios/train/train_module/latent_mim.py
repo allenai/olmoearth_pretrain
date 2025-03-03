@@ -13,16 +13,19 @@ from olmo_core.float8 import Float8Config
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
-from olmo_core.train.train_module.transformer import \
-    TransformerActivationCheckpointingConfig
+from olmo_core.train.train_module.transformer import (
+    TransformerActivationCheckpointingConfig,
+)
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
 from helios.nn.latent_mim import LatentMIM
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
-from helios.train.train_module.train_module import (HeliosTrainModule,
-                                                    HeliosTrainModuleConfig)
+from helios.train.train_module.train_module import (
+    HeliosTrainModule,
+    HeliosTrainModuleConfig,
+)
 from helios.train.utils import split_batch
 
 logger = getLogger(__name__)
