@@ -7,7 +7,6 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelConfig,
     DataParallelType,
 )
-from olmo_core.internal.common import get_beaker_username
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import ConfigSaverCallback, GPUMemoryMonitorCallback
@@ -16,15 +15,15 @@ from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
-from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.data.normalize import Strategy
-from helios.internal.common import build_launch_config, get_root_dir
+from helios.internal.common import (
+    build_common_components,
+)
 from helios.internal.experiment import (
     CommonComponents,
     HeliosVisualizeConfig,
-    SubCmd,
     main,
 )
 from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
@@ -214,43 +213,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         )
     )
     return trainer_config
-
-
-# TODO: Allow submission of multiple clusters
-def build_common_components(
-    script: str,
-    cmd: SubCmd,
-    run_name: str,
-    cluster: str,
-    overrides: list[str],
-) -> CommonComponents:
-    """Build the common components for an experiment."""
-    # Variables to be changed per user
-    SUPPORTED_MODALITIES = [
-        Modality.SENTINEL2_L2A.name,
-        Modality.LATLON.name,
-        Modality.SENTINEL1.name,
-        Modality.WORLDCOVER.name,
-    ]
-
-    cmd_to_launch = SubCmd.train
-    if cmd == SubCmd.launch_prep:
-        cmd_to_launch = SubCmd.prep
-
-    launch_config = build_launch_config(
-        name=f"{run_name}-{cmd_to_launch}",
-        cmd=[script, cmd_to_launch, run_name, cluster, *overrides],
-        clusters=cluster,
-        nccl_debug=False,
-    )
-    root_dir = get_root_dir(cluster)
-    beaker_user = get_beaker_username()
-    return CommonComponents(
-        run_name=run_name,
-        save_folder=f"{root_dir}/checkpoints/{beaker_user.lower()}/{run_name}",
-        supported_modality_names=SUPPORTED_MODALITIES,
-        launch=launch_config,
-    )
 
 
 def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:

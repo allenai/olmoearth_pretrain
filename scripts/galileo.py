@@ -1,7 +1,6 @@
 """Trying to prototype fitting everything into olmo core."""
 
 import logging
-from os import environ
 
 from olmo_core.config import DType
 from olmo_core.distributed.parallel.data_parallel import (
@@ -20,6 +19,7 @@ from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.data.normalize import Strategy
+from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
 from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
 from helios.nn.galileo import GalileoConfig
@@ -229,27 +229,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         )
     )
     return trainer_config
-
-
-def build_common_components() -> CommonComponents:
-    """Build the common components for an experiment."""
-    run_name = "test_run"
-    # Variables to be changed per user
-    workdir = UPath("./output")  # nosec
-    # This allows pre-emptible jobs to save their workdir in the output folder
-    SUPPORTED_MODALITIES = [
-        Modality.SENTINEL2_L2A.name,
-        Modality.LATLON.name,
-        Modality.SENTINEL1.name,
-        Modality.WORLDCOVER.name,
-    ]
-    if environ.get("USE_OUTPUT_FOLDER"):
-        workdir = UPath(environ["USE_OUTPUT_FOLDER"]) / "helios" / "workdir"
-    return CommonComponents(
-        run_name=run_name,
-        save_folder=workdir,
-        supported_modality_names=SUPPORTED_MODALITIES,
-    )
 
 
 def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
