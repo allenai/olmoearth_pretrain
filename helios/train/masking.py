@@ -472,7 +472,7 @@ class SpaceTimeMaskingStrategy(MaskingStrategy):
         if (self.generator.random() < 0.5) or (not has_enough_timesteps):
             return self.space_strategy.apply_mask(batch, patch_size, **kwargs)
         else:
-            return self.time_strategy.apply_mask(batch, patch_size, **kwargs)
+            return self.time_strategy.apply_mask(batch, **kwargs)
 
 
 @MASKING_STRATEGY_REGISTRY.register("random")

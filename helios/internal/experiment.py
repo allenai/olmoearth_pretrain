@@ -61,7 +61,8 @@ class HeliosVisualizeConfig(Config):
     """Configuration for visualizing the dataset."""
 
     output_dir: str
-    num_samples: int = 10
+    num_samples: int | None = None
+    sample_indices: list[int] | None = None
     normalize_strategy: Strategy = Strategy.PREDEFINED
     std_multiplier: float = 2.0
 
@@ -170,9 +171,12 @@ def visualize(config: HeliosExperimentConfig) -> None:
     if config.visualize_config is None:
         raise ValueError("visualize_config is not set")
     dataset = config.dataset.build()
-    sample_indices = np.random.randint(
-        0, len(dataset), config.visualize_config.num_samples
-    )
+    if config.visualize_config.sample_indices is not None:
+        sample_indices = config.visualize_config.sample_indices
+    else:
+        sample_indices = np.random.randint(
+            0, len(dataset), config.visualize_config.num_samples
+        )
     normalizer = Normalizer(
         strategy=config.visualize_config.normalize_strategy,
         std_multiplier=config.visualize_config.std_multiplier,
