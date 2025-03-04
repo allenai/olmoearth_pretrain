@@ -35,7 +35,7 @@ from helios.train.train_module.galileo import GalileoTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 # TODO: Need to use the dynamic computation from trainer for this
-STEPS_PER_EPOCH = 25
+STEPS_PER_EPOCH = 250
 
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
@@ -128,7 +128,7 @@ def build_train_module_config(
     }
     token_exit_cfg_b = {modality: 0 for modality in common.supported_modality_names}
 
-    WARMUP_EPOCHS = 2
+    WARMUP_EPOCHS = 4
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
@@ -195,7 +195,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         entity=WANDB_USERNAME,
         enabled=True,  # set to False to avoid wandb errors
     )
-    EVAL_INTERVAL_EPOCHS = 1
+    EVAL_INTERVAL_EPOCHS = 5
     EVAL_TASKS = [
         DownstreamTaskConfig(
             name="m-eurosat",
