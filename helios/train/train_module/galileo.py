@@ -254,7 +254,9 @@ class GalileoTrainModule(HeliosTrainModule):
                 subsampled_batch = subsampled_batch.to_device(self.device)
                 # Each microbatch should have about the same number of encoded tokens if
                 # we mask here
-                if get_local_rank() % 2 == 0:
+                local_rank = get_local_rank()
+                logger.info(f"local rank: {local_rank}")
+                if local_rank == 0:
                     logger.info("Running model a")
                     masked_batch = self.masking_strategy_a.apply_mask(subsampled_batch)
 
