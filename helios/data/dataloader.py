@@ -76,6 +76,7 @@ class HeliosDataLoader(DataLoaderBase):
         self.drop_last = drop_last
         self._global_indices: np.ndarray | None = None
         self.persistent_workers = persistent_workers
+
     @property
     def total_batches(self) -> int:
         """The total number of batches in an epoch."""
@@ -178,7 +179,9 @@ class HeliosDataLoader(DataLoaderBase):
             num_workers=self.num_workers,
             pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
             prefetch_factor=self.prefetch_factor,
-            persistent_workers=self.persistent_workers,
+            persistent_workers=self.persistent_workers
+            if self.num_workers > 0
+            else False,
             timeout=0,
         )
 
