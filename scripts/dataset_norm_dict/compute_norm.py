@@ -50,4 +50,4 @@ with open(args_dict["output_path"], "w") as f:
 # Example usage:
 # 20250304 run:
 # python3 compute_norm.py --tile_path "/weka/dfive-default/helios/dataset/presto" --supported_modalities "sentinel2_l2a,sentinel1,worldcover" --output_path "/weka/dfive-default/yawenz/helios/data/norm_configs/computed_20250304.json"
-# took about
+# took ~7 hours
