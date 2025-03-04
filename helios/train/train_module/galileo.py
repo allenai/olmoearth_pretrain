@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
-from olmo_core.distributed.utils import get_local_tensor, get_world_size
+from olmo_core.distributed.utils import get_local_rank, get_local_tensor, get_world_size
 from olmo_core.float8 import Float8Config
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
@@ -254,7 +254,7 @@ class GalileoTrainModule(HeliosTrainModule):
                 subsampled_batch = subsampled_batch.to_device(self.device)
                 # Each microbatch should have about the same number of encoded tokens if
                 # we mask here
-                if microbatch_idx % 2 == 0:
+                if get_local_rank(self.dp_process_group) % 2 == 0:
                     masked_batch = self.masking_strategy_a.apply_mask(subsampled_batch)
 
                     # Run Encoder and decoder on the augmented input
