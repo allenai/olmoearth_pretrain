@@ -254,7 +254,7 @@ class GalileoTrainModule(HeliosTrainModule):
                 subsampled_batch = subsampled_batch.to_device(self.device)
                 # Each microbatch should have about the same number of encoded tokens if
                 # we mask here
-                if get_local_rank(self.dp_process_group) % 2 == 0:
+                if get_local_rank() % 2 == 0:
                     masked_batch = self.masking_strategy_a.apply_mask(subsampled_batch)
 
                     # Run Encoder and decoder on the augmented input
@@ -279,7 +279,7 @@ class GalileoTrainModule(HeliosTrainModule):
 
         self.trainer.record_metric(
             f"train/{self.base_loss_a.name}+{self.base_loss_b.name}",
-            total_batch_loss / get_world_size(self.dp_process_group),
+            total_batch_loss,
             ReduceType.mean,
         )
 
