@@ -221,7 +221,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 # Smallest h /w must be bigger than the smallest patch size
 
                 patch_size = np.random.choice(
-                    np.arange(1, self.model.encoder.max_patch_size)
+                    np.arange(4, self.model.encoder.max_patch_size)
                 )
                 microbatch = self.model.transform.apply(microbatch)
                 subsampled_batch = microbatch.subset(
