@@ -1,7 +1,6 @@
 """Code for configuring and running Helios experiments."""
 
 import logging
-import math
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -177,16 +176,7 @@ def visualize(config: HeliosExperimentConfig) -> None:
         data_loader = config.data_loader.build(
             dataset, collator=collate_helios, dp_process_group=None
         )
-        logger.info(f"number of steps per epoch: {data_loader.total_batches}")
-        epoch = math.ceil(global_step / data_loader.total_batches)
-        step_in_epoch = global_step % data_loader.total_batches
-        logger.info(f"epoch: {epoch}, step in epoch: {step_in_epoch}")
-        # How many times has the data been reshuffled at epoch 4 I think it is 5 times
-        for i in range(1, epoch + 1):
-            data_loader.reshuffle(epoch=i)
-        batch_start = int(data_loader.get_global_indices()[step_in_epoch])
-        batch_end = batch_start + data_loader.global_batch_size
-        sample_indices = np.arange(batch_start, batch_end)
+        sample_indices = data_loader.fast_forward(global_step)
     else:
         sample_indices = np.random.randint(
             0, len(dataset), config.visualize_config.num_samples

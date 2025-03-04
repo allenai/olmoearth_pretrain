@@ -257,7 +257,7 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
     """Build the visualize config for an experiment."""
     return HeliosVisualizeConfig(
         num_samples=None,
-        output_dir="./test_vis2",  # str(UPath(common.save_folder) / "visualizations"),
+        output_dir=str(UPath(common.save_folder) / "visualizations"),
         normalize_strategy=Strategy.PREDEFINED,
         std_multiplier=2.0,
     )
