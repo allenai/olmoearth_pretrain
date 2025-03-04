@@ -255,6 +255,7 @@ class GalileoTrainModule(HeliosTrainModule):
                 # Each microbatch should have about the same number of encoded tokens if
                 # we mask here
                 if get_local_rank() % 2 == 0:
+                    logger.info("Running model a")
                     masked_batch = self.masking_strategy_a.apply_mask(subsampled_batch)
 
                     # Run Encoder and decoder on the augmented input
@@ -263,6 +264,7 @@ class GalileoTrainModule(HeliosTrainModule):
                     )
                     loss = self.loss_fn_a(decoded, target_output)
                 else:
+                    logger.info("Running model b")
                     masked_batch = self.masking_strategy_b.apply_mask(subsampled_batch)
 
                     # Run Encoder and decoder on the augmented input

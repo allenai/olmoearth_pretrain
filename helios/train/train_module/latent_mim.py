@@ -248,7 +248,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
 
         self.trainer.record_metric(
             f"train/{self.base_loss.name}",
-            total_batch_loss / get_world_size(self.dp_process_group),
+            total_batch_loss,
             ReduceType.mean,
         )
 
