@@ -157,7 +157,11 @@ def train(config: HeliosExperimentConfig) -> None:
         dataset, collator=collate_helios, dp_process_group=train_module.dp_process_group
     )
     trainer = config.trainer.build(train_module, data_loader)
-
+    import torch
+    # logger.info(f"torch.get_num_threads(): {torch.get_num_threads()}")
+    # num_threads = torch.get_num_threads()
+    # # try dividing bt the number of workers
+    torch.set_num_threads(1)
     # Record the config to W&B/Comet and each checkpoint dir.
     config_dict = config.as_config_dict()
     cast(WandBCallback, trainer.callbacks["wandb"]).config = config_dict
