@@ -621,6 +621,7 @@ class HeliosDataset(Dataset):
                     )
 
                     # Compute updated mean and variance with the new batch of data
+                    # Reference: https://www.geeksforgeeks.org/expression-for-mean-and-variance-in-a-running-stream/
                     new_count = current_count + band_data_count
                     new_mean = (
                         current_mean

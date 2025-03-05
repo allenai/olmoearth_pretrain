@@ -1,6 +1,7 @@
 """Utils for the data module."""
 
 import math
+import random
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -107,4 +108,23 @@ def plot_latlon_distribution(latlons: np.ndarray, title: str) -> plt.Figure:
     ax.set_global()  # Show the entire globe
     ax.gridlines()
     ax.set_title(title)
+    return fig
+
+
+def plot_modality_data_distribution(modality: str, modality_data: dict) -> plt.Figure:
+    """Plot the data distribution."""
+    fig, axes = plt.subplots(
+        len(modality_data), 1, figsize=(10, 5 * len(modality_data))
+    )
+    if len(modality_data) == 1:
+        axes = [axes]
+    for ax, (band, values) in zip(axes, modality_data.items()):
+        # Sample 1000 values to speed up plotting
+        values = random.sample(values, 1000)
+        ax.hist(values, bins=50, alpha=0.75)
+        ax.set_title(f"{modality} - {band}")
+        ax.set_xlabel("Value")
+        ax.set_ylabel("Frequency")
+        ax.grid(True, linestyle="--", alpha=0.5)
+    fig.tight_layout()
     return fig
