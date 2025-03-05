@@ -176,3 +176,7 @@ cython_debug/
 
 # misc
 .DS_Store
+
+# local files
+local_output/
+test_vis/

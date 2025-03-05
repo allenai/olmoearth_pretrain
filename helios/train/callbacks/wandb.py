@@ -10,7 +10,7 @@ from olmo_core.exceptions import OLMoEnvironmentError
 from olmo_core.train.callbacks.wandb import WANDB_API_KEY_ENV_VAR, WandBCallback
 
 from helios.data.dataloader import HeliosDataLoader
-from helios.data.utils import plot_latlon_distribution
+from helios.data.utils import plot_latlon_distribution, plot_modality_data_distribution
 
 logger = logging.getLogger(__name__)
 
@@ -72,3 +72,15 @@ class HeliosWandBCallback(WandBCallback):
                     }
                 )
                 plt.close(fig)
+                logger.info("Gathering normalized data distribution")
+                sample_data = dataset.get_sample_data_for_histogram()
+                for modality, modality_data in sample_data.items():
+                    fig = plot_modality_data_distribution(modality, modality_data)
+                    self.wandb.log(
+                        {
+                            f"dataset/pretraining_{modality}_distribution": self.wandb.Image(
+                                fig
+                            )
+                        }
+                    )
+                    plt.close(fig)
