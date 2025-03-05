@@ -1,15 +1,13 @@
 """KNN worldcover sampling."""
 
+import argparse
+
 import numpy as np
 import pandas as pd
 from numpy.linalg import norm
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
-
-GRID_PATH = "esa_grid_granular.csv"
-SUBSAMPLED_GRID_PATH = "esa_grid_subsampled.csv"
-SUBSAMPLED_GLOBAL_GRID_PATH = "esa_grid_subsampled_global.csv"
 
 
 def _find_clusters(
@@ -53,13 +51,40 @@ def _return_clusters_per_tile(
 
 
 if __name__ == "__main__":
-    grid = pd.read_csv(GRID_PATH)
+    parser = argparse.ArgumentParser(
+        description="Launch Beaker jobs for computing WorldCover histograms",
+    )
+    parser.add_argument(
+        "--csv_fname",
+        type=str,
+        help="File containing concatenated histogram CSVs computed by compute_worldcover_histograms.py",
+        required=True,
+    )
+    parser.add_argument(
+        "--subsampled_grid_path",
+        type=str,
+        help="Filename to write the per-tile clusters",
+        required=True,
+    )
+    parser.add_argument(
+        "--subsampled_global_grid_path",
+        type=str,
+        help="Filename to write the per-tile clusters",
+        required=True,
+    )
+    args = parser.parse_args()
+
+    grid = pd.read_csv(args.csv_fname)
+    print(f"got {len(grid)} total tiles")
+
+    print("finding per-tile clusters")
     output = _return_clusters_per_tile(
         grid, num_clusters_per_tile=50, num_tiles_to_process=None
     )
-    output.to_csv(SUBSAMPLED_GRID_PATH)
+    output.to_csv(args.subsampled_grid_path)
     print(len(output))
 
+    print("finding global clusters")
     output_global = _find_clusters(grid, "global", num_clusters_per_tile=150000)
-    output_global.to_csv(SUBSAMPLED_GLOBAL_GRID_PATH)
+    output_global.to_csv(args.subsampled_global_grid_path)
     print(len(output_global))
