@@ -52,6 +52,7 @@ class PatchDiscriminationLoss(Loss):
         tau: float = 0.1,
         pred2unit: bool = False,
         mask_other_samples: bool = True,
+        log_similarity_stats: bool = True,
     ):
         """Initialize patch discrimination loss.
 
@@ -65,6 +66,7 @@ class PatchDiscriminationLoss(Loss):
         self.tau = tau
         self.pred2unit = pred2unit
         self.mask_other_samples = mask_other_samples
+        self.log_similarity_stats = log_similarity_stats
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -93,8 +95,27 @@ class PatchDiscriminationLoss(Loss):
 
         pred = F.normalize(pred, p=2, dim=-1)
         target = F.normalize(target, p=2, dim=-1)
-
         scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
+        if self.log_similarity_stats:
+            self.positive_similarity_scores_stats = {}
+            self.negative_similarity_scores_stats = {}
+            n, p, q = scores.shape
+
+            # For positive scores - only consider diagonal elements
+            # Efficiently extract diagonal without creating a full-sized mask
+            positive_indices = torch.arange(min(p, q), device=scores.device)
+            positive_scores = scores[:, positive_indices, positive_indices]
+
+            # Gather statistics for positive scores
+            self.positive_similarity_scores_stats = {
+                "mean": positive_scores.mean().item(),
+                "std": positive_scores.std().item(),
+                "min": positive_scores.min().item(),
+                "max": positive_scores.max().item(),
+                "median": positive_scores.median().item(),
+                "hist": positive_scores.flatten().detach().cpu().numpy().tolist(),
+            }
+
         count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
 
         if self.mask_other_samples:
