@@ -7,10 +7,7 @@ import torch
 
 from helios.data.constants import Modality, ModalitySpec
 from helios.data.transform import TransformConfig
-from helios.nn.flexihelios import (
-    Encoder,
-    Predictor,
-)
+from helios.nn.flexihelios import Encoder, Predictor
 from helios.nn.latent_mim import LatentMIM
 from helios.train.loss import PatchDiscriminationLoss
 from helios.train.masking import MaskedHeliosSample, MaskValue
@@ -106,6 +103,7 @@ def test_latentmim_with_loss(
         supported_modalities=supported_modalities,
         embedding_size=ENCODER_EMBEDDING_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
+        min_patch_size=1,
         num_heads=NUM_HEADS,
         mlp_ratio=MLP_RATIO,
         max_sequence_length=MAX_SEQ_LENGTH,

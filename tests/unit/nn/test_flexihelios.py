@@ -205,13 +205,14 @@ class TestEncoder:
         """
         return Encoder(
             embedding_size=8,
+            max_patch_size=8,
+            min_patch_size=1,
             num_heads=2,
             mlp_ratio=4.0,
             depth=2,
             drop_path=0.1,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
-            max_patch_size=8,
             use_channel_embs=True,
         )
 
