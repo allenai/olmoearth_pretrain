@@ -70,7 +70,7 @@ def build_launch_config(
         weka_buckets=weka_buckets,
         beaker_image=f"henryh/{OLMoCoreBeakerImage.stable}",  # we can all use the same image for now
         num_nodes=1,
-        num_gpus=1,
+        num_gpus=4,
         shared_filesystem=True,  # We only use Weka for now
         shared_memory="256GiB",
         allow_dirty=False,
