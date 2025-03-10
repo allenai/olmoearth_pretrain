@@ -52,7 +52,7 @@ class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     )
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
-    warmup_duration: Duration = Duration.epochs(2)
+    warmup_duration: Duration = field(default_factory=Duration.epochs(2))
 
     def build(
         self,

@@ -447,9 +447,9 @@ class SpaceMaskingStrategy(MaskingStrategy):
         return MaskedHeliosSample(**output_dict)
 
 
-@MASKING_STRATEGY_REGISTRY.register("band")
-class BandMaskingStrategy(MaskingStrategy):
-    """Band structured random masking of the input data."""
+@MASKING_STRATEGY_REGISTRY.register("modality")
+class ModalityMaskingStrategy(MaskingStrategy):
+    """Modality structured random masking of the input data."""
 
     def __init__(
         self,
@@ -462,13 +462,12 @@ class BandMaskingStrategy(MaskingStrategy):
         self.generator = np.random.default_rng(0)
 
     def apply_mask(self, batch: HeliosSample, **kwargs: Any) -> MaskedHeliosSample:
-        """Apply random masking to the input data.
+        """Randomly mask out modalities in the input data.
 
-        Masking happens in patchified form, with whole patches having the same mask. Non-spatial data is randomly masked.
+        Entire modalities (per instance) are assigned the same mask.
 
         Args:
             batch: Input data of type HeliosSample
-            patch_size: patch size applied to sample
             **kwargs: Additional arguments for maskings
 
         Returns:
@@ -542,8 +541,8 @@ class SpaceTimeMaskingStrategy(MaskingStrategy):
             return self.time_strategy.apply_mask(batch, **kwargs)
 
 
-@MASKING_STRATEGY_REGISTRY.register("band_space_time")
-class BandSpaceTimeMaskingStrategy(MaskingStrategy):
+@MASKING_STRATEGY_REGISTRY.register("modality_space_time")
+class ModalitySpaceTimeMaskingStrategy(MaskingStrategy):
     """Randomly select space or time masking and apply it to the input data."""
 
     def __init__(
@@ -558,7 +557,7 @@ class BandSpaceTimeMaskingStrategy(MaskingStrategy):
 
         self.space_strategy = SpaceMaskingStrategy(encode_ratio, decode_ratio)
         self.time_strategy = TimeMaskingStrategy(encode_ratio, decode_ratio)
-        self.band_strategy = BandMaskingStrategy(encode_ratio, decode_ratio)
+        self.modality_strategy = ModalityMaskingStrategy(encode_ratio, decode_ratio)
 
     def apply_mask(
         self, batch: HeliosSample, patch_size: int = 1, **kwargs: Any
@@ -571,7 +570,7 @@ class BandSpaceTimeMaskingStrategy(MaskingStrategy):
         if has_enough_timesteps:
             possible_strategies.append(self.time_strategy)
         if has_enough_modalities:
-            possible_strategies.append(self.band_strategy)
+            possible_strategies.append(self.modality_strategy)
 
         selected_strategy: MaskingStrategy = self.generator.choice(possible_strategies)
         if isinstance(selected_strategy, SpaceMaskingStrategy):
