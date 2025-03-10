@@ -411,7 +411,7 @@ class HeliosDataset(Dataset):
                 )
 
             # Count modality combinations
-            combination = frozenset(m.name for m in sample.modalities)
+            combination = frozenset(str(m.name) for m in sample.modalities)
             modality_combinations[combination] = (
                 modality_combinations.get(combination, 0) + 1
             )

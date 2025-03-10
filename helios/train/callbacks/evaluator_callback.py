@@ -128,9 +128,6 @@ class DownstreamEvaluatorCallback(Callback):
             )
             logger.info(f"Metric {METRIC_NAME}: {val_result}")
 
-        # Restore model to train mode.
-        self.trainer.model.train()
-
 
 @dataclass
 class DownstreamTaskConfig:

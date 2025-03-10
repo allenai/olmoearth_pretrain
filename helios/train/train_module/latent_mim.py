@@ -208,6 +208,8 @@ class LatentMIMTrainModule(HeliosTrainModule):
         NOTE: For contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
         self.update_target_encoder()
+        # Set the model to train mode
+        self.model.train()
         # Set the maximum number of tokens
         token_budget = self.model.token_budget
         h_w_to_sample = list(
