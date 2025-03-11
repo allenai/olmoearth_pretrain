@@ -350,8 +350,8 @@ class HeliosDataset(Dataset):
         self._work_dir: Path | None = None  # type: ignore
         self._work_dir_set = False
 
-        # self.cache_in_ram = cache_in_ram
-        # self.cache: dict[tuple[ModalityTile, SampleInformation], np.ndarray] = {}
+        self.cache_in_ram = cache_in_ram
+        self.cache: dict[tuple[ModalityTile, SampleInformation], np.ndarray] = {}
 
     @property
     def fingerprint_version(self) -> str:
@@ -653,14 +653,14 @@ class HeliosDataset(Dataset):
         self, sample_modality: ModalityTile, sample: SampleInformation
     ) -> np.ndarray:
         """Load the sample."""
-        # if self.cache_in_ram:
-        #     if (sample_modality, sample) in self.cache:
-        #         image = self.cache[(sample_modality, sample)]
-        #     else:
-        #         image = load_image_for_sample(sample_modality, sample)
-        #         self.cache[(sample_modality, sample)] = image
-        # else:
-        image = load_image_for_sample(sample_modality, sample)
+        if self.cache_in_ram:
+            if (sample_modality, sample) in self.cache:
+                image = self.cache[(sample_modality, sample)]
+            else:
+                image = load_image_for_sample(sample_modality, sample)
+                self.cache[(sample_modality, sample)] = image
+        else:
+            image = load_image_for_sample(sample_modality, sample)
 
         if image.ndim == 4:
             modality_data = rearrange(image, "t c h w -> h w t c")

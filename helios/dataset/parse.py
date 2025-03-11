@@ -1,6 +1,7 @@
 """Parse the Helios dataset."""
 
 import csv
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -78,13 +79,13 @@ class ModalityTile:
             bands.extend(band_set.bands)
         return bands
 
-    # def __hash__(self) -> int:
-    #     """Hash the modality tile."""
-    #     sha256_hash = hashlib.sha256()
-    #     sha256_hash.update(
-    #         f"{hash(self.grid_tile)}_{self.center_time}_{''.join(self.get_flat_bands())}".encode()
-    #     )
-    #     return int.from_bytes(sha256_hash.digest(), "big")
+    def __hash__(self) -> int:
+        """Hash the modality tile."""
+        sha256_hash = hashlib.sha256()
+        sha256_hash.update(
+            f"{hash(self.grid_tile)}_{self.center_time}_{''.join(self.get_flat_bands())}".encode()
+        )
+        return int.from_bytes(sha256_hash.digest(), "big")
 
 
 def parse_modality_csv(
