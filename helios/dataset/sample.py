@@ -1,5 +1,6 @@
 """Construct training samples from parsed Helios CSVs."""
 
+import hashlib
 import logging
 from dataclasses import dataclass
 
@@ -37,6 +38,17 @@ class SampleInformation:
     # The time spans from which the ModalityTiles are sourced should either match the
     # time span of the sample, or should be TimeSpan.STATIC.
     modalities: dict[ModalitySpec, ModalityTile]
+
+    def __hash__(self) -> int:
+        """Hash the Sample Information."""
+        sha256_hash = hashlib.sha256()
+        modalities_str = "".join(
+            [f"{hash(key)}_{hash(val)}" for key, val in self.modalities.items()]
+        )
+        sha256_hash.update(
+            f"{hash(self.grid_tile)}_{self.time_span}_{modalities_str}".encode()
+        )
+        return int.from_bytes(sha256_hash.digest(), "big")
 
 
 def image_tiles_to_samples(

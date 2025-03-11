@@ -44,12 +44,19 @@ class TestHeliosDataset:
         set_random_seeds: None,  # calls the fixture
     ) -> None:
         """Test the load_sample method."""
-        prepare_samples, _ = prepare_samples_and_supported_modalities
+        prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
         samples = prepare_samples(tmp_path)
         logger.info(f"samples: {len(samples)}")
         sample: SampleInformation = samples[0]
         sample_modality: ModalityTile = sample.modalities[Modality.SENTINEL2_L2A]
-        image = HeliosDataset.load_sample(sample_modality, sample)
+        dataset = HeliosDataset(
+            samples=samples,
+            tile_path=tmp_path,
+            supported_modalities=supported_modalities,
+            dtype="float32",
+            cache_in_ram=False,
+        )
+        image = dataset.load_sample(sample_modality, sample)
         sentinel2_bandset_indices = Modality.SENTINEL2_L2A.bandsets_as_indices()
         # checking that sample data is loaded in the order corresponding to the bandset indices
         # These are manually extracted values from each band and dependent on the seed (call with conftest.py)
