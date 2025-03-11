@@ -16,7 +16,7 @@ from .parse import GridTile, ModalityTile
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass
 class SampleInformation:
     """Specification of a training example.
 

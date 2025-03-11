@@ -55,7 +55,7 @@ class GridTile:
     row: int
 
 
-@dataclass(frozen=True)
+@dataclass
 class ModalityTile:
     """Information about one tile pertaining to a modality."""
 
