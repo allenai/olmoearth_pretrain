@@ -648,7 +648,6 @@ class HeliosDataset(Dataset):
 
         return norm_dict
 
-    @classmethod
     def load_sample(
         self, sample_modality: ModalityTile, sample: SampleInformation
     ) -> np.ndarray:
