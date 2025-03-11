@@ -311,6 +311,7 @@ class HeliosDataset(Dataset):
         dtype: DType,
         samples: list[SampleInformation] | None = None,
         normalize: bool = True,
+        cache_in_ram: bool = True,
     ):
         """Initialize the dataset.
 
@@ -325,6 +326,7 @@ class HeliosDataset(Dataset):
             samples: The samples to include in the dataset.
             dtype: The dtype of the data.
             normalize: If True, apply normalization to the data, if False, do not apply normalization
+            cache_in_ram: Whether to store loaded ndarrays in RAM
 
         Returns:
             None
@@ -347,6 +349,9 @@ class HeliosDataset(Dataset):
         self._fs_local_rank = get_fs_local_rank()
         self._work_dir: Path | None = None  # type: ignore
         self._work_dir_set = False
+
+        self.cache_in_ram = cache_in_ram
+        self.cache: dict[tuple[ModalityTile, SampleInformation], np.ndarray] = {}
 
     @property
     def fingerprint_version(self) -> str:
@@ -643,12 +648,18 @@ class HeliosDataset(Dataset):
 
         return norm_dict
 
-    @classmethod
     def load_sample(
         self, sample_modality: ModalityTile, sample: SampleInformation
     ) -> np.ndarray:
         """Load the sample."""
-        image = load_image_for_sample(sample_modality, sample)
+        if self.cache_in_ram:
+            if (sample_modality, sample) in self.cache:
+                image = self.cache[(sample_modality, sample)]
+            else:
+                image = load_image_for_sample(sample_modality, sample)
+                self.cache[(sample_modality, sample)] = image
+        else:
+            image = load_image_for_sample(sample_modality, sample)
 
         if image.ndim == 4:
             modality_data = rearrange(image, "t c h w -> h w t c")
