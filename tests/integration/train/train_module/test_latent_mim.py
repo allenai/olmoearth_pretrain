@@ -330,7 +330,7 @@ def test_train_batch_without_missing_modalities(
             # I want to be able to have a trainer object that actually has the metrics
             logger.info(mock_trainer._metrics)
             assert torch.allclose(
-                mock_trainer._metrics["train/Patch Discrimination"],
+                mock_trainer._metrics["train/PatchDisc"],
                 torch.tensor(0.9216),
                 atol=1e-2,
             )
@@ -364,7 +364,7 @@ def test_train_batch_with_missing_modalities(
             # I want to be able to have a trainer object that actually has the metrics
             logger.info(mock_trainer._metrics)
             assert torch.allclose(
-                mock_trainer._metrics["train/Patch Discrimination"],
+                mock_trainer._metrics["train/PatchDisc"],
                 torch.tensor(0.864),
                 atol=1e-2,
             )
