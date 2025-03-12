@@ -120,7 +120,7 @@ class PatchDiscriminationLoss(Loss):
                     torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
                 )
                 logger.info(f"score_sample: {score_sample.shape}")
-                labels = torch.arange(c, dtype=torch.long, device=pred.device)
+                labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
                 loss = F.cross_entropy(
                     score_sample.flatten(0, 1),
                     labels.flatten(0, 1),
@@ -140,7 +140,9 @@ class PatchDiscriminationLoss(Loss):
                 None
             ].repeat(bs, 1)
             loss = F.cross_entropy(
-                scores.flatten(0, 1), labels.flatten(0, 1), reduction="none"
+                scores.flatten(0, 1),
+                labels.flatten(0, 1),
+                reduction="none",
             ) * (self.tau * 2)
             # emulate averaging across the batch dimension
             loss_multiplier = self._expand_and_reciprocate(count)
