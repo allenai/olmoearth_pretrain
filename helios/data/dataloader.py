@@ -406,7 +406,7 @@ class HeliosDataLoaderConfig(Config):
     shuffle: bool = True
     num_threads: int | None = None
     num_workers: int = 0
-    prefetch_factor: int | None = None
+    prefetch_factor: int = 4
     target_device_type: str = "cpu"
     drop_last: bool = True
 

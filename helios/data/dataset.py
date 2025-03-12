@@ -341,8 +341,6 @@ class HeliosDataset(Dataset):
         if len(samples) == 0:
             raise ValueError("No samples provided")
         self.samples = self._filter_samples(samples)  # type: ignore
-        # select the first half of the samples
-        self.samples = self.samples[: len(self.samples) // 3]
         self.dtype = dtype
         self.normalize = normalize
         self.h5py_dir = self.tile_path / h5py_folder
@@ -511,6 +509,8 @@ class HeliosDataset(Dataset):
         logger.info(f"Number of samples after filtering: {len(filtered_samples)}")
         logger.info("Distribution of samples after filtering:")
         self._log_modality_distribution(filtered_samples)
+        # random select 1/3 of the samples
+        filtered_samples = random.sample(filtered_samples, k=len(filtered_samples) // 3)
         return filtered_samples
 
     def get_latlon(self, sample: SampleInformation) -> np.ndarray:
