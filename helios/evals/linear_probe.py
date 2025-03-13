@@ -104,16 +104,16 @@ def train_probe(
 
     for epoch in range(epochs):
         for i, batch in enumerate(data_loader):
-            batch_emb, batch_labels = batch  # (bsz, num_patches, dim), (bsz, H, W)
-            spatial_patches_per_dim = int(batch_emb.shape[1] ** 0.5)
+            batch_emb, batch_labels = batch  # (bsz, t_h, t_w, dim), (bsz, H, W)
+            spatial_patches_per_dim = batch_emb.shape[1]
             batch_emb = batch_emb.to(device)
 
-            with torch.amp.autocast(dtype=torch.bfloat16):
+            with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 logits = probe(batch_emb)  # (bsz, num_patches, logits_per_patch)
 
                 logits = rearrange(
                     logits,
-                    "b (h w) (c i j) -> b c (h i) (w j)",
+                    "b h w (c i j) -> b c (h i) (w j)",
                     h=spatial_patches_per_dim,
                     w=spatial_patches_per_dim,
                     c=num_classes,
@@ -160,14 +160,14 @@ def evaluate_probe(
     with torch.no_grad():
         for batch in data_loader:
             batch_emb, batch_labels = batch  # (bsz, num_patches, dim), (bsz, H, W)
-            spatial_patches_per_dim = int(batch_emb.shape[1] ** 0.5)
+            spatial_patches_per_dim = batch_emb.shape[1]
             batch_emb = batch_emb.to(device)
 
-            with torch.amp.autocast(dtype=torch.bfloat16):
+            with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 logits = probe(batch_emb)  # (bsz, num_patches, logits_per_patch)
                 logits = rearrange(
                     logits,
-                    "b (h w) (c i j) -> b c (h i) (w j)",
+                    "b h w (c i j) -> b c (h i) (w j)",
                     h=spatial_patches_per_dim,
                     w=spatial_patches_per_dim,
                     c=num_classes,
