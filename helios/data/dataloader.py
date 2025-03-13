@@ -177,8 +177,8 @@ class HeliosDataLoader(DataLoaderBase):
             _IterableDatasetWrapper(self),
             batch_size=None,
             num_workers=self.num_workers,
-            pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
-            prefetch_factor=self.prefetch_factor,
+            pin_memory=False,  # self.target_device_type == "cuda" and self.num_workers > 0,  # False try
+            prefetch_factor=4,  # self.prefetch_factor,  # increase prefetch factor
             persistent_workers=self.persistent_workers
             if self.num_workers > 0
             else False,
@@ -359,7 +359,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
         if self.worker_info is None and self.data_loader.num_threads is None:
             # If `num_threads` hasn't been specified and we're not using multiprocessing we'll
             # try to guess a good number of threads.
-            num_threads = 4
+            num_threads = 4  # try 16 threads
 
         # Potentially slice by threads.
         instance_iterator: Iterator[HeliosSample]
