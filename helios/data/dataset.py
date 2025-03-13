@@ -698,10 +698,11 @@ class HeliosDataset(Dataset):
         # Apply normalization
         if self.normalize:
             for modality in sample.modalities:
-                if modality == "timestamps" or modality == "latlon":
-                    continue
                 sample_dict[modality.name] = self.normalize_image(
                     modality, sample_dict[modality.name]
+                )
+                sample_dict[modality.name] = sample_dict[modality.name].astype(
+                    self.dtype
                 )
         return HeliosSample(**sample_dict)
 
