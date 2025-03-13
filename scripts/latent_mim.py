@@ -171,7 +171,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
         upload_dataset_distribution_pre_train=False,
-        enabled=False,  # set to False to avoid wandb errors
+        enabled=True,  # set to False to avoid wandb errors
     )
     EVAL_INTERVAL_EPOCHS = 5
     EVAL_TASKS = [
