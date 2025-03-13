@@ -354,8 +354,8 @@ def collate_helios(
         dtype_to_use = found_dtype if found_dtype is not None else reference_dtype
         logger.info(f"expected_shape: {expected_shape}, dtype_to_use: {dtype_to_use}")
         for i in missing_data_indices:
-            modality_data_stack[i] = torch.full(
-                expected_shape, float('nan'), dtype=dtype_to_use,
+            modality_data_stack[i] = torch.zeros(
+                expected_shape, dtype=dtype_to_use,
             )
         if missing_data_indices:
             missing_modalities_masks[field] = torch.zeros(
