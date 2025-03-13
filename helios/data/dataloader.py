@@ -1,9 +1,11 @@
 """Helios DataLoader."""
 
+import inspect
 import logging
 import math
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from functools import partial
 from itertools import islice
 from pathlib import Path
 from typing import Any
@@ -66,7 +68,13 @@ class HeliosDataLoader(DataLoaderBase):
         )
         self.dataset = dataset
         assert isinstance(self.dataset, HeliosDataset)  # type: ignore
-        self.collator = collator
+        # Check if collator function accepts supported_modalities argument
+        if "supported_modalities" in inspect.signature(collator).parameters:
+            self.collator = partial(
+                collator, supported_modalities=self.dataset.supported_modalities
+            )
+        else:
+            self.collator = collator  # type: ignore
         self.seed = seed
         self.shuffle = shuffle
         self.num_threads = num_threads
@@ -179,9 +187,9 @@ class HeliosDataLoader(DataLoaderBase):
             num_workers=self.num_workers,
             pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
             prefetch_factor=self.prefetch_factor,
-            persistent_workers=self.persistent_workers
-            if self.num_workers > 0
-            else False,
+            persistent_workers=(
+                self.persistent_workers if self.num_workers > 0 else False
+            ),
             timeout=0,
         )
 
@@ -386,7 +394,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
                 self.data_loader._get_dataset_item(int(idx)) for idx in indices
             )
         return (
-            self.data_loader.collator(batch, self.dataset.supported_modalities)
+            self.data_loader.collator(batch)
             for batch in iter_batched(
                 instance_iterator,
                 self.data_loader.rank_batch_size,

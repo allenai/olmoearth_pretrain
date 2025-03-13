@@ -13,8 +13,7 @@ import torch
 from rasterio.transform import from_origin
 
 from helios.data.constants import BandSet, Modality, ModalitySpec
-from helios.dataset.parse import (GridTile, ModalityImage, ModalityTile,
-                                  TimeSpan)
+from helios.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
 from helios.dataset.sample import SampleInformation
 from helios.train.masking import MaskValue
 
@@ -22,11 +21,11 @@ from helios.train.masking import MaskValue
 @pytest.fixture(autouse=True)
 def set_random_seeds() -> None:
     """Set random seeds for reproducibility."""
+    np.random.seed(42)
     torch.manual_seed(42)
     torch.use_deterministic_algorithms(True)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    np.random.seed(42)
     random.seed(42)
 
 
@@ -49,6 +48,7 @@ def create_geotiff(
     """Create a GeoTIFF file with specified resolution and size."""
     transform = from_origin(0, 0, resolution, resolution)
     data = np.random.randint(0, 255, (num_bands, height, width), dtype=np.uint8)
+
     with rasterio.open(
         file_path,
         "w",
@@ -115,8 +115,7 @@ def prepare_samples_and_supported_modalities() -> (
                             / "s2_l2a_10m.tif",
                             BandSet(
                                 ["B05", "B06", "B07", "B8A", "B11", "B12"], 32
-                            ): data_path
-                            / "s2_l2a_20m.tif",
+                            ): data_path / "s2_l2a_20m.tif",
                             BandSet(["B01", "B09"], 64): data_path / "s2_l2a_40m.tif",
                         },
                     ),

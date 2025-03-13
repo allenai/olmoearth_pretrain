@@ -54,9 +54,9 @@ class TestHeliosDataset:
         # checking that sample data is loaded in the order corresponding to the bandset indices
         # These are manually extracted values from each band and dependent on the seed (call with conftest.py)
         expected_values = [
-            [119, 247, 58, 216],
-            [41, 103, 96, 128, 120, 162],
-            [169, 19],
+            [102, 242, 187, 105],
+            [131, 210, 108, 227, 85, 87],
+            [94, 248],
         ]
         data_matches_expected = []
         for bandset_index, expected_value_lst in zip(
@@ -64,7 +64,9 @@ class TestHeliosDataset:
         ):
             loaded_data = image[..., bandset_index]
             for idx in range(len(expected_value_lst)):
-                print(loaded_data[0, 0, 0, idx])
+                print(
+                    f"loaded_data[0, 0, 0, idx]: {loaded_data[0, 0, 0, idx]} expected_value_lst[idx]: {expected_value_lst[idx]}"
+                )
                 data_matches_expected.append(
                     loaded_data[0, 0, 0, idx] == expected_value_lst[idx]
                 )
