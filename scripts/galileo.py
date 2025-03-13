@@ -209,6 +209,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
+            probe_lr=0.1,
         ),
     ]
     # Let us not use garbage collector fallback
