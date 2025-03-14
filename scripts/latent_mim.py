@@ -43,12 +43,12 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     # which may cause issues
     H_W_TO_SAMPLE_MIN = 5
     H_W_TO_SAMPLE_MAX = 13
-    ENCODER_EMBEDDING_SIZE = 256
-    DECODER_EMBEDDING_SIZE = 256
-    ENCODER_DEPTH = 4
+    ENCODER_EMBEDDING_SIZE = 768
+    DECODER_EMBEDDING_SIZE = 768
+    ENCODER_DEPTH = 12
     DECODER_DEPTH = 4
-    ENCODER_NUM_HEADS = 8
-    DECODER_NUM_HEADS = 8
+    ENCODER_NUM_HEADS = 12
+    DECODER_NUM_HEADS = 12
     MLP_RATIO = 4.0
     TRANSFORM_TYPE = "flip_and_rotate"
     encoder_config = EncoderConfig(
@@ -87,8 +87,8 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 0.002
-    RANK_MICROBATCH_SIZE = 32
+    LR = 0.0003
+    RANK_MICROBATCH_SIZE = 64
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
     WD = 0.02
@@ -132,9 +132,10 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
 
-    NUM_WORKERS = 8
+    NUM_WORKERS = 4
     NUM_THREADS = 0
-    GLOBAL_BATCH_SIZE = 128
+    GLOBAL_BATCH_SIZE = 512
+    PREFETCH_FACTOR = 2
 
     dataloader_config = HeliosDataLoaderConfig(
         global_batch_size=GLOBAL_BATCH_SIZE,
@@ -142,6 +143,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         work_dir=common.save_folder,
         num_threads=NUM_THREADS,
         num_workers=NUM_WORKERS,
+        prefetch_factor=PREFETCH_FACTOR,
     )
     # Should the dataloader build the config or take an object?
     return dataloader_config

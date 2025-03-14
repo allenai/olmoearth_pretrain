@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
-from olmo_core.distributed.utils import get_local_tensor, get_world_size
+from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.float8 import Float8Config
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
@@ -298,7 +298,7 @@ class GalileoTrainModule(HeliosTrainModule):
 
         self.trainer.record_metric(
             f"train/{self.base_loss_a.name}+{self.base_loss_b.name}",
-            total_batch_loss / get_world_size(self.dp_process_group),
+            total_batch_loss,
             ReduceType.mean,
         )
 
