@@ -189,7 +189,6 @@ class HeliosTrainModule(TrainModule):
         else:
             self.world_mesh = None
 
-
         self.warmup_duration = warmup_duration
 
         self.float8_handler: Float8Handler | None = None
