@@ -228,8 +228,20 @@ class MaskingStrategy:
 
         mask = torch.as_tensor(flat_mask_tokens, device=device)
         if modality.is_spatial:
-            mask = repeat(mask, "b t -> b h w t", h=patch_size, w=patch_size)
-        mask = mask.view(*shape)
+            patchified_shape = (
+                shape[0],
+                shape[1] // patch_size,
+                shape[2] // patch_size,
+            )
+            patchified_shape = patchified_shape + shape[3:]
+
+            mask = mask.view(*patchified_shape)
+            # Repeat the mask across the patch dimensions
+            mask = repeat(
+                mask, "b h w ... -> b (h hp) (w wp) ...", hp=patch_size, wp=patch_size
+            )
+        else:
+            mask = mask.view(*shape)
         return mask
 
     @property
