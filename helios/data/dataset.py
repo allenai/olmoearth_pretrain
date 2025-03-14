@@ -336,7 +336,7 @@ class HeliosDataset(Dataset):
             samples = self._get_samples()  # type: ignore
         if len(samples) == 0:
             raise ValueError("No samples provided")
-        self.samples = self._filter_samples(samples)  # type: ignore
+        self.samples = np.array(self._filter_samples(samples))  # type: ignore
         self.dtype = dtype
         self.normalize = normalize
 

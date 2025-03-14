@@ -10,3 +10,5 @@ python3 scripts/latent_mim.py dry_run --trainer.max_duration.value=10 --trainer.
 
 - Make sure to replace all variables for evaluator task
 python3 scripts/latent_mim.py  --trainer.callbacks.downstream_evaluator.tasks="[{name: my_task, num_workers: 2, ...}]" \
+
+python3 scripts/galileo.py launch example2_galileo_missing_modality ai2/jupiter-cirrascale-2  --data_loader.num_workers=4
