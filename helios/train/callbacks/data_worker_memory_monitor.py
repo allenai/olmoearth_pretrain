@@ -1,17 +1,12 @@
 """Data worker memory monitor callback."""
 
-import json
 import logging
 import os
-import pickle
-import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any
 
 import psutil
-import torch
 from olmo_core.train.callbacks.callback import Callback
 from tabulate import tabulate
 
