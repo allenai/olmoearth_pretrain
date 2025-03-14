@@ -165,6 +165,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg = token_exit_cfg
+        # We have to add a seed here when we build and include the masking seed as part of the train module state dict
         self.base_loss = loss_config.build()
         self.masking_strategy = masking_config.build()
 
