@@ -177,7 +177,7 @@ class HeliosDataLoader(DataLoaderBase):
             _IterableDatasetWrapper(self),
             batch_size=None,
             num_workers=self.num_workers,
-            pin_memory=True,
+            pin_memory=False,
             prefetch_factor=self.prefetch_factor,
             persistent_workers=self.persistent_workers
             if self.num_workers > 0
