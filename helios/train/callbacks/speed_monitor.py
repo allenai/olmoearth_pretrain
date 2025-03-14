@@ -2,6 +2,7 @@
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from olmo_core.train.callbacks.speed_monitor import SpeedMonitorCallback
@@ -13,6 +14,7 @@ from helios.train.train_module.latent_mim import LatentMIMTrainModule
 logger = logging.getLogger(__name__)
 
 
+@dataclass
 class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
     """Speed monitor callback for the trainer for Helios."""
 
