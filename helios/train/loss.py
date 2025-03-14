@@ -83,6 +83,7 @@ class PatchDiscriminationLoss(Loss):
         all_targets = targets.flatten_tokens_and_masks()[0]
 
         # Samples may have different number of tokens
+        # TODO: Skip unqueeze and the for loop when mask_other_samples is True
         pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
         target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
         bs, nt, _ = pred.shape

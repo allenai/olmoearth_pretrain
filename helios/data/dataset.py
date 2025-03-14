@@ -5,6 +5,7 @@ import logging
 import os
 import random
 import tempfile
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import floor
@@ -343,7 +344,12 @@ class HeliosDataset(Dataset):
         self.samples = self._filter_samples(samples)  # type: ignore
         self.dtype = dtype
         self.normalize = normalize
-        self.h5py_dir = self.tile_path / h5py_folder / str(len(self.samples))
+        self.h5py_dir = (
+            self.tile_path
+            / h5py_folder
+            / "_".join([modality.name for modality in self.supported_modalities])
+            / str(len(self.samples))
+        )
         os.makedirs(self.h5py_dir, exist_ok=True)
 
         if self.normalize:
@@ -671,32 +677,51 @@ class HeliosDataset(Dataset):
         except Exception:
             return self.normalizer_predefined.normalize(modality, image)
 
+    def _get_h5_file_path(self, index: int) -> UPath:
+        """Get the h5 file path."""
+        return self.h5py_dir / f"sample_{index}.h5"
+
+    def _create_h5_file(
+        self, index: int, sample: SampleInformation, h5_file_path: UPath
+    ) -> dict[str, Any]:
+        """Create the h5 file."""
+        sample_dict = {}
+        for modality in sample.modalities:
+            sample_modality = sample.modalities[modality]
+            image = self.load_sample(sample_modality, sample)
+            # Convert Sentinel1 data to dB
+            if modality == Modality.SENTINEL1:
+                image = convert_to_db(image)
+            sample_dict[modality.name] = image
+            # Get latlon and timestamps from Sentinel2 data
+            if modality == Modality.SENTINEL2_L2A:
+                sample_dict["latlon"] = self.get_latlon(sample).astype(self.dtype)
+                sample_dict["timestamps"] = self._get_timestamps(sample)
+        # Save h5 file on WEKA
+        with h5py.File(h5_file_path, "w") as f:
+            for modality_name, image in sample_dict.items():
+                f.create_dataset(modality_name, data=image)
+        return sample_dict
+
     def __getitem__(self, index: int) -> HeliosSample:
         """Get the sample at the given index."""
         sample = self.samples[index]
-        sample_dict = {}
-        h5_file_path = self.h5py_dir / f"sample_{index}.h5"
-        # If the h5 file does not exist, create it
+        h5_file_path = self._get_h5_file_path(index)
+
         if not h5_file_path.exists():
-            for modality in sample.modalities:
-                sample_modality = sample.modalities[modality]
-                image = self.load_sample(sample_modality, sample)
-                # Convert Sentinel1 data to dB
-                if modality == Modality.SENTINEL1:
-                    image = convert_to_db(image)
-                sample_dict[modality.name] = image
-                # Get latlon and timestamps from Sentinel2 data
-                if modality == Modality.SENTINEL2_L2A:
-                    sample_dict["latlon"] = self.get_latlon(sample).astype(self.dtype)
-                    sample_dict["timestamps"] = self._get_timestamps(sample)
-            with h5py.File(h5_file_path, "w") as f:
-                for modality_name, image in sample_dict.items():
-                    f.create_dataset(modality_name, data=image)
+            sample_dict = self._create_h5_file(index, sample, h5_file_path)
         else:
-            # took about 0.02 seconds to read h5 data
+            # Check how long it takes to read h5 data
+            if index == 0:
+                start_time = time.time()
             with h5py.File(h5_file_path, "r") as f:
                 sample_dict = {k: v[()] for k, v in f.items()}
-        # Apply normalization
+            if index == 0:
+                end_time = time.time()
+                logger.info(
+                    f"Time taken to read h5 data: {end_time - start_time} seconds"
+                )
+
         if self.normalize:
             for modality in sample.modalities:
                 sample_dict[modality.name] = self.normalize_image(
