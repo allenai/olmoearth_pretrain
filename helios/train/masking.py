@@ -225,6 +225,14 @@ class MaskingStrategy(ABC):
         mask = mask.view(*shape)
         return mask
 
+    def get_masking_seed_state(self) -> int:
+        "Get the current state of the generator"
+        return self.generator.bit_generator.state
+
+    def set_masking_seed_state(self, state: int) -> None:
+        "Set the state of the generator"
+        self.generator.bit_generator.state = state
+
     @property
     def encode_ratio(self) -> float:
         """Get the encode ratio."""
@@ -588,13 +596,14 @@ class RandomMaskingStrategy(MaskingStrategy):
 
     def __init__(
         self,
+        masking_seed: int,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
     ) -> None:
         """Initialize the masking strategy."""
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
-        self.generator = np.random.default_rng(0)
+        self.generator = np.random.default_rng(masking_seed)
 
     def apply_mask(self, batch: HeliosSample, **kwargs: Any) -> MaskedHeliosSample:
         """Apply random masking to the input data.
