@@ -530,6 +530,7 @@ class ModalityMaskingStrategy(MaskingStrategy):
             b_s = shape[-1]
             b, h, w, t = list(shape[:-1]) + [1] * (4 - len(shape[:-1]))
             mask = repeat(modality_mask, "b -> b h w t b_s", h=h, w=w, b_s=b_s, t=t)
+            # Ensure we don't do index_put_ on expanded tensors is deprecated.
             mask = mask.view(*shape).contiguous()
             missing_mask = missing_mask_dict.get(modality, None)
             mask = self.apply_missing_mask(mask, missing_mask)
