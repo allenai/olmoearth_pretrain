@@ -54,7 +54,7 @@ class HeliosDataLoader(DataLoaderBase):
         collator: Callable = default_collate,
         target_device_type: str = "cpu",
         drop_last: bool = True,
-        persistent_workers: bool = True,
+        persistent_workers: bool = False,
     ):
         """Initialize the HeliosDataLoader."""
         super().__init__(
