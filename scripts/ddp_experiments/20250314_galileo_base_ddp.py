@@ -42,7 +42,7 @@ BASE_COMMAND = (
     "--train_module.optim_config.lr={lr} "
     "--train_module.optim_config.weight_decay={wd} "
     "--train_module.warmup_duration.value={warmup} "
-    "--train_module.warmup_duration.unit=epochs"
+    "--train_module.warmup_duration.unit=epochs "
     "--launch.num_gpus=8"
 )
 
