@@ -118,7 +118,7 @@ class PatchDiscriminationLoss(Loss):
                 loss = loss.mean()
                 losses.append(loss)
                 start = end
-            loss = torch.stack(losses).mean()
+            loss = torch.stack(losses).sum()
         else:
             # Compute scores for all samples
             scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
