@@ -21,8 +21,8 @@ MLP_RATIO = 4
 
 # Sweep parameters
 LEARNING_RATES = [2e-3]
-WEIGHT_DECAYS = [2e-2]
-WARMUP_EPOCHS = [10]
+WEIGHT_DECAYS = [3e-2]
+WARMUP_EPOCHS = [30]
 
 # Base command template
 BASE_COMMAND = (
