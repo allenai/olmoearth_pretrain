@@ -11,16 +11,16 @@ GLOBAL_BATCH_SIZE = 512
 RANK_MICROBATCH_SIZE = 64
 
 # Fixed model parameters
-ENCODER_EMBEDDING_SIZE = 768
-DECODER_EMBEDDING_SIZE = 768
-ENCODER_DEPTH = 12
-DECODER_DEPTH = 4
-ENCODER_NUM_HEADS = 12
-DECODER_NUM_HEADS = 12
+ENCODER_EMBEDDING_SIZE = 256
+DECODER_EMBEDDING_SIZE = 256
+ENCODER_DEPTH = 4
+DECODER_DEPTH = 2
+ENCODER_NUM_HEADS = 8
+DECODER_NUM_HEADS = 8
 MLP_RATIO = 4
 
 # Sweep parameters
-LEARNING_RATES = [3e-4]
+LEARNING_RATES = [2e-3]
 WEIGHT_DECAYS = [2e-2]
 WARMUP_EPOCHS = [10]
 
@@ -49,7 +49,7 @@ BASE_COMMAND = (
 # Iterate over all combinations of hyperparameters
 for lr, wd, warmup in itertools.product(LEARNING_RATES, WEIGHT_DECAYS, WARMUP_EPOCHS):
     # Construct run name indicating hyperparameters
-    run_name = f"galileo_base_ddp_lr_{lr}_wd_{wd}_warmup_{warmup}"
+    run_name = f"galileo_tiny_ddp_lr_{lr}_wd_{wd}_warmup_{warmup}"
 
     # Construct full command
     command = BASE_COMMAND.format(
