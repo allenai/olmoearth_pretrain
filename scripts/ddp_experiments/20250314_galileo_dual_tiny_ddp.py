@@ -26,7 +26,7 @@ WARMUP_EPOCHS = [30]
 
 # Base command template
 BASE_COMMAND = (
-    "python3 scripts/galileo.py launch {run_name} ai2/jupiter-cirrascale-2 "
+    "python3 scripts/galileo.py launch {run_name} ai2/saturn-cirrascale "
     "--model.encoder_config.embedding_size={encoder_embedding_size} "
     "--model.encoder_config.depth={encoder_depth} "
     "--model.encoder_config.num_heads={encoder_num_heads} "
@@ -49,7 +49,7 @@ BASE_COMMAND = (
 # Iterate over all combinations of hyperparameters
 for lr, wd, warmup in itertools.product(LEARNING_RATES, WEIGHT_DECAYS, WARMUP_EPOCHS):
     # Construct run name indicating hyperparameters
-    run_name = f"galileo_tiny_modality_ddp_lr_{lr}_wd_{wd}_warmup_{warmup}"
+    run_name = f"galileo_tiny_modality_ddp_lr_{lr}_wd_{wd}_warmup_{warmup}_1"
 
     # Construct full command
     command = BASE_COMMAND.format(
