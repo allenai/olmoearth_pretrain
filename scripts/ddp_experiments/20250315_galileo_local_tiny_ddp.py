@@ -5,6 +5,7 @@ import subprocess  # nosec
 
 # Fixed training parameters
 NUM_WORKERS = 4
+PREFETCH_FACTOR = 1
 GLOBAL_BATCH_SIZE = 512
 RANK_MICROBATCH_SIZE = 64
 
@@ -36,7 +37,7 @@ token_exit_args = " ".join(
 
 # Base command template
 BASE_COMMAND = (
-    "python3 scripts/latent_mim.py launch {run_name} ai2/saturn-cirrascale "
+    "python3 scripts/latent_mim.py launch {run_name} ai2/jupiter-cirrascale-2 "
     "--model.encoder_config.embedding_size={encoder_embedding_size} "
     "--model.encoder_config.depth={encoder_depth} "
     "--model.encoder_config.num_heads={encoder_num_heads} "
@@ -47,6 +48,7 @@ BASE_COMMAND = (
     "--model.decoder_config.num_heads={decoder_num_heads} "
     "--model.decoder_config.mlp_ratio={mlp_ratio} "
     "--data_loader.num_workers={num_workers} "
+    "--data_loader.prefetch_factor={prefetch_factor} "
     "--data_loader.global_batch_size={global_batch_size} "
     "--train_module.rank_microbatch_size={rank_microbatch_size} "
     "--train_module.optim_config.lr={lr} "
@@ -59,7 +61,7 @@ BASE_COMMAND = (
 # Iterate over all combinations of hyperparameters
 for lr, wd, warmup in itertools.product(LEARNING_RATES, WEIGHT_DECAYS, WARMUP_EPOCHS):
     # Construct run name indicating hyperparameters
-    run_name = f"galileo_local_tiny_ddp_lr_{lr}_wd_{wd}_warmup_{warmup}_1"
+    run_name = f"galileo_local_tiny_ddp_lr_{lr}_wd_{wd}_warmup_{warmup}_2"
 
     # Construct full command
     command = BASE_COMMAND.format(
@@ -72,6 +74,7 @@ for lr, wd, warmup in itertools.product(LEARNING_RATES, WEIGHT_DECAYS, WARMUP_EP
         decoder_num_heads=DECODER_NUM_HEADS,
         mlp_ratio=MLP_RATIO,
         num_workers=NUM_WORKERS,
+        prefetch_factor=PREFETCH_FACTOR,
         global_batch_size=GLOBAL_BATCH_SIZE,
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         lr=lr,
