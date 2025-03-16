@@ -53,7 +53,7 @@ BASE_COMMAND = (
     "--train_module.optim_config.weight_decay={wd} "
     "--train_module.warmup_duration.value={warmup} "
     "--train_module.warmup_duration.unit=epochs " + token_exit_args + " "
-    "--launch.num_gpus=8"
+    "--launch.num_gpus=8 --launch.shared_memory=512GiB"
 )
 
 # Iterate over all combinations of hyperparameters
