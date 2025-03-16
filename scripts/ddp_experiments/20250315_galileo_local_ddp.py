@@ -1,6 +1,4 @@
-"""This script is running ddp experiments for the Galileo basemodel."""
-
-# Example run: https://wandb.ai/eai-ai2/helios-train/runs/in6gc4g7
+"""This script is running ddp experiments for the Galileo tiny local model."""
 
 import itertools
 import subprocess  # nosec
@@ -20,13 +18,25 @@ DECODER_NUM_HEADS = 8
 MLP_RATIO = 4
 
 # Sweep parameters
-LEARNING_RATES = [2e-3]
+LEARNING_RATES = [3e-3]
 WEIGHT_DECAYS = [3e-2]
-WARMUP_EPOCHS = [30]
+WARMUP_EPOCHS = [2]
+
+# Fixed token exit
+TOKEN_EXIT_CFG = {
+    "sentinel2_l2a": 0,
+    "sentinel1": 0,
+    "latlon": 0,
+    "worldcover": 0,
+}
+token_exit_args = " ".join(
+    f"--train_module.token_exit_cfg.{key}={value}"
+    for key, value in TOKEN_EXIT_CFG.items()
+)
 
 # Base command template
 BASE_COMMAND = (
-    "python3 scripts/galileo.py launch {run_name} ai2/jupiter-cirrascale-2 "
+    "python3 scripts/latent_mim.py launch {run_name} ai2/jupiter-cirrascale-2 "
     "--model.encoder_config.embedding_size={encoder_embedding_size} "
     "--model.encoder_config.depth={encoder_depth} "
     "--model.encoder_config.num_heads={encoder_num_heads} "
@@ -42,14 +52,14 @@ BASE_COMMAND = (
     "--train_module.optim_config.lr={lr} "
     "--train_module.optim_config.weight_decay={wd} "
     "--train_module.warmup_duration.value={warmup} "
-    "--train_module.warmup_duration.unit=epochs "
+    "--train_module.warmup_duration.unit=epochs " + token_exit_args + " "
     "--launch.num_gpus=8"
 )
 
 # Iterate over all combinations of hyperparameters
 for lr, wd, warmup in itertools.product(LEARNING_RATES, WEIGHT_DECAYS, WARMUP_EPOCHS):
     # Construct run name indicating hyperparameters
-    run_name = f"galileo_tiny_modality_ddp_lr_{lr}_wd_{wd}_warmup_{warmup}"
+    run_name = f"galileo_local_tiny_ddp_lr_{lr}_wd_{wd}_warmup_{warmup}"
 
     # Construct full command
     command = BASE_COMMAND.format(
