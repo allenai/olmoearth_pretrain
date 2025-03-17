@@ -81,6 +81,8 @@ class PatchDiscriminationLoss(Loss):
         """
         all_preds, all_masks = predictions.flatten_tokens_and_masks()
         all_targets = targets.flatten_tokens_and_masks()[0]
+        # The number of tokens per sample in a microbatch should be the same
+        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
 
         if self.mask_other_samples:
             bs, _, d = all_preds.shape
@@ -102,10 +104,8 @@ class PatchDiscriminationLoss(Loss):
         pred = F.normalize(pred, p=2, dim=-1)
         target = F.normalize(target, p=2, dim=-1)
 
-        # count represents the number of tokens per sample
-        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
-
         if self.mask_other_samples:
+            # Compute scores for each sample in the batch
             scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
             logger.info(f"scores: {scores.shape}")
             labels = torch.arange(nt, dtype=torch.long, device=pred.device)[
@@ -114,6 +114,7 @@ class PatchDiscriminationLoss(Loss):
             loss = F.cross_entropy(
                 scores.flatten(0, 1),
                 labels.flatten(0, 1),
+                reduction="mean",
             ) * (self.tau * 2)
             return loss
         else:

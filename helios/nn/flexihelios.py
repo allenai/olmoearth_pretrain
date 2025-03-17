@@ -303,6 +303,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     dtype=modality_data.dtype,
                     device=modality_data.device,
                 )
+                logger.info(f"{modality} is assigned empty embedding!")
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)

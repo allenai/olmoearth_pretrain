@@ -204,15 +204,26 @@ class MaskingStrategy:
             mask_shape[1] //= patch_size
             mask_shape[2] //= patch_size
 
-        if modality.is_spatial or modality.is_multitemporal:
-            b = shape[0]
-            num_tokens = np.prod(mask_shape[1:])
-        else:
-            num_tokens = np.prod(mask_shape[:-1])
+        b = shape[0]
+        num_tokens = np.prod(mask_shape[1:])
 
-        encode_tokens = int(num_tokens * self.encode_ratio)
-        decode_tokens = int(num_tokens * self.decode_ratio)
-        target_tokens = int(num_tokens - (encode_tokens + decode_tokens))
+        if num_tokens > 1:
+            encode_tokens = int(num_tokens * self.encode_ratio)
+            decode_tokens = int(num_tokens * self.decode_ratio)
+            target_tokens = int(num_tokens - (encode_tokens + decode_tokens))
+        else:
+            # If there's only one token, we assign it to online encoder or decoder based on their ratios
+            # In this way, latlon can be handled similarly as other modalities
+            encoder_only = self.generator.random() < self.encode_ratio
+            decoder_only = self.generator.random() < self.decode_ratio
+            if encoder_only:
+                encode_tokens = num_tokens
+                decode_tokens = 0
+                target_tokens = 0
+            elif decoder_only:
+                encode_tokens, decode_tokens, target_tokens = 0, num_tokens, 0
+            else:
+                encode_tokens, decode_tokens, target_tokens = 0, 0, num_tokens
 
         # we do this as a numpy array to take advantage of
         # numpy's permuted function
@@ -224,11 +235,8 @@ class MaskingStrategy:
                 np.ones(encode_tokens, dtype=np.int_) * MaskValue.ONLINE_ENCODER.value,
             )
         )
-        if modality.is_spatial or modality.is_multitemporal:
-            flat_mask_tokens = repeat(flat_mask_tokens, "t -> b t", b=b)
-            flat_mask_tokens = self.generator.permuted(flat_mask_tokens, axis=1)
-        else:
-            flat_mask_tokens = self.generator.permuted(flat_mask_tokens)
+        flat_mask_tokens = repeat(flat_mask_tokens, "t -> b t", b=b)
+        flat_mask_tokens = self.generator.permuted(flat_mask_tokens, axis=1)
 
         mask = torch.as_tensor(flat_mask_tokens, device=device)
         mask = mask.view(*mask_shape)
