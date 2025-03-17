@@ -132,10 +132,10 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
 
-    NUM_WORKERS = 8
+    NUM_WORKERS = 2
     NUM_THREADS = 0
-    GLOBAL_BATCH_SIZE = 128
-    PREFETCH_FACTOR = 2
+    GLOBAL_BATCH_SIZE = 32
+    PREFETCH_FACTOR = 1
 
     dataloader_config = HeliosDataLoaderConfig(
         global_batch_size=GLOBAL_BATCH_SIZE,

@@ -85,7 +85,9 @@ class PatchDiscriminationLoss(Loss):
         if self.mask_other_samples:
             bs, _, d = all_preds.shape
             pred = all_preds[all_masks == MaskValue.DECODER.value].reshape(bs, -1, d)
-            target = all_targets[all_masks == MaskValue.DECODER.value].reshape(bs, -1)
+            target = all_targets[all_masks == MaskValue.DECODER.value].reshape(
+                bs, -1, d
+            )
             bs, nt, _ = pred.shape
         else:
             pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
@@ -112,7 +114,6 @@ class PatchDiscriminationLoss(Loss):
             loss = F.cross_entropy(
                 scores.flatten(0, 1),
                 labels.flatten(0, 1),
-                reduction="none",
             ) * (self.tau * 2)
             return loss
         else:
