@@ -4,7 +4,7 @@ import hashlib
 import logging
 import random
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import floor
 from pathlib import Path
@@ -23,14 +23,24 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from upath import UPath
 
-from helios.data.constants import (BASE_RESOLUTION, IMAGE_TILE_SIZE,
-                                   MISSING_VALUE, PROJECTION_CRS, TIMESTAMPS,
-                                   Modality, ModalitySpec, TimeSpan)
+from helios.data.constants import (
+    BASE_RESOLUTION,
+    IMAGE_TILE_SIZE,
+    MISSING_VALUE,
+    PROJECTION_CRS,
+    TIMESTAMPS,
+    Modality,
+    ModalitySpec,
+    TimeSpan,
+)
 from helios.data.normalize import Normalizer, Strategy
 from helios.data.utils import convert_to_db, update_streaming_stats
 from helios.dataset.parse import ModalityTile, parse_helios_dataset
-from helios.dataset.sample import (SampleInformation, image_tiles_to_samples,
-                                   load_image_for_sample)
+from helios.dataset.sample import (
+    SampleInformation,
+    image_tiles_to_samples,
+    load_image_for_sample,
+)
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.types import ArrayTensor
 
@@ -123,10 +133,7 @@ class HeliosSample(NamedTuple):
     @property
     def modalities(self) -> list[str]:
         """Get the modalities present in the sample."""
-        return [
-            modality
-            for modality in self.as_dict(ignore_nones=True).keys()
-        ]
+        return [modality for modality in self.as_dict(ignore_nones=True).keys()]
 
     def to_device(self, device: torch.device) -> "HeliosSample":
         """Move all tensors to the specified device.
