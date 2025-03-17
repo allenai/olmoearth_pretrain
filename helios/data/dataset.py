@@ -466,7 +466,7 @@ class HeliosDataset(Dataset):
             / "_".join(
                 sorted([modality.name for modality in self.supported_modalities])
             )
-            / str(num_samples) / "debug_setup" # TODO: remove this
+            / str(num_samples)
         )
         logger.info(f"Setting h5py_dir to {self._h5py_dir}")
         os.makedirs(self._h5py_dir, exist_ok=True)
