@@ -212,8 +212,7 @@ class MaskingStrategy:
             decode_tokens = int(num_tokens * self.decode_ratio)
             target_tokens = int(num_tokens - (encode_tokens + decode_tokens))
         else:
-            # If there's only one token, we assign it to online encoder or decoder based on their ratios
-            # In this way, latlon can be handled similarly as other modalities
+            # If there's only one token, we assign it to online encoder or decoder based on ratios
             encoder_only = self.generator.random() < self.encode_ratio
             decoder_only = self.generator.random() < self.decode_ratio
             if encoder_only:
@@ -221,9 +220,13 @@ class MaskingStrategy:
                 decode_tokens = 0
                 target_tokens = 0
             elif decoder_only:
-                encode_tokens, decode_tokens, target_tokens = 0, num_tokens, 0
+                encode_tokens = 0
+                decode_tokens = num_tokens
+                target_tokens = 0
             else:
-                encode_tokens, decode_tokens, target_tokens = 0, 0, num_tokens
+                encode_tokens = 0
+                decode_tokens = 0
+                target_tokens = num_tokens
 
         # we do this as a numpy array to take advantage of
         # numpy's permuted function

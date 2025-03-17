@@ -1,6 +1,7 @@
 """Loss functions for training."""
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -107,7 +108,7 @@ class PatchDiscriminationLoss(Loss):
         if self.mask_other_samples:
             # Compute scores for each sample in the batch
             scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
-            logger.info(f"scores: {scores.shape}")
+            logger.debug(f"scores: {scores.shape}")
             labels = torch.arange(nt, dtype=torch.long, device=pred.device)[
                 None
             ].repeat(bs, 1)
@@ -120,7 +121,7 @@ class PatchDiscriminationLoss(Loss):
         else:
             # Compute scores for all samples
             scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
-            logger.info(f"scores: {scores.shape}")
+            logger.debug(f"scores: {scores.shape}")
             labels = torch.arange(nt, dtype=torch.long, device=pred.device)[
                 None
             ].repeat(bs, 1)
@@ -134,6 +135,108 @@ class PatchDiscriminationLoss(Loss):
             # can't use bs here since this is after the unsqueezing, so bs == 1
             loss = (loss * loss_multiplier).sum() / all_preds.shape[0]
             return loss
+
+
+@LOSS_REGISTRY.register("adjusted_patch_discrimination")
+class AdjustedPatchDiscriminationLoss(Loss):
+    """Loss function for patch discrimination task."""
+
+    name = "AdjustedPatchDisc"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        mu: float = 0.7,
+        sigma: float = 1.0,
+        pred2unit: bool = False,
+        mask_other_samples: bool = True,
+    ):
+        """Initialize patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            mu: the mean of the Gaussian distribution
+            sigma: the standard deviation of the Gaussian distribution
+            pred2unit: whether to standardize the predictions using batch statistics
+            mask_other_samples: whether to apply the contrastive loss drawing samples
+                from within a sample (True) or using all other instances in a batch (False).
+                If this is False, then this is the AllDisc loss from the Galileo paper
+        """
+        self.tau = tau
+        self.mu = mu
+        self.sigma = sigma
+        self.pred2unit = pred2unit
+        self.mask_other_samples = mask_other_samples
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute patch discrimination loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+
+        if self.mask_other_samples:
+            bs, _, d = all_preds.shape
+            pred = all_preds[all_masks == MaskValue.DECODER.value].reshape(bs, -1, d)
+            target = all_targets[all_masks == MaskValue.DECODER.value].reshape(
+                bs, -1, d
+            )
+            bs, nt, _ = pred.shape
+        else:
+            pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            bs, nt, _ = pred.shape
+
+        if self.pred2unit:
+            pred_mu = pred.mean(1, keepdims=True)
+            pred_std = pred.std(1, keepdims=True)
+            pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+        pred = F.normalize(pred, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+
+        if self.mask_other_samples:
+            # Compute scores for each sample in the batch
+            scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
+            # labels = torch.arange(nt, dtype=torch.long, device=pred.device)[
+            #     None
+            # ].repeat(bs, 1)
+            exp_scores = torch.exp(scores)
+            # Compute the Gaussian-based weights for negative samples
+            weights = (
+                1.0
+                / (self.sigma * math.sqrt(2 * math.pi))
+                * torch.exp(
+                    -((scores * self.tau - self.mu) ** 2)
+                    / (2 * math.pow(self.sigma, 2))
+                )
+            )  # (bs, nt, nt)
+            weights = weights.flatten(0, 1)  # (bs * nt, nt)
+            weights = weights / weights.mean(
+                dim=-1, keepdim=True
+            )  # Normalize weights per sample
+            weighted_exp_scores = exp_scores * weights
+
+            softmax_scores = exp_scores.flatten(0, 1) / weighted_exp_scores.sum(
+                dim=-1, keepdim=True
+            )
+            nll_loss = -torch.log(softmax_scores)
+            loss = nll_loss.mean()
+
+            return loss
+        else:
+            NotImplementedError(
+                "Adjusted InfoNCE is not implemented for AllDisc loss yet!"
+            )
 
 
 @LOSS_REGISTRY.register("l1")
