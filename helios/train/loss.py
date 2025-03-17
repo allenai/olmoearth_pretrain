@@ -82,11 +82,15 @@ class PatchDiscriminationLoss(Loss):
         all_preds, all_masks = predictions.flatten_tokens_and_masks()
         all_targets = targets.flatten_tokens_and_masks()[0]
 
-        # Samples may have different number of tokens
-        # TODO: Skip unqueeze and the for loop when mask_other_samples is True
-        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        bs, nt, _ = pred.shape
+        if self.mask_other_samples:
+            bs, _, d = all_preds.shape
+            pred = all_preds[all_masks == MaskValue.DECODER.value].reshape(bs, -1, d)
+            target = all_targets[all_masks == MaskValue.DECODER.value].reshape(bs, -1)
+            bs, nt, _ = pred.shape
+        else:
+            pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            bs, nt, _ = pred.shape
 
         if self.pred2unit:
             pred_mu = pred.mean(1, keepdims=True)
@@ -96,29 +100,21 @@ class PatchDiscriminationLoss(Loss):
         pred = F.normalize(pred, p=2, dim=-1)
         target = F.normalize(target, p=2, dim=-1)
 
+        # count represents the number of tokens per sample
         count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
 
         if self.mask_other_samples:
-            # Compute scores per sample to reduce memory usage
-            losses = []
-            start = 0
-            for c in count:
-                end = start + c
-                pred_sample = pred[:, start:end, :]
-                target_sample = target[:, start:end, :]
-                score_sample = (
-                    torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
-                )
-                labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
-                loss = F.cross_entropy(
-                    score_sample.flatten(0, 1),
-                    labels.flatten(0, 1),
-                    reduction="none",
-                ) * (self.tau * 2)
-                loss = loss.mean()
-                losses.append(loss)
-                start = end
-            loss = torch.stack(losses).mean()
+            scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
+            logger.info(f"scores: {scores.shape}")
+            labels = torch.arange(nt, dtype=torch.long, device=pred.device)[
+                None
+            ].repeat(bs, 1)
+            loss = F.cross_entropy(
+                scores.flatten(0, 1),
+                labels.flatten(0, 1),
+                reduction="none",
+            ) * (self.tau * 2)
+            return loss
         else:
             # Compute scores for all samples
             scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
@@ -135,7 +131,7 @@ class PatchDiscriminationLoss(Loss):
             loss_multiplier = self._expand_and_reciprocate(count)
             # can't use bs here since this is after the unsqueezing, so bs == 1
             loss = (loss * loss_multiplier).sum() / all_preds.shape[0]
-        return loss
+            return loss
 
 
 @LOSS_REGISTRY.register("l1")

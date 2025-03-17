@@ -7,6 +7,7 @@ import subprocess  # nosec
 
 # Fixed training parameters
 NUM_WORKERS = 4
+PREFETCH_FACTOR = 1
 GLOBAL_BATCH_SIZE = 512
 RANK_MICROBATCH_SIZE = 64
 
@@ -24,6 +25,18 @@ LEARNING_RATES = [3e-4]
 WEIGHT_DECAYS = [2e-2]
 WARMUP_EPOCHS = [10]
 
+# Fixed token exit
+TOKEN_EXIT_CFG = {
+    "sentinel2_l2a": 12,
+    "sentinel1": 12,
+    "latlon": 12,
+    "worldcover": 0,
+}
+token_exit_args = " ".join(
+    f"--train_module.token_exit_cfg.{key}={value}"
+    for key, value in TOKEN_EXIT_CFG.items()
+)
+
 # Base command template
 BASE_COMMAND = (
     "python3 scripts/galileo.py launch {run_name} ai2/jupiter-cirrascale-2 "
@@ -37,12 +50,13 @@ BASE_COMMAND = (
     "--model.decoder_config.num_heads={decoder_num_heads} "
     "--model.decoder_config.mlp_ratio={mlp_ratio} "
     "--data_loader.num_workers={num_workers} "
+    "--data_loader.prefetch_factor={prefetch_factor} "
     "--data_loader.global_batch_size={global_batch_size} "
     "--train_module.rank_microbatch_size={rank_microbatch_size} "
     "--train_module.optim_config.lr={lr} "
     "--train_module.optim_config.weight_decay={wd} "
     "--train_module.warmup_duration.value={warmup} "
-    "--train_module.warmup_duration.unit=epochs"
+    "--train_module.warmup_duration.unit=epochs " + token_exit_args + " "
     "--launch.num_gpus=8"
 )
 
@@ -62,6 +76,7 @@ for lr, wd, warmup in itertools.product(LEARNING_RATES, WEIGHT_DECAYS, WARMUP_EP
         decoder_num_heads=DECODER_NUM_HEADS,
         mlp_ratio=MLP_RATIO,
         num_workers=NUM_WORKERS,
+        prefetch_factor=PREFETCH_FACTOR,
         global_batch_size=GLOBAL_BATCH_SIZE,
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         lr=lr,
