@@ -43,7 +43,7 @@ BASE_COMMAND = (
     "--train_module.warmup_duration.unit=epochs "
     "--trainer.max_duration.value={num_epochs} "
     "--trainer.max_duration.unit=epochs "
-    "--torch.num_threads={num_threads}"
+    "--data_loader.num_threads={num_threads}"
 )
 
 # Iterate over all combinations of hyperparameters
