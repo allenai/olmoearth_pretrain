@@ -2,8 +2,8 @@
 
 import logging
 import os
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 from olmo_core.distributed.utils import get_rank
@@ -14,6 +14,7 @@ from helios.data.dataloader import HeliosDataLoader
 from helios.data.utils import plot_latlon_distribution, plot_modality_data_distribution
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class HeliosWandBCallback(WandBCallback):
@@ -60,6 +61,7 @@ class HeliosWandBCallback(WandBCallback):
                 dataset = self.trainer.data_loader.dataset
                 logger.info("Gathering locations of entire dataset")
                 latlons = dataset.latlon_distribution
+                assert latlons is not None
                 # this should just be a general utility function
                 logger.info(f"Uploading dataset distribution to wandb: {latlons.shape}")
                 fig = plot_latlon_distribution(

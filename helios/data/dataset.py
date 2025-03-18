@@ -345,8 +345,8 @@ class HeliosDataset(Dataset):
         if self.normalize:
             # We want to delay the creation of the normalizers
             # until the first time they are used so that we don't need to pickle them
-            self._normalizer_predefined = None
-            self._normalizer_computed = None
+            self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
+            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
 
         self._fs_local_rank = get_fs_local_rank()
         self._work_dir: Path | None = None  # type: ignore
@@ -403,21 +403,6 @@ class HeliosDataset(Dataset):
     def work_dir_set(self) -> bool:
         """Check if the working directory was explicitly set."""
         return self._work_dir_set
-
-
-    @property
-    def normalizer_computed(self) -> Normalizer:
-        """Get the normalizer computed."""
-        if self._normalizer_computed is None:
-            self._normalizer_computed = Normalizer(Strategy.COMPUTED)
-        return self._normalizer_computed
-
-    @property
-    def normalizer_predefined(self) -> Normalizer:
-        """Get the normalizer predefined."""
-        if self._normalizer_predefined is None:
-            self._normalizer_predefined = Normalizer(Strategy.PREDEFINED)
-        return self._normalizer_predefined
 
     def process_sample_into_h5(
         self, index_sample_tuple: tuple[int, SampleInformation]

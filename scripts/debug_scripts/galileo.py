@@ -12,7 +12,11 @@ from olmo_core.distributed.parallel.data_parallel import (
 )
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
-from olmo_core.train.callbacks import ConfigSaverCallback, GPUMemoryMonitorCallback, GarbageCollectorCallback
+from olmo_core.train.callbacks import (
+    ConfigSaverCallback,
+    GarbageCollectorCallback,
+    GPUMemoryMonitorCallback,
+)
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
@@ -37,6 +41,7 @@ from helios.train.masking import MaskingConfig
 from helios.train.train_module.galileo import GalileoTrainModuleConfig
 
 logger = logging.getLogger(__name__)
+
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
@@ -157,9 +162,11 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
     NUM_WORKERS = 8
-    NUM_THREADS = 0 # How fast we can actually create batches with some overhead
+    NUM_THREADS = 0  # How fast we can actually create batches with some overhead
     logger.warning(f"Using {NUM_WORKERS} workers and {NUM_THREADS} threads")
-    logger.warning("Set NUM_WORKERS and NUM_THREADS to 0 if you want to just start the run to debug without caring about results")
+    logger.warning(
+        "Set NUM_WORKERS and NUM_THREADS to 0 if you want to just start the run to debug without caring about results"
+    )
     GLOBAL_BATCH_SIZE = 256
     PREFETCH_FACTOR = 1
 
@@ -204,7 +211,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         upload_dataset_distribution_pre_train=False,
         enabled=True,  # set to False to avoid wandb errors
     )
-    garbage_collector_callback = GarbageCollectorCallback(enabled=False)
+    garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     logger.warning("WANDB Distribution Uploads are disabled for Debugging")
     EVAL_INTERVAL_EPOCHS = 1
     EVAL_TASKS = [
