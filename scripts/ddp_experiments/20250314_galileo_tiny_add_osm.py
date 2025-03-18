@@ -5,6 +5,8 @@
 import itertools
 import subprocess  # nosec
 
+from helios.data.constants import Modality
+
 # Fixed training parameters
 NUM_WORKERS = 4
 PREFETCH_FACTOR = 1
@@ -24,6 +26,15 @@ MLP_RATIO = 4
 LEARNING_RATES = [2e-3]
 WEIGHT_DECAYS = [3e-2]
 WARMUP_EPOCHS = [10]
+
+# Supported modalities
+SUPPORTED_MODALITIES = [
+    Modality.SENTINEL2_L2A.name,
+    Modality.LATLON.name,
+    Modality.SENTINEL1.name,
+    Modality.WORLDCOVER.name,
+    Modality.OPENSTREETMAP.name,
+]
 
 # Base command template
 BASE_COMMAND = (
@@ -45,13 +56,14 @@ BASE_COMMAND = (
     "--train_module.optim_config.weight_decay={wd} "
     "--train_module.warmup_duration.value={warmup} "
     "--train_module.warmup_duration.unit=epochs "
+    "--common.supported_modality_names={supported_modality_names} "
     "--launch.num_gpus=8"
 )
 
 # Iterate over all combinations of hyperparameters
 for lr, wd, warmup in itertools.product(LEARNING_RATES, WEIGHT_DECAYS, WARMUP_EPOCHS):
     # Construct run name indicating hyperparameters
-    run_name = f"galileo_tiny_ddp_lr_{lr}_wd_{wd}_warmup_{warmup}"
+    run_name = f"galileo_tiny_ddp_add_osm_lr_{lr}_wd_{wd}_warmup_{warmup}"
 
     # Construct full command
     command = BASE_COMMAND.format(
@@ -70,6 +82,7 @@ for lr, wd, warmup in itertools.product(LEARNING_RATES, WEIGHT_DECAYS, WARMUP_EP
         lr=lr,
         wd=wd,
         warmup=warmup,
+        supported_modality_names=SUPPORTED_MODALITIES,
     )
 
     print(f"Launching: {command}")
