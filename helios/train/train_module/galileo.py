@@ -30,9 +30,9 @@ from helios.train.train_module.train_module import (
 from helios.train.utils import split_batch
 
 logger = getLogger(__name__)
-import logging
-import psutil
 import os
+
+import psutil
 
 
 def log_memory_usage_for_process(process):
@@ -44,8 +44,10 @@ def log_memory_usage_for_process(process):
         uss = 0
         shared = 0
 
-        # Log the process memory usage
-        logger.info(f"Process (PID {process.pid}) memory usage: RSS={rss / (1024 * 1024 * 1024):.2f} GB")
+        # # Log the process memory usage
+        # logger.info(
+        #     f"Process (PID {process.pid}) memory usage: RSS={rss / (1024 * 1024 * 1024):.2f} GB"
+        # )
 
         # Iterate over memory maps
         for mmap in process.memory_maps():
@@ -58,6 +60,7 @@ def log_memory_usage_for_process(process):
     except psutil.NoSuchProcess:
         # The process may have terminated between the time we got the list and now
         return 0, 0, 0, 0
+
 
 def log_total_memory_usage():
     """Log total memory usage for the main process and its children."""
@@ -88,8 +91,11 @@ def log_total_memory_usage():
         total_shared += shared
 
     # Log the total memory usage
-    logger.info(f"Total memory usage: RSS={total_rss / (1024 * 1024 * 1024):.2f} GB, PSS={total_pss / (1024 * 1024 * 1024):.2f} GB, USS={total_uss / (1024 * 1024 * 1024):.2f} GB, Shared={total_shared / (1024 * 1024 * 1024):.2f} GB")
+    # logger.info(
+    #     f"Total memory usage: RSS={total_rss / (1024 * 1024 * 1024):.2f} GB, PSS={total_pss / (1024 * 1024 * 1024):.2f} GB, USS={total_uss / (1024 * 1024 * 1024):.2f} GB, Shared={total_shared / (1024 * 1024 * 1024):.2f} GB"
+    # )
     return total_pss / (1024 * 1024 * 1024)
+
 
 @dataclass
 class GalileoTrainModuleConfig(HeliosTrainModuleConfig):

@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from math import floor
 from pathlib import Path
 from typing import Any, NamedTuple
-import psutil
 
 import h5py
 import numpy as np
@@ -292,17 +291,6 @@ class HeliosSample(NamedTuple):
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
 
-# def get_mem_info(pid: int) -> dict[str, int]:
-#   res = {}
-#   for mmap in psutil.Process(pid).memory_maps():
-#     logger.info(f"Memory map: {mmap}")
-#     res['rss'] += mmap.rss
-#     res['pss'] += mmap.pss
-#     res['uss'] += mmap.private_clean + mmap.private_dirty
-#     res['shared'] += mmap.shared_clean + mmap.shared_dirty
-#     if mmap.path.startswith('/'):  # looks like a file path
-#       res['shared_file'] += mmap.shared_clean + mmap.shared_dirty
-#   return res
 
 def collate_helios(batch: list[HeliosSample]) -> HeliosSample:
     """Collate function that automatically handles any modalities present in the samples."""
