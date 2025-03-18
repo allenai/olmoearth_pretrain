@@ -168,12 +168,22 @@ class HeliosSample(NamedTuple):
     @property
     def height(self) -> int:
         """Get the height of the data."""
-        return self.sentinel2_l2a.shape[1]
+        if len(self.sentinel2_l2a.shape) == 5:
+            return self.sentinel2_l2a.shape[1]
+        elif len(self.sentinel2_l2a.shape) == 4:
+            return self.sentinel2_l2a.shape[0]
+        else:
+            raise ValueError(f"Invalid shape: {self.sentinel2_l2a.shape}")
 
     @property
     def width(self) -> int:
         """Get the width of the data."""
-        return self.sentinel2_l2a.shape[2]
+        if len(self.sentinel2_l2a.shape) == 5:
+            return self.sentinel2_l2a.shape[2]
+        elif len(self.sentinel2_l2a.shape) == 4:
+            return self.sentinel2_l2a.shape[1]
+        else:
+            raise ValueError(f"Invalid shape: {self.sentinel2_l2a.shape}")
 
     @property
     def time(self) -> int:
@@ -241,7 +251,6 @@ class HeliosSample(NamedTuple):
         max_tokens_per_instance
         """
         max_height_width = max(self.height, self.width)
-        logger.info(f"Max height/width: {max_height_width}")
         max_height_width_tokens = int(max_height_width / patch_size)
         hw_to_sample = [x for x in hw_to_sample if x <= max_height_width_tokens]
         if len(hw_to_sample) == 0:
@@ -263,11 +272,11 @@ class HeliosSample(NamedTuple):
                 new_data_dict[attribute] = modality[:, start_t : start_t + max_t]
                 continue
 
+            # remember to add the batching back in
             modality_spec = Modality.get(attribute)
             if modality_spec.is_spacetime_varying:
                 # for now, lets assume fixed resolution
                 new_data_dict[attribute] = modality[
-                    :,
                     start_h : start_h + sampled_hw,
                     start_w : start_w + sampled_hw,
                     start_t : start_t + max_t,
@@ -275,10 +284,10 @@ class HeliosSample(NamedTuple):
             elif modality_spec.is_space_only_varying:
                 # for now, lets assume fixed resolution
                 new_data_dict[attribute] = modality[
-                    :, start_h : start_h + sampled_hw, start_w : start_w + sampled_hw
+                     start_h : start_h + sampled_hw, start_w : start_w + sampled_hw
                 ]
             elif modality_spec.is_time_only_varying:
-                new_data_dict[attribute] = modality[:, start_t : start_t + max_t]
+                new_data_dict[attribute] = modality[start_t : start_t + max_t]
             elif modality_spec.is_static_in_space_and_time:
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
@@ -493,14 +502,15 @@ class HeliosDataset(Dataset):
         before any other process tries to use the dataset
         """
         logger.info("Preparing dataset...")
-        if samples is None:
-            samples = self._get_samples()  # type: ignore
-        if len(samples) == 0:
-            raise ValueError("No samples provided")
-        samples = self._filter_samples(samples)  # type: ignore
-        # probably is faster to do this just once in some way by saving to a with the dataset file and reading it in
-        self.latlon_distribution = self.get_geographic_distribution(samples)
-        num_samples = len(samples)
+        # if samples is None:
+        #     samples = self._get_samples()  # type: ignore
+        # if len(samples) == 0:
+        #     raise ValueError("No samples provided")
+        # samples = self._filter_samples(samples)  # type: ignore
+        # # probably is faster to do this just once in some way by saving to a with the dataset file and reading it in
+        # self.latlon_distribution = self.get_geographic_distribution(samples)
+        # trying to get start up to be faster
+        num_samples = 98856 # len(samples) #98856 samples
         self.set_h5py_dir(num_samples)
         self.sample_indices = np.arange(num_samples)
         if self.attempt_to_create_h5_files:
@@ -819,12 +829,19 @@ class HeliosDataset(Dataset):
             raise FileNotFoundError(
                 f"H5 file {h5_file_path} does not exist, Be Sure to run prepare before starting Training"
             )
+
         with h5py.File(h5_file_path, "r") as f:
             sample_dict = {k: v[()] for k, v in f.items()}
+
+        sample = HeliosSample(**sample_dict)
+        result = sample.subset(4, 1500, [12])
+        sample_dict = result.as_dict(ignore_nones=True)
+
         # Sample modalities should be written into the metadata of the h5 dataset
         sample_modalities = list(
             [Modality.get(key) for key in sample_dict.keys() if key != "timestamps"]
         )
+
         if self.normalize:
             for modality in sample_modalities:
                 sample_dict[modality.name] = self.normalize_image(

@@ -190,7 +190,7 @@ class HeliosDataLoader(DataLoaderBase):
             persistent_workers=self.persistent_workers
             if self.num_workers > 0
             else False,
-            multiprocessing_context=self.multiprocessing_context,
+            multiprocessing_context=self.multiprocessing_context if self.num_workers > 0 else None,
             timeout=0,
         )
 

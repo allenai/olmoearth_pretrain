@@ -16,7 +16,8 @@ from olmo_core.train.common import Duration, ReduceType
 from olmo_core.train.train_module.transformer import (
     TransformerActivationCheckpointingConfig,
 )
-
+import sys
+import gc
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
 from helios.nn.latent_mim import LatentMIM
@@ -289,8 +290,29 @@ class GalileoTrainModule(HeliosTrainModule):
 
         NOTE: For contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
-        total_pss = log_total_memory_usage()
-        self.trainer.record_metric("worker_memory/total_pss", total_pss, ReduceType.mean)
+
+        # # # Collect all tensors
+        # tensors = [obj for obj in gc.get_objects() if isinstance(obj, torch.Tensor)]
+
+        # # Sort tensors by size (bytes)
+        # tensors = sorted(tensors, key=lambda x: x.numel() * x.element_size(), reverse=True)
+
+        # total_tensor_ram = sum([tensor.numel() * tensor.element_size() / (1024 ** 2) for tensor in tensors])
+        # logger.info(f"Total tensor RAM: {total_tensor_ram:.2f} MB")
+        # # Print top N largest tensors
+        # # total_size = 0
+        # # print(f"Found {len(tensors)} tensors in memory.")
+        # # for i, tensor in enumerate(tensors[:100]):  # Show top 10
+        # #     size_in_mb = tensor.numel() * tensor.element_size() / (1024 ** 2)
+        # #     if i < 5:
+        # #         print(f"Tensor {i}: Shape {tensor.shape}, Dtype {tensor.dtype}, Size {size_in_mb:.2f} MB")
+        # #     total_size += size_in_mb
+        # # logger.info(f"Total size of top 100 tensors: {total_size:.2f} MB")
+        # logger.info("Logging total virtual memory usage")
+        # logger.info(f"Total virtual memory usage: {psutil.virtual_memory().total / (1024 * 1024 * 1024):.2f} GB")
+        # total_pss = log_total_memory_usage()
+
+        # self.trainer.record_metric("worker_memory/total_pss", total_pss, ReduceType.mean)
         self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
@@ -304,78 +326,79 @@ class GalileoTrainModule(HeliosTrainModule):
         # Split into micro-batches.
         microbatches = split_batch(batch, self.rank_microbatch_size)
         num_microbatches = len(microbatches)
-        for microbatch_idx, microbatch in enumerate(microbatches, start=1):
-            with self._train_microbatch_context(microbatch_idx, num_microbatches):
-                logger.info(
-                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
-                )
-                # Gallileo does this subsetting at the microbatch level so we follow that for now
-                # Smallest h /w must be bigger than the smallest patch size
+        # for microbatch_idx, microbatch in enumerate(microbatches, start=1):
+        #     with self._train_microbatch_context(microbatch_idx, num_microbatches):
+        #         logger.info(
+        #             f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
+        #         )
+        #         # Gallileo does this subsetting at the microbatch level so we follow that for now
+        #         # Smallest h /w must be bigger than the smallest patch size
 
-                patch_size = np.random.choice(
-                    np.arange(
-                        self.model.encoder.min_patch_size,
-                        self.model.encoder.max_patch_size,
-                    )
-                )
-                logger.info(f"Patch size: {patch_size}")
-                logger.info(f"Token budget: {token_budget}")
-                logger.info(f"H / W to sample: {h_w_to_sample}")
-                microbatch = self.model.transform.apply(microbatch)
-                subsampled_batch = microbatch.subset(
-                    patch_size, token_budget, h_w_to_sample
-                )
-                # subsampled_batch = microbatch
-                subsampled_batch = subsampled_batch.to_device(self.device)
-                # Each microbatch should have about the same number of encoded tokens if
-                # we mask here
-                if microbatch_idx % 2 == 0:
-                    masked_batch = self.masking_strategy_a.apply_mask(
-                        subsampled_batch, patch_size=patch_size
-                    )
+        #         patch_size = np.random.choice(
+        #             np.arange(
+        #                 self.model.encoder.min_patch_size,
+        #                 self.model.encoder.max_patch_size,
+        #             )
+        #         )
+        #         logger.info(f"Patch size: {patch_size}")
+        #         logger.info(f"Token budget: {token_budget}")
+        #         logger.info(f"H / W to sample: {h_w_to_sample}")
+        #         # apply transforms after the subsetting
+        #         microbatch = self.model.transform.apply(microbatch)
+        #         subsampled_batch = microbatch.subset(
+        #             patch_size, token_budget, h_w_to_sample
+        #         )
+        #         # subsampled_batch = microbatch
+        #         subsampled_batch = subsampled_batch.to_device(self.device)
+        #         # Each microbatch should have about the same number of encoded tokens if
+        #         # we mask here
+        #         if microbatch_idx % 2 == 0:
+        #             masked_batch = self.masking_strategy_a.apply_mask(
+        #                 subsampled_batch, patch_size=patch_size
+        #             )
 
-                    # Run Encoder and decoder on the augmented input
-                    decoded, target_output = self.model_forward_a(
-                        masked_batch, patch_size, self.token_exit_cfg_a
-                    )
-                    loss = self.loss_fn_a(decoded, target_output)
-                else:
-                    masked_batch = self.masking_strategy_b.apply_mask(
-                        subsampled_batch, patch_size=patch_size
-                    )
+        #             # Run Encoder and decoder on the augmented input
+        #             decoded, target_output = self.model_forward_a(
+        #                 masked_batch, patch_size, self.token_exit_cfg_a
+        #             )
+        #             loss = self.loss_fn_a(decoded, target_output)
+        #         else:
+        #             masked_batch = self.masking_strategy_b.apply_mask(
+        #                 subsampled_batch, patch_size=patch_size
+        #             )
 
-                    # Run Encoder and decoder on the augmented input
-                    decoded, target_output = self.model_forward_b(
-                        masked_batch, patch_size, self.token_exit_cfg_b
-                    )
-                    loss = self.loss_fn_b(decoded, target_output)
-                # Scale loss by number of microbatches
-                loss = loss / num_microbatches
-                loss_val = get_local_tensor(loss)
-                total_batch_loss += loss_val
+        #             # Run Encoder and decoder on the augmented input
+        #             decoded, target_output = self.model_forward_b(
+        #                 masked_batch, patch_size, self.token_exit_cfg_b
+        #             )
+        #             loss = self.loss_fn_b(decoded, target_output)
+        #         # Scale loss by number of microbatches
+        #         loss = loss / num_microbatches
+        #         loss_val = get_local_tensor(loss)
+        #         total_batch_loss += loss_val
 
-                # Skip bad batches# Skip bad batches
-                if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
-                    )
-                    del decoded, target_output
-                    break
+        #         # Skip bad batches# Skip bad batches
+        #         if torch.isnan(loss).any() or torch.isinf(loss).any():
+        #             logger.warning(
+        #                 f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+        #             )
+        #             del decoded, target_output
+        #             break
 
-                del decoded, target_output
-                loss.backward()
+        #         del decoded, target_output
+        #         loss.backward()
 
-        self.trainer.record_metric(
-            f"train/{self.base_loss_a.name}+{self.base_loss_b.name}",
-            total_batch_loss,
-            ReduceType.mean,
-        )
+        # self.trainer.record_metric(
+        #     f"train/{self.base_loss_a.name}+{self.base_loss_b.name}",
+        #     total_batch_loss,
+        #     ReduceType.mean,
+        # )
 
         if dry_run:
             return
 
-        del batch  # In case this helps with memory utilization.
-        del masked_batch
+        # del batch  # In case this helps with memory utilization.
+        # del masked_batch
 
     def eval_batch(
         self, batch: dict[str, Any], labels: torch.Tensor | None = None
