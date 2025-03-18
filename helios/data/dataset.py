@@ -314,6 +314,7 @@ class HeliosDataset(Dataset):
         dtype: DType,
         normalize: bool = True,
         h5py_folder: str = "h5py_data",
+        attempt_to_create_h5_files: bool = False,
     ):
         """Initialize the dataset.
 
@@ -328,6 +329,7 @@ class HeliosDataset(Dataset):
             dtype: The dtype of the data.
             normalize: If True, apply normalization to the data, if False, do not apply normalization
             h5py_folder: The folder to store the h5py files.
+            attempt_to_create_h5_files: If True, attempt to create the h5py files, we should only do this if we have not yet created the files for the dataset
 
         Returns:
             None
@@ -338,10 +340,11 @@ class HeliosDataset(Dataset):
         self.dtype = dtype
         # Let us see if pickling the normalizers is slow
         self.normalize = normalize
-
         if self.normalize:
-            self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+            # We want to delay the creation of the normalizers
+            # until the first time they are used so that we don't need to pickle them
+            self._normalizer_predefined = None
+            self._normalizer_computed = None
 
         self._fs_local_rank = get_fs_local_rank()
         self._work_dir: Path | None = None  # type: ignore
@@ -349,6 +352,7 @@ class HeliosDataset(Dataset):
         self._h5py_dir: Path | None = None  # type: ignore
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
+        self.attempt_to_create_h5_files = attempt_to_create_h5_files
 
     @property
     def fingerprint_version(self) -> str:
@@ -398,6 +402,21 @@ class HeliosDataset(Dataset):
         """Check if the working directory was explicitly set."""
         return self._work_dir_set
 
+
+    @property
+    def normalizer_computed(self) -> Normalizer:
+        """Get the normalizer computed."""
+        if self._normalizer_computed is None:
+            self._normalizer_computed = Normalizer(Strategy.COMPUTED)
+        return self._normalizer_computed
+
+    @property
+    def normalizer_predefined(self) -> Normalizer:
+        """Get the normalizer predefined."""
+        if self._normalizer_predefined is None:
+            self._normalizer_predefined = Normalizer(Strategy.PREDEFINED)
+        return self._normalizer_predefined
+
     def process_sample_into_h5(
         self, index_sample_tuple: tuple[int, SampleInformation]
     ) -> None:
@@ -419,7 +438,6 @@ class HeliosDataset(Dataset):
         # Determine number of processes to use (leave one core free)
         num_processes = max(1, mp.cpu_count() - 2)
         logger.info(f"Creating H5 dataset using {num_processes} processes")
-
         # Create a pool of workers
         with mp.Pool(processes=num_processes) as pool:
             # Process samples in parallel and track progress with tqdm
@@ -486,7 +504,9 @@ class HeliosDataset(Dataset):
         num_samples = len(samples)
         self.set_h5py_dir(num_samples)
         self.sample_indices = np.arange(num_samples)
-        # self.sample_indices = self.create_h5_dataset(samples)
+        if self.attempt_to_create_h5_files:
+            logger.info("Attempting to create H5 files may take some time...")
+            self.sample_indices = self.create_h5_dataset(samples)
         # Likely will want to save the distirbtion information here as well and then delete it after it used
 
     @property

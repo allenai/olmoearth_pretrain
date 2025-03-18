@@ -92,7 +92,7 @@ def build_train_module_config(
 ) -> GalileoTrainModuleConfig:
     """Build the train module config for an experiment."""
     LR = 0.002
-    RANK_MICROBATCH_SIZE = 32
+    RANK_MICROBATCH_SIZE = 64
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
     WD = 0.02
@@ -157,11 +157,13 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
     NUM_WORKERS = 8
-    NUM_THREADS = 2
+    NUM_THREADS = 0 # How fast we can actually create batches with some overhead
     logger.warning(f"Using {NUM_WORKERS} workers and {NUM_THREADS} threads")
     logger.warning("Set NUM_WORKERS and NUM_THREADS to 0 if you want to just start the run to debug without caring about results")
-    GLOBAL_BATCH_SIZE = 32
-    PREFETCH_FACTOR = 4
+    GLOBAL_BATCH_SIZE = 256
+    PREFETCH_FACTOR = 1
+
+    # GBS * PREFETCH_FACTOR * NUM_WORKERS is the total number of instances that can be put in
 
     dataloader_config = HeliosDataLoaderConfig(
         global_batch_size=GLOBAL_BATCH_SIZE,

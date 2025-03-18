@@ -21,6 +21,7 @@ from olmo_core.distributed.utils import (
     get_rank,
     get_world_size,
 )
+import multiprocessing as mp
 from olmo_core.utils import get_default_device, roundrobin, threaded_generator
 from torch.utils.data import default_collate
 from upath import UPath
@@ -55,6 +56,7 @@ class HeliosDataLoader(DataLoaderBase):
         target_device_type: str = "cpu",
         drop_last: bool = True,
         persistent_workers: bool = True,
+        multiprocessing_context: str = "spawn",
     ):
         """Initialize the HeliosDataLoader."""
         super().__init__(
@@ -78,6 +80,10 @@ class HeliosDataLoader(DataLoaderBase):
         self.drop_last = drop_last
         self._global_indices: np.ndarray | None = None
         self.persistent_workers = persistent_workers
+        self.multiprocessing_context = multiprocessing_context
+        if self.num_workers > 0 and self.multiprocessing_context == "forkserver":
+            # Overhead of loading modules on import by preloading them
+            mp.set_forkserver_preload(["torch", "rasterio"])
 
     @property
     def total_batches(self) -> int:
@@ -184,6 +190,7 @@ class HeliosDataLoader(DataLoaderBase):
             persistent_workers=self.persistent_workers
             if self.num_workers > 0
             else False,
+            multiprocessing_context=self.multiprocessing_context,
             timeout=0,
         )
 
