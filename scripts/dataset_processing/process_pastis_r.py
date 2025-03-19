@@ -204,7 +204,7 @@ all_data_splits = {
 
 # Save data
 for split, data in all_data_splits.items():
-    torch.save(data, OUTPUT_DIR / f"pastis_{split}.pt")
+    torch.save(data, OUTPUT_DIR / f"pastis_r_{split}.pt")
 
 # Print stats
 for split in ["train", "valid", "test"]:
