@@ -159,14 +159,14 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     """Build the dataloader config for an experiment."""
     # things should be set during building
     # TODO: Include collate function here
-    NUM_WORKERS = 2
+    NUM_WORKERS = 4
     NUM_THREADS = 0  # How fast we can actually create batches with some overhead
     logger.warning(f"Using {NUM_WORKERS} workers and {NUM_THREADS} threads")
     logger.warning(
         "Set NUM_WORKERS and NUM_THREADS to 0 if you want to just start the run to debug without caring about results"
     )
-    GLOBAL_BATCH_SIZE = 64
-    PREFETCH_FACTOR = None
+    GLOBAL_BATCH_SIZE = 128
+    PREFETCH_FACTOR = 4
     SAMPLE_HW_P_LIST = list(range(5, 13))
     # GBS * PREFETCH_FACTOR * NUM_WORKERS is the total number of instances that can be put into prefetch queue
 

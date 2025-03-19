@@ -252,7 +252,6 @@ class HeliosTrainModule(TrainModule):
         self.state_dict_load_opts = state_dict_load_opts or dist_cp_sd.StateDictOptions(
             flatten_optimizer_state_dict=True, strict=True
         )
-
     @property
     def dp_process_group(self) -> dist.ProcessGroup | None:
         """Get the data parallel process group."""
@@ -308,14 +307,13 @@ class HeliosTrainModule(TrainModule):
                     self.warmup_duration
                 )
                 self.scheduler.warmup_steps = warmup_steps
-
-        if self.trainer.data_loader.min_patch_size != self.model.min_patch_size:
+        if self.trainer.data_loader.min_patch_size != self.model.encoder.min_patch_size:
             raise ValueError(
-                f"min_patch_size of dataloader ({self.trainer.data_loader.min_patch_size}) must match min_patch_size of model ({self.model.min_patch_size})"
+                f"min_patch_size of dataloader ({self.trainer.data_loader.min_patch_size}) must match min_patch_size of model ({self.model.encoder.min_patch_size})"
             )
-        if self.trainer.data_loader.max_patch_size != self.model.max_patch_size:
+        if self.trainer.data_loader.max_patch_size != self.model.encoder.max_patch_size:
             raise ValueError(
-                f"max_patch_size of dataloader ({self.trainer.data_loader.max_patch_size}) must match max_patch_size of model ({self.model.max_patch_size})"
+                f"max_patch_size of dataloader ({self.trainer.data_loader.max_patch_size}) must match max_patch_size of model ({self.model.encoder.max_patch_size})"
             )
 
     def state_dict(self) -> dict[str, Any]:

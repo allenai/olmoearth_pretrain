@@ -69,6 +69,8 @@ class HeliosDataLoader(DataLoaderBase):
         assert isinstance(self.dataset, HeliosDataset)  # type: ignore
         if not self.dataset.is_dataset_prepared:
             raise RuntimeError("Dataset must be prepared before creating a dataloader")
+        self.min_patch_size = min_patch_size
+        self.max_patch_size = max_patch_size
         self.patch_sizes = np.arange(min_patch_size, max_patch_size + 1)
         self.sampled_hw_p_list = sampled_hw_p_list
         self.collator = collator
