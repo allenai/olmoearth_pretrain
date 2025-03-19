@@ -20,6 +20,8 @@ from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
+MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
+
 
 def minimal_common_components() -> CommonComponents:
     """Return a minimal CommonComponents object."""
@@ -38,10 +40,6 @@ def minimal_common_components() -> CommonComponents:
 
 def minimal_model_config_builder(common: CommonComponents) -> LatentMIMConfig:
     """Return a minimal LatentMIMConfig."""
-    MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
-    TOKEN_BUDGET = 1500
-    H_W_TO_SAMPLE_MIN = 2
-    H_W_TO_SAMPLE_MAX = 13
     ENCODER_EMBEDDING_SIZE = 16
     DECODER_EMBEDDING_SIZE = 16
     ENCODER_DEPTH = 2
@@ -75,9 +73,6 @@ def minimal_model_config_builder(common: CommonComponents) -> LatentMIMConfig:
         encoder_config=encoder_config,
         decoder_config=decoder_config,
         transform_type=TRANSFORM_TYPE,
-        token_budget=TOKEN_BUDGET,
-        h_w_to_sample_min=H_W_TO_SAMPLE_MIN,
-        h_w_to_sample_max=H_W_TO_SAMPLE_MAX,
     )
     return model_config
 
@@ -87,6 +82,7 @@ def minimal_dataset_config_builder(common: CommonComponents) -> HeliosDatasetCon
     TILE_PATH = "test_tile_path"
     return HeliosDatasetConfig(
         tile_path=TILE_PATH,
+        h5py_dir=None,
         supported_modality_names=common.supported_modality_names,
         dtype=DType.float32,
     )
@@ -101,6 +97,10 @@ def minimal_dataloader_config_builder(
         global_batch_size=GLOBAL_BATCH_SIZE,
         seed=3622,
         work_dir=common.save_folder,
+        min_patch_size=1,
+        max_patch_size=1,
+        sampled_hw_p_list=[256],
+        token_budget=1000000,
     )
     return dataloader_config
 
