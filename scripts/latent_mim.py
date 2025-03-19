@@ -133,7 +133,6 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # TODO: Include collate function here
 
     NUM_WORKERS = 8
-    NUM_THREADS = 0
     GLOBAL_BATCH_SIZE = 128
     PREFETCH_FACTOR = 2
 
@@ -141,7 +140,6 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         global_batch_size=GLOBAL_BATCH_SIZE,
         seed=3622,
         work_dir=common.save_folder,
-        num_threads=NUM_THREADS,
         num_workers=NUM_WORKERS,
         prefetch_factor=PREFETCH_FACTOR,
     )

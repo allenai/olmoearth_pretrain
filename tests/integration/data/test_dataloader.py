@@ -30,7 +30,6 @@ def test_helios_dataloader(
         fs_local_rank=0,
         seed=0,
         shuffle=True,
-        num_threads=1,
         num_workers=0,
         collator=default_collate,
         target_device_type="cpu",

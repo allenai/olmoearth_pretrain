@@ -48,7 +48,6 @@ class HeliosDataLoader(DataLoaderBase):
         fs_local_rank: int = 0,
         seed: int = 0,
         shuffle: bool = True,
-        num_threads: int | None = None,
         num_workers: int = 0,
         prefetch_factor: int | None = None,
         collator: Callable = default_collate,
@@ -76,7 +75,6 @@ class HeliosDataLoader(DataLoaderBase):
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
-        self.num_threads = num_threads
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
         self.target_device_type = target_device_type
@@ -394,48 +392,16 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
     def __iter__(self) -> Iterator[HeliosSample]:
         """Iterate over the dataset."""
         global_indices = self.data_loader.get_global_indices()
-
-        num_threads = self.data_loader.num_threads
-        if self.worker_info is None and self.data_loader.num_threads is None:
-            # If `num_threads` hasn't been specified and we're not using multiprocessing we'll
-            # try to guess a good number of threads.
-            num_threads = 4
-
-        # Potentially slice by threads.
-        instance_iterator: Iterator[HeliosSample]
-        if num_threads:
-            raise NotImplementedError("Threading is not supported yet")
-            # In order to stay ahead of training the total queue size (sum across all threads)
-            # should be bigger than the batch size per rank.
-            queue_size = math.ceil(self.data_loader.rank_batch_size * 2 / num_threads)
-            thread_generators = []
-            for i in range(num_threads):
-                indices = self.data_loader._get_local_instance_indices(global_indices)
-                generator = (
-                    self.data_loader._get_dataset_item(int(idx))
-                    for idx in islice(indices, i, None, num_threads)
-                )
-                thread_generators.append(
-                    threaded_generator(
-                        generator, maxsize=queue_size, thread_name=f"data thread {i}"
-                    )
-                )
-            instance_iterator = roundrobin(*thread_generators)
-        else:
-            indices = self.data_loader._get_local_instance_indices(global_indices)
-            # I want to create a generator that yields a tuple of (idx, patch_size, sampled_hw_p)
-            # where a single patch size and sampled_hw_p is used for each batch and randomly chosen
-            # Ths simplest thing is to have an iterator that yields a tuple of (idx, patch_size, sampled_hw_p)
-            # that changes every batchsize
-            instance_iterator = (
-                self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
-                for idx, patch_size, sampled_hw_p in _get_batch_item_params_iterator(
-                    indices,
-                    self.data_loader.patch_sizes,
-                    self.data_loader.sampled_hw_p_list,
-                    self.data_loader.rank_batch_size,
-                )
+        indices = self.data_loader._get_local_instance_indices(global_indices)
+        instance_iterator = (
+            self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
+            for idx, patch_size, sampled_hw_p in _get_batch_item_params_iterator(
+                indices,
+                self.data_loader.patch_sizes,
+                self.data_loader.sampled_hw_p_list,
+                self.data_loader.rank_batch_size,
             )
+        )
 
         return (
             self.data_loader.collator(batch)
@@ -458,7 +424,6 @@ class HeliosDataLoaderConfig(Config):
     sampled_hw_p_list: list[int]
     seed: int
     shuffle: bool = True
-    num_threads: int | None = None
     num_workers: int = 0
     prefetch_factor: int | None = None
     target_device_type: str | None = None
@@ -497,7 +462,6 @@ class HeliosDataLoaderConfig(Config):
             fs_local_rank=get_fs_local_rank(),
             seed=self.seed,
             shuffle=self.shuffle,
-            num_threads=self.num_threads,
             num_workers=self.num_workers,
             prefetch_factor=self.prefetch_factor,
             target_device_type=self.target_device_type or get_default_device().type,
