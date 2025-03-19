@@ -326,8 +326,7 @@ class HeliosDataLoader(DataLoaderBase):
         epoch = math.ceil(global_step / self.total_batches)
         step_in_epoch = global_step % self.total_batches
         logger.info(f"epoch: {epoch}, step in epoch: {step_in_epoch}")
-        for i in range(1, epoch + 1):
-            self.reshuffle(epoch=i)
+        self.reshuffle(epoch=epoch)
         batch_start = int(self.get_global_indices()[step_in_epoch])
         batch_end = batch_start + self.global_batch_size
         sample_indices = np.arange(batch_start, batch_end)

@@ -643,7 +643,8 @@ class HeliosDataset(Dataset):
         self._log_modality_distribution(filtered_samples)
         return filtered_samples
 
-    def get_latlon(self, sample: SampleInformation) -> np.ndarray:
+    @classmethod
+    def get_latlon(cls, sample: SampleInformation) -> np.ndarray:
         """Get the latlon of the sample."""
         # Get coordinates at projection units, and then transform to latlon
         grid_resolution = sample.grid_tile.resolution_factor * BASE_RESOLUTION
@@ -652,7 +653,7 @@ class HeliosDataset(Dataset):
             (sample.grid_tile.row + 0.5) * -grid_resolution * IMAGE_TILE_SIZE,
         )
         transformer = Transformer.from_crs(
-            sample.grid_tile.crs, self.PROJECTION_CRS, always_xy=True
+            sample.grid_tile.crs, cls.PROJECTION_CRS, always_xy=True
         )
         lon, lat = transformer.transform(x, y)
         return np.array([lat, lon])

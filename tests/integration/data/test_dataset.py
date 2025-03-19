@@ -16,12 +16,16 @@ def test_helios_dataset(
 ) -> None:
     """Test the HeliosDataset class."""
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
-    prepare_samples(tmp_path)
+    prepared_samples = prepare_samples(tmp_path)
     dataset = HeliosDataset(
         tile_path=tmp_path,
         supported_modalities=supported_modalities,
         dtype="float32",
+        multiprocessed_h5_creation=False,
     )
+    # Mock the _get_samples method to return the prepared samples
+    # Do this before calling prepare()
+    dataset._get_samples = lambda: prepared_samples  # type: ignore
     dataset.prepare()
 
     assert len(dataset) == 1
@@ -29,7 +33,6 @@ def test_helios_dataset(
         idx=0,
         patch_size=1,
         sampled_hw_p=256,
-        token_budget=1000000,
     )
     item = dataset[args]
     assert isinstance(item, HeliosSample)

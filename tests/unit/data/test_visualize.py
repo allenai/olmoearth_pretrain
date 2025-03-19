@@ -20,7 +20,12 @@ def test_visualize_sample(
         supported_modalities=supported_modalities,
         tile_path=tmp_path,
         dtype="float32",
+        multiprocessed_h5_creation=False,
     )
+    # Mock the _get_samples method to return the prepared samples
+    # Do this before calling prepare()
+    dataset._get_samples = lambda: samples  # type: ignore
+    dataset.prepare()
     for i in range(len(dataset)):
         visualize_sample(
             dataset,
