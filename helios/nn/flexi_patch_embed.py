@@ -86,7 +86,9 @@ class FlexiPatchEmbed(nn.Module):
         Returns:
             A 2-tuple containing either the original iterable values or the input repeated twice.
         """
+        logger.info(f"x: {x}")
         if isinstance(x, Iterable) and not isinstance(x, str):
+            logger.info(f"x is iterable lenght: {len(list(x))}")
             assert len(list(x)) == 2, "x must be a 2-tuple"
             return tuple(x)
         return (x, x)

@@ -70,6 +70,8 @@ class HeliosDataLoader(DataLoaderBase):
         assert isinstance(self.dataset, HeliosDataset)  # type: ignore
         if not self.dataset.is_dataset_prepared:
             raise RuntimeError("Dataset must be prepared before creating a dataloader")
+        self.patch_sizes = np.arange(1, 8)
+        self.sampled_hw_p_list = list(range(5, 13))
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
@@ -217,9 +219,9 @@ class HeliosDataLoader(DataLoaderBase):
         indices = indices[:, self.dp_rank :: self.dp_world_size].reshape((-1,))
         return indices
 
-    def _get_dataset_item(self, idx: int) -> HeliosSample:
+    def _get_dataset_item(self, idx: int, patch_size: int, sampled_hw_p: int) -> HeliosSample:
         """Get a dataset item."""
-        item = self.dataset[idx]
+        item = self.dataset[idx, patch_size, sampled_hw_p]
         return item
 
     def state_dict(self) -> dict[str, Any]:
@@ -288,7 +290,8 @@ class HeliosDataLoader(DataLoaderBase):
         timestamps = torch.cat([days, months, years], dim=1)
         timestamps = rearrange(timestamps, "b t c -> b c t")
         output_dict["timestamps"] = timestamps
-        return HeliosSample(**output_dict)
+        #  TODO: Temporary hardcoded fix later
+        return 1, HeliosSample(**output_dict).subset(1, 1500, 6)
 
     def fast_forward(self, global_step: int) -> np.ndarray:
         """Fast forward the data loader to a specific global step and return the batch_indices."""
@@ -340,6 +343,24 @@ def iter_batched(
         yield tuple(batch)
 
 
+def _get_batch_item_params_iterator(indices: np.ndarray, patch_size: list[int], sampled_hw_p: list[int], rank_batch_size: int) -> Iterator[tuple[int, int, int]]:
+    """Get a generator that yields a tuple of (idx, patch_size, sampled_hw_p)
+    that changes the patch_size and sampled_hw_p every rank_batch_size
+    """
+    patch_size_array = np.array(patch_size)
+    sampled_hw_p_array = np.array(sampled_hw_p)
+    instances_processed = 0
+    # TODO: we should use a generator here
+    for idx in indices:
+        if instances_processed % rank_batch_size == 0:
+            patch_size = np.random.choice(patch_size_array)
+            sampled_hw_p = np.random.choice(sampled_hw_p_array)
+            logger.info(f"patch size: {patch_size}, sampled_hw_p: {sampled_hw_p}")
+            logger.info(f"patch size type: {type(patch_size)}, sampled_hw_p type: {type(sampled_hw_p)}")
+        yield idx, int(patch_size), int(sampled_hw_p)
+        instances_processed += 1
+
+
 class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
     """Iterable dataset wrapper.
 
@@ -370,9 +391,11 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
             # try to guess a good number of threads.
             num_threads = 4
 
+
         # Potentially slice by threads.
         instance_iterator: Iterator[HeliosSample]
         if num_threads:
+            raise NotImplementedError("Threading is not supported yet")
             # In order to stay ahead of training the total queue size (sum across all threads)
             # should be bigger than the batch size per rank.
             queue_size = math.ceil(self.data_loader.rank_batch_size * 2 / num_threads)
@@ -391,8 +414,14 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
             instance_iterator = roundrobin(*thread_generators)
         else:
             indices = self.data_loader._get_local_instance_indices(global_indices)
+            # I want to create a generator that yields a tuple of (idx, patch_size, sampled_hw_p)
+            # where a single patch size and sampled_hw_p is used for each batch and randomly chosen
+            # Ths simplest thing is to have an iterator that yields a tuple of (idx, patch_size, sampled_hw_p)
+            # that changes every batchsize
             instance_iterator = (
-                self.data_loader._get_dataset_item(int(idx)) for idx in indices
+                self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
+                for idx, patch_size, sampled_hw_p in
+                 _get_batch_item_params_iterator(indices, self.data_loader.patch_sizes, self.data_loader.sampled_hw_p_list, self.data_loader.rank_batch_size)
             )
 
         return (

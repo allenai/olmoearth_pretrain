@@ -230,7 +230,7 @@ class HeliosSample(NamedTuple):
         return min(floor(max_t_within_budget), self.time)
 
     def subset(
-        self, patch_size: int, max_tokens_per_instance: int, hw_to_sample: list[int]
+        self, patch_size: int, max_tokens_per_instance: int, sampled_hw_p: int
     ) -> "HeliosSample":
         """Subset a HelioSample.
 
@@ -249,14 +249,14 @@ class HeliosSample(NamedTuple):
         of timesteps allowable so that the total tokens (per instance) is >=
         max_tokens_per_instance
         """
-        max_height_width = max(self.height, self.width)
-        max_height_width_tokens = int(max_height_width / patch_size)
-        hw_to_sample = [x for x in hw_to_sample if x <= max_height_width_tokens]
-        if len(hw_to_sample) == 0:
-            raise ValueError(
-                "max height/width allowed by sample smaller than values in hw_to_sample"
-            )
-        sampled_hw_p = random.choice(hw_to_sample)
+        # max_height_width = max(self.height, self.width)
+        # max_height_width_tokens = int(max_height_width / patch_size)
+        # hw_to_sample = [x for x in hw_to_sample if x <= max_height_width_tokens]
+        # if len(hw_to_sample) == 0:
+        #     raise ValueError(
+        #         "max height/width allowed by sample smaller than values in hw_to_sample"
+        #     )
+        # sampled_hw_p = random.choice(hw_to_sample)
         max_t = self._get_max_t_within_token_budget(
             sampled_hw_p, max_tokens_per_instance
         )
@@ -294,23 +294,26 @@ class HeliosSample(NamedTuple):
 
 def collate_helios(batch: list[HeliosSample]) -> HeliosSample:
     """Collate function that automatically handles any modalities present in the samples."""
-
     # Stack tensors while handling None values
     def stack_or_none(attr: str) -> torch.Tensor | None:
         """Stack the tensors while handling None values."""
-        if getattr(batch[0], attr) is None:
+        if getattr(batch[0][1], attr) is None:
             return None
-        return torch.stack(
-            [torch.from_numpy(getattr(sample, attr)) for sample in batch], dim=0
+        stacked_tensor = torch.stack(
+            [torch.from_numpy(getattr(sample, attr)) for _, sample in batch], dim=0
         )
+        logger.info(f"Stacked tensor shape: {stacked_tensor.shape} for attribute: {attr}")
+        return stacked_tensor
 
     # TODO: Gets all non-None modalities ASSUMES ALL SAMPLES HAVE THE SAME MODALITIES
-    sample_fields = batch[0].modalities
+    patch_size, batch_zero = batch[0]
+    sample_fields = batch_zero.modalities
 
     # Create a dictionary of stacked tensors for each field
     collated_dict = {field: stack_or_none(field) for field in sample_fields}
     # patch_size = 2
-    return HeliosSample(**collated_dict)
+    logger.info(f"patch size type in collate: {type(patch_size)}")
+    return patch_size, HeliosSample(**collated_dict)
 
 
 class HeliosDataset(Dataset):
@@ -324,6 +327,7 @@ class HeliosDataset(Dataset):
         supported_modalities: list[ModalitySpec],
         dtype: DType,
         normalize: bool = True,
+        token_budget: int = 1500,
         h5py_folder: str = "h5py_data",
         attempt_to_create_h5_files: bool = False,
     ):
@@ -347,6 +351,7 @@ class HeliosDataset(Dataset):
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
+        self.token_budget = token_budget
         self.h5py_folder = h5py_folder
         self.dtype = dtype
         # Let us see if pickling the normalizers is slow
@@ -809,8 +814,9 @@ class HeliosDataset(Dataset):
                 f.create_dataset(modality_name, data=image)
         return sample_dict
 
-    def __getitem__(self, index: int) -> HeliosSample:
+    def __getitem__(self, index_patch_size_sampled_hw_p: tuple[int, int, int]) -> tuple[int, HeliosSample]:
         """Get the sample at the given index."""
+        index, patch_size, sampled_hw_p = index_patch_size_sampled_hw_p
         h5_file_path = self._get_h5_file_path(index)
 
         if not h5_file_path.exists():
@@ -822,7 +828,7 @@ class HeliosDataset(Dataset):
             sample_dict = {k: v[()] for k, v in f.items()}
 
         sample = HeliosSample(**sample_dict)
-        result = sample.subset(4, 1500, [12])
+        result = sample.subset(patch_size, self.token_budget, sampled_hw_p)
         sample_dict = result.as_dict(ignore_nones=True)
 
         # Sample modalities should be written into the metadata of the h5 dataset
@@ -838,7 +844,7 @@ class HeliosDataset(Dataset):
                 sample_dict[modality.name] = sample_dict[modality.name].astype(
                     self.dtype
                 )
-        return HeliosSample(**sample_dict)
+        return patch_size, HeliosSample(**sample_dict)
 
 
 @dataclass
