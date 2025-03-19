@@ -87,7 +87,7 @@ def build_train_module_config(
 ) -> GalileoTrainModuleConfig:
     """Build the train module config for an experiment."""
     LR = 0.002
-    RANK_MICROBATCH_SIZE = 64
+    RANK_MICROBATCH_SIZE = 128
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
     WD = 0.02
@@ -175,9 +175,12 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    TILE_PATH = UPath("/weka/dfive-default/helios/dataset/presto/")
+    # h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/98856"
+    # TODO: cahnge back to presto
+    tile_path = "/weka/dfive-default/helios/dataset/20250223"
     return HeliosDatasetConfig(
-        tile_path=TILE_PATH,
+        h5py_dir=None,
+        tile_path=tile_path,
         supported_modality_names=common.supported_modality_names,
         dtype=DType.float32,
     )
@@ -196,9 +199,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         name=common.run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
-        upload_modality_data_band_distribution_pre_train=False,
-        upload_dataset_distribution_pre_train=False,
-        enabled=False,  # set to False to avoid wandb errors
+        enabled=True,  # set to False to avoid wandb errors
     )
     # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)

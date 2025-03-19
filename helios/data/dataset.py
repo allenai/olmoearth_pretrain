@@ -321,9 +321,9 @@ class HeliosDataset(Dataset):
 
     def __init__(
         self,
-        h5py_dir: UPath | None,
         supported_modalities: list[ModalitySpec],
         dtype: DType,
+        h5py_dir: UPath | None = None,
         tile_path: UPath | None = None,
         normalize: bool = True,
         h5py_folder: str = "h5py_data",
@@ -346,16 +346,18 @@ class HeliosDataset(Dataset):
         Returns:
             None
         """
-        if h5_dir_path is None and tile_path is None:
-            raise ValueError("Either h5_dir_path or tile_path must be provided")
-        if h5_dir_path is not None and tile_path is not None:
-            raise ValueError("Only one of h5_dir_path or tile_path can be provided")
-        if h5_dir_path is not None:
-            self._h5py_dir = h5_dir_path
-            self.tile_path = h5_dir_path.parent.parent
-            predefined_supported_modalities = [Modality.get(modality) for modality in h5_dir_path.parent.name.split("_")]
-            if predefined_supported_modalities != supported_modalities:
-                raise ValueError("The predefined supported modalities do not match the supported modalities")
+        if h5py_dir is None and tile_path is None:
+            raise ValueError("Either h5py_dir or tile_path must be provided")
+        if h5py_dir is not None and tile_path is not None:
+            raise ValueError("Only one of h5py_dir or tile_path can be provided")
+        if h5py_dir is not None:
+            self._h5py_dir = h5py_dir
+            self.tile_path = h5py_dir.parent.parent
+            logger.info(f"H5py dir: {self.h5py_dir.parent.name.split('_')}")
+            predefined_supported_modalities_names = self.parse_modalities_names_from_dir_name(self.h5py_dir.parent.name)
+            modality_names = [modality.name for modality in supported_modalities]
+            if set(predefined_supported_modalities_names) != set(modality_names):
+                raise ValueError(f"The predefined supported modalities do not match the supported modalities: {predefined_supported_modalities_names} != {modality_names}")
         else:
             self.tile_path = tile_path
             self._h5py_dir: Path | None = None  # type: ignore
@@ -373,7 +375,10 @@ class HeliosDataset(Dataset):
         self._work_dir_set = False
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
-        self.attempt_to_create_h5_files = attempt_to_create_h5_files
+
+    def parse_modalities_names_from_dir_name(self, dir_name: str) -> list[str]:
+        """Parse the modalities from the directory name."""
+        return [name for name in Modality.names() if name in dir_name and name != "sentinel2"]
 
     @property
     def fingerprint_version(self) -> str:
@@ -433,18 +438,13 @@ class HeliosDataset(Dataset):
             return
         self._create_h5_file(sample, h5_file_path)
 
-    def create_h5_dataset(self, samples: list[SampleInformation]) -> int:
+    def create_h5_dataset(self, samples: list[SampleInformation]) -> None:
         """Create a dataset of the samples in h5 format in a shared weka directory under the given fingerprint.
-
-        Returns:
-            The last index of the samples that was processed.
         """
         total_sample_indices = len(samples)
 
-        # Determine number of processes to use (leave one core free)
         num_processes = max(1, mp.cpu_count() - 2)
         logger.info(f"Creating H5 dataset using {num_processes} processes")
-        # Create a pool of workers
         with mp.Pool(processes=num_processes) as pool:
             # Process samples in parallel and track progress with tqdm
             _ = list(
@@ -454,7 +454,6 @@ class HeliosDataset(Dataset):
                     desc="Creating H5 files",
                 )
             )
-        return total_sample_indices
 
     @property
     def h5py_dir(self) -> Path:
@@ -500,17 +499,19 @@ class HeliosDataset(Dataset):
             logger.info("Dataset is already prepared")
             return
 
-        if self.h5py_dir is None:
+        if self.tile_path is not None:
             logger.warning("h5py_dir is not set, Generating H5 files from raw tile directory")
             if samples is None:
                 samples = self._get_samples()  # type: ignore
             if len(samples) == 0:
                 raise ValueError("No samples provided")
             samples = self._filter_samples(samples)  # type: ignore
-            self.latlon_distribution = self.get_geographic_distribution(samples)
+            num_samples = len(samples)
             self.set_h5py_dir(num_samples)
+            self.latlon_distribution = self.get_geographic_distribution(samples)
+
             logger.info("Attempting to create H5 files may take some time...")
-            num_samples = self.create_h5_dataset(samples)
+            self.create_h5_dataset(samples)
         else:
             logger.info("H5 files already exist, skipping creation")
             logger.info(f"H5 files exist in {self.h5py_dir}")
@@ -521,6 +522,15 @@ class HeliosDataset(Dataset):
     def is_dataset_prepared(self) -> bool:
         """Check if the dataset is prepared."""
         return self.sample_indices is not None
+
+    @property
+    def latlon_distribution_path(self) -> UPath:
+        """Get the path to the latlon distribution file."""
+        return self.h5py_dir / "latlon_distribution.npy"
+
+    def save_latlon_distribution(self, latlons: np.ndarray) -> None:
+        """Save the latlon distribution to a file."""
+        np.save(self.latlon_distribution_path, latlons)
 
     def _log_modality_distribution(self, samples: list[SampleInformation]) -> None:
         """Log the modality distribution."""
@@ -640,11 +650,14 @@ class HeliosDataset(Dataset):
             numpy.ndarray: Array of shape (N, 2) containing [latitude, longitude]
             coordinates for each of the N samples in the dataset.
         """
+        if self.latlon_distribution_path.exists():
+            return np.load(self.latlon_distribution_path)
         latlons = []
         for sample in samples:
             latlon = self.get_latlon(sample)
             latlons.append(latlon)
         latlons = np.vstack(latlons)
+        self.save_latlon_distribution(latlons)
         return latlons
 
     def get_sample_data_for_histogram(
@@ -859,9 +872,9 @@ class HeliosDataset(Dataset):
 class HeliosDatasetConfig(Config):
     """Configuration for the HeliosDataset."""
 
-    tile_path: str
+    h5py_dir: str | None
     supported_modality_names: list[str]
-    samples: list[SampleInformation] | None = None
+    tile_path: str | None = None
     dtype: DType = DType.float32
     normalize: bool = True
 
@@ -875,8 +888,12 @@ class HeliosDatasetConfig(Config):
             ValueError: If any arguments are invalid
         """
         # Validate tile_path
-        if not isinstance(self.tile_upath, UPath):
-            raise ValueError("tile_path must be a UPath")
+        # Check that either a tile path or h5py_dir is provided
+        if self.tile_path is None and self.h5py_dir is None:
+            raise ValueError("Either a tile path or h5py_dir must be provided")
+        if self.tile_path is not None and self.h5py_dir is not None:
+            raise ValueError("Only one of tile_path or h5py_dir must be provided")
+
 
         # Validate supported_modalities
         if not isinstance(self.supported_modalities, list):
@@ -896,11 +913,19 @@ class HeliosDatasetConfig(Config):
         """Get the tile path."""
         return UPath(self.tile_path)
 
+    @property
+    def h5py_dir_upath(self) -> UPath:
+        """Get the h5py directory."""
+        return UPath(self.h5py_dir)
+
     def build(self) -> "HeliosDataset":
         """Build the dataset."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
-        kwargs["tile_path"] = self.tile_upath
+        if self.h5py_dir is not None:
+            kwargs["h5py_dir"] = self.h5py_dir_upath
+        else:
+            kwargs["tile_path"] = self.tile_upath
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"HeliosDataset kwargs: {kwargs}")
