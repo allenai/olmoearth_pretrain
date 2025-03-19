@@ -284,4 +284,4 @@ class Sen1Floods11Dataset(Dataset):
                 sentinel1=torch.tensor(image).float(), timestamps=timestamp.long()
             )
         )
-        return masked_sample, label
+        return masked_sample, label.long()
