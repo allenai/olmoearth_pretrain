@@ -21,6 +21,7 @@ def test_split_batch(microbatch_size: int) -> None:
         if i == len(micro_batches) - 1:
             microbatch_size = B - i * microbatch_size
         assert micro_batch.batch_size == microbatch_size
+        assert micro_batch.sentinel2_l2a is not None
         assert micro_batch.sentinel2_l2a.shape == (microbatch_size, H, W, T, D)
         assert micro_batch.latlon is not None
         assert micro_batch.latlon.shape == (microbatch_size, 1, D)

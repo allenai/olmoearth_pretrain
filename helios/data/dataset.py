@@ -176,7 +176,7 @@ class HeliosSample(NamedTuple):
                     return x.shape[1]
                 else:
                     # no batch dimension
-                    if x.shape != 4:
+                    if len(x.shape) != 4:
                         raise ValueError(f"Unexpected shape {x.shape} for {modality}")
                     return x.shape[0]
         raise ValueError("No modality with height or width present")
@@ -192,7 +192,7 @@ class HeliosSample(NamedTuple):
                     return x.shape[2]
                 else:
                     # no batch dimension
-                    if x.shape != 4:
+                    if len(x.shape) != 4:
                         raise ValueError(f"Unexpected shape {x.shape} for {modality}")
                     return x.shape[1]
         raise ValueError("No modality with height or width present")
