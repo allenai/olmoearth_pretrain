@@ -46,8 +46,8 @@ class MaskedHeliosSample(NamedTuple):
     timestamps: (
         ArrayTensor  # [B, T, D=3], where D=[day, month, year] (months are zero indexed)
     )
-    sentinel2_l2a: ArrayTensor | None
-    sentinel2_l2a_mask: ArrayTensor | None
+    sentinel2_l2a: ArrayTensor | None = None
+    sentinel2_l2a_mask: ArrayTensor | None = None
     sentinel1: ArrayTensor | None = None
     sentinel1_mask: ArrayTensor | None = None
     worldcover: ArrayTensor | None = None
