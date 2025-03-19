@@ -17,12 +17,11 @@ def test_visualize_sample(
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
     samples = prepare_samples(tmp_path)
     dataset = HeliosDataset(
-        samples=samples,
         supported_modalities=supported_modalities,
         tile_path=tmp_path,
         dtype="float32",
     )
-    for i in range(len(samples)):
+    for i in range(len(dataset)):
         visualize_sample(
             dataset,
             i,

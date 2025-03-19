@@ -13,13 +13,13 @@ def test_helios_dataloader(
 ) -> None:
     """Test the HeliosDataloader class."""
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
-    samples = prepare_samples(tmp_path)
+    _ = prepare_samples(tmp_path)
     dataset = HeliosDataset(
-        samples=samples,
         tile_path=tmp_path,
         supported_modalities=supported_modalities,
         dtype="float32",
     )
+    dataset.prepare()
     assert isinstance(dataset, HeliosDataset)
     dataloader = HeliosDataLoader(
         dataset=dataset,
@@ -33,6 +33,10 @@ def test_helios_dataloader(
         num_workers=0,
         collator=default_collate,
         target_device_type="cpu",
+        token_budget=1000000,
+        min_patch_size=1,
+        max_patch_size=1,
+        sampled_hw_p_list=[256],
     )
 
     dataloader.reshuffle()
