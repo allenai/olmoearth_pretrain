@@ -6,7 +6,12 @@ import torch.nn as nn
 from olmo_core.config import Config
 
 from helios.data.transform import Transform, TransformConfig
-from helios.nn.flexihelios import EncoderConfig, PredictorConfig, TokensAndMasks
+from helios.nn.flexihelios import (
+    EncoderConfig,
+    PredictorConfig,
+    ReconstructorConfig,
+    TokensAndMasks,
+)
 from helios.nn.utils import DistributedMixins
 from helios.train.masking import MaskedHeliosSample
 
@@ -18,6 +23,7 @@ class MAE(nn.Module, DistributedMixins):
         self,
         encoder: nn.Module,
         decoder: nn.Module,
+        reconstructor: nn.Module,
         transform: Transform,
         token_budget: int = 1500,
         h_w_to_sample_min: int = 2,
@@ -28,6 +34,7 @@ class MAE(nn.Module, DistributedMixins):
         Args:
             encoder: The encoder to use.
             decoder: The decoder to use.
+            reconstructor: The reconstructor to use.
             transform: The transform to use.
             token_budget: The token budget to use.
             h_w_to_sample_min: The minimum height and width to sample.
@@ -36,6 +43,7 @@ class MAE(nn.Module, DistributedMixins):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
+        self.reconstructor = reconstructor
         self.token_budget = token_budget
         self.transform = transform
         self.h_w_to_sample_min = h_w_to_sample_min
@@ -45,7 +53,8 @@ class MAE(nn.Module, DistributedMixins):
         """Forward pass for the MAE Module."""
         latent = self.encoder(x, patch_size=patch_size)
         decoded = self.decoder(latent, timestamps=x.timestamps, patch_size=patch_size)
-        return decoded
+        reconstructed = self.reconstructor(decoded, patch_size=patch_size)
+        return reconstructed
 
 
 @dataclass
@@ -54,6 +63,7 @@ class MAEConfig(Config):
 
     encoder_config: "EncoderConfig"
     decoder_config: "PredictorConfig"
+    reconstructor_config: "ReconstructorConfig"
     transform_type: str = "no_transform"
     token_budget: int = 1500
     h_w_to_sample_min: int = 2
@@ -84,10 +94,12 @@ class MAEConfig(Config):
         self.validate()
         encoder = self.encoder_config.build()
         decoder = self.decoder_config.build()
+        reconstructor = self.reconstructor_config.build()
         transform = TransformConfig(transform_type=self.transform_type).build()
         return MAE(
             encoder=encoder,
             decoder=decoder,
+            reconstructor=reconstructor,
             transform=transform,
             token_budget=self.token_budget,
             h_w_to_sample_min=self.h_w_to_sample_min,

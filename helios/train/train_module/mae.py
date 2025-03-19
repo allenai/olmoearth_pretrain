@@ -18,9 +18,10 @@ from olmo_core.train.train_module.transformer import (
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
+from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.mae import MAE
 from helios.train.loss import LossConfig
-from helios.train.masking import MaskedHeliosSample, MaskingConfig
+from helios.train.masking import MaskingConfig
 from helios.train.train_module.train_module import (
     HeliosTrainModule,
     HeliosTrainModuleConfig,
@@ -39,7 +40,7 @@ class MAETrainModuleConfig(HeliosTrainModuleConfig):
     """
 
     loss_config: LossConfig = field(
-        default_factory=lambda: LossConfig(loss_config={"type": "patch_discrimination"})
+        default_factory=lambda: LossConfig(loss_config={"type": "l1"})
     )
     masking_config: MaskingConfig = field(
         default_factory=lambda: MaskingConfig(strategy_config={"type": "random"})
@@ -197,10 +198,9 @@ class MAETrainModule(HeliosTrainModule):
         )
 
         # Run Encoder and decoder on the augmented input
-        decoded, target_output = self.model_forward(
-            masked_batch, patch_size, self.token_exit_cfg
-        )
-        loss = self.loss_fn(decoded, target_output)
+        reconstructed = self.model(masked_batch, patch_size, self.token_exit_cfg)
+        target_output = TokensAndMasks(**batch.as_dict())
+        loss = self.loss_fn(reconstructed, target_output)
         loss.backward()
 
         self.trainer.record_metric(
@@ -220,11 +220,3 @@ class MAETrainModule(HeliosTrainModule):
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         """Evaluate a batch."""
         raise NotImplementedError("eval batch not implemented")
-
-    def model_forward(
-        self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run a forward pass."""
-        with self._model_forward_context():
-            decoded = self.model.forward(batch, patch_size)
-            return decoded, batch.unmask()

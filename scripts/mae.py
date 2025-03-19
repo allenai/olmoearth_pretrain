@@ -175,7 +175,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     EVAL_INTERVAL_EPOCHS = 1
     EVAL_TASKS = [
         DownstreamTaskConfig(
-            name="m-eurosat",
+            dataset="m-eurosat",
             batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,

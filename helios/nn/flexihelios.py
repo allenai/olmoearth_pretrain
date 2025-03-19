@@ -343,7 +343,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         return output_dict
 
 
-class FlexiHeliosPatchReconstruction(nn.Module):
+class Reconstructor(nn.Module):
     """Module that patchifies and encodes the input data."""
 
     def __init__(
@@ -416,7 +416,7 @@ class FlexiHeliosPatchReconstruction(nn.Module):
 
     # TODO: Likely we want a single object that stores all the data related configuration etc per modality including channel grous bands patch size etc
     def apply_reconstruction_to_modality(
-        self, modality: str, input_data: MaskedHeliosSample, patch_size: int
+        self, modality: str, input_data: TokensAndMasks, patch_size: int
     ) -> tuple[Tensor, Tensor]:
         """Apply reconstruction to a modality."""
         masked_modality_name = input_data.get_masked_modality_name(modality)
@@ -446,9 +446,9 @@ class FlexiHeliosPatchReconstruction(nn.Module):
 
     def forward(
         self,
-        input_data: MaskedHeliosSample,
+        input_data: TokensAndMasks,
         patch_size: int,
-    ) -> dict[str, Tensor]:
+    ) -> TokensAndMasks:
         """Return flexibly patchified reconstruction for each modality of the input data.
 
         Given a [B, H, W, (T), b_s, D] inputs, returns a [B, H, W, (T), C] output.
@@ -464,7 +464,37 @@ class FlexiHeliosPatchReconstruction(nn.Module):
             output_dict[modality] = modality_tokens
             modality_mask_name = input_data.get_masked_modality_name(modality)
             output_dict[modality_mask_name] = modality_masks
-        return output_dict
+        return TokensAndMasks(**output_dict)
+
+
+@dataclass
+class ReconstructorConfig(Config):
+    """Configuration for the Reconstructor."""
+
+    supported_modality_names: list[str]
+    embedding_size: int = 16
+    max_patch_size: int = 8
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        if len(self.supported_modalities) == 0:
+            raise ValueError("At least one modality must be added!")
+        else:
+            for modality in self.supported_modalities:
+                if modality not in Modality.values():
+                    raise ValueError(f"Modality {modality} is not supported")
+
+    @property
+    def supported_modalities(self) -> list[ModalitySpec]:
+        """Get the supported modalities."""
+        return get_modality_specs_from_names(self.supported_modality_names)
+
+    def build(self) -> "Reconstructor":
+        """Build the reconstructor."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        logger.info(f"Predictor kwargs: {kwargs}")
+        return Predictor(**kwargs)
 
 
 class FlexiHeliosCompositeEncodings(nn.Module):
@@ -1505,50 +1535,3 @@ class PredictorConfig(Config):
 
 
 # TODO: add multiple combo of variables for encoder and predictor, and being able to build them directly, no need to specify each parameter, e.g., encoder_tiny, encoder_small, encoder_base, encoder_large, etc.
-
-
-class PixelPredictor(FlexiHeliosBase):
-    """Predictor module that generates pixel predictions from encoded tokens."""
-
-    cross_attn = True
-
-    def __init__(
-        self,
-        supported_modalities: list[ModalitySpec],
-        encoder_embedding_size: int = 128,
-        decoder_embedding_size: int = 128,
-        depth: int = 2,
-        mlp_ratio: float = 2.0,
-        num_heads: int = 8,
-        max_sequence_length: int = 24,
-        drop_path: float = 0.0,
-        learnable_channel_embeddings: bool = True,
-        random_channel_embeddings: bool = False,
-        output_embedding_size: int | None = None,
-    ):
-        """Initialize the predictor.
-
-        Args:
-            supported_modalities: modalities this model instantiation supports
-            encoder_embedding_size: Size of encoder embeddings
-            decoder_embedding_size: Size of decoder embeddings
-            depth: Number of transformer layers
-            mlp_ratio: Ratio for MLP hidden dimension
-            num_heads: Number of attention heads
-            max_sequence_length: Maximum sequence length
-            drop_path: Drop path rate
-            learnable_channel_embeddings: Whether to use learnable channel embeddings
-            random_channel_embeddings: Whether to randomly initialize channel embeddings
-            output_embedding_size: Size of output embeddings
-        """
-        super().__init__(
-            embedding_size=decoder_embedding_size,
-            depth=depth,
-            mlp_ratio=mlp_ratio,
-            num_heads=num_heads,
-            max_sequence_length=max_sequence_length,
-            drop_path=drop_path,
-            use_channel_embs=learnable_channel_embeddings,
-            random_channel_embs=random_channel_embeddings,
-            supported_modalities=supported_modalities,
-        )
