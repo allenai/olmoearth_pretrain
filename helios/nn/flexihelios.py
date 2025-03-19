@@ -463,14 +463,12 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         elif modality_tokens.ndim == 5:
             b, h, w, b_s, _ = modality_tokens.shape
             ein_string, ein_dict = "b h w b_s d", {"b": b, "h": h, "w": w, "b_s": b_s}
-            logger.info(f"Modality {modality_name} has shape {modality_tokens.shape}")
         elif modality_tokens.ndim == 6:
             b, h, w, t, b_s, _ = modality_tokens.shape
             ein_string, ein_dict = (
                 "b h w t b_s d",
                 {"b": b, "h": h, "w": w, "t": t, "b_s": b_s},
             )
-            logger.info(f"Modality {modality_name} has shape {modality_tokens.shape}")
         else:
             raise ValueError(f"Unsupported tokens shape: {modality_tokens.shape}")
 
@@ -507,8 +505,6 @@ class FlexiHeliosCompositeEncodings(nn.Module):
                 encoding_dim=self.embedding_dim_per_embedding_type,
                 device=device,
             )
-            logger.info(f"Spatial embed has shape {spatial_embed.shape}")
-            logger.info(f"Modality name: {modality}")
             spatial_embed = rearrange(spatial_embed, "b (h w) d -> b h w d", h=h, w=w)
             spatial_embed = repeat(
                 spatial_embed, f"b h w d -> {ein_string}", **ein_dict

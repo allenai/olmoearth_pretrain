@@ -118,7 +118,6 @@ def build_common_components(
         Modality.LATLON.name,
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
-        Modality.OPENSTREETMAP_RASTER.name,
     ]
 
     cmd_to_launch = SubCmd.train
