@@ -7,21 +7,22 @@ import subprocess  # nosec
 
 # Fixed training parameters
 NUM_WORKERS = 4
+PREFETCH_FACTOR = 1
 GLOBAL_BATCH_SIZE = 512
 RANK_MICROBATCH_SIZE = 64
 
 # Fixed model parameters
-ENCODER_EMBEDDING_SIZE = 768
-DECODER_EMBEDDING_SIZE = 768
-ENCODER_DEPTH = 12
+ENCODER_EMBEDDING_SIZE = 256
+DECODER_EMBEDDING_SIZE = 256
+ENCODER_DEPTH = 4
 DECODER_DEPTH = 4
-ENCODER_NUM_HEADS = 12
-DECODER_NUM_HEADS = 12
+ENCODER_NUM_HEADS = 8
+DECODER_NUM_HEADS = 8
 MLP_RATIO = 4
 
 # Sweep parameters
-LEARNING_RATES = [3e-4]
-WEIGHT_DECAYS = [2e-2]
+LEARNING_RATES = [2e-3]
+WEIGHT_DECAYS = [3e-2]
 WARMUP_EPOCHS = [10]
 
 # Base command template
@@ -37,19 +38,20 @@ BASE_COMMAND = (
     "--model.decoder_config.num_heads={decoder_num_heads} "
     "--model.decoder_config.mlp_ratio={mlp_ratio} "
     "--data_loader.num_workers={num_workers} "
+    "--data_loader.prefetch_factor={prefetch_factor} "
     "--data_loader.global_batch_size={global_batch_size} "
     "--train_module.rank_microbatch_size={rank_microbatch_size} "
     "--train_module.optim_config.lr={lr} "
     "--train_module.optim_config.weight_decay={wd} "
     "--train_module.warmup_duration.value={warmup} "
-    "--train_module.warmup_duration.unit=epochs"
+    "--train_module.warmup_duration.unit=epochs "
     "--launch.num_gpus=8"
 )
 
 # Iterate over all combinations of hyperparameters
 for lr, wd, warmup in itertools.product(LEARNING_RATES, WEIGHT_DECAYS, WARMUP_EPOCHS):
     # Construct run name indicating hyperparameters
-    run_name = f"galileo_base_ddp_lr_{lr}_wd_{wd}_warmup_{warmup}"
+    run_name = f"galileo_tiny_ddp_lr_{lr}_wd_{wd}_warmup_{warmup}"
 
     # Construct full command
     command = BASE_COMMAND.format(
@@ -62,6 +64,7 @@ for lr, wd, warmup in itertools.product(LEARNING_RATES, WEIGHT_DECAYS, WARMUP_EP
         decoder_num_heads=DECODER_NUM_HEADS,
         mlp_ratio=MLP_RATIO,
         num_workers=NUM_WORKERS,
+        prefetch_factor=PREFETCH_FACTOR,
         global_batch_size=GLOBAL_BATCH_SIZE,
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         lr=lr,
