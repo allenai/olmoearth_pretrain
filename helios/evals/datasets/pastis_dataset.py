@@ -1,7 +1,9 @@
-"""PASTIS dataset class."""
+"""PASTIS-R (S2+S1) dataset class."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import einops
 import numpy as np
@@ -14,15 +16,18 @@ from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
 from helios.train.masking import MaskedHeliosSample
 
-from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_HELIOS_S2_BANDS
+from .constants import (
+    EVAL_S1_BAND_NAMES,
+    EVAL_S2_BAND_NAMES,
+    EVAL_TO_HELIOS_S1_BANDS,
+    EVAL_TO_HELIOS_S2_BANDS,
+)
 from .normalize import normalize_bands
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
-PASTIS_DIR = UPath("/weka/dfive-default/presto_eval_sets/pastis")
 
-
-BAND_STATS = {
+S2_BAND_STATS = {
     "01 - Coastal aerosol": {"mean": 1201.6458740234375, "std": 1254.5341796875},
     "02 - Blue": {"mean": 1201.6458740234375, "std": 1254.5341796875},
     "03 - Green": {"mean": 1398.6396484375, "std": 1200.8133544921875},
@@ -38,9 +43,239 @@ BAND_STATS = {
     "12 - SWIR": {"mean": 1632.4835205078125, "std": 829.1475219726562},
 }
 
+S1_BAND_STATS = {
+    "vv": {"mean": -10.7902, "std": 2.8360},
+    "vh": {"mean": -17.3257, "std": 2.8106},
+}
 
-class PASTISDataset(Dataset):
-    """PASTIS dataset class."""
+
+class PASTISRProcessor:
+    """Process PASTIS-R dataset into PyTorch objects.
+
+    This class processes the PASTIS-R dataset into PyTorch objects.
+    It loads the S2 and S1 images, and the annotations, and splits them into 4 images.
+    It also imputes the missing bands in the S2 images.
+    """
+
+    def __init__(self, pastis_path: str, output_dir: str):
+        """Initialize PASTIS-R processor.
+
+        Args:
+            pastis_path: Path to PASTIS-R dataset
+            output_dir: Path to output directory
+        """
+        self.pastis_path = UPath(pastis_path)
+        self.output_dir = UPath(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.all_months = [
+            "201809",
+            "201810",
+            "201811",
+            "201812",
+            "201901",
+            "201902",
+            "201903",
+            "201904",
+            "201905",
+            "201906",
+            "201907",
+            "201908",
+            "201909",
+            "201910",
+        ]
+
+    def impute(self, img: torch.Tensor) -> torch.Tensor:
+        """Impute missing bands in Sentinel-2 images."""
+        img = torch.stack(
+            [
+                img[0, ...],  # fill B1 with B2, IMPUTED!
+                img[0, ...],  # fill B2 with B2
+                img[1, ...],  # fill B3 with B3
+                img[2, ...],  # fill B4 with B4
+                img[3, ...],  # fill B5 with B5
+                img[4, ...],  # fill B6 with B6
+                img[5, ...],  # fill B7 with B7
+                img[6, ...],  # fill B8 with B8
+                img[7, ...],  # fill B8A with B8A
+                img[7, ...],  # fill B9 with B8A, IMPUTED!
+                img[8, ...],  # fill B10 with B11, IMPUTED!
+                img[8, ...],  # fill B11 with B11
+                img[9, ...],  # fill B12 with B12
+            ]
+        )
+        return img
+
+    def aggregate_months(
+        self, images: torch.Tensor, dates: dict[str, int]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Aggregate images into monthly averages."""
+        months_dict = dict[str, list[torch.Tensor]]()
+        for m in self.all_months:
+            months_dict[m] = []
+
+        for idx, date in dates.items():
+            month = str(date)[:6]
+            img = torch.tensor(images[int(idx)], dtype=torch.float32)
+            if images.shape[1] == 10:
+                img = self.impute(img)
+            months_dict[month].append(img)
+
+        img_list: list[torch.Tensor] = []
+        month_list: list[int] = []
+        for month in self.all_months:
+            if months_dict[month]:
+                stacked_imgs = torch.stack(months_dict[month])
+                month_avg = stacked_imgs.mean(dim=0)
+                if len(img_list) < 12:
+                    img_list.append(month_avg)
+                    month_list.append(int(month[4:]))
+
+        return torch.stack(img_list), torch.tensor(month_list, dtype=torch.long)
+
+    def process_sample(self, sample: dict[str, Any]) -> dict[str, torch.Tensor] | None:
+        """Process a single sample from metadata."""
+        properties = sample["properties"]
+        dates = properties["dates-S2"]
+        patch_id = properties["ID_PATCH"]
+
+        s2_path = self.pastis_path / f"DATA_S2/S2_{patch_id}.npy"
+        s1_path = self.pastis_path / f"DATA_S1A/S1A_{patch_id}.npy"
+        target_path = self.pastis_path / f"ANNOTATIONS/TARGET_{patch_id}.npy"
+
+        try:
+            s2_images = np.load(s2_path)
+            s1_images = np.load(s1_path)
+            targets = np.load(target_path)[0].astype("int64")
+        except FileNotFoundError:
+            return None  # Skip missing files
+
+        assert len(dates) == s2_images.shape[0], "Mismatch between S2 dates and images"
+
+        s1_images = s1_images[:, :2, ...]
+        s2_images, months = self.aggregate_months(s2_images, dates)
+        s1_images, _ = self.aggregate_months(s1_images, dates)
+
+        targets = torch.tensor(targets, dtype=torch.long)
+        targets[targets == 19] = -1  # Convert void class to -1
+
+        def split_images(images: torch.Tensor) -> torch.Tensor:
+            """Split images into 4 quadrants."""
+            return torch.stack(
+                [
+                    images[..., :64, :64],
+                    images[..., 64:, :64],
+                    images[..., :64, 64:],
+                    images[..., 64:, 64:],
+                ]
+            )
+
+        return {
+            "fold": f'fold_{properties["Fold"]}',
+            "s2_images": split_images(s2_images),
+            "s1_images": split_images(s1_images),
+            "months": torch.stack([months] * 4),
+            "targets": torch.stack(
+                [
+                    targets[:64, :64],
+                    targets[64:, :64],
+                    targets[:64, 64:],
+                    targets[64:, 64:],
+                ]
+            ),
+        }
+
+    def process(self) -> None:
+        """Process the PASTIS-R dataset."""
+        with open(self.pastis_path / "metadata.geojson") as f:
+            meta_data = json.load(f)
+
+        all_data: dict[str, dict[str, list[torch.Tensor]]] = {
+            f"fold_{i}": {"s2_images": [], "s1_images": [], "months": [], "targets": []}
+            for i in range(1, 6)
+        }
+
+        doesnt_have_twelve = 0
+
+        with ThreadPoolExecutor() as executor:
+            results = list(executor.map(self.process_sample, meta_data["features"]))
+
+        for res in results:
+            if res:
+                fold = res["fold"]
+                if res["s2_images"].shape[1] == 12 and res["s1_images"].shape[1] == 12:
+                    for key in ["s2_images", "s1_images", "months", "targets"]:
+                        all_data[fold][key].append(res[key])
+                else:
+                    doesnt_have_twelve += 1
+
+        print(f"doesnt_have_twelve: {doesnt_have_twelve}")
+
+        for fold_idx in range(1, 6):
+            fold_key = f"fold_{fold_idx}"
+            for key in ["s2_images", "s1_images", "months", "targets"]:
+                all_data[fold_key][key] = torch.cat(all_data[fold_key][key], dim=0)
+
+        all_data_splits = {
+            "train": {
+                key: torch.cat(
+                    [
+                        all_data["fold_1"][key],
+                        all_data["fold_2"][key],
+                        all_data["fold_3"][key],
+                    ],
+                    dim=0,
+                )
+                for key in ["s2_images", "s1_images", "months", "targets"]
+            },
+            "valid": {
+                key: all_data["fold_4"][key]
+                for key in ["s2_images", "s1_images", "months", "targets"]
+            },
+            "test": {
+                key: all_data["fold_5"][key]
+                for key in ["s2_images", "s1_images", "months", "targets"]
+            },
+        }
+
+        for split, data in all_data_splits.items():
+            torch.save(data, self.output_dir / f"pastis_r_{split}.pt")
+
+        for split in ["train", "valid", "test"]:
+            for key in ["s2_images", "s1_images", "months", "targets"]:
+                print(f"{split} {key}: {all_data_splits[split][key].shape}")
+
+        for channel_idx in range(13):
+            channel_data = all_data_splits["train"]["s2_images"][
+                :, :, channel_idx, :, :
+            ]
+            print(
+                f"S2 Channel {channel_idx}: Mean {channel_data.mean().item():.4f}, Std {channel_data.std().item():.4f}"
+            )
+
+        for channel_idx in range(2):
+            channel_data = all_data_splits["train"]["s1_images"][
+                :, :, channel_idx, :, :
+            ]
+            print(
+                f"S1 Channel {channel_idx}: Mean {channel_data.mean().item():.4f}, Std {channel_data.std().item():.4f}"
+            )
+
+
+def process_pastis(
+    pastis_path: str = "/weka/dfive-default/helios/evaluation/PASTIS-R",
+    output_dir: str = "/weka/dfive-default/presto_eval_sets/pastis_r",
+) -> None:
+    """Process PASTIS-R dataset."""
+    processor = PASTISRProcessor(
+        pastis_path=pastis_path,
+        output_dir=output_dir,
+    )
+    processor.process()
+
+
+class PASTISRDataset(Dataset):
+    """PASTIS-R dataset class."""
 
     def __init__(
         self,
@@ -50,10 +285,10 @@ class PASTISDataset(Dataset):
         norm_stats_from_pretrained: bool = True,
         norm_method: str = "norm_no_clip",
     ):
-        """Init PASTIS dataset.
+        """Init PASTIS-R dataset.
 
         Args:
-            path_to_splits: Path where .pt objects returned by process_pastis have been saved
+            path_to_splits: Path where .pt objects returned by process_pastis_r have been saved
             split: Split to use
             partition: Partition to use
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
@@ -63,7 +298,12 @@ class PASTISDataset(Dataset):
         if split == "valid":
             split = "val"
 
-        self.means, self.stds = self._get_norm_stats(BAND_STATS)
+        self.s2_means, self.s2_stds = self._get_norm_stats(
+            S2_BAND_STATS, EVAL_S2_BAND_NAMES
+        )
+        self.s1_means, self.s1_stds = self._get_norm_stats(
+            S1_BAND_STATS, EVAL_S1_BAND_NAMES
+        )
         self.split = split
         self.norm_method = norm_method
 
@@ -74,8 +314,9 @@ class PASTISDataset(Dataset):
 
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
 
-        torch_obj = torch.load(path_to_splits / f"pastis_{split}.pt")
-        self.images = torch_obj["images"]
+        torch_obj = torch.load(path_to_splits / f"pastis_r_{split}.pt")
+        self.s2_images = torch_obj["s2_images"]
+        self.s1_images = torch_obj["s1_images"]
         self.labels = torch_obj["targets"]
         self.months = torch_obj["months"]
 
@@ -83,17 +324,19 @@ class PASTISDataset(Dataset):
             with open(path_to_splits / f"{partition}_partition.json") as json_file:
                 subset_indices = json.load(json_file)
 
-            self.images = self.images[subset_indices]
+            self.s2_images = self.s2_images[subset_indices]
+            self.s1_images = self.s1_images[subset_indices]
             self.labels = self.labels[subset_indices]
             self.months = self.months[subset_indices]
 
     @staticmethod
     def _get_norm_stats(
         imputed_band_info: dict[str, dict[str, float]],
+        band_names: list[str],
     ) -> tuple[np.ndarray, np.ndarray]:
         means = []
         stds = []
-        for band_name in EVAL_S2_BAND_NAMES:
+        for band_name in band_names:
             assert band_name in imputed_band_info, f"{band_name} not found in band_info"
             means.append(imputed_band_info[band_name]["mean"])  # type: ignore
             stds.append(imputed_band_info[band_name]["std"])  # type: ignore
@@ -101,24 +344,34 @@ class PASTISDataset(Dataset):
 
     def __len__(self) -> int:
         """Length of the dataset."""
-        return self.images.shape[0]
+        return self.s2_images.shape[0]
 
     def __getitem__(self, idx: int) -> tuple[MaskedHeliosSample, torch.Tensor]:
         """Return a single PASTIS data instance."""
-        image = self.images[idx]  # (12, 13, 64, 64)
-        image = einops.rearrange(image, "t c h w -> h w t c")  # (64, 64, 12, 13)
-        image = image[:, :, :, EVAL_TO_HELIOS_S2_BANDS]
+        s2_image = self.s2_images[idx]  # (12, 13, 64, 64)
+        s2_image = einops.rearrange(s2_image, "t c h w -> h w t c")  # (64, 64, 12, 13)
+        s2_image = s2_image[:, :, :, EVAL_TO_HELIOS_S2_BANDS]
+
+        s1_image = self.s1_images[idx]  # (12, 2, 64, 64)
+        s1_image = einops.rearrange(s1_image, "t c h w -> h w t c")  # (64, 64, 12, 2)
+        s1_image = s1_image[:, :, :, EVAL_TO_HELIOS_S1_BANDS]
 
         labels = self.labels[idx]  # (64, 64)
         months = self.months[idx]  # (12)
 
         if not self.norm_stats_from_pretrained:
-            image = normalize_bands(
-                image.numpy(), self.means, self.stds, self.norm_method
+            s2_image = normalize_bands(
+                s2_image.numpy(), self.s2_means, self.s2_stds, self.norm_method
+            )
+            s1_image = normalize_bands(
+                s1_image.numpy(), self.s1_means, self.s1_stds, self.norm_method
             )
 
         if self.norm_stats_from_pretrained:
-            image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
+            s2_image = self.normalizer_computed.normalize(
+                Modality.SENTINEL2_L2A, s2_image
+            )
+            s1_image = self.normalizer_computed.normalize(Modality.SENTINEL1, s1_image)
 
         timestamps = []
         # A little hack to get the correct year for the timestamps
@@ -132,7 +385,9 @@ class PASTISDataset(Dataset):
 
         masked_sample = MaskedHeliosSample.from_heliossample(
             HeliosSample(
-                sentinel2_l2a=torch.tensor(image).float(), timestamps=timestamps
+                sentinel2_l2a=torch.tensor(s2_image).float(),
+                sentinel1=torch.tensor(s1_image).float(),
+                timestamps=timestamps,
             )
         )
 
