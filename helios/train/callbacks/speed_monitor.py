@@ -9,6 +9,7 @@ from olmo_core.train.callbacks.speed_monitor import SpeedMonitorCallback
 from helios.data.dataset import HeliosSample
 from helios.train.train_module.galileo import GalileoTrainModule
 from helios.train.train_module.latent_mim import LatentMIMTrainModule
+from helios.train.train_module.mae import MAETrainModule
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,16 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         super().pre_train()
         train_module = self.trainer.train_module
 
+        if isinstance(train_module, MAETrainModule):
+            # Unwrap if the model is in DDP
+            model = train_module.model
+            self._token_budget = model.token_budget
+            self._encoder_ratio = train_module.masking_strategy.encode_ratio
+            self._decoder_ratio = train_module.masking_strategy.decode_ratio
+            logger.warning(
+                "Speed monitor callback bases token input based on token budget, "
+                "encoder ratio, and decoder ratio"
+            )
         if isinstance(train_module, LatentMIMTrainModule):
             # Unwrap if the model is in DDP
             model = train_module.model
