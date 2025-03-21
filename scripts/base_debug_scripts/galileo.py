@@ -232,6 +232,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
+            eval_duration=Duration.epochs(20),
         ),
         DownstreamTaskConfig(
             dataset="pastis",

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -245,7 +246,25 @@ class PASTISRProcessor:
         }
 
         for split, data in all_data_splits.items():
-            torch.save(data, self.output_dir / f"pastis_r_{split}.pt")
+            # torch.save(data, self.output_dir / f"pastis_r_{split}.pt")
+
+            # Instead of saving the whole dataset into torch object, we save each S1/S2 separately
+            split_dir = self.output_dir / f"pastis_r_{split}"
+            os.makedirs(split_dir, exist_ok=True)
+
+            torch.save(data["months"], split_dir / "months.pt")
+            torch.save(data["targets"], split_dir / "targets.pt")
+
+            s2_dir = split_dir / "s2_images"
+            s1_dir = split_dir / "s1_images"
+            os.makedirs(s2_dir, exist_ok=True)
+            os.makedirs(s1_dir, exist_ok=True)
+
+            for idx in range(data["s2_images"].shape[0]):
+                torch.save(data["s2_images"][idx], s2_dir / f"{idx}.pt")
+
+            for idx in range(data["s1_images"].shape[0]):
+                torch.save(data["s1_images"][idx], s1_dir / f"{idx}.pt")
 
         for split in ["train", "valid", "test"]:
             for key in ["s2_images", "s1_images", "months", "targets"]:
@@ -393,16 +412,20 @@ class PASTISRDataset(Dataset):
         if self.is_multimodal:
             masked_sample = MaskedHeliosSample.from_heliossample(
                 HeliosSample(
-                    sentinel2_l2a=torch.tensor(s2_image).float(),
-                    sentinel1=torch.tensor(s1_image).float(),
+                    sentinel2_l2a=s2_image.float(),
+                    sentinel1=s1_image.float(),
                     timestamps=timestamps,
                 )
             )
         else:
             masked_sample = MaskedHeliosSample.from_heliossample(
                 HeliosSample(
-                    sentinel2_l2a=torch.tensor(s2_image).float(),
+                    sentinel2_l2a=s2_image.float(),
                     timestamps=timestamps,
                 )
             )
         return masked_sample, labels
+
+
+# if __name__ == "__main__":
+#     process_pastis()
