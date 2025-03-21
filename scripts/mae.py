@@ -48,7 +48,7 @@ SUPPORTED_MODALITIES = [
 def build_model_config(common: CommonComponents) -> MAEConfig:
     """Build the model config for an experiment."""
     MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
-    TOKEN_BUDGET = 1500
+    TOKEN_BUDGET = None
     # IF HW MIN is too small , then we cna have microbatches with very uneven token budgets
     # which may cause issues
     H_W_TO_SAMPLE_MIN = 5

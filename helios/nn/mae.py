@@ -25,7 +25,7 @@ class MAE(nn.Module, DistributedMixins):
         decoder: nn.Module,
         reconstructor: nn.Module,
         transform: Transform,
-        token_budget: int = 1500,
+        token_budget: int | None = None,
         h_w_to_sample_min: int = 2,
         h_w_to_sample_max: int = 13,
     ):
@@ -65,7 +65,7 @@ class MAEConfig(Config):
     decoder_config: "PredictorConfig"
     reconstructor_config: "ReconstructorConfig"
     transform_type: str = "no_transform"
-    token_budget: int = 1500
+    token_budget: int | None = None
     h_w_to_sample_min: int = 2
     h_w_to_sample_max: int = 13
 
