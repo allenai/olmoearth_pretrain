@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 from helios.data.constants import Modality
-from helios.data.dataset import HeliosDataset, HeliosSample
+from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
 from helios.dataset.parse import ModalityTile
 from helios.dataset.sample import SampleInformation
 
@@ -16,22 +16,32 @@ def test_helios_dataset(
 ) -> None:
     """Test the HeliosDataset class."""
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
-    samples = prepare_samples(tmp_path)
+    prepared_samples = prepare_samples(tmp_path)
     dataset = HeliosDataset(
-        samples=samples,
         tile_path=tmp_path,
         supported_modalities=supported_modalities,
         dtype="float32",
+        multiprocessed_h5_creation=False,
     )
+    # Mock the _get_samples method to return the prepared samples
+    # Do this before calling prepare()
+    dataset._get_samples = lambda: prepared_samples  # type: ignore
     dataset.prepare()
 
     assert len(dataset) == 1
-    assert isinstance(dataset[0], HeliosSample)
-    assert dataset[0].sentinel2_l2a.shape == (256, 256, 12, 12)  # type: ignore
-    assert dataset[0].sentinel1.shape == (256, 256, 12, 2)  # type: ignore
-    assert dataset[0].worldcover.shape == (256, 256, 1, 1)  # type: ignore
-    assert dataset[0].latlon.shape == (2,)  # type: ignore
-    assert dataset[0].timestamps.shape == (12, 3)  # type: ignore
+    args = GetItemArgs(
+        idx=0,
+        patch_size=1,
+        sampled_hw_p=256,
+    )
+    patch_size, item = dataset[args]
+    assert patch_size == 1
+    assert isinstance(item, HeliosSample)
+    assert item.sentinel2_l2a.shape == (256, 256, 12, 12)  # type: ignore
+    assert item.sentinel1.shape == (256, 256, 12, 2)  # type: ignore
+    assert item.worldcover.shape == (256, 256, 1, 1)  # type: ignore
+    assert item.latlon.shape == (2,)  # type: ignore
+    assert item.timestamps.shape == (12, 3)  # type: ignore
 
 
 class TestHeliosDataset:
@@ -54,9 +64,9 @@ class TestHeliosDataset:
         # checking that sample data is loaded in the order corresponding to the bandset indices
         # These are manually extracted values from each band and dependent on the seed (call with conftest.py)
         expected_values = [
-            [119, 247, 58, 216],
-            [41, 103, 96, 128, 120, 162],
-            [169, 19],
+            [135, 10, 36, 92],
+            [135, 31, 130, 28, 10, 88],
+            [135, 37],
         ]
         data_matches_expected = []
         for bandset_index, expected_value_lst in zip(

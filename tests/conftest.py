@@ -42,8 +42,9 @@ def create_geotiff(
     num_bands: int,
 ) -> None:
     """Create a GeoTIFF file with specified resolution and size."""
+    generator = np.random.default_rng(42)
     transform = from_origin(0, 0, resolution, resolution)
-    data = np.random.randint(0, 255, (num_bands, height, width), dtype=np.uint8)
+    data = generator.integers(0, 255, (num_bands, height, width), dtype=np.uint8)
     with rasterio.open(
         file_path,
         "w",

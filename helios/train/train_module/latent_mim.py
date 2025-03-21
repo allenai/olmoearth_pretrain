@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
 
-import numpy as np
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
@@ -186,7 +185,11 @@ class LatentMIMTrainModule(HeliosTrainModule):
             / self.trainer.max_steps
         )
         with torch.no_grad():
-            logger.info(f"Using ema decay {cur_ema_value}")
+            self.trainer.record_metric(
+                "train/ema_decay",
+                cur_ema_value,
+                ReduceType.mean,
+            )
             for param, target_param in zip(
                 self.model.encoder.parameters(), self.model.target_encoder.parameters()
             ):
@@ -194,7 +197,9 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     cur_ema_value * target_param.data + (1 - cur_ema_value) * param.data
                 )
 
-    def train_batch(self, batch: HeliosSample, dry_run: bool = False) -> None:
+    def train_batch(
+        self, batch: tuple[int, HeliosSample], dry_run: bool = False
+    ) -> None:
         """Train a batch.
 
         NOTE: Gradient accumulation/microbatching is not invariant for all losses across the same global batch size.
@@ -210,38 +215,21 @@ class LatentMIMTrainModule(HeliosTrainModule):
         self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
-        # Set the maximum number of tokens
-        token_budget = self.model.token_budget
-        h_w_to_sample = list(
-            range(self.model.h_w_to_sample_min, self.model.h_w_to_sample_max)
-        )
         total_batch_loss = torch.tensor(0.0, device=self.device)
+        patch_size, batch_data = batch
         # Split into micro-batches.
-        microbatches = split_batch(batch, self.rank_microbatch_size)
+        microbatches = split_batch(batch_data, self.rank_microbatch_size)
         num_microbatches = len(microbatches)
         for microbatch_idx, microbatch in enumerate(microbatches, start=1):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
-                # Gallileo does this subsetting at the microbatch level so we follow that for now
-                # Smallest h /w must be bigger than the smallest patch size
-
-                patch_size = np.random.choice(
-                    np.arange(
-                        self.model.encoder.min_patch_size,
-                        self.model.encoder.max_patch_size,
-                    )
+                microbatch = self.model.transform.apply(microbatch).to_device(
+                    self.device
                 )
-                microbatch = self.model.transform.apply(microbatch)
-                subsampled_batch = microbatch.subset(
-                    patch_size, token_budget, h_w_to_sample
-                )
-                subsampled_batch = subsampled_batch.to_device(self.device)
-                # Each microbatch should have about the same number of encoded tokens if
-                # we mask here
                 masked_batch = self.masking_strategy.apply_mask(
-                    subsampled_batch, patch_size=patch_size
+                    microbatch, patch_size=patch_size
                 )
 
                 # Run Encoder and decoder on the augmented input
@@ -274,7 +262,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         if dry_run:
             return
 
-        del batch  # In case this helps with memory utilization.
+        del batch, batch_data  # In case this helps with memory utilization.
         del masked_batch
 
     def eval_batch(

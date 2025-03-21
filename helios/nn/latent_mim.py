@@ -19,10 +19,8 @@ class LatentMIM(nn.Module, DistributedMixins):
         self,
         encoder: nn.Module,
         decoder: nn.Module,
+        # TODO: Move transforms to TrainModule
         transform: Transform,
-        token_budget: int = 1500,
-        h_w_to_sample_min: int = 2,
-        h_w_to_sample_max: int = 13,
     ):
         """Initialize the Latent MIM Style.
 
@@ -30,9 +28,6 @@ class LatentMIM(nn.Module, DistributedMixins):
             encoder: The encoder to use.
             decoder: The decoder to use.
             transform: The transform to use.
-            token_budget: The token budget to use.
-            h_w_to_sample_min: The minimum height and width to sample.
-            h_w_to_sample_max: The maximum height and width to sample.
         """
         super().__init__()
         self.encoder = encoder
@@ -40,10 +35,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
-        self.token_budget = token_budget
         self.transform = transform
-        self.h_w_to_sample_min = h_w_to_sample_min
-        self.h_w_to_sample_max = h_w_to_sample_max
 
     def forward(self, x: MaskedHeliosSample, patch_size: int) -> TokensAndMasks:
         """Forward pass for the Latent MIM Style."""
@@ -60,9 +52,6 @@ class LatentMIMConfig(Config):
     encoder_config: "EncoderConfig"
     decoder_config: "PredictorConfig"
     transform_type: str = "no_transform"
-    token_budget: int = 1500
-    h_w_to_sample_min: int = 2
-    h_w_to_sample_max: int = 13
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -94,7 +83,4 @@ class LatentMIMConfig(Config):
             encoder=encoder,
             decoder=decoder,
             transform=transform,
-            token_budget=self.token_budget,
-            h_w_to_sample_min=self.h_w_to_sample_min,
-            h_w_to_sample_max=self.h_w_to_sample_max,
         )

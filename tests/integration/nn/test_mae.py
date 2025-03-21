@@ -124,6 +124,8 @@ def test_mae_with_loss(
     output = mae.forward(x, patch_size)
     assert output.sentinel2_l2a is not None
     assert output.sentinel2_l2a_mask is not None
+    assert x.sentinel2_l2a is not None
+    assert x.sentinel2_l2a_mask is not None
     assert output.sentinel2_l2a.shape == x.sentinel2_l2a.shape
     assert output.sentinel2_l2a_mask.shape == x.sentinel2_l2a_mask.shape
 

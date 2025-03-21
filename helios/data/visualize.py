@@ -57,8 +57,9 @@ def visualize_sample(
         wc_classes_sorted[-1] + 1
     ]  # e.g., up to 101 if last is 100
     wc_norm = mcolors.BoundaryNorm(wc_bounds, wc_cmap.N)
-
-    sample = dataset.samples[sample_index]
+    samples = dataset._get_samples()
+    samples = dataset._filter_samples(samples)
+    sample = samples[sample_index]
     logger.info(f"Visualizing sample index: {sample_index}")
 
     # Gather all modalities (including LATLON)
@@ -66,7 +67,6 @@ def visualize_sample(
     if not modalities:
         logger.warning("No modalities found in this sample.")
         return
-
     total_rows = len(modalities)
     # At least 1 column, but also handle the largest band_order among the modalities
     max_bands = 1
@@ -82,7 +82,7 @@ def visualize_sample(
     )
 
     # Load lat/lon data, e.g. [lat, lon]
-    latlon_data = dataset.get_latlon(sample)
+    latlon_data = HeliosDataset.get_latlon(sample)
     lat = float(latlon_data[0])
     lon = float(latlon_data[1])
 
@@ -115,7 +115,7 @@ def visualize_sample(
         logger.info(f"Plotting modality: {modality_spec.name}")
 
         # 4B. Plot other modalities
-        modality_data = dataset.load_sample(modality_tile, sample)
+        modality_data = HeliosDataset.load_sample(modality_tile, sample)
         if modality_spec == Modality.SENTINEL1:
             modality_data = convert_to_db(modality_data)
         if not modality_spec == Modality.WORLDCOVER:

@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
 
-import numpy as np
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
@@ -171,7 +170,9 @@ class MAETrainModule(HeliosTrainModule):
         """Compute the loss between the predicted and target tensors."""
         raise NotImplementedError("eval loss fn not implemented")
 
-    def train_batch(self, batch: HeliosSample, dry_run: bool = False) -> None:
+    def train_batch(
+        self, patch_batch: tuple[int, HeliosSample], dry_run: bool = False
+    ) -> None:
         """Train a batch.
 
         NOTE: Gradient accumulation/microbatching is not invariant for all losses across the same global batch size.
@@ -184,11 +185,10 @@ class MAETrainModule(HeliosTrainModule):
 
         NOTE: For contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
+        # why is this a tuple?
+        patch_size, batch = patch_batch
+        self.model.train()
         # Set the maximum number of tokens
-        token_budget = self.model.token_budget
-        h_w_to_sample = list(
-            range(self.model.h_w_to_sample_min, self.model.h_w_to_sample_max)
-        )
         total_batch_loss = torch.tensor(0.0, device=self.device)
 
         # Split into micro-batches.
@@ -199,25 +199,11 @@ class MAETrainModule(HeliosTrainModule):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
-                # Gallileo does this subsetting at the microbatch level so we follow that for now
-                # Smallest h /w must be bigger than the smallest patch size
-
-                patch_size = np.random.choice(
-                    np.arange(
-                        self.model.encoder.min_patch_size,
-                        self.model.encoder.max_patch_size,
-                    )
+                microbatch = self.model.transform.apply(microbatch).to_device(
+                    self.device
                 )
-                microbatch = self.model.transform.apply(microbatch)
-                subsampled_batch = microbatch.subset(
-                    patch_size, token_budget, h_w_to_sample
-                )
-                subsampled_batch = subsampled_batch.to_device(self.device)
-                # Each microbatch should have about the same number of encoded tokens if
-                # we mask here
-
                 masked_batch = self.masking_strategy.apply_mask(
-                    subsampled_batch, patch_size=patch_size
+                    microbatch, patch_size=patch_size
                 )
 
                 # Run Encoder and decoder on the augmented input
@@ -232,7 +218,7 @@ class MAETrainModule(HeliosTrainModule):
                 loss_val = get_local_tensor(loss)
                 total_batch_loss += loss_val
 
-                # Skip bad batches# Skip bad batches
+                # Skip bad batches
                 if torch.isnan(loss).any() or torch.isinf(loss).any():
                     logger.warning(
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
