@@ -175,8 +175,12 @@ class HeliosTrainModule(TrainModule):
         super().__init__()
 
         self.model = model
-        num_params = sum(p.numel() for p in self.model.parameters())
-        logger.info(f"number of parameters: {num_params:,d}")
+
+        logger.info(
+            "Number of encoder parameters: %d",
+            sum(p.numel() for p in self.model.encoder.parameters()),
+        )
+
         self.device = device or get_default_device()
         self.world_mesh = build_world_mesh(dp=dp_config, device_type=self.device.type)
         logger.info(
@@ -312,6 +316,14 @@ class HeliosTrainModule(TrainModule):
                     self.warmup_duration
                 )
                 self.scheduler.warmup_steps = warmup_steps
+        if self.trainer.data_loader.min_patch_size != self.model.encoder.min_patch_size:
+            raise ValueError(
+                f"min_patch_size of dataloader ({self.trainer.data_loader.min_patch_size}) must match min_patch_size of model ({self.model.encoder.min_patch_size})"
+            )
+        if self.trainer.data_loader.max_patch_size != self.model.encoder.max_patch_size:
+            raise ValueError(
+                f"max_patch_size of dataloader ({self.trainer.data_loader.max_patch_size}) must match max_patch_size of model ({self.model.encoder.max_patch_size})"
+            )
 
     def state_dict(self) -> dict[str, Any]:
         """Get the state dict."""

@@ -17,12 +17,16 @@ def test_visualize_sample(
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
     samples = prepare_samples(tmp_path)
     dataset = HeliosDataset(
-        samples=samples,
         supported_modalities=supported_modalities,
         tile_path=tmp_path,
         dtype="float32",
+        multiprocessed_h5_creation=False,
     )
-    for i in range(len(samples)):
+    # Mock the _get_samples method to return the prepared samples
+    # Do this before calling prepare()
+    dataset._get_samples = lambda: samples  # type: ignore
+    dataset.prepare()
+    for i in range(len(dataset)):
         visualize_sample(
             dataset,
             i,

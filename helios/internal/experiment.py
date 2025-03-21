@@ -17,6 +17,7 @@ from olmo_core.train import (
 )
 from olmo_core.train.callbacks import ConfigSaverCallback, WandBCallback
 from olmo_core.utils import get_default_device, prepare_cli_environment, seed_all
+from torch.utils.viz._cycles import warn_tensor_cycles
 
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
@@ -162,7 +163,7 @@ def train(config: HeliosExperimentConfig) -> None:
     config_dict = config.as_config_dict()
     cast(WandBCallback, trainer.callbacks["wandb"]).config = config_dict
     cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config_dict
-
+    warn_tensor_cycles()
     trainer.fit()
 
 
@@ -200,6 +201,33 @@ def launch(config: HeliosExperimentConfig) -> None:
     logger.info(config)
     # Set follow=False if you don't want to stream the logs to the terminal
     config.launch.launch(follow=True)
+
+
+def prep(config: HeliosExperimentConfig) -> None:
+    """Prepare the dataset for an experiment.
+
+    This builds the H5s and saves them to weka to be shared across experiments.
+    """
+    dataset = config.dataset.build()
+    # TODO: akward harcoding of the collator here
+    data_loader = config.data_loader.build(
+        dataset, collator=collate_helios, dp_process_group=None
+    )
+    data_loader.reshuffle(epoch=1)
+    # Also may want to create the first index of shuffling here for starters
+
+
+def launch_prep(config: HeliosExperimentConfig) -> None:
+    """Launch the preparation of the dataset for an experiment."""
+    assert config.launch is not None
+    config.launch.num_gpus = 0
+    config.launch.num_nodes = 1
+    logger.info(config)
+    logger.info("Launching the preparation of the dataset...")
+    logger.info(
+        "Follow along until the dataset is prepared and saved to Weka then stop the script"
+    )
+    config.launch.launch(follow=True, torchrun=False)
 
 
 class SubCmd(StrEnum):
@@ -268,9 +296,9 @@ class SubCmd(StrEnum):
             finally:
                 teardown_training_environment()
         elif self == SubCmd.prep:
-            raise NotImplementedError
+            prep(config)
         elif self == SubCmd.launch_prep:
-            raise NotImplementedError
+            launch_prep(config)
         else:
             raise NotImplementedError(self)
 
@@ -302,8 +330,8 @@ If running command on a local machine ie from a session, you can use the [b]loca
 [b magenta]train:[/]       Run the trainer. You usually shouldn't invoke the script with this subcommand directly.
              Instead use [b magenta]launch[/] or run it with torchrun.
 [b magenta]train_single:[/]       Run the trainer on a single device (GPU, CPU, MPS). num_nodes is ignored.
-[b magenta]prep:[/]       Not Implemented. Prepare the dataset ahead of training to save GPU time.
-[b magenta]launch_prep:[/] Not Implemented. Launch the script on Beaker with the [b magenta]prep[/] subcommand.
+[b magenta]prep:[/]        Prepare the dataset ahead of training to save  to Weka.
+[b magenta]launch_prep:[/] Launch the script on Beaker with the [b magenta]prep[/] subcommand.
 [b magenta]dry_run:[/]     Pretty print the config and exit.
 [b magenta]visualize:[/]   Visualize the dataset.
 

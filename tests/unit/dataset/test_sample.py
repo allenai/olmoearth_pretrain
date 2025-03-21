@@ -136,17 +136,20 @@ def test_supporting_latlon(tmp_path: Path, create_image_tiles: Callable) -> None
 def test_subsetting() -> None:
     """Test subsetting works."""
     (
-        b,
         h,
         w,
         t,
-    ) = 1, 16, 16, 100
+    ) = (
+        16,
+        16,
+        100,
+    )
     sample = HeliosSample(
-        sentinel2_l2a=torch.ones((b, h, w, t, HeliosSample.num_bands("sentinel2_l2a"))),
-        timestamps=torch.ones((b, t, HeliosSample.num_bands("timestamps"))),
+        sentinel2_l2a=torch.ones((h, w, t, HeliosSample.num_bands("sentinel2_l2a"))),
+        timestamps=torch.ones((t, HeliosSample.num_bands("timestamps"))),
     )
     subsetted_sample = sample.subset(
-        patch_size=4, max_tokens_per_instance=100, hw_to_sample=[4]
+        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4
     )
 
     # 16 / 4 = 4 tokens along the height and width dimension
@@ -158,18 +161,21 @@ def test_subsetting() -> None:
 def test_subsetting_worldcover_too() -> None:
     """Test subsetting works."""
     (
-        b,
         h,
         w,
         t,
-    ) = 1, 16, 16, 100
+    ) = (
+        16,
+        16,
+        100,
+    )
     sample = HeliosSample(
-        sentinel2_l2a=torch.ones((b, h, w, t, HeliosSample.num_bands("sentinel2_l2a"))),
-        worldcover=torch.ones((b, h, w, HeliosSample.num_bands("worldcover"))),
-        timestamps=torch.ones((b, t, HeliosSample.num_bands("timestamps"))),
+        sentinel2_l2a=torch.ones((h, w, t, HeliosSample.num_bands("sentinel2_l2a"))),
+        worldcover=torch.ones((h, w, HeliosSample.num_bands("worldcover"))),
+        timestamps=torch.ones((t, HeliosSample.num_bands("timestamps"))),
     )
     subsetted_sample = sample.subset(
-        patch_size=4, max_tokens_per_instance=100, hw_to_sample=[4]
+        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4
     )
 
     # 16 / 4 = 4 tokens along the height and width dimension
