@@ -47,7 +47,7 @@ class HeliosDataLoader(DataLoaderBase):
         min_patch_size: int,
         max_patch_size: int,
         sampled_hw_p_list: list[int],
-        token_budget: int = BASE_TOKEN_BUDGET,
+        token_budget: int | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -310,7 +310,14 @@ class HeliosDataLoader(DataLoaderBase):
 
         patch_size = 1
         collated_sample = self.collator(
-            [(patch_size, HeliosSample(**output_dict).subset(patch_size, 1500, 6))]
+            [
+                (
+                    patch_size,
+                    HeliosSample(**output_dict).subset(
+                        patch_size, max_tokens_per_instance=1500, sampled_hw_p=6
+                    ),
+                )
+            ]
         )
         return collated_sample
 
@@ -387,6 +394,9 @@ def _get_batch_item_params_iterator(
             filtered_hw_p_to_sample_array = hw_p_to_sample_array[
                 hw_p_to_sample_array <= max_height_width_tokens
             ]
+            filtered_hw_p_to_sample_array = filtered_hw_p_to_sample_array[
+                filtered_hw_p_to_sample_array > 0
+            ]
             sampled_hw_p = np.random.choice(filtered_hw_p_to_sample_array)
         yield idx, int(patch_size), int(sampled_hw_p)
         instances_processed += 1
@@ -446,7 +456,7 @@ class HeliosDataLoaderConfig(Config):
     max_patch_size: int
     sampled_hw_p_list: list[int]
     seed: int
-    token_budget: int = BASE_TOKEN_BUDGET
+    token_budget: int | None = None  # No subsetting if None
     shuffle: bool = True
     num_workers: int = 0
     prefetch_factor: int | None = None

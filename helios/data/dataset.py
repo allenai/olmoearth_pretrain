@@ -239,12 +239,12 @@ class HeliosSample(NamedTuple):
     ) -> "HeliosSample":
         """Subset a HelioSample that is unbatched ie no batch dimension.
 
-        patch_size: the patch size being applied to this sample
-        max_tokens_per_instance: the token budget when subsetting. This is used
-            to determine the maximum number of timesteps possible for a given
-            height and width.
-        hw_to_sample: possible values for the number of tokens in the height and width
-            dimensions.
+        Args:
+            patch_size: The patch size being applied to this sample.
+            max_tokens_per_instance: The token budget when subsetting. This is used
+                to determine the maximum number of timesteps possible for a given
+                height and width.
+            sampled_hw_p: The number of tokens in the height and width dimensions.
 
         The returned sample will have shape:
             height = hw_t * patch_size
