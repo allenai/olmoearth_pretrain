@@ -175,8 +175,12 @@ class HeliosTrainModule(TrainModule):
         super().__init__()
 
         self.model = model
-        num_params = sum(p.numel() for p in self.model.parameters())
-        logger.info(f"number of parameters: {num_params:,d}")
+
+        logger.info(
+            "Number of encoder parameters: %d",
+            sum(p.numel() for p in self.model.encoder.parameters()),
+        )
+
         self.device = device or get_default_device()
         self.world_mesh = build_world_mesh(dp=dp_config, device_type=self.device.type)
         logger.info(
