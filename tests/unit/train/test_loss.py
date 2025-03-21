@@ -1,9 +1,20 @@
 """Test losses."""
 
+import logging
+
 import torch
 
 from helios.nn.flexihelios import TokensAndMasks
-from helios.train.loss import CrossEntropyLoss, L1Loss, L2Loss, PatchDiscriminationLoss
+from helios.train.loss import (
+    CrossEntropyLoss,
+    L1Loss,
+    L2Loss,
+    PatchDiscriminationLoss,
+    PatchDiscriminationLossNew,
+)
+from helios.train.masking import MaskValue
+
+logger = logging.getLogger(__name__)
 
 
 def test_patch_disc_loss() -> None:
@@ -12,9 +23,9 @@ def test_patch_disc_loss() -> None:
 
     preds = TokensAndMasks(
         sentinel2_l2a=torch.ones((b, t_h, t_w, t, d)),
-        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * 2,
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
         latlon=torch.ones((b, 1, d)),
-        latlon_mask=torch.ones((b, 1)) * 2,
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
     )
     targets = TokensAndMasks(
         sentinel2_l2a=torch.ones((b, t_h, t_w, t, d)),
@@ -27,6 +38,55 @@ def test_patch_disc_loss() -> None:
     # not very good! since they are all the same
     # predictions and values
     assert loss_value > 0.5
+
+
+def test_if_old_and_new_loss_are_the_same() -> None:
+    """Test that the old and new patch discrimination loss are the same."""
+    b, t_h, t_w, t, d = 5, 4, 4, 2, 2
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
+    )
+    loss_old = PatchDiscriminationLoss()
+    loss_new = PatchDiscriminationLossNew()
+    old_loss = loss_old.compute(preds, targets)
+    new_loss = loss_new.compute(preds, targets)
+    logger.info(f"old_loss: {old_loss}, new_loss: {new_loss}")
+    assert torch.isclose(old_loss, new_loss)
+
+
+def test_if_old_and_new_loss_are_the_same_uneven_number_of_decoder_tokens() -> None:
+    """Test that the old and new patch discrimination loss are the same."""
+    b, t_h, t_w, t, d = 5, 4, 4, 2, 2
+
+    s2_preds_mask = torch.randint(0, 3, (b, t_h, t_w, t))
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_preds_mask,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.zeros((b, t_h, t_w, t)),
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.zeros((b, 1)),
+    )
+    loss_old = PatchDiscriminationLoss()
+    loss_new = PatchDiscriminationLossNew()
+    old_loss = loss_old.compute(preds, targets)
+    new_loss = loss_new.compute(preds, targets)
+    logger.info(f"old_loss: {old_loss}, new_loss: {new_loss}")
+    assert torch.isclose(old_loss, new_loss)
 
 
 def test_patch_disc_loss_averaged_over_batch_size() -> None:
