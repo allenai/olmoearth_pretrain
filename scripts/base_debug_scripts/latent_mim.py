@@ -3,17 +3,13 @@
 import logging
 
 from olmo_core.config import DType
-from olmo_core.distributed.parallel.data_parallel import (
-    DataParallelConfig,
-    DataParallelType,
-)
+from olmo_core.distributed.parallel.data_parallel import (DataParallelConfig,
+                                                          DataParallelType)
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
-from olmo_core.train.callbacks import (
-    ConfigSaverCallback,
-    GarbageCollectorCallback,
-    GPUMemoryMonitorCallback,
-)
+from olmo_core.train.callbacks import (ConfigSaverCallback,
+                                       GarbageCollectorCallback,
+                                       GPUMemoryMonitorCallback)
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
@@ -23,14 +19,13 @@ from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.data.normalize import Strategy
 from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
+from helios.internal.experiment import (CommonComponents,
+                                        HeliosVisualizeConfig, main)
 from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
 from helios.nn.latent_mim import LatentMIMConfig
-from helios.train.callbacks import (
-    DownstreamEvaluatorCallbackConfig,
-    HeliosSpeedMonitorCallback,
-    HeliosWandBCallback,
-)
+from helios.train.callbacks import (DownstreamEvaluatorCallbackConfig,
+                                    HeliosSpeedMonitorCallback,
+                                    HeliosWandBCallback)
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
@@ -152,11 +147,16 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
+    # How do we know if a file has missing modalities we could save a file? or check or how would we know the distribution
+    # we should probably save a local distribution file to check this
+    # would be great to save a csv that says which samples have which modalities
+
     h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/98856"
+    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/102686"
     return HeliosDatasetConfig(
         h5py_dir=h5py_dir,
-        tile_path=None,
         supported_modality_names=common.supported_modality_names,
+        use_samples_with_missing_supported_modalities=True,  # This only matters when we prepare the dataset so should default to None
         dtype=DType.float32,
     )
 

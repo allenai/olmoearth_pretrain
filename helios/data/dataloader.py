@@ -17,12 +17,8 @@ import torch.distributed as dist
 from olmo_core.config import Config
 from olmo_core.data.data_loader import DataLoaderBase
 from olmo_core.data.utils import get_rng, memmap_to_write
-from olmo_core.distributed.utils import (
-    barrier,
-    get_fs_local_rank,
-    get_rank,
-    get_world_size,
-)
+from olmo_core.distributed.utils import (barrier, get_fs_local_rank, get_rank,
+                                         get_world_size)
 from olmo_core.utils import get_default_device
 from torch.utils.data import default_collate
 from upath import UPath
@@ -74,13 +70,7 @@ class HeliosDataLoader(DataLoaderBase):
         )
         self.dataset = dataset
         assert isinstance(self.dataset, HeliosDataset)  # type: ignore
-        # Check if collator function accepts supported_modalities argument
-        if "supported_modalities" in inspect.signature(collator).parameters:
-            self.collator = partial(
-                collator, supported_modalities=self.dataset.supported_modalities
-            )
-        else:
-            self.collator = collator  # type: ignore
+        self.collator = collator
         if not self.dataset.is_dataset_prepared:
             raise RuntimeError("Dataset must be prepared before creating a dataloader")
         self.min_patch_size = min_patch_size

@@ -26,24 +26,14 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from upath import UPath
 
-from helios.data.constants import (
-    BASE_RESOLUTION,
-    IMAGE_TILE_SIZE,
-    MISSING_VALUE,
-    PROJECTION_CRS,
-    TIMESTAMPS,
-    Modality,
-    ModalitySpec,
-    TimeSpan,
-)
+from helios.data.constants import (BASE_RESOLUTION, IMAGE_TILE_SIZE,
+                                   MISSING_VALUE, PROJECTION_CRS, TIMESTAMPS,
+                                   Modality, ModalitySpec, TimeSpan)
 from helios.data.normalize import Normalizer, Strategy
 from helios.data.utils import convert_to_db, update_streaming_stats
 from helios.dataset.parse import ModalityTile, parse_helios_dataset
-from helios.dataset.sample import (
-    SampleInformation,
-    image_tiles_to_samples,
-    load_image_for_sample,
-)
+from helios.dataset.sample import (SampleInformation, image_tiles_to_samples,
+                                   load_image_for_sample)
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.types import ArrayTensor
 
@@ -132,8 +122,16 @@ class HeliosSample(NamedTuple):
 
     @property
     def modalities(self) -> list[str]:
-        """Get the modalities present in the sample."""
+        """Get the modalities present in the sample.
+
+        Includes timestamps and latlon"""
         return [modality for modality in self.as_dict(ignore_nones=True).keys()]
+
+
+    @property
+    def missing_modalities(self) -> list[str]:
+        """Get the modalities missing from the sample."""
+        return [modality for modality in self.as_dict(ignore_nones=True).keys() if self.as_dict(ignore_nones=True)[modality] is None]
 
     def to_device(self, device: torch.device) -> "HeliosSample":
         """Move all tensors to the specified device.
@@ -205,6 +203,18 @@ class HeliosSample(NamedTuple):
         if self.timestamps is None:
             raise ValueError("Timestamps are not present in the sample")
         return self.timestamps.shape[-2]
+
+    def get_expected_shape(self, attribute: str) -> tuple[int, ...]:
+        """Get the expected shape of an attribute."""
+        modality_spec = Modality.get(attribute)
+        if modality_spec.is_spacetime_varying:
+            return (self.height, self.width, self.time, *modality_spec.num_bands)
+        elif modality_spec.is_space_only_varying:
+            return (self.height, self.width, 1, *modality_spec.num_bands)
+        elif modality_spec.is_time_only_varying:
+            return (1, 1, self.time, *modality_spec.num_bands)
+        else:
+            return (1, 1, 1, *modality_spec.num_bands)
 
     def _get_max_t_within_token_budget(
         self, h_w_p: int, max_tokens_per_instance: int
@@ -297,57 +307,7 @@ class HeliosSample(NamedTuple):
         return HeliosSample(**new_data_dict)
 
 
-def collate_helios(
-    batch: list[HeliosSample], supported_modalities: list[ModalitySpec]
-) -> HeliosSample:
-    """Collate function capable of handling batches with samples missing modalities."""
-    collated_dict: dict = {}
-
-    # First, find a reference sample to get dtypes from
-    # We'll use sentinel2_l2a as our reference since it's always required
-    reference_dtype = torch.from_numpy(batch[0].sentinel2_l2a).dtype
-    sample_fields = set(batch[0].modalities).union(
-        modality.name for modality in supported_modalities
-    )
-    for field in sample_fields:
-        modality_data_stack = []
-        missing_data_indices = []
-
-        # First pass: collect data and identify missing entries
-        expected_shape = None
-        found_dtype = None
-
-        for i, sample in enumerate(batch):
-            modality_data = getattr(sample, field)
-            if modality_data is not None:
-                modality_data = torch.from_numpy(modality_data)
-                if expected_shape is None:
-                    expected_shape = modality_data.shape
-                    found_dtype = modality_data.dtype
-                modality_data_stack.append(modality_data)
-            else:
-                logger.info(f"missing data for modality: {field}")
-                missing_data_indices.append(i)
-                modality_data_stack.append(None)  # Placeholder
-
-        # If all samples are missing this modality, skip it
-        if expected_shape is None:
-            collated_dict[field] = None
-            continue
-
-        # Second pass: fill in missing data with MISSING_VALUE
-        dtype_to_use = found_dtype if found_dtype is not None else reference_dtype
-        for i in missing_data_indices:
-            modality_data_stack[i] = torch.full(
-                expected_shape,
-                fill_value=MISSING_VALUE,
-                dtype=dtype_to_use,
-            )
-        collated_dict[field] = torch.stack(modality_data_stack, dim=0)
-
-    return HeliosSample(**collated_dict)
-
-def old_collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSample]:
+def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSample]:
     """Collate function that automatically handles any modalities present in the samples."""
 
     # Stack tensors while handling None values
@@ -941,6 +901,15 @@ class HeliosDataset(Dataset):
             sample_dict = {k: v[()] for k, v in f.items()}
 
         sample = HeliosSample(**sample_dict)
+        for missing_modality in sample.missing_modalities:
+            if missing_modality in self.supported_modalities:
+                sample_dict[missing_modality] = np.full(
+                    sample.get_expected_shape(missing_modality),
+                    fill_value=MISSING_VALUE,
+                    dtype=self.dtype,
+                )
+
+        # I would like to know the expected shape of the sample Perhaps Helios Sample can have a property that returns the expected shape of the sample
         if args.token_budget is not None:
             result = sample.subset(
                 patch_size=args.patch_size,
@@ -964,6 +933,7 @@ class HeliosDataset(Dataset):
                 sample_dict[modality.name] = sample_dict[modality.name].astype(
                     self.dtype
                 )
+
         return args.patch_size, HeliosSample(**sample_dict)
 
 
