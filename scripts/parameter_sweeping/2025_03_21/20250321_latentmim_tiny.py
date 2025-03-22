@@ -66,7 +66,7 @@ LOSS_TYPES = ["patch_discrimination_new", "l2", "all_discrimination"]
 
 # Base command template
 BASE_COMMAND = (
-    "python3 scripts/parameter_sweeping/2025_03_21/latent_mim_base_script.py train {run_name} ai2/jupiter-cirrascale-2 "
+    "python3 scripts/parameter_sweeping/2025_03_21/latent_mim_base_script.py launch {run_name} ai2/jupiter-cirrascale-2 "
     "--train_module.masking_config.strategy_config.type={masking_type} "
     "--train_module.loss_config.loss_config.type={loss_type} --train_module.rank_microbatch_size={rank_microbatch_size} "
     "{token_exit_args}"
