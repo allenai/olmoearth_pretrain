@@ -8,7 +8,6 @@ import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
 from olmo_core.distributed.utils import get_local_tensor, get_world_size
-from olmo_core.float8 import Float8Config
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import Duration, ReduceType
@@ -83,7 +82,6 @@ class MAETrainModule(HeliosTrainModule):
         loss_config: The loss configuration for the model.
         rank_microbatch_size: The rank microbatch size in instances.
         compile_model: Whether to compile to the model.
-        float8_config: Float8 configuration for the model.
         dp_config: Data parallel configuration for the model.
         ac_config: Activation checkpointing configuration for the model.
         loss_fn: Loss function to use.
@@ -106,7 +104,6 @@ class MAETrainModule(HeliosTrainModule):
         rank_microbatch_size: int,
         token_exit_cfg: dict[str, int],
         compile_model: bool = False,
-        float8_config: Float8Config | None = None,
         dp_config: DataParallelConfig | None = None,
         ac_config: TransformerActivationCheckpointingConfig | None = None,
         compile_loss: bool = False,
@@ -127,7 +124,6 @@ class MAETrainModule(HeliosTrainModule):
             loss_config: The loss configuration for the model.
             rank_microbatch_size: The rank microbatch size in instances.
             compile_model: Whether to compile to the model.
-            float8_config: Float8 configuration for the model.
             dp_config: Data parallel configuration for the model.
             ac_config: Activation checkpointing configuration for the model.
             loss_fn: Loss function to use.
@@ -146,7 +142,6 @@ class MAETrainModule(HeliosTrainModule):
             optim_config=optim_config,
             rank_microbatch_size=rank_microbatch_size,
             compile_model=compile_model,
-            float8_config=float8_config,
             dp_config=dp_config,
             ac_config=ac_config,
             compile_loss=compile_loss,
