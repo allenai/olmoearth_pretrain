@@ -418,7 +418,8 @@ class PASTISRDataset(Dataset):
         for month in months:
             if month == 1:
                 year = 2019
-            timestamps.append(torch.tensor([1, month, year], dtype=torch.long))
+            # NOTE: month is 0-indexed, from 0 to 11
+            timestamps.append(torch.tensor([1, month - 1, year], dtype=torch.long))
         timestamps = torch.stack(timestamps)
 
         if self.is_multimodal:

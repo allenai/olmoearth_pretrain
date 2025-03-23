@@ -161,7 +161,7 @@ class MaskedHeliosSample(NamedTuple):
                     masked_sample_dict[
                         MaskedHeliosSample.get_masked_modality_name(key)
                     ] = (
-                        torch.ones(sample.shape(key, mask=True))
+                        torch.ones(sample.shape(key, mask=False))
                         * MaskValue.ONLINE_ENCODER.value
                     )
 
