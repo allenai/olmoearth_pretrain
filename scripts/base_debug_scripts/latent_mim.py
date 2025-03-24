@@ -37,6 +37,7 @@ from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 logger = logging.getLogger(__name__)
+
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
@@ -99,7 +100,7 @@ def build_train_module_config(
     )
     loss_config = LossConfig(
         loss_config={
-            "type": "patch_discrimination",  # TODO: Should be registered via enum names
+            "type": "patch_discrimination_new",  # TODO: Should be registered via enum names
         }
     )
     token_exit_cfg = {modality: 0 for modality in common.supported_modality_names}
@@ -178,14 +179,33 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     )
     # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
-    EVAL_INTERVAL_EPOCHS = 5
+    logger.warning("WANDB Distribution Uploads are disabled for Debugging")
     EVAL_TASKS = [
+        DownstreamTaskConfig(
+            dataset="pastis",
+            batch_size=8,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_duration=Duration.epochs(20),
+        ),
+        DownstreamTaskConfig(
+            dataset="pastis-r",
+            batch_size=8,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_duration=Duration.epochs(20),
+        ),
         DownstreamTaskConfig(
             dataset="m-eurosat",
             batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
+            eval_duration=Duration.epochs(5),
         ),
         DownstreamTaskConfig(
             dataset="mados",
@@ -194,6 +214,16 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
             probe_lr=0.1,
+            eval_duration=Duration.epochs(20),
+        ),
+        DownstreamTaskConfig(
+            dataset="sen1floods11",
+            batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_duration=Duration.epochs(20),
         ),
     ]
     trainer_config = (
@@ -214,7 +244,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
                 tasks=EVAL_TASKS,
-                eval_duration=Duration.epochs(EVAL_INTERVAL_EPOCHS),
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)

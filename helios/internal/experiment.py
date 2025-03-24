@@ -323,7 +323,7 @@ def main(
 
     """
     usage = f"""
-[yellow]Usage:[/] [i blue]python[/] [i cyan]{sys.argv[0]}[/] [i b magenta]{'|'.join(SubCmd)}[/] [i b]RUN_NAME CLUSTER[/] [i][OVERRIDES...][/]
+[yellow]Usage:[/] [i blue]python[/] [i cyan]{sys.argv[0]}[/] [i b magenta]{"|".join(SubCmd)}[/] [i b]RUN_NAME CLUSTER[/] [i][OVERRIDES...][/]
 If running command on a local machine ie from a session, you can use the [b]local[/b] cluster name.
 [b]Subcommands[/]
 [b magenta]launch:[/]     Not Implemented. Launch the script on Beaker with the [b magenta]train[/] subcommand.

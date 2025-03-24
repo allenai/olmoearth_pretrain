@@ -32,6 +32,7 @@ class DownstreamEvaluator:
         batch_size: int = 128,
         num_workers: int = 8,
         patch_size: int = 4,
+        eval_duration: Duration = field(default_factory=lambda: Duration.epochs(1)),
         pooling_type: PoolingType = PoolingType.MEAN,
         norm_stats_from_pretrained: bool = True,
         device: torch.device | None = None,
@@ -48,6 +49,7 @@ class DownstreamEvaluator:
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
         self.probe_lr = probe_lr
         self.patch_size = patch_size
+        self.eval_duration = eval_duration
 
     def _get_data_loader(self, split: str) -> DataLoader:
         """Get the data loader for the given split."""
@@ -77,10 +79,7 @@ class DownstreamEvaluator:
 
     def val(self) -> float:
         """Validate the model on the downstream task."""
-        # try:
         train_loader = self._get_data_loader("train")
-        print("train loader loaded")
-        print(len(train_loader.dataset))
         val_loader = self._get_data_loader("valid")
 
         train_embeddings, train_labels = self._get_embeddings(train_loader)
@@ -128,9 +127,6 @@ class DownstreamEvaluator:
             raise ValueError(f"Unrecognized task type: {self.config.task_type}")
         logger.info(f"Downstream evaluator {self.dataset} score: {val_result}")
         return val_result
-        # except Exception as e:
-        #     logger.error(f"Error during evaluation: {e}")
-        #     return -1
 
 
 @dataclass
@@ -138,23 +134,22 @@ class DownstreamEvaluatorCallback(Callback):
     """Runs in-loop evaluations periodically during training."""
 
     evaluators: list[DownstreamEvaluator] = field(default_factory=list)
-    eval_duration: Duration = field(default_factory=lambda: Duration.epochs(1))
 
     def post_step(self) -> None:
         """Run the evaluators."""
-        # Compute the evaluation interval in steps.
-        eval_interval_steps = self.trainer.convert_duration_to_steps(self.eval_duration)
-        if self.step <= 1 or self.step % eval_interval_steps != 0:
-            return
-
         for evaluator in self.evaluators:
-            logger.info(f"Running {evaluator.dataset} evaluations...")
-            start_time = time.monotonic()
-            val_result = evaluator.val()
-            self.trainer.record_metric(f"eval/{evaluator.dataset}", val_result)
-            logger.info(
-                f"Finished {evaluator.dataset} evaluations in {time.monotonic() - start_time:.1f} seconds."
+            # Convert epochs to steps
+            eval_interval_steps = self.trainer.convert_duration_to_steps(
+                evaluator.eval_duration
             )
+            if self.step == 1 or self.step % eval_interval_steps == 0:
+                logger.info(f"Running {evaluator.dataset} evaluations...")
+                start_time = time.monotonic()
+                val_result = evaluator.val()
+                self.trainer.record_metric(f"eval/{evaluator.dataset}", val_result)
+                logger.info(
+                    f"Finished {evaluator.dataset} evaluations in {time.monotonic() - start_time:.1f} seconds."
+                )
 
 
 @dataclass
@@ -173,6 +168,7 @@ class DownstreamTaskConfig:
     # ViT-base = 0.01
     probe_lr: float | None = None
     patch_size: int = 4
+    eval_duration: Duration = field(default_factory=lambda: Duration.epochs(1))
 
 
 @dataclass
@@ -180,7 +176,6 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     """Config for the downstream evaluator callback."""
 
     tasks: list[DownstreamTaskConfig]
-    eval_duration: Duration = field(default_factory=lambda: Duration.epochs(1))
     enabled: bool = True
 
     def build(self, trainer: Trainer) -> Callback | None:
@@ -206,9 +201,9 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     device=trainer.device,
                     probe_lr=task.probe_lr,
                     patch_size=task.patch_size,
+                    eval_duration=task.eval_duration,
                 )
             )
         return DownstreamEvaluatorCallback(
             evaluators=evaluators,
-            eval_duration=self.eval_duration,
         )
