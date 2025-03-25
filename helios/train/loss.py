@@ -23,7 +23,9 @@ class Loss(ABC):
     name: str
 
     @abstractmethod
-    def compute(self, predictions: Any, targets: Any, **kwargs: Any) -> Tensor:
+    def compute(
+        self, predictions: Any, targets: Any, **kwargs: Any
+    ) -> Tensor | tuple[Tensor, Tensor]:
         """Compute the loss between predictions and targets."""
         pass
 
@@ -134,7 +136,7 @@ class PatchDiscriminationLossNew(Loss):
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
-    ) -> Tensor:
+    ) -> tuple[Tensor, Tensor]:
         """Compute patch discrimination loss between predictions and targets.
 
         Args:
@@ -183,7 +185,7 @@ class PatchDiscriminationLossNew(Loss):
             losses.append(loss)
             start = end
         loss = torch.stack(losses).mean()
-        return loss
+        return loss, score_sample * self.tau
 
 
 @LOSS_REGISTRY.register("patch_discrimination")

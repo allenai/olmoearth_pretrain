@@ -230,7 +230,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 decoded, target_output = self.model_forward(
                     masked_batch, patch_size, self.token_exit_cfg
                 )
-                loss = self.loss_fn(decoded, target_output)
+                loss, score_sample = self.loss_fn(decoded, target_output)
                 # Scale loss by number of microbatches
                 loss = loss / num_microbatches
                 loss_val = get_local_tensor(loss)
@@ -246,6 +246,40 @@ class LatentMIMTrainModule(HeliosTrainModule):
 
                 del decoded, target_output
                 loss.backward()
+
+        # Change score_sample to 1D tensor, get the min, 25%, 50%, 75%, max
+        score_sample = score_sample.view(-1)
+        min_score = score_sample.min()
+        max_score = score_sample.max()
+        q1_score = score_sample.quantile(0.25)
+        q2_score = score_sample.quantile(0.5)
+        q3_score = score_sample.quantile(0.75)
+
+        self.trainer.record_metric(
+            "train/similarity_score_min",
+            min_score,
+            ReduceType.mean,
+        )
+        self.trainer.record_metric(
+            "train/similarity_score_max",
+            max_score,
+            ReduceType.mean,
+        )
+        self.trainer.record_metric(
+            "train/similarity_score_q1",
+            q1_score,
+            ReduceType.mean,
+        )
+        self.trainer.record_metric(
+            "train/similarity_score_q2",
+            q2_score,
+            ReduceType.mean,
+        )
+        self.trainer.record_metric(
+            "train/similarity_score_q3",
+            q3_score,
+            ReduceType.mean,
+        )
 
         self.trainer.record_metric(
             f"train/{self.base_loss.name}",
