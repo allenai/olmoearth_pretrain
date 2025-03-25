@@ -182,24 +182,24 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     logger.warning("WANDB Distribution Uploads are disabled for Debugging")
     EVAL_TASKS = [
-        DownstreamTaskConfig(
-            dataset="pastis",
-            batch_size=8,
-            num_workers=4,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_duration=Duration.epochs(20),
-        ),
-        DownstreamTaskConfig(
-            dataset="pastis-r",
-            batch_size=8,
-            num_workers=4,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_duration=Duration.epochs(20),
-        ),
+        # DownstreamTaskConfig(
+        #     dataset="pastis",
+        #     batch_size=8,
+        #     num_workers=4,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     probe_lr=0.1,
+        #     eval_duration=Duration.epochs(20),
+        # ),
+        # DownstreamTaskConfig(
+        #     dataset="pastis-r",
+        #     batch_size=8,
+        #     num_workers=4,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     probe_lr=0.1,
+        #     eval_duration=Duration.epochs(20),
+        # ),
         DownstreamTaskConfig(
             dataset="m-eurosat",
             batch_size=128,
@@ -208,24 +208,24 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_duration=Duration.epochs(5),
         ),
-        DownstreamTaskConfig(
-            dataset="mados",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            probe_lr=0.1,
-            eval_duration=Duration.epochs(20),
-        ),
-        DownstreamTaskConfig(
-            dataset="sen1floods11",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_duration=Duration.epochs(20),
-        ),
+        # DownstreamTaskConfig(
+        #     dataset="mados",
+        #     batch_size=128,
+        #     num_workers=8,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=False,
+        #     probe_lr=0.1,
+        #     eval_duration=Duration.epochs(20),
+        # ),
+        # DownstreamTaskConfig(
+        #     dataset="sen1floods11",
+        #     batch_size=128,
+        #     num_workers=8,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     probe_lr=0.1,
+        #     eval_duration=Duration.epochs(20),
+        # ),
     ]
     trainer_config = (
         TrainerConfig(
