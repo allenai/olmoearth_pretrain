@@ -8,9 +8,11 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 from class_registry import ClassRegistry
+from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor
 
+from helios.data.constants import Modality
 from helios.nn.flexihelios import TokensAndMasks
 from helios.train.masking import MaskValue
 
@@ -302,7 +304,7 @@ class L2Loss(Loss):
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
-    ) -> float:
+    ) -> Tensor:
         """Compute L2 loss between predictions and targets.
 
         Args:
@@ -318,6 +320,63 @@ class L2Loss(Loss):
         pred = all_preds[all_masks == MaskValue.DECODER.value]
         target = all_targets[all_masks == MaskValue.DECODER.value]
         return F.mse_loss(pred, target)
+
+
+@LOSS_REGISTRY.register("imagel2")
+class ImageL2Loss(Loss):
+    """Loss function for L2 (mean squared error) over images."""
+
+    name = "ImageL2"
+
+    # data: [B, H, W, T, C]
+    def _flatten_helios_data(self, data: TokensAndMasks) -> tuple[Tensor, Tensor]:
+        masks = []
+        datas = []
+        for modality in data.modalities:
+            modality_spec = Modality.get(modality)
+            pred = getattr(data, modality)
+            if pred is not None:
+                mask = getattr(data, data.get_masked_modality_name(modality))
+                for idx, channel_set_idxs in enumerate(
+                    modality_spec.bandsets_as_indices()
+                ):
+                    bs_mask = mask[..., idx]
+                    bs_mask = repeat(
+                        bs_mask, "b h w t -> b h w t c", c=len(channel_set_idxs)
+                    )
+                    bs_mask = rearrange(bs_mask, "b h w t c -> b (h w t c)")
+                    masks.append(bs_mask)
+                    bs_data = pred[..., channel_set_idxs]
+                    bs_data = rearrange(bs_data, "b h w t c -> b (h w t c)")
+                    datas.append(bs_data)
+        return torch.cat(datas, dim=1), torch.cat(masks, dim=1)
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute L2 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        data, masks = self._flatten_helios_data(predictions)
+        valid_dict = {}
+        for modality in predictions.modalities:
+            if getattr(predictions, modality) is not None:
+                masked_name = targets.get_masked_modality_name(modality)
+                valid_dict[modality] = getattr(targets, modality)
+                valid_dict[masked_name] = getattr(targets, masked_name)
+        valid_targets = TokensAndMasks(**valid_dict)
+        labels, label_masks = self._flatten_helios_data(valid_targets)
+        decode = label_masks == MaskValue.DECODER.value
+        data = data * decode
+        labels = labels * decode
+        return F.mse_loss(data, labels, reduction="sum") / torch.count_nonzero(decode)
 
 
 @LOSS_REGISTRY.register("cross_entropy")

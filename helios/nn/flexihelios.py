@@ -19,7 +19,7 @@ from helios.nn.encodings import (
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
 )
-from helios.nn.flexi_patch_embed import FlexiPatchEmbed
+from helios.nn.flexi_patch_embed import FlexiPatchEmbed, FlexiPatchReconstruction
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
@@ -350,6 +350,172 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             modality_mask_name = input_data.get_masked_modality_name(modality)
             output_dict[modality_mask_name] = modality_masks
         return output_dict
+
+
+class Reconstructor(nn.Module):
+    """Module that patchifies and encodes the input data."""
+
+    def __init__(
+        self,
+        supported_modalities: list[ModalitySpec],
+        max_patch_size: int,
+        embedding_size: int,
+    ):
+        """Initialize the patch embeddings.
+
+        Args:
+            supported_modalities: Which modalities from Modality this model
+                instantiation supports
+            max_patch_size: Maximum size of patches
+            embedding_size: Size of embeddings
+        """
+        super().__init__()
+        self.max_patch_size = max_patch_size
+        self.embedding_size = embedding_size
+        self.supported_modalities = supported_modalities
+        # TODO: want to be able to remove certain bands and modalities
+        self.per_modality_reconstructions = nn.ModuleDict({})
+        for modality in self.supported_modalities:
+            self.per_modality_reconstructions[modality.name] = (
+                self._get_patch_reconstruction_module_for_modality(modality)
+            )
+
+    @staticmethod
+    def _get_reconstruction_module_name(modality: str, idx: int) -> str:
+        """Get the reconstruction module name.
+
+        Module Dicts require string keys
+        """
+        return f"{modality}__{idx}"
+
+    def _get_patch_reconstruction_module_for_modality(
+        self, modality: ModalitySpec
+    ) -> nn.Module:
+        """Get the patch reconstruction module for a modality."""
+        # Based on the modality name we choose the way to embed the data
+
+        # I likely will need to know about what the embedding strategy is in the forward as well
+        # Static modality
+        if modality.get_tile_resolution() == 0:
+            # static in space
+            return nn.ModuleDict(
+                {
+                    self._get_reconstruction_module_name(modality.name, idx): nn.Linear(
+                        self.embedding_size, len(channel_set_idxs)
+                    )
+                    for idx, channel_set_idxs in enumerate(
+                        modality.bandsets_as_indices()
+                    )
+                }
+            )
+        else:
+            return nn.ModuleDict(
+                {
+                    self._get_reconstruction_module_name(
+                        modality.name, idx
+                    ): FlexiPatchReconstruction(
+                        out_chans=len(channel_set_idxs),
+                        embedding_size=self.embedding_size,
+                        max_patch_size=self.max_patch_size,
+                    )
+                    for idx, channel_set_idxs in enumerate(
+                        modality.bandsets_as_indices()
+                    )
+                }
+            )
+
+    # TODO: Likely we want a single object that stores all the data related configuration etc per modality including channel grous bands patch size etc
+    def apply_reconstruction_to_modality(
+        self, modality: str, input_data: TokensAndMasks, patch_size: int
+    ) -> tuple[Tensor, Tensor]:
+        """Apply reconstruction to a modality."""
+        masked_modality_name = input_data.get_masked_modality_name(modality)
+        modality_mask = getattr(input_data, masked_modality_name)
+        modality_data = getattr(input_data, modality)
+
+        modality_spec = Modality.get(modality)
+
+        # x: Input tensor with shape [b, h, w, (t), b_s, d]
+        modality_tokens, modality_masks = [], []
+        for idx, channel_set_indices in enumerate(modality_spec.bandsets_as_indices()):
+            data = modality_data[..., idx, :]
+            masks = modality_mask[..., idx]
+            r_model = self.per_modality_reconstructions[modality][
+                self._get_reconstruction_module_name(modality, idx)
+            ]
+            if modality_spec.get_tile_resolution() == 0:
+                data = r_model(data)
+            else:
+                data = r_model(data, patch_size=patch_size)
+            modality_tokens.append(data)
+            masks = repeat(
+                masks,
+                "b h w ... -> b (h p_h) (w p_w) ...",
+                p_h=patch_size,
+                p_w=patch_size,
+            )
+            modality_masks.append(masks)
+        modality_mask = repeat(
+            modality_mask,
+            "b h w ... -> b (h p_h) (w p_w) ...",
+            p_h=patch_size,
+            p_w=patch_size,
+        )
+        return torch.cat(modality_tokens, dim=-1), modality_mask
+
+    def forward(
+        self,
+        input_data: TokensAndMasks,
+        patch_size: int,
+    ) -> TokensAndMasks:
+        """Return flexibly patchified reconstruction for each modality of the input data.
+
+        Given a [B, H, W, (T), b_s, D] inputs, returns a [B, H, W, (T), C] output.
+        """
+        output_dict = {}
+        modalities_to_process = get_modalities_to_process(
+            input_data.modalities, [m.name for m in self.supported_modalities]
+        )
+        for modality in modalities_to_process:
+            modality_tokens, modality_masks = self.apply_reconstruction_to_modality(
+                modality, input_data, patch_size
+            )
+            output_dict[modality] = modality_tokens
+            modality_mask_name = input_data.get_masked_modality_name(modality)
+            output_dict[modality_mask_name] = modality_masks
+        return TokensAndMasks(**output_dict)
+
+
+@dataclass
+class ReconstructorConfig(Config):
+    """Configuration for the Reconstructor."""
+
+    supported_modality_names: list[str]
+    embedding_size: int = 16
+    max_patch_size: int = 8
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        if len(self.supported_modalities) == 0:
+            raise ValueError("At least one modality must be added!")
+        else:
+            for modality in self.supported_modalities:
+                if modality not in Modality.values():
+                    raise ValueError(f"Modality {modality} is not supported")
+
+    @property
+    def supported_modalities(self) -> list[ModalitySpec]:
+        """Get the supported modalities."""
+        return get_modality_specs_from_names(self.supported_modality_names)
+
+    def build(self) -> "Reconstructor":
+        """Build the reconstructor."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"Predictor kwargs: {kwargs}")
+        return Reconstructor(**kwargs)
 
 
 class FlexiHeliosCompositeEncodings(nn.Module):
