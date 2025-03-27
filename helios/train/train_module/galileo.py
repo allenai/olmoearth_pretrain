@@ -236,6 +236,7 @@ class GalileoTrainModule(HeliosTrainModule):
         # Set the model to train mode
         self.model.train()
 
+        # This is a clear loss buffer
         if not hasattr(self, 'total_batch_loss'):
             self.total_batch_loss = torch.zeros(1, device=self.device)
         else:

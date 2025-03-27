@@ -42,7 +42,14 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 MIN_PATCH_SIZE = 1
 
-
+# vit G
+ENCODER_EMBEDDING_SIZE = 1536
+DECODER_EMBEDDING_SIZE = 768
+ENCODER_DEPTH = 40
+DECODER_DEPTH = 12
+ENCODER_NUM_HEADS = 16
+DECODER_NUM_HEADS = 12
+MLP_RATIO = 4.0
 # Billion parameters model Vit-H
 
 ENCODER_EMBEDDING_SIZE = 1024
@@ -59,14 +66,13 @@ MLP_RATIO = 4.0
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
-    ENCODER_EMBEDDING_SIZE = 1536
+    ENCODER_EMBEDDING_SIZE = 1024
     DECODER_EMBEDDING_SIZE = 768
-    ENCODER_DEPTH = 40
+    ENCODER_DEPTH = 24
     DECODER_DEPTH = 12
     ENCODER_NUM_HEADS = 16
     DECODER_NUM_HEADS = 12
     MLP_RATIO = 4.0
-
     TRANSFORM_TYPE = "flip_and_rotate"
     encoder_config = EncoderConfig(
         supported_modality_names=common.supported_modality_names,

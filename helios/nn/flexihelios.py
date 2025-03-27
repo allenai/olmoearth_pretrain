@@ -299,10 +299,9 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                 token_mask = modality_mask[:, 0::patch_size, 0::patch_size, ..., idx]
                 modality_specific_kwargs = {"patch_size": patch_size}
             patchified_dims = token_mask.shape[1:]
-            # Now apply the embedding to
+            # Now apply the embedding to the patchified data
             if self.is_any_data_seen_by_encoder(token_mask):
                 patchified_data = modality_data[..., channel_set_indices]
-
                 embedding_module = self.per_modality_embeddings[modality][
                     self._get_embedding_module_name(modality, idx)
                 ]
@@ -323,7 +322,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
     @staticmethod
     def is_any_data_seen_by_encoder(modality_mask: Tensor) -> bool:
         """Check if any data is seen by the encoder."""
-        return modality_mask.min() == MaskValue.ONLINE_ENCODER.value
+        return (modality_mask == MaskValue.ONLINE_ENCODER.value).any()
 
     def forward(
         self,
