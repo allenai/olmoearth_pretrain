@@ -6,7 +6,6 @@ from dataclasses import dataclass
 import torch.nn as nn
 from olmo_core.config import Config
 
-from helios.data.transform import Transform, TransformConfig
 from helios.nn.flexihelios import EncoderConfig, PredictorConfig, TokensAndMasks
 from helios.nn.utils import DistributedMixins
 from helios.train.masking import MaskedHeliosSample
@@ -19,15 +18,12 @@ class LatentMIM(nn.Module, DistributedMixins):
         self,
         encoder: nn.Module,
         decoder: nn.Module,
-        # TODO: Move transforms to TrainModule
-        transform: Transform,
     ):
         """Initialize the Latent MIM Style.
 
         Args:
             encoder: The encoder to use.
             decoder: The decoder to use.
-            transform: The transform to use.
         """
         super().__init__()
         self.encoder = encoder
@@ -35,7 +31,6 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
-        self.transform = transform
 
     def forward(self, x: MaskedHeliosSample, patch_size: int) -> TokensAndMasks:
         """Forward pass for the Latent MIM Style."""
@@ -51,7 +46,6 @@ class LatentMIMConfig(Config):
 
     encoder_config: "EncoderConfig"
     decoder_config: "PredictorConfig"
-    transform_type: str = "no_transform"
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -78,9 +72,7 @@ class LatentMIMConfig(Config):
         self.validate()
         encoder = self.encoder_config.build()
         decoder = self.decoder_config.build()
-        transform = TransformConfig(transform_type=self.transform_type).build()
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
-            transform=transform,
         )

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 import torch.nn as nn
 from olmo_core.config import Config
 
-from helios.data.transform import Transform, TransformConfig
 from helios.nn.flexihelios import (
     EncoderConfig,
     PredictorConfig,
@@ -24,7 +23,6 @@ class MAE(nn.Module, DistributedMixins):
         encoder: nn.Module,
         decoder: nn.Module,
         reconstructor: nn.Module,
-        transform: Transform,
     ):
         """Initialize the MAE Module.
 
@@ -32,16 +30,11 @@ class MAE(nn.Module, DistributedMixins):
             encoder: The encoder to use.
             decoder: The decoder to use.
             reconstructor: The reconstructor to use.
-            transform: The transform to use.
-            token_budget: The token budget to use.
-            h_w_to_sample_min: The minimum height and width to sample.
-            h_w_to_sample_max: The maximum height and width to sample.
         """
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.reconstructor = reconstructor
-        self.transform = transform
 
     def forward(self, x: MaskedHeliosSample, patch_size: int) -> TokensAndMasks:
         """Forward pass for the MAE Module."""
@@ -58,7 +51,6 @@ class MAEConfig(Config):
     encoder_config: "EncoderConfig"
     decoder_config: "PredictorConfig"
     reconstructor_config: "ReconstructorConfig"
-    transform_type: str = "no_transform"
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -86,10 +78,8 @@ class MAEConfig(Config):
         encoder = self.encoder_config.build()
         decoder = self.decoder_config.build()
         reconstructor = self.reconstructor_config.build()
-        transform = TransformConfig(transform_type=self.transform_type).build()
         return MAE(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
-            transform=transform,
         )

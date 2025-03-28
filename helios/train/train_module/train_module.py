@@ -21,7 +21,7 @@ from olmo_core.distributed.utils import get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
-from olmo_core.train.common import Duration
+from olmo_core.train.common import Duration, ReduceType
 from olmo_core.train.train_module import EvalBatchSizeUnit, EvalBatchSpec, TrainModule
 from olmo_core.train.train_module.transformer import (
     TransformerActivationCheckpointingConfig,
@@ -31,6 +31,8 @@ from torch.distributed.checkpoint.metadata import Metadata
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
+
+from helios.data.transform import TransformConfig
 
 logger = getLogger(__name__)
 
@@ -42,6 +44,7 @@ class HeliosTrainModuleConfig(Config):
     Args:
         rank_microbatch_size: The micro batch size per rank in instances.
         optim: The optimizer configuration.
+        transform_config: The transform configuration for the model.
         compile_model: Whether to compile the model using torch.compile.
         dp_config: Data parallel configuration for distributed training.
         ac_config: Activation checkpointing configuration.
@@ -56,6 +59,7 @@ class HeliosTrainModuleConfig(Config):
     # Training settings
 
     optim_config: OptimConfig
+    transform_config: TransformConfig
     rank_microbatch_size: int
 
     # Model settings
@@ -117,7 +121,8 @@ class HeliosTrainModule(TrainModule):
 
     Args:
         model: The transformer model to train.
-        optim: The corresponding optimizer config.
+        optim_config: The corresponding optimizer config.
+        transform_config: The transform configuration for the model.
         rank_microbatch_size: The rank micro batch size in instances.
         compile_model: Whether to compile to the model.
         dp_config: Data parallel configuration for the model.
@@ -135,6 +140,7 @@ class HeliosTrainModule(TrainModule):
         self,
         model: Any,
         optim_config: OptimConfig,
+        transform_config: TransformConfig,
         rank_microbatch_size: int,
         warmup_duration: Duration | None = None,
         compile_model: bool = False,
@@ -153,6 +159,7 @@ class HeliosTrainModule(TrainModule):
         Args:
             model: The transformer model to train.
             optim_config: The corresponding optimizer config.
+            transform_config: The transform configuration for the model.
             rank_microbatch_size: The rank batch size in instances.
             warmup_duration: The warmup duration.
             compile_model: Whether to compile to the model.
@@ -170,6 +177,7 @@ class HeliosTrainModule(TrainModule):
 
         self.model = model
 
+        self.transform = transform_config.build()
         logger.info(
             "Number of encoder parameters: %d",
             sum(p.numel() for p in self.model.encoder.parameters()),
@@ -445,6 +453,28 @@ class HeliosTrainModule(TrainModule):
         return torch.nn.utils.clip_grad_norm_(
             self.model.parameters(), max_grad_norm, norm_type=norm_type, foreach=foreach
         )
+
+    def update_target_encoder(self) -> None:
+        """Update the target encoder."""
+        # Update target encoder with EMA this should be a callback
+        cur_ema_value = (
+            self.start_ema
+            + self.trainer.global_step
+            * (self.end_ema - self.start_ema)
+            / self.trainer.max_steps
+        )
+        with torch.no_grad():
+            self.trainer.record_metric(
+                "train/ema_decay",
+                cur_ema_value,
+                ReduceType.mean,
+            )
+            for param, target_param in zip(
+                self.model.encoder.parameters(), self.model.target_encoder.parameters()
+            ):
+                target_param.data = (
+                    cur_ema_value * target_param.data + (1 - cur_ema_value) * param.data
+                )
 
     def eval_batch(
         self, batch: dict[str, Any], labels: torch.Tensor | None = None

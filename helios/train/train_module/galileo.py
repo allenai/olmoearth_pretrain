@@ -17,6 +17,7 @@ from olmo_core.train.train_module.transformer import (
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
+from helios.data.transform import TransformConfig
 from helios.nn.latent_mim import LatentMIM
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
@@ -112,6 +113,7 @@ class GalileoTrainModule(HeliosTrainModule):
         self,
         model: LatentMIM,
         optim_config: OptimConfig,
+        transform_config: TransformConfig,
         masking_config_a: MaskingConfig,
         masking_config_b: MaskingConfig,
         loss_config_a: LossConfig,
@@ -137,6 +139,7 @@ class GalileoTrainModule(HeliosTrainModule):
         Args:
             model: The transformer model to train.
             optim_config: The corresponding optimizer config.
+            transform_config: The transform configuration for the model.
             masking_config_a: The masking configuration for the model.
             masking_config_b: The masking configuration for the model.
             loss_config_a: The loss configuration for the model.
@@ -160,6 +163,7 @@ class GalileoTrainModule(HeliosTrainModule):
         super().__init__(
             model=model,
             optim_config=optim_config,
+            transform_config=transform_config,
             rank_microbatch_size=rank_microbatch_size,
             compile_model=compile_model,
             dp_config=dp_config,
@@ -188,28 +192,6 @@ class GalileoTrainModule(HeliosTrainModule):
     def loss_fn_b(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss_b.compute(pred, targets)
-
-    def update_target_encoder(self) -> None:
-        """Update the target encoder."""
-        # Update target encoder with EMA this should be a callback
-        cur_ema_value = (
-            self.start_ema
-            + self.trainer.global_step
-            * (self.end_ema - self.start_ema)
-            / self.trainer.max_steps
-        )
-        with torch.no_grad():
-            self.trainer.record_metric(
-                "train/ema_decay",
-                cur_ema_value,
-                ReduceType.mean,
-            )
-            for param, target_param in zip(
-                self.model.encoder.parameters(), self.model.target_encoder.parameters()
-            ):
-                target_param.data = (
-                    cur_ema_value * target_param.data + (1 - cur_ema_value) * param.data
-                )
 
     def train_batch(
         self, batch: tuple[int, HeliosSample], dry_run: bool = False
@@ -241,9 +223,7 @@ class GalileoTrainModule(HeliosTrainModule):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
-                microbatch = self.model.transform.apply(microbatch).to_device(
-                    self.device
-                )
+                microbatch = self.transform.apply(microbatch).to_device(self.device)
 
                 if microbatch_idx % 2 == 0:
                     masked_batch = self.masking_strategy_a.apply_mask(
