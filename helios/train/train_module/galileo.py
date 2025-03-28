@@ -189,10 +189,6 @@ class GalileoTrainModule(HeliosTrainModule):
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss_b.compute(pred, targets)
 
-    def eval_loss_fn(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        """Compute the loss between the predicted and target tensors."""
-        raise NotImplementedError("eval loss fn not implemented")
-
     def update_target_encoder(self) -> None:
         """Update the target encoder."""
         # Update target encoder with EMA this should be a callback
@@ -295,11 +291,6 @@ class GalileoTrainModule(HeliosTrainModule):
         )
         del masked_batch, batch, microbatch, batch_data
 
-    def eval_batch(
-        self, batch: dict[str, Any], labels: torch.Tensor | None = None
-    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        """Evaluate a batch."""
-        raise NotImplementedError("eval batch not implemented")
 
     def model_forward_a(
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]

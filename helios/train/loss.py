@@ -60,6 +60,7 @@ class KoleoLoss(Loss):
     def pairwise_nearest_neighbors(self, predictions: Tensor) -> Tensor:
         """Pairwise nearest neighbors for L2-normalized vectors."""
         # parwise dot products (= inverse distance)
+        logger.info(f"predictions: {predictions.shape}")
         dots = torch.mm(predictions, predictions.t())
         n = predictions.shape[0]
         dots.view(-1)[:: (n + 1)].fill_(-1)  # Trick to fill diagonal with -1
@@ -74,11 +75,12 @@ class KoleoLoss(Loss):
         **kwargs: Any,
     ) -> Tensor:
         """Compute the loss between predictions and targets."""
-        # We want to force the representation of every sample to be spead out as well
-        # Doing this on a token or patch level may not mAKE A TON OF SENSE
-        logger.warning("KoleoLoss is only applied on predictions")
+        # We want to force the representation of every sample to be spread out as well
         all_preds, all_masks = predictions.flatten_tokens_and_masks()
-        all_preds = all_preds[all_masks == MaskValue.DECODER.value]
+        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+        # SHould we be regularizing the encoder or the decoder embeddings or both?
+        all_preds = all_preds.sum(dim=(1)) / count
+        # we want to push the mean pooled embeddings apart
         # Compute the pairwise distances between all prediction
         normalized_preds = F.normalize(all_preds, p=2, dim=-1)
         nn_indices = self.pairwise_nearest_neighbors(all_preds)
@@ -584,6 +586,7 @@ class CombinedLoss(Loss):
             self.losses.append(loss_instance)
             loss_names.append(loss_instance.name)
 
+        self.loss_names = loss_names
         # Set name as the combination of component loss names
         self.name = "_".join(loss_names)
 
@@ -609,12 +612,12 @@ class CombinedLoss(Loss):
         Returns:
             The weighted sum of all component losses.
         """
-        return sum(
-            (
-                weight * loss_fn.compute(predictions, targets, **kwargs)
-                for weight, loss_fn in zip(self.weights, self.losses)
-            )
-        )
+        # TODO: do we want to record these losses seperately?
+        losses = []
+        for weight, loss_fn in zip(self.weights, self.losses):
+            component_loss = weight * loss_fn.compute(predictions, targets, **kwargs)
+            losses.append(component_loss)
+        return torch.stack(losses)
 
 
 @dataclass

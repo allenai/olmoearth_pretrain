@@ -445,3 +445,9 @@ class HeliosTrainModule(TrainModule):
         return torch.nn.utils.clip_grad_norm_(
             self.model.parameters(), max_grad_norm, norm_type=norm_type, foreach=foreach
         )
+
+    def eval_batch(
+        self, batch: dict[str, Any], labels: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        """Evaluate a batch."""
+        raise NotImplementedError("eval batch not implemented")

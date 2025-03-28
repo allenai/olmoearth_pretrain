@@ -162,13 +162,22 @@ class LatentMIMTrainModule(HeliosTrainModule):
         self.base_loss = loss_config.build()
         self.masking_strategy = masking_config.build()
 
+    # THis can likely be shared
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
-        return self.base_loss.compute(pred, targets)
+        if hasattr(self.base_loss, "losses"):
+            losses = self.base_loss.compute(pred, targets)
+            for i, loss_name in enumerate(self.base_loss.loss_names):
+                self.trainer.record_metric(
+                    f"train/{loss_name}",
+                    get_local_tensor(losses[i]),
+                    ReduceType.mean,
+                )
+            loss = get_local_tensor(losses.sum())
+        else:
+            loss = self.base_loss.compute(pred, targets)
+        return loss
 
-    def eval_loss_fn(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        """Compute the loss between the predicted and target tensors."""
-        raise NotImplementedError("eval loss fn not implemented")
 
     def update_target_encoder(self) -> None:
         """Update the target encoder."""
@@ -258,12 +267,6 @@ class LatentMIMTrainModule(HeliosTrainModule):
 
         del batch, batch_data  # In case this helps with memory utilization.
         del masked_batch
-
-    def eval_batch(
-        self, batch: dict[str, Any], labels: torch.Tensor | None = None
-    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        """Evaluate a batch."""
-        raise NotImplementedError("eval batch not implemented")
 
     def model_forward(
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
