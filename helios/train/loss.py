@@ -43,6 +43,52 @@ class Loss(ABC):
 
 LOSS_REGISTRY = ClassRegistry[Loss]()
 
+# I want this loss to be able to be combined with othe losses with a given weight
+
+
+@LOSS_REGISTRY.register("koleo")
+class KoleoLoss(Loss):
+    """Kozachenko-Leonenko entropic loss regularizer from Sablayrolles et al. - 2018 - Spreading vectors for similarity search
+
+    adapted from https://github.com/facebookresearch/dinov2/blob/main/dinov2/loss/koleo_loss.py
+    """
+
+    name = "Koleo"
+
+    eps = 1e-8
+
+    def pairwise_nearest_neighbors(self, x):
+        """
+        Pairwise nearest neighbors for L2-normalized vectors.
+
+
+        """
+        # parwise dot products (= inverse distance)
+        dots = torch.mm(x, x.t())
+        n = x.shape[0]
+        dots.view(-1)[:: (n + 1)].fill_(-1)  # Trick to fill diagonal with -1
+        # max inner prod -> min distance
+        _, nn_indices = torch.max(dots, dim=1)  # noqa: E741
+        return nn_indices
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute the loss between predictions and targets."""
+        # We want to force the representation of every sample to be spead out as well
+        # Doing this on a token or patch level may not mAKE A TON OF SENSE
+        logger.warning("KoleoLoss is only applied on predictions")
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_preds = all_preds[all_masks == MaskValue.DECODER.value]
+        # Compute the pairwise distances between all prediction
+        normalized_preds = F.normalize(all_preds, p=2, dim=-1)
+        nn_indices = self.pairwise_nearest_neighbors(all_preds)
+        pairwise_distances = F.pairwise_distance(
+            normalized_preds, normalized_preds[nn_indices], p=2
+        )
+        loss = -torch.log(pairwise_distances + self.eps).mean()
+        return loss
+
 
 @LOSS_REGISTRY.register("all_discrimination")
 class AllDiscriminationLoss(Loss):
