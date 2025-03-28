@@ -609,12 +609,10 @@ class CombinedLoss(Loss):
         Returns:
             The weighted sum of all component losses.
         """
-        loss_values = [
-            loss_fn.compute(predictions, targets, **kwargs) for loss_fn in self.losses
-        ]
-        return torch.sum(
-            torch.stack(
-                [w * loss_value for w, loss_value in zip(self.weights, loss_values)]
+        return sum(
+            (
+                weight * loss_fn.compute(predictions, targets, **kwargs)
+                for weight, loss_fn in zip(self.weights, self.losses)
             )
         )
 
