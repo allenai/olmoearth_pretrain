@@ -48,7 +48,7 @@ LOSS_REGISTRY = ClassRegistry[Loss]()
 
 @LOSS_REGISTRY.register("koleo")
 class KoleoLoss(Loss):
-    """Kozachenko-Leonenko entropic loss regularizer from Sablayrolles et al. - 2018 - Spreading vectors for similarity search
+    """Kozachenko-Leonenko entropic loss regularizer from Sablayrolles et al. - 2018 - Spreading vectors for similarity search.
 
     adapted from https://github.com/facebookresearch/dinov2/blob/main/dinov2/loss/koleo_loss.py
     """
@@ -57,22 +57,21 @@ class KoleoLoss(Loss):
 
     eps = 1e-8
 
-    def pairwise_nearest_neighbors(self, x):
-        """
-        Pairwise nearest neighbors for L2-normalized vectors.
-
-
-        """
+    def pairwise_nearest_neighbors(self, predictions: Tensor) -> Tensor:
+        """Pairwise nearest neighbors for L2-normalized vectors."""
         # parwise dot products (= inverse distance)
-        dots = torch.mm(x, x.t())
-        n = x.shape[0]
+        dots = torch.mm(predictions, predictions.t())
+        n = predictions.shape[0]
         dots.view(-1)[:: (n + 1)].fill_(-1)  # Trick to fill diagonal with -1
         # max inner prod -> min distance
         _, nn_indices = torch.max(dots, dim=1)  # noqa: E741
         return nn_indices
 
     def compute(
-        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+        self,
+        predictions: TokensAndMasks,
+        targets: TokensAndMasks | None = None,
+        **kwargs: Any,
     ) -> Tensor:
         """Compute the loss between predictions and targets."""
         # We want to force the representation of every sample to be spead out as well
@@ -561,6 +560,63 @@ class CrossEntropyLoss(Loss):
         target = all_targets[all_masks == MaskValue.DECODER.value]
 
         return F.cross_entropy(pred, target.squeeze())
+
+
+@LOSS_REGISTRY.register("combined_loss")
+class CombinedLoss(Loss):
+    """Loss function for combined loss."""
+
+    def __init__(self, losses: list[dict], weights: list[float] | None = None):
+        """Initialize combined loss.
+
+        Args:
+            losses: List of loss configs for each component loss
+            weights: Optional list of weights for each loss. If None, equal weights are used.
+        """
+        if not losses:
+            raise ValueError("At least one loss must be provided")
+
+        self.losses = []
+        loss_names = []
+        for loss_config in losses:
+            loss_type = loss_config.pop("type")
+            loss_instance = LOSS_REGISTRY.get_class(loss_type)(**loss_config)
+            self.losses.append(loss_instance)
+            loss_names.append(loss_instance.name)
+
+        # Set name as the combination of component loss names
+        self.name = "_".join(loss_names)
+
+        if weights is None:
+            self.weights = [1.0 / len(self.losses)] * len(self.losses)
+        else:
+            if len(weights) != len(self.losses):
+                raise ValueError(
+                    f"Number of weights ({len(weights)}) must match number of losses ({len(self.losses)})"
+                )
+            self.weights = weights
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute the weighted sum of component losses.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The weighted sum of all component losses.
+        """
+        loss_values = [
+            loss_fn.compute(predictions, targets, **kwargs) for loss_fn in self.losses
+        ]
+        return torch.sum(
+            torch.stack(
+                [w * loss_value for w, loss_value in zip(self.weights, loss_values)]
+            )
+        )
 
 
 @dataclass
