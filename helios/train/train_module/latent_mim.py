@@ -220,32 +220,33 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
-                microbatch = self.model.transform.apply(microbatch).to_device(
-                    self.device
-                )
-                masked_batch = self.masking_strategy.apply_mask(
-                    microbatch, patch_size=patch_size
-                )
-                # Run Encoder and decoder on the augmented input
-                decoded, target_output = self.model_forward(
-                    masked_batch, patch_size, self.token_exit_cfg
-                )
-                loss = self.loss_fn(decoded, target_output)
-                # Scale loss by number of microbatches
-                loss = loss / num_microbatches
-                loss_val = get_local_tensor(loss)
-                total_batch_loss += loss_val
-
-                # Skip bad batches
-                if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+                for i in range(4):
+                    microbatch = self.model.transform.apply(microbatch).to_device(
+                        self.device
                     )
-                    del decoded, target_output
-                    break
+                    masked_batch = self.masking_strategy.apply_mask(
+                        microbatch, patch_size=patch_size
+                    )
+                    # Run Encoder and decoder on the augmented input
+                    decoded, target_output = self.model_forward(
+                        masked_batch, patch_size, self.token_exit_cfg
+                    )
+                    loss = self.loss_fn(decoded, target_output)
+                    # Scale loss by number of microbatches
+                    loss = loss / 4.0
+                    loss_val = get_local_tensor(loss)
+                    total_batch_loss += loss_val
 
-                del decoded, target_output
-                loss.backward()
+                    # Skip bad batches
+                    if torch.isnan(loss).any() or torch.isinf(loss).any():
+                        logger.warning(
+                            f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+                        )
+                        del decoded, target_output
+                        break
+
+                    del decoded, target_output
+                    loss.backward()
 
         self.trainer.record_metric(
             f"train/{self.base_loss.name}",
