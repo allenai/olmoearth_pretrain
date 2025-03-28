@@ -2,13 +2,12 @@
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 import torch.nn as nn
 from olmo_core.config import Config
-from torch.distributed.fsdp import register_fsdp_forward_method, fully_shard
 from torch.distributed import DeviceMesh
+from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
 
 from helios.data.transform import Transform, TransformConfig
 from helios.nn.flexihelios import EncoderConfig, PredictorConfig, TokensAndMasks
@@ -50,8 +49,8 @@ class LatentMIM(nn.Module, DistributedMixins):
 
     def apply_fsdp(
         self,
-        dp_mesh: Optional[DeviceMesh] = None,
-        param_dtype: Optional[torch.dtype] = None,
+        dp_mesh: DeviceMesh | None = None,
+        param_dtype: torch.dtype | None = None,
         reduce_dtype: torch.dtype = torch.float32,
         prefetch_factor: int = 0,
     ) -> None:

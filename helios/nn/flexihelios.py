@@ -883,7 +883,7 @@ class FlexiHeliosBase(nn.Module):
 
         return tokens_only_dict
 
-    def apply_fsdp(self, **fsdp_kwargs) -> None:
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         for block in self.blocks:
             block.apply_fsdp(**fsdp_kwargs)
@@ -1192,7 +1192,7 @@ class Encoder(FlexiHeliosBase):
             )
         return TokensAndMasks(**patchified_tokens_and_masks)
 
-    def apply_fsdp(self, **fsdp_kwargs) -> None:
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         super().apply_fsdp(**fsdp_kwargs)
         fully_shard(self.patch_embeddings, **fsdp_kwargs)
@@ -1491,7 +1491,7 @@ class Predictor(FlexiHeliosBase):
             output_dict[masked_modality_name] = modality_mask
         return TokensAndMasks(**output_dict)
 
-    def apply_fsdp(self, **fsdp_kwargs) -> None:
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         super().apply_fsdp(**fsdp_kwargs)
         fully_shard(self, **fsdp_kwargs)

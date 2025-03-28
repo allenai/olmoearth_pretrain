@@ -17,8 +17,10 @@ from olmo_core.distributed.parallel import (
     get_dp_mesh,
     get_dp_process_group,
 )
-from olmo_core.distributed.utils import get_full_tensor, get_local_tensor
-from olmo_core.distributed.utils import get_world_size
+from olmo_core.distributed.utils import (
+    get_full_tensor,
+    get_world_size,
+)
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler

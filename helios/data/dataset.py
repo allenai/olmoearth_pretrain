@@ -149,6 +149,7 @@ class HeliosSample(NamedTuple):
             **{
                 key: val.to(device)
                 for key, val in self.as_dict(ignore_nones=True).items()
+                if val is not None
             }
         )
 

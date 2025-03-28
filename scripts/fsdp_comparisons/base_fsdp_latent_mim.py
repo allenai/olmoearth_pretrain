@@ -1,8 +1,5 @@
 """Base fsdp latentmim experiment."""
 
-
-"""Trying to prototype fitting everything into olmo core."""
-
 import logging
 
 from olmo_core.config import DType

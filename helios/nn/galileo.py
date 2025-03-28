@@ -1,24 +1,22 @@
 """Simple set up of latent predictor with two predictors, following Galileo."""
 
+import logging
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Optional
-import logging
 
 import torch
 import torch.nn as nn
 from olmo_core.config import Config
 from torch.distributed import DeviceMesh
-from torch.distributed.fsdp import fully_shard
+from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
 
 from helios.data.transform import Transform, TransformConfig
-from helios.nn.flexihelios import (EncoderConfig, PredictorConfig,
-                                   TokensAndMasks)
+from helios.nn.flexihelios import EncoderConfig, PredictorConfig, TokensAndMasks
 from helios.nn.utils import DistributedMixins
 from helios.train.masking import MaskedHeliosSample
-from torch.distributed.fsdp import register_fsdp_forward_method
 
 logger = logging.getLogger(__name__)
+
 
 class Galileo(nn.Module, DistributedMixins):
     """Galileo Style."""
@@ -62,11 +60,10 @@ class Galileo(nn.Module, DistributedMixins):
         decoded = self.decoder_b(latent, timestamps=x.timestamps, patch_size=patch_size)
         return decoded
 
-
     def apply_fsdp(
         self,
-        dp_mesh: Optional[DeviceMesh] = None,
-        param_dtype: Optional[torch.dtype] = None,
+        dp_mesh: DeviceMesh | None = None,
+        param_dtype: torch.dtype | None = None,
         reduce_dtype: torch.dtype = torch.float32,
         prefetch_factor: int = 0,
     ) -> None:
