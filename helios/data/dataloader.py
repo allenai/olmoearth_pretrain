@@ -426,11 +426,13 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
         """Get worker info."""
         return torch.utils.data.get_worker_info()
 
-    def __iter__(self) -> Iterator[HeliosSample]:
+    def __iter__(
+        self,
+    ) -> Iterator[tuple[HeliosSample, HeliosSample, HeliosSample, HeliosSample]]:
         """Iterate over the dataset."""
         global_indices = self.data_loader.get_global_indices()
         indices = self.data_loader._get_local_instance_indices(global_indices)
-        instance_iterator = (
+        instance_iterator_0 = (
             self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
             for idx, patch_size, sampled_hw_p in _get_batch_item_params_iterator(
                 indices,
@@ -439,14 +441,66 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
                 self.data_loader.rank_batch_size,
             )
         )
-
-        return (
-            self.data_loader.collator(batch)
-            for batch in iter_batched(
-                instance_iterator,
+        instance_iterator_1 = (
+            self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
+            for idx, patch_size, sampled_hw_p in _get_batch_item_params_iterator(
+                indices,
+                self.data_loader.patch_sizes,
+                self.data_loader.sampled_hw_p_list,
                 self.data_loader.rank_batch_size,
-                self.data_loader.drop_last,
             )
+        )
+        instance_iterator_2 = (
+            self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
+            for idx, patch_size, sampled_hw_p in _get_batch_item_params_iterator(
+                indices,
+                self.data_loader.patch_sizes,
+                self.data_loader.sampled_hw_p_list,
+                self.data_loader.rank_batch_size,
+            )
+        )
+        instance_iterator_3 = (
+            self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
+            for idx, patch_size, sampled_hw_p in _get_batch_item_params_iterator(
+                indices,
+                self.data_loader.patch_sizes,
+                self.data_loader.sampled_hw_p_list,
+                self.data_loader.rank_batch_size,
+            )
+        )
+        return (
+            (
+                self.data_loader.collator(batch)
+                for batch in iter_batched(
+                    instance_iterator_0,
+                    self.data_loader.rank_batch_size,
+                    self.data_loader.drop_last,
+                )
+            ),
+            (
+                self.data_loader.collator(batch)
+                for batch in iter_batched(
+                    instance_iterator_1,
+                    self.data_loader.rank_batch_size,
+                    self.data_loader.drop_last,
+                )
+            ),
+            (
+                self.data_loader.collator(batch)
+                for batch in iter_batched(
+                    instance_iterator_2,
+                    self.data_loader.rank_batch_size,
+                    self.data_loader.drop_last,
+                )
+            ),
+            (
+                self.data_loader.collator(batch)
+                for batch in iter_batched(
+                    instance_iterator_3,
+                    self.data_loader.rank_batch_size,
+                    self.data_loader.drop_last,
+                )
+            ),
         )
 
 

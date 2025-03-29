@@ -211,42 +211,47 @@ class LatentMIMTrainModule(HeliosTrainModule):
         # Set the model to train mode
         self.model.train()
         total_batch_loss = torch.tensor(0.0, device=self.device)
-        patch_size, batch_data = batch
+        # TODO: Double check if the whole batch get the same patch size?
+        patch_size_0, batch_data_0, patch_size_1, batch_data_1, patch_size_2, batch_data_2, patch_size_3, batch_data_3 = batch
         # Split into micro-batches.
-        microbatches = split_batch(batch_data, self.rank_microbatch_size)
-        num_microbatches = len(microbatches)
-        for microbatch_idx, microbatch in enumerate(microbatches, start=1):
+        microbatches_0 = split_batch(batch_data_0, self.rank_microbatch_size)
+        microbatches_1 = split_batch(batch_data_1, self.rank_microbatch_size)
+        microbatches_2 = split_batch(batch_data_2, self.rank_microbatch_size)
+        microbatches_3 = split_batch(batch_data_3, self.rank_microbatch_size)
+        patches = [patch_size_0, patch_size_1, patch_size_2, patch_size_3]
+        microbatches = [microbatches_0, microbatches_1, microbatches_2, microbatches_3]
+        num_microbatches = 4
+        for microbatch_idx in range(num_microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
                 logger.info(
-                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
+                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatches[microbatch_idx].batch_size}"
                 )
-                for i in range(4):
-                    microbatch = self.model.transform.apply(microbatch).to_device(
-                        self.device
-                    )
-                    masked_batch = self.masking_strategy.apply_mask(
-                        microbatch, patch_size=patch_size
-                    )
-                    # Run Encoder and decoder on the augmented input
-                    decoded, target_output = self.model_forward(
-                        masked_batch, patch_size, self.token_exit_cfg
-                    )
-                    loss = self.loss_fn(decoded, target_output)
-                    # Scale loss by number of microbatches
-                    loss = loss / 4.0
-                    loss_val = get_local_tensor(loss)
-                    total_batch_loss += loss_val
+                microbatch = self.model.transform.apply(microbatches[microbatch_idx]).to_device(
+                    self.device
+                )
+                masked_batch = self.masking_strategy.apply_mask(
+                    microbatch, patch_size=patches[microbatch_idx]
+                )
+                # Run Encoder and decoder on the augmented input
+                decoded, target_output = self.model_forward(
+                    masked_batch, patches[microbatch_idx], self.token_exit_cfg
+                )
+                loss = self.loss_fn(decoded, target_output)
+                # Scale loss by number of microbatches
+                loss = loss / num_microbatches
+                loss_val = get_local_tensor(loss)
+                total_batch_loss += loss_val
 
-                    # Skip bad batches
-                    if torch.isnan(loss).any() or torch.isinf(loss).any():
-                        logger.warning(
-                            f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
-                        )
-                        del decoded, target_output
-                        break
-
+                # Skip bad batches
+                if torch.isnan(loss).any() or torch.isinf(loss).any():
+                    logger.warning(
+                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+                    )
                     del decoded, target_output
-                    loss.backward()
+                    break
+
+                del decoded, target_output
+                loss.backward()
 
         self.trainer.record_metric(
             f"train/{self.base_loss.name}",
@@ -257,8 +262,8 @@ class LatentMIMTrainModule(HeliosTrainModule):
         if dry_run:
             return
 
-        del batch, batch_data  # In case this helps with memory utilization.
-        del masked_batch
+        # del batch, batch_data  # In case this helps with memory utilization.
+        # del masked_batch
 
     def eval_batch(
         self, batch: dict[str, Any], labels: torch.Tensor | None = None
