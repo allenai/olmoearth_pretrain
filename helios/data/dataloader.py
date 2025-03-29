@@ -323,6 +323,7 @@ class HeliosDataLoader(DataLoaderBase):
                 )
             ]
         )
+        logger.info(f"collated_sample: {collated_sample}")
         return collated_sample, collated_sample, collated_sample, collated_sample
 
     def fast_forward(self, global_step: int) -> np.ndarray:

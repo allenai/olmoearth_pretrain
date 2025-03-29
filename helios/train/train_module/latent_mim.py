@@ -213,15 +213,15 @@ class LatentMIMTrainModule(HeliosTrainModule):
         total_batch_loss = torch.tensor(0.0, device=self.device)
         # TODO: Double check if the whole batch get the same patch size?
         (
-            patch_size_0,
-            batch_data_0,
-            patch_size_1,
-            batch_data_1,
-            patch_size_2,
-            batch_data_2,
-            patch_size_3,
-            batch_data_3,
+            batch_0,
+            batch_1,
+            batch_2,
+            batch_3,
         ) = batch
+        patch_size_0, batch_data_0 = batch_0    
+        patch_size_1, batch_data_1 = batch_1
+        patch_size_2, batch_data_2 = batch_2
+        patch_size_3, batch_data_3 = batch_3
         # Split into micro-batches.
         microbatches_0 = split_batch(batch_data_0, self.rank_microbatch_size)
         microbatches_1 = split_batch(batch_data_1, self.rank_microbatch_size)
