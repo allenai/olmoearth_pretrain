@@ -233,7 +233,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         for microbatch_idx in range(num_microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
                 logger.info(
-                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatches[microbatch_idx].batch_size}"
+                    f"Training microbatch {microbatch_idx} of {num_microbatches}"
                 )
                 microbatch = self.model.transform.apply(
                     microbatches[microbatch_idx]
