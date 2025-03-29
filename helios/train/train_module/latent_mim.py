@@ -212,7 +212,16 @@ class LatentMIMTrainModule(HeliosTrainModule):
         self.model.train()
         total_batch_loss = torch.tensor(0.0, device=self.device)
         # TODO: Double check if the whole batch get the same patch size?
-        patch_size_0, batch_data_0, patch_size_1, batch_data_1, patch_size_2, batch_data_2, patch_size_3, batch_data_3 = batch
+        (
+            patch_size_0,
+            batch_data_0,
+            patch_size_1,
+            batch_data_1,
+            patch_size_2,
+            batch_data_2,
+            patch_size_3,
+            batch_data_3,
+        ) = batch
         # Split into micro-batches.
         microbatches_0 = split_batch(batch_data_0, self.rank_microbatch_size)
         microbatches_1 = split_batch(batch_data_1, self.rank_microbatch_size)
@@ -226,9 +235,9 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatches[microbatch_idx].batch_size}"
                 )
-                microbatch = self.model.transform.apply(microbatches[microbatch_idx]).to_device(
-                    self.device
-                )
+                microbatch = self.model.transform.apply(
+                    microbatches[microbatch_idx]
+                ).to_device(self.device)
                 masked_batch = self.masking_strategy.apply_mask(
                     microbatch, patch_size=patches[microbatch_idx]
                 )
