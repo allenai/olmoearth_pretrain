@@ -223,15 +223,16 @@ class LatentMIMTrainModule(HeliosTrainModule):
         patch_size_2, batch_data_2 = batch_2
         patch_size_3, batch_data_3 = batch_3
         # Split into micro-batches.
-        microbatches_0 = split_batch(batch_data_0, self.rank_microbatch_size)
-        microbatches_1 = split_batch(batch_data_1, self.rank_microbatch_size)
-        microbatches_2 = split_batch(batch_data_2, self.rank_microbatch_size)
-        microbatches_3 = split_batch(batch_data_3, self.rank_microbatch_size)
+        # microbatches_0 = split_batch(batch_data_0, self.rank_microbatch_size)
+        # microbatches_1 = split_batch(batch_data_1, self.rank_microbatch_size)
+        # microbatches_2 = split_batch(batch_data_2, self.rank_microbatch_size)
+        # microbatches_3 = split_batch(batch_data_3, self.rank_microbatch_size)
         patches = [patch_size_0, patch_size_1, patch_size_2, patch_size_3]
-        microbatches = [microbatches_0, microbatches_1, microbatches_2, microbatches_3]
+        microbatches = [batch_data_0, batch_data_1, batch_data_2, batch_data_3]
         num_microbatches = 4
         for microbatch_idx in range(num_microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
+                # logger.info(f"microbatches: {microbatches[microbatch_idx]}")
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches}"
                 )
