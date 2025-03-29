@@ -66,7 +66,7 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
             # We don't record the first batch since the first one tends to take
             # unusually long.
             return
-        _, batch = batch
+        _, batch = batch[0]
         # We need token budget times encoder ratio and token budget times decoder ratio
         if isinstance(batch, HeliosSample):
             self._step_tokens_encoded = (
