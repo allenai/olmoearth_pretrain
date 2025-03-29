@@ -323,7 +323,7 @@ class HeliosDataLoader(DataLoaderBase):
                 )
             ]
         )
-        return collated_sample
+        return collated_sample, collated_sample, collated_sample, collated_sample
 
     def fast_forward(self, global_step: int) -> np.ndarray:
         """Fast forward the data loader to a specific global step and return the batch_indices."""
