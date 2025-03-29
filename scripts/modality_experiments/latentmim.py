@@ -154,10 +154,10 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     # NOTE: Change this directory based on the supported modalities
-    h5py_dir = None
+    tile_path = "/weka/dfive-default/helios/dataset/presto"
     return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
-        tile_path=None,
+        h5py_dir=None,
+        tile_path=tile_path,
         supported_modality_names=common.supported_modality_names,
         dtype=DType.float32,
     )
