@@ -44,12 +44,12 @@ MIN_PATCH_SIZE = 1
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    ENCODER_EMBEDDING_SIZE = 128
-    DECODER_EMBEDDING_SIZE = 128
-    ENCODER_DEPTH = 4
-    DECODER_DEPTH = 4
-    ENCODER_NUM_HEADS = 8
-    DECODER_NUM_HEADS = 8
+    ENCODER_EMBEDDING_SIZE = 192
+    DECODER_EMBEDDING_SIZE = 192
+    ENCODER_DEPTH = 12
+    DECODER_DEPTH = 12
+    ENCODER_NUM_HEADS = 3
+    DECODER_NUM_HEADS = 3
     MLP_RATIO = 4.0
     TRANSFORM_TYPE = "flip_and_rotate"
     encoder_config = EncoderConfig(
@@ -154,9 +154,8 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     # NOTE: Change this directory based on the supported modalities
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/98856"
     return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
+        h5py_dir=None,
         tile_path=None,
         supported_modality_names=common.supported_modality_names,
         dtype=DType.float32,
