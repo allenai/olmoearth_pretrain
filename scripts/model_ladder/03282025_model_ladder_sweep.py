@@ -25,11 +25,7 @@ import subprocess  # nosec
 
 MASKING_TYPES = [
     "random",
-    "time",
-    "space",
-    "modality",
     "space_time",
-    "modality_space_time",
 ]
 MODEL_SIZE_ARGS = {
     "base": {
@@ -70,6 +66,10 @@ MODEL_SIZE_ARGS = {
     },
 }
 
+EMA_DECAYS = [0.841, 0.946, 0.974, 0.987, 0.992, 0.997, 0.9993]
+
+LEARNING_RATES = [3e-4, 1e-3, 2e-3]
+
 # Base command template
 BASE_COMMAND = (
     "python3 scripts/model_ladder/latent_mim_base_script.py launch {run_name} ai2/jupiter-cirrascale-2 "
@@ -83,6 +83,8 @@ BASE_COMMAND = (
     "--model.encoder_config.mlp_ratio={mlp_ratio} "
     "--model.decoder_config.mlp_ratio={mlp_ratio} "
     "--train_module.masking_config.strategy_config.type={masking_type} "
+    "--train_module.ema_decay=\[{ema_decay}, {ema_decay}\] "
+    "--train_module.optim_config.lr={lr} "
     "--launch.num_gpus=4"
 )
 
