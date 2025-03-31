@@ -245,45 +245,46 @@ class GalileoTrainModule(HeliosTrainModule):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
-                microbatch = self.model.transform.apply(microbatch).to_device(
-                    self.device
-                )
-
-                if microbatch_idx % 2 == 0:
-                    masked_batch = self.masking_strategy_a.apply_mask(
-                        microbatch, patch_size=patch_size
+                for i in range(4):
+                    microbatch = self.model.transform.apply(microbatch).to_device(
+                        self.device
                     )
 
-                    # Run Encoder and decoder on the augmented input
-                    decoded, target_output = self.model_forward_a(
-                        masked_batch, patch_size, self.token_exit_cfg_a
-                    )
-                    loss = self.loss_fn_a(decoded, target_output)
-                else:
-                    masked_batch = self.masking_strategy_b.apply_mask(
-                        microbatch, patch_size=patch_size
-                    )
+                    if microbatch_idx % 2 == 0:
+                        masked_batch = self.masking_strategy_a.apply_mask(
+                            microbatch, patch_size=patch_size
+                        )
 
-                    # Run Encoder and decoder on the augmented input
-                    decoded, target_output = self.model_forward_b(
-                        masked_batch, patch_size, self.token_exit_cfg_b
-                    )
-                    loss = self.loss_fn_b(decoded, target_output)
-                # Scale loss by number of microbatches
-                loss = loss / num_microbatches
-                loss_val = get_local_tensor(loss)
-                total_batch_loss += loss_val
+                        # Run Encoder and decoder on the augmented input
+                        decoded, target_output = self.model_forward_a(
+                            masked_batch, patch_size, self.token_exit_cfg_a
+                        )
+                        loss = self.loss_fn_a(decoded, target_output)
+                    else:
+                        masked_batch = self.masking_strategy_b.apply_mask(
+                            microbatch, patch_size=patch_size
+                        )
 
-                # Skip bad batches
-                if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
-                    )
+                        # Run Encoder and decoder on the augmented input
+                        decoded, target_output = self.model_forward_b(
+                            masked_batch, patch_size, self.token_exit_cfg_b
+                        )
+                        loss = self.loss_fn_b(decoded, target_output)
+                    # Scale loss by number of microbatches
+                    loss = loss / 4.0
+                    loss_val = get_local_tensor(loss)
+                    total_batch_loss += loss_val
+
+                    # Skip bad batches
+                    if torch.isnan(loss).any() or torch.isinf(loss).any():
+                        logger.warning(
+                            f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+                        )
+                        del decoded, target_output
+                        break
+
                     del decoded, target_output
-                    break
-
-                del decoded, target_output
-                loss.backward()
+                    loss.backward()
 
         if dry_run:
             return
