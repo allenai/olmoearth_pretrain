@@ -236,10 +236,25 @@ class GalileoTrainModule(HeliosTrainModule):
 
         # Set the maximum number of tokens
         total_batch_loss = torch.tensor(0.0, device=self.device)
+        # TODO: Double check if the whole batch get the same patch size?
+        (
+            batch_0,
+            batch_1,
+            batch_2,
+            batch_3,
+        ) = batch
+        patch_size_0, batch_data_0 = batch_0    
+        patch_size_1, batch_data_1 = batch_1
+        patch_size_2, batch_data_2 = batch_2
+        patch_size_3, batch_data_3 = batch_3
         # Split into micro-batches.
-        patch_size, batch_data = batch
-        microbatches = split_batch(batch_data, self.rank_microbatch_size)
-        num_microbatches = len(microbatches)
+        # microbatches_0 = split_batch(batch_data_0, self.rank_microbatch_size)
+        # microbatches_1 = split_batch(batch_data_1, self.rank_microbatch_size)
+        # microbatches_2 = split_batch(batch_data_2, self.rank_microbatch_size)
+        # microbatches_3 = split_batch(batch_data_3, self.rank_microbatch_size)
+        patches = [patch_size_0, patch_size_1, patch_size_2, patch_size_3]
+        microbatches = [batch_data_0, batch_data_1, batch_data_2, batch_data_3]
+        num_microbatches = 4
         for microbatch_idx, microbatch in enumerate(microbatches, start=1):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
                 logger.info(
@@ -251,7 +266,7 @@ class GalileoTrainModule(HeliosTrainModule):
 
                 if microbatch_idx % 2 == 0:
                     masked_batch = self.masking_strategy_a.apply_mask(
-                        microbatch, patch_size=patch_size
+                        microbatch, patch_size=patches[microbatch_idx - 1]
                     )
 
                     # Run Encoder and decoder on the augmented input
@@ -261,7 +276,7 @@ class GalileoTrainModule(HeliosTrainModule):
                     loss = self.loss_fn_a(decoded, target_output)
                 else:
                     masked_batch = self.masking_strategy_b.apply_mask(
-                        microbatch, patch_size=patch_size
+                        microbatch, patch_size=patches[microbatch_idx - 1]
                     )
 
                     # Run Encoder and decoder on the augmented input
@@ -293,7 +308,7 @@ class GalileoTrainModule(HeliosTrainModule):
             total_batch_loss,
             ReduceType.mean,
         )
-        del masked_batch, batch, microbatch, batch_data
+        # del masked_batch, batch, microbatch, batch_data
 
     def eval_batch(
         self, batch: dict[str, Any], labels: torch.Tensor | None = None
