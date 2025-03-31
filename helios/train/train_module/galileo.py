@@ -271,7 +271,7 @@ class GalileoTrainModule(HeliosTrainModule):
 
                     # Run Encoder and decoder on the augmented input
                     decoded, target_output = self.model_forward_a(
-                        masked_batch, patch_size, self.token_exit_cfg_a
+                        masked_batch, patch_size=patches[microbatch_idx - 1], self.token_exit_cfg_a
                     )
                     loss = self.loss_fn_a(decoded, target_output)
                 else:
@@ -281,7 +281,7 @@ class GalileoTrainModule(HeliosTrainModule):
 
                     # Run Encoder and decoder on the augmented input
                     decoded, target_output = self.model_forward_b(
-                        masked_batch, patch_size, self.token_exit_cfg_b
+                        masked_batch, patch_size=patches[microbatch_idx - 1], self.token_exit_cfg_b
                     )
                     loss = self.loss_fn_b(decoded, target_output)
                 # Scale loss by number of microbatches
