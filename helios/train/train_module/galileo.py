@@ -243,7 +243,7 @@ class GalileoTrainModule(HeliosTrainModule):
             batch_2,
             batch_3,
         ) = batch
-        patch_size_0, batch_data_0 = batch_0    
+        patch_size_0, batch_data_0 = batch_0
         patch_size_1, batch_data_1 = batch_1
         patch_size_2, batch_data_2 = batch_2
         patch_size_3, batch_data_3 = batch_3
