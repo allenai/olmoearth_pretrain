@@ -230,13 +230,13 @@ class HeliosSample(NamedTuple):
         """Get the expected shape of an attribute."""
         modality_spec = Modality.get(attribute)
         if modality_spec.is_spacetime_varying:
-            return (self.height, self.width, self.time, *modality_spec.num_bands)
+            return (self.height, self.width, self.time, modality_spec.num_bands)
         elif modality_spec.is_space_only_varying:
-            return (self.height, self.width, 1, *modality_spec.num_bands)
+            return (self.height, self.width, 1, modality_spec.num_bands)
         elif modality_spec.is_time_only_varying:
-            return (1, 1, self.time, *modality_spec.num_bands)
+            return (1, 1, self.time, modality_spec.num_bands)
         else:
-            return (1, 1, 1, *modality_spec.num_bands)
+            return (1, 1, 1, modality_spec.num_bands)
 
     def _get_max_t_within_token_budget(
         self, h_w_p: int, max_tokens_per_instance: int
@@ -899,11 +899,11 @@ class HeliosDataset(Dataset):
         return sample_dict
 
     def fill_sample_with_missing_values(
-        self, sample: HeliosSample
+        self, sample_dict: dict[str, Any]
     ) -> tuple[HeliosSample, list[str]]:
         """Fill the sample with missing values."""
         missing_modalities = []
-        sample_dict = sample.as_dict(ignore_nones=True)
+        sample = HeliosSample(**sample_dict)
         for modality in self.supported_modalities:
             if modality.name not in sample_dict.keys():
                 sample_dict[modality.name] = np.full(
@@ -942,11 +942,8 @@ class HeliosDataset(Dataset):
         # We are currently reading the entire h5 file into memory this can be made faster by chunking the dataset appropriately and only reading in the optimal chunks
         # THis io is the current bottleneck of the getitem operation
         sample_dict = self.read_h5_file(h5_file_path)
-        sample_dict, missing_modalities = self.fill_sample_with_missing_values(
-            sample_dict
-        )
-        subset_sample = self.apply_subset(HeliosSample(**sample_dict), args)
-
+        sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
+        subset_sample = self.apply_subset(sample, args)
         sample_dict = subset_sample.as_dict(ignore_nones=True)
         # Sample modalities should be written into the metadata of the h5 dataset
         sample_modalities = list(
