@@ -42,7 +42,7 @@ Before launching your script **MAKE SURE YOUR CODE IS COMMITED AND PUSHED** as w
 
 We can launch a script as follows:
 
-`python3 scripts/latent_mim.py launch test_run ai2/saturn-cirrascale`
+`python3 scripts/base_debug_scripts/latent_mim.py launch test_run ai2/saturn-cirrascale`
 
 This will launch a beaker job and stream the logs to your console until you cancel.
 Add additional overides as needed.
@@ -55,7 +55,7 @@ Be sure your session creation has included the following args
 
 When launching runs in Sessions for debugging, use the following command,
 
-`torchrun scripts/latent_mim.py train test_run local`
+`torchrun scripts/base_debug_scripts/latent_mim.py train test_run local`
 
 Add additional overides as needed.
 

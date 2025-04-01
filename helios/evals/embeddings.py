@@ -35,6 +35,7 @@ def get_embeddings(
                     masked_helios_sample_dict[key] = val.to(
                         device=device, dtype=torch.bfloat16
                     )
+
             masked_helios_sample = MaskedHeliosSample.from_dict(
                 masked_helios_sample_dict
             )
@@ -44,6 +45,7 @@ def get_embeddings(
                 batch_embeddings: TokensAndMasks = model(
                     masked_helios_sample, patch_size=patch_size
                 )  # (bsz, dim)
+
             spatial_pool = True if task_type == TaskType.SEGMENTATION else False
             averaged_embeddings = batch_embeddings.pool_unmasked_tokens(
                 pooling_type, spatial_pooling=spatial_pool

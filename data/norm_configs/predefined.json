@@ -23,6 +23,128 @@
       "min": -1
     }
   },
+  "openstreetmap_raster": {
+    "aerialway_pylon": {
+      "max": 1,
+      "min": 0
+    },
+    "aerodrome": {
+      "max": 1,
+      "min": 0
+    },
+    "airstrip": {
+      "max": 1,
+      "min": 0
+    },
+    "amenity_fuel": {
+      "max": 1,
+      "min": 0
+    },
+    "building": {
+      "max": 1,
+      "min": 0
+    },
+    "chimney": {
+      "max": 1,
+      "min": 0
+    },
+    "communications_tower": {
+      "max": 1,
+      "min": 0
+    },
+    "crane": {
+      "max": 1,
+      "min": 0
+    },
+    "flagpole": {
+      "max": 1,
+      "min": 0
+    },
+    "fountain": {
+      "max": 1,
+      "min": 0
+    },
+    "generator_wind": {
+      "max": 1,
+      "min": 0
+    },
+    "helipad": {
+      "max": 1,
+      "min": 0
+    },
+    "highway": {
+      "max": 1,
+      "min": 0
+    },
+    "leisure": {
+      "max": 1,
+      "min": 0
+    },
+    "lighthouse": {
+      "max": 1,
+      "min": 0
+    },
+    "obelisk": {
+      "max": 1,
+      "min": 0
+    },
+    "observatory": {
+      "max": 1,
+      "min": 0
+    },
+    "parking": {
+      "max": 1,
+      "min": 0
+    },
+    "petroleum_well": {
+      "max": 1,
+      "min": 0
+    },
+    "power_plant": {
+      "max": 1,
+      "min": 0
+    },
+    "power_substation": {
+      "max": 1,
+      "min": 0
+    },
+    "power_tower": {
+      "max": 1,
+      "min": 0
+    },
+    "river": {
+      "max": 1,
+      "min": 0
+    },
+    "runway": {
+      "max": 1,
+      "min": 0
+    },
+    "satellite_dish": {
+      "max": 1,
+      "min": 0
+    },
+    "silo": {
+      "max": 1,
+      "min": 0
+    },
+    "storage_tank": {
+      "max": 1,
+      "min": 0
+    },
+    "taxiway": {
+      "max": 1,
+      "min": 0
+    },
+    "water_tower": {
+      "max": 1,
+      "min": 0
+    },
+    "works": {
+      "max": 1,
+      "min": 0
+    }
+  },
   "sentinel1": {
     "vh": {
       "max": 0,

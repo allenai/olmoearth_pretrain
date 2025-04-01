@@ -1,6 +1,7 @@
 """Loss functions for training."""
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -8,9 +9,11 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 from class_registry import ClassRegistry
+from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor
 
+from helios.data.constants import Modality
 from helios.nn.flexihelios import TokensAndMasks
 from helios.train.masking import MaskValue
 
@@ -39,6 +42,150 @@ class Loss(ABC):
 
 
 LOSS_REGISTRY = ClassRegistry[Loss]()
+
+
+@LOSS_REGISTRY.register("all_discrimination")
+class AllDiscriminationLoss(Loss):
+    """Loss function for all discrimination task.
+
+    Discriminates across patches using all samples in a batch.
+    """
+
+    name = "AllDisc"
+
+    def __init__(self, tau: float = 0.1, pred2unit: bool = False):
+        """Initialize all patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+        """
+        self.tau = tau
+        self.pred2unit = pred2unit
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute all patch discrimination loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+
+        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        bs, nt, _ = pred.shape
+        if self.pred2unit:
+            pred_mu = pred.mean(1, keepdims=True)
+            pred_std = pred.std(1, keepdims=True)
+            pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+        pred = F.normalize(pred, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+
+        scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
+        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+
+        labels = torch.arange(nt, dtype=torch.long, device=pred.device)[None].repeat(
+            bs, 1
+        )
+        loss = F.cross_entropy(
+            scores.flatten(0, 1), labels.flatten(0, 1), reduction="none"
+        ) * (self.tau * 2)
+
+        # emulate averaging across the batch dimension
+        loss_multiplier = self._expand_and_reciprocate(count)
+        # can't use bs here since this is after the unsqueezing, so bs == 1
+        loss = (loss * loss_multiplier).sum() / all_preds.shape[0]
+        return loss
+
+
+@LOSS_REGISTRY.register("patch_discrimination_new")
+class PatchDiscriminationLossNew(Loss):
+    """Loss function for patch discrimination task.
+
+    This has lower memory consumption than the old patch discrimination loss.
+    It does not support all discrimination loss.
+    """
+
+    name = "PatchDisc"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        pred2unit: bool = False,
+    ):
+        """Initialize patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            mask_other_samples: whether to apply the contrastive loss drawing samples
+                from within a sample (True) or using all other instances in a batch (False).
+                If this is False, then this is the AllDisc loss from the Galileo paper
+        """
+        self.tau = tau
+        self.pred2unit = pred2unit
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute patch discrimination loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+
+        # Samples may have different number of tokens
+        # TODO: Skip unqueeze and the for loop when mask_other_samples is True
+        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        bs, nt, _ = pred.shape
+
+        if self.pred2unit:
+            pred_mu = pred.mean(1, keepdims=True)
+            pred_std = pred.std(1, keepdims=True)
+            pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+        pred = F.normalize(pred, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+
+        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+
+        losses = []
+        start = 0
+        for c in count:
+            end = start + c
+            pred_sample = pred[:, start:end, :]
+            target_sample = target[:, start:end, :]
+            score_sample = (
+                torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
+            )
+            labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
+            loss = F.cross_entropy(
+                score_sample.flatten(0, 1),
+                labels.flatten(0, 1),
+                reduction="none",
+            ) * (self.tau * 2)
+            loss = loss.mean()
+            losses.append(loss)
+            start = end
+        loss = torch.stack(losses).mean()
+        return loss
 
 
 @LOSS_REGISTRY.register("patch_discrimination")
@@ -119,6 +266,117 @@ class PatchDiscriminationLoss(Loss):
         return loss
 
 
+@LOSS_REGISTRY.register("adjusted_patch_discrimination")
+class AdjustedPatchDiscriminationLoss(Loss):
+    """Loss function for adjusted patch discrimination task.
+
+    Reference: https://proceedings.neurips.cc/paper_files/paper/2023/file/48aaa5ea741ae8430bd58e25917d267d-Paper-Conference.pdf
+    """
+
+    name = "AdjustedPatchDisc"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        mu: float = 0.7,
+        sigma: float = 1.0,
+        pred2unit: bool = False,
+    ):
+        """Initialize adjusted patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            mu: the mean of the Gaussian distribution
+            sigma: the standard deviation of the Gaussian distribution
+            pred2unit: whether to standardize the predictions using batch statistics
+        """
+        self.tau = tau
+        self.mu = mu
+        self.sigma = sigma
+        self.pred2unit = pred2unit
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute patch discrimination loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+
+        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        bs, nt, _ = pred.shape
+
+        if self.pred2unit:
+            pred_mu = pred.mean(1, keepdims=True)
+            pred_std = pred.std(1, keepdims=True)
+            pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+        pred = F.normalize(pred, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+
+        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+
+        losses = []
+        start = 0
+        for c in count:
+            end = start + c
+            pred_sample = pred[:, start:end, :]  # (1, c, d)
+            target_sample = target[:, start:end, :]  # (1, c, d)
+
+            sim_matrix = torch.einsum(
+                "npd,nqd->npq", pred_sample, target_sample
+            )  # (1, c, c)
+
+            pos_scores = torch.diagonal(sim_matrix, dim1=-2, dim2=-1)  # (1, c)
+            pos_scores = pos_scores / self.tau
+
+            # Mask out diagonal (positives) to get negatives
+            mask = ~torch.eye(c, dtype=torch.bool, device=pred.device)
+            neg_scores = sim_matrix.masked_select(mask).view(1, c, c - 1)  # (1, c, c-1)
+            neg_scores = neg_scores / self.tau
+
+            # Apply Gaussian-based weights to negatives
+            # Weight is computed based on the neg_scores from a sample
+            weight = (
+                1.0
+                / (self.sigma * math.sqrt(2 * math.pi))
+                * torch.exp(
+                    -((neg_scores * self.tau - self.mu) ** 2)
+                    / (2 * math.pow(self.sigma, 2))
+                )
+            )  # (1, c, c-1)
+            # Normalize the weights per query
+            weight = weight / weight.mean(dim=-1, keepdim=True)
+            neg_scores = neg_scores * weight.detach()
+
+            # Reconstruct the sim_matrix
+            sim_matrix = torch.zeros(1, c, c, device=pred.device)
+            sim_matrix.diagonal(dim1=-2, dim2=-1).copy_(pos_scores)
+            sim_matrix.masked_scatter_(mask, neg_scores)
+
+            labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
+            loss = F.cross_entropy(
+                sim_matrix.flatten(0, 1),
+                labels.flatten(0, 1),
+                reduction="none",
+            ) * (self.tau * 2)
+            loss = loss.mean()
+            losses.append(loss)
+            start = end
+
+        loss = torch.stack(losses).mean()
+        return loss
+
+
 @LOSS_REGISTRY.register("l1")
 class L1Loss(Loss):
     """Loss function for L1 (mean average error)."""
@@ -154,7 +412,7 @@ class L2Loss(Loss):
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
-    ) -> float:
+    ) -> Tensor:
         """Compute L2 loss between predictions and targets.
 
         Args:
@@ -170,6 +428,63 @@ class L2Loss(Loss):
         pred = all_preds[all_masks == MaskValue.DECODER.value]
         target = all_targets[all_masks == MaskValue.DECODER.value]
         return F.mse_loss(pred, target)
+
+
+@LOSS_REGISTRY.register("imagel2")
+class ImageL2Loss(Loss):
+    """Loss function for L2 (mean squared error) over images."""
+
+    name = "ImageL2"
+
+    # data: [B, H, W, T, C]
+    def _flatten_helios_data(self, data: TokensAndMasks) -> tuple[Tensor, Tensor]:
+        masks = []
+        datas = []
+        for modality in data.modalities:
+            modality_spec = Modality.get(modality)
+            pred = getattr(data, modality)
+            if pred is not None:
+                mask = getattr(data, data.get_masked_modality_name(modality))
+                for idx, channel_set_idxs in enumerate(
+                    modality_spec.bandsets_as_indices()
+                ):
+                    bs_mask = mask[..., idx]
+                    bs_mask = repeat(
+                        bs_mask, "b h w t -> b h w t c", c=len(channel_set_idxs)
+                    )
+                    bs_mask = rearrange(bs_mask, "b h w t c -> b (h w t c)")
+                    masks.append(bs_mask)
+                    bs_data = pred[..., channel_set_idxs]
+                    bs_data = rearrange(bs_data, "b h w t c -> b (h w t c)")
+                    datas.append(bs_data)
+        return torch.cat(datas, dim=1), torch.cat(masks, dim=1)
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute L2 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        data, masks = self._flatten_helios_data(predictions)
+        valid_dict = {}
+        for modality in predictions.modalities:
+            if getattr(predictions, modality) is not None:
+                masked_name = targets.get_masked_modality_name(modality)
+                valid_dict[modality] = getattr(targets, modality)
+                valid_dict[masked_name] = getattr(targets, masked_name)
+        valid_targets = TokensAndMasks(**valid_dict)
+        labels, label_masks = self._flatten_helios_data(valid_targets)
+        decode = label_masks == MaskValue.DECODER.value
+        data = data * decode
+        labels = labels * decode
+        return F.mse_loss(data, labels, reduction="sum") / torch.count_nonzero(decode)
 
 
 @LOSS_REGISTRY.register("cross_entropy")

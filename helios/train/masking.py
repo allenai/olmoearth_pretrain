@@ -54,6 +54,8 @@ class MaskedHeliosSample(NamedTuple):
     worldcover_mask: ArrayTensor | None = None
     latlon: ArrayTensor | None = None  # [B, 2]
     latlon_mask: ArrayTensor | None = None
+    openstreetmap_raster: ArrayTensor | None = None
+    openstreetmap_raster_mask: ArrayTensor | None = None
 
     def as_dict(self, return_none: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
@@ -527,8 +529,6 @@ class ModalityMaskingStrategy(MaskingStrategy):
         Returns:
             MaskedHeliosSample containing the masked data and mask
         """
-        if patch_size is not None:
-            raise ValueError("patch_size must not be provided for modality masking")
         output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
         present_modalities = [b for b in batch.modalities if b != "timestamps"]
 
@@ -596,8 +596,10 @@ class SpaceTimeMaskingStrategy(MaskingStrategy):
         """Apply space or time masking to the input data."""
         has_enough_timesteps = batch.time >= 3
         if (self.generator.random() < 0.5) or (not has_enough_timesteps):
+            logger.info("Applying space masking")
             return self.space_strategy.apply_mask(batch, patch_size, **kwargs)
         else:
+            logger.info("Applying time masking")
             return self.time_strategy.apply_mask(batch, patch_size, **kwargs)
 
 

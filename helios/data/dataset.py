@@ -22,6 +22,8 @@ from olmo_core.aliases import PathOrStr
 from olmo_core.config import Config, DType
 from olmo_core.distributed.utils import get_fs_local_rank
 from pyproj import Transformer
+from torch.distributed import DeviceMesh
+from torch.distributed.tensor import distribute_tensor
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from upath import UPath
@@ -52,6 +54,7 @@ class HeliosSample(NamedTuple):
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
     sentinel1: ArrayTensor | None = None  # [B, H, W, T, len(S1_bands)]
     worldcover: ArrayTensor | None = None  # [B, H, W, 1, len(WC_bands)]
+    openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
@@ -142,15 +145,21 @@ class HeliosSample(NamedTuple):
         Returns:
             A new HeliosSample with all tensors moved to the specified device.
         """
-
-        def maybe_move_to_device(tensor: torch.Tensor | None) -> torch.Tensor | None:
-            """Move the tensor to the specified device if it is not None."""
-            if tensor is None:
-                return None
-            return tensor.to(device)
-
         return HeliosSample(
-            **{key: maybe_move_to_device(val) for key, val in self.as_dict().items()}
+            **{
+                key: val.to(device)
+                for key, val in self.as_dict(ignore_nones=True).items()
+                if val is not None
+            }
+        )
+
+    def distribute_tensors(self, device_mesh: DeviceMesh) -> "HeliosSample":
+        """Distribute the tensors to the specified device mesh."""
+        return HeliosSample(
+            **{
+                key: distribute_tensor(val, device_mesh)
+                for key, val in self.as_dict(ignore_nones=True).items()
+            }
         )
 
     @property
@@ -385,15 +394,12 @@ class HeliosDataset(Dataset):
         if h5py_dir is not None:
             self.h5py_dir = h5py_dir
             self.tile_path = h5py_dir.parent.parent
-            logger.info(f"H5py dir: {self.h5py_dir.parent.name.split('_')}")
-            predefined_supported_modalities_names = (
-                self.parse_modalities_names_from_dir_name(self.h5py_dir.parent.name)
-            )
-            modality_names = [modality.name for modality in supported_modalities]
-            if set(predefined_supported_modalities_names) != set(modality_names):
-                raise ValueError(
-                    f"The predefined supported modalities do not match the supported modalities: {predefined_supported_modalities_names} != {modality_names}"
-                )
+            # Ensure that the supported modalities are present in the h5py directory
+            for modality in supported_modalities:
+                if modality.name not in self.h5py_dir.parent.name:
+                    raise ValueError(
+                        f"The modality {modality.name} is not present in the h5py directory"
+                    )
         else:
             self.tile_path = tile_path
             self.h5py_dir: Path | None = None  # type: ignore
@@ -415,14 +421,6 @@ class HeliosDataset(Dataset):
         self._work_dir_set = False
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
-
-    def parse_modalities_names_from_dir_name(self, dir_name: str) -> list[str]:
-        """Parse the modalities from the directory name."""
-        return [
-            name
-            for name in Modality.names()
-            if name in dir_name and name != "sentinel2"
-        ]
 
     @property
     def fingerprint_version(self) -> str:
@@ -899,7 +897,6 @@ class HeliosDataset(Dataset):
         # THis io is the current bottleneck of the getitem operation
         with h5py.File(h5_file_path, "r") as f:
             sample_dict = {k: v[()] for k, v in f.items()}
-
         sample = HeliosSample(**sample_dict)
         for missing_modality in sample.missing_modalities:
             if missing_modality in self.supported_modalities:

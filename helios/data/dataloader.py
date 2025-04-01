@@ -302,6 +302,10 @@ class HeliosDataLoader(DataLoaderBase):
         if Modality.LATLON in self.dataset.supported_modalities:
             mock_latlon = rng.random((2,), dtype=np.float32)
             output_dict["latlon"] = mock_latlon
+        if Modality.OPENSTREETMAP_RASTER in self.dataset.supported_modalities:
+            mock_openstreetmap_raster = rng.random((256, 256, 1, 30), dtype=np.float32)
+            output_dict["openstreetmap_raster"] = mock_openstreetmap_raster
+
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
         years = rng.integers(2018, 2020, (12, 1))

@@ -9,6 +9,7 @@ from olmo_core.train.callbacks.speed_monitor import SpeedMonitorCallback
 from helios.data.dataset import HeliosSample
 from helios.train.train_module.galileo import GalileoTrainModule
 from helios.train.train_module.latent_mim import LatentMIMTrainModule
+from helios.train.train_module.mae import MAETrainModule
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         train_module = self.trainer.train_module
 
         self._token_budget = self.trainer.data_loader.token_budget
-        if isinstance(train_module, LatentMIMTrainModule):
+        if isinstance(train_module, MAETrainModule | LatentMIMTrainModule):
             # Unwrap if the model is in DDP
             self._encoder_ratio = train_module.masking_strategy.encode_ratio
             self._decoder_ratio = train_module.masking_strategy.decode_ratio
@@ -55,7 +56,7 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         else:
             logger.warning(
                 "Speed monitor callback only calculates token throughput with "
-                "LatentMIMTrainModule or GalileoTrainModule"
+                "MAETrainModule, LatentMIMTrainModule or GalileoTrainModule"
             )
 
     def pre_step(self, batch: Any) -> None:
@@ -80,10 +81,13 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         self._total_tokens_encoded += self._step_tokens_encoded
         self._total_tokens_decoded += self._step_tokens_decoded
         self._total_tokens_target_encoder += self._step_tokens_target_encoder
+        self.model_start_time = time.perf_counter()
 
     def post_step(self) -> None:
         """Post-step callback for the speed monitor."""
         counter = time.perf_counter()
+        self.model_end_time = counter
+
         self.trainer.record_metric(
             "throughput/device/data loading (s)", self._batch_load_time
         )
@@ -97,6 +101,7 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
             self._first_step = False
             return
 
+        self.model_duration = self.model_end_time - self.model_start_time
         step_time = counter - self._step_last_logged
         total_time = counter - self._start_time
         self._step_last_logged = counter
@@ -140,3 +145,9 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         self.trainer.record_metric("throughput/device/data loading (%)", data_pct)
         self.trainer.record_metric("throughput/device/BPS", bps)
         self.trainer.record_metric("throughput/device/BPS (estimated avg)", bps_avg)
+        self.trainer.record_metric(
+            "throughput/device/model duration (s)", self.model_duration
+        )
+        self.trainer.record_metric(
+            "throughput/device/model duration (%)", self.model_duration / step_time
+        )

@@ -327,7 +327,7 @@ class Modality:
             )
         ],
         is_multitemporal=False,
-        ignore_when_parsing=True,
+        ignore_when_parsing=False,
     )
 
     LATLON = ModalitySpec(

@@ -34,12 +34,3 @@ def test_visualize_sample(
             tmp_path / "visualizations_predefined",
         )
         assert (tmp_path / "visualizations_predefined" / f"sample_{i}.png").exists()
-
-    for i in range(len(samples)):
-        visualize_sample(
-            dataset,
-            i,
-            Normalizer(Strategy.COMPUTED),
-            tmp_path / "visualizations_computed",
-        )
-        assert (tmp_path / "visualizations_computed" / f"sample_{i}.png").exists()

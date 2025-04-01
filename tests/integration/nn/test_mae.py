@@ -6,10 +6,10 @@ import pytest
 import torch
 
 from helios.data.constants import Modality, ModalitySpec
-from helios.nn.flexihelios import Encoder, Predictor
-from helios.nn.latent_mim import LatentMIM
-from helios.train.loss import PatchDiscriminationLoss
-from helios.train.masking import MaskedHeliosSample
+from helios.nn.flexihelios import Encoder, Predictor, Reconstructor, TokensAndMasks
+from helios.nn.mae import MAE
+from helios.train.loss import ImageL2Loss
+from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -32,27 +32,55 @@ def modality_band_set_len_and_total_bands(
     }
 
 
-def test_latentmim_with_loss(
+def test_mae_with_loss(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
-    masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:
     """Test the full end to end forward pass of the model with an exit configuration and loss."""
-    # Define supported modalities
     supported_modalities = [
         Modality.SENTINEL2_L2A,
-        Modality.LATLON,
         Modality.WORLDCOVER,
     ]
     sentinel2_l2a_num_band_sets, sentinel2_l2a_num_bands = (
         modality_band_set_len_and_total_bands["sentinel2_l2a"]
     )
-    latlon_num_band_sets, latlon_num_bands = modality_band_set_len_and_total_bands[
-        "latlon"
-    ]
-    B, H, W, T, C = masked_sample_dict["sentinel2_l2a"].shape
+    B, H, W, T, C = (
+        16,
+        32,
+        32,
+        2,
+        sentinel2_l2a_num_bands,
+    )
+    # Create dummy sentinel2_l2a data: shape (B, H, W, T, C)
+    sentinel2_l2a = torch.randn(B, H, W, T, C)
+    # Here we assume 0 (ONLINE_ENCODER) means the token is visible.
+    sentinel2_l2a_mask = torch.zeros(
+        B, H, W, T, sentinel2_l2a_num_band_sets, dtype=torch.long
+    )
+
+    worldcover = torch.randn(B, H, W, 1, 1)
+    worldcover_mask = (
+        torch.ones(B, H, W, 1, 1, dtype=torch.float32) * MaskValue.DECODER.value
+    )
+    # Generate valid timestamps:
+    # - days: range 1..31,
+    # - months: range 1..13,
+    # - years: e.g. 2018-2019.
+    days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+    months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+    years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
+    timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
+
+    masked_sample_dict = {
+        "sentinel2_l2a": sentinel2_l2a,
+        "sentinel2_l2a_mask": sentinel2_l2a_mask,
+        "worldcover": worldcover,
+        "worldcover_mask": worldcover_mask,
+        "timestamps": timestamps,
+    }
     x = MaskedHeliosSample(**masked_sample_dict)
 
-    patch_size = 4
+    patch_size = 2
+    # input_res = 1
     # Shared constants for encoder and predictor
     MAX_PATCH_SIZE = 8
     NUM_HEADS = 2
@@ -85,92 +113,58 @@ def test_latentmim_with_loss(
         drop_path=DROP_PATH,
         learnable_channel_embeddings=True,
     )
-    latentmim = LatentMIM(encoder, predictor)
-    output = latentmim.forward(x, patch_size)
-    # output = predictor.forward(output, x.timestamps, patch_size, input_res)
-    patched_H = H // patch_size
-    patched_W = W // patch_size
+    reconstructor = Reconstructor(
+        supported_modalities=supported_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        embedding_size=ENCODER_EMBEDDING_SIZE,
+    )
+    mae = MAE(encoder, predictor, reconstructor)
+    output = mae.forward(x, patch_size)
     assert output.sentinel2_l2a is not None
     assert output.sentinel2_l2a_mask is not None
-    assert output.latlon is not None
-    assert output.latlon_mask is not None
-    assert output.sentinel2_l2a.shape == (
-        B,
-        patched_H,
-        patched_W,
-        T,
-        sentinel2_l2a_num_band_sets,
-        predictor.output_embedding_size,
-    )
-    assert output.sentinel2_l2a_mask.shape == (
-        B,
-        patched_H,
-        patched_W,
-        T,
-        sentinel2_l2a_num_band_sets,
-    )
-    assert output.latlon.shape == (
-        B,
-        latlon_num_band_sets,
-        predictor.output_embedding_size,
-    )
-    assert output.latlon_mask.shape == (
-        B,
-        latlon_num_band_sets,
-    )
+    assert x.sentinel2_l2a is not None
+    assert x.sentinel2_l2a_mask is not None
+    assert output.sentinel2_l2a.shape == x.sentinel2_l2a.shape
+    assert output.sentinel2_l2a_mask.shape == x.sentinel2_l2a_mask.shape
+
     assert output.worldcover is not None
     assert output.worldcover_mask is not None
-    assert output.worldcover.shape == (
-        B,
-        patched_H,
-        patched_W,
-        1,
-        1,
-        predictor.output_embedding_size,
-    )
-    assert output.worldcover_mask.shape == (
-        B,
-        patched_H,
-        patched_W,
-        1,
-        1,
-    )
-    loss_fn = PatchDiscriminationLoss()
-    with torch.no_grad():
-        logger.info("target encoder running here")
-        target_output = latentmim.target_encoder.forward(
-            x.unmask(),
-            patch_size=patch_size,
-            token_exit_cfg={
-                modality: 0 for modality in latentmim.encoder.supported_modality_names
-            },
-        )
-    loss_fn.compute(output, target_output).backward()
+    assert x.worldcover is not None
+    assert x.worldcover_mask is not None
+    assert output.worldcover.shape == x.worldcover.shape
+    assert output.worldcover_mask.shape == x.worldcover_mask.shape
 
-    for name, param in latentmim.encoder.named_parameters():
+    assert (output.worldcover_mask == x.worldcover_mask).all()
+    assert (output.sentinel2_l2a_mask == x.sentinel2_l2a_mask).all()
+
+    # this reflects the forward_model function in mae
+    loss_fn = ImageL2Loss()
+    reconstructed = output
+    labels = x.as_dict()
+    labels.pop("timestamps")
+    target_output = TokensAndMasks(**labels)
+    loss = loss_fn.compute(reconstructed, target_output)
+    loss.backward()
+
+    for name, param in mae.encoder.named_parameters():
         # worldcover and latlons are masked from the encoder
         if not any(
             ignore_param in name
             for ignore_param in [
                 "pos_embed",
                 "month_embed",
-                "composite_encodings.per_modality_channel_embeddings.latlon",
                 "composite_encodings.per_modality_channel_embeddings.worldcover",
-                "patch_embeddings.per_modality_embeddings.latlon",
                 "patch_embeddings.per_modality_embeddings.worldcover",
             ]
         ):
             assert param.grad is not None, name
-    for name, param in latentmim.decoder.named_parameters():
+    for name, param in mae.decoder.named_parameters():
         # sentinel2_l2a is "masked" from the decoder
         if not any(
             ignore_param in name
             for ignore_param in [
                 "pos_embed",
                 "month_embed",
-                "composite_encodings.per_modality_channel_embeddings.latlon",
             ]
         ):
             assert param.grad is not None, name
-    for name, param in latentmim.target_encoder.named_parameters():
-        assert param.grad is None, name

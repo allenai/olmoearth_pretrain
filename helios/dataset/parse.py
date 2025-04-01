@@ -174,14 +174,10 @@ def parse_helios_dataset(
                 f"ignoring modality {modality.name} not in supported_modalities"
             )
             continue
-        # TODO: there's N/A in the image_idx column for openstreetmap
-        if modality.name == "openstreetmap":
-            continue
 
         if modality.is_multitemporal:
             # We need to load the one-year and two-week data separately.
             time_spans = [TimeSpan.YEAR, TimeSpan.TWO_WEEK]
-
         else:
             # Just need to load the static data.
             time_spans = [TimeSpan.STATIC]

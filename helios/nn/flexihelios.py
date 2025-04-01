@@ -10,6 +10,7 @@ import torch
 from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor, nn
+from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
 
 from helios.data.constants import Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
@@ -19,7 +20,7 @@ from helios.nn.encodings import (
     get_2d_sincos_pos_encoding_with_resolution,
     get_month_encoding_table,
 )
-from helios.nn.flexi_patch_embed import FlexiPatchEmbed
+from helios.nn.flexi_patch_embed import FlexiPatchEmbed, FlexiPatchReconstruction
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
@@ -61,8 +62,14 @@ class TokensAndMasks(NamedTuple):
     Args:
         sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
         sentinel2_mask: sentinel 2 mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
+        sentinel1: sentinel 1 data of shape (B, P_H, P_W, T, Band_Sets, D)
+        sentinel1_mask: sentinel 1 mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
+        worldcover: worldcover data of shape (B, P_H, P_W, T, Band_Sets, D)
+        worldcover_mask: worldcover mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
         latlon: lat lon data containing geographical coordinates
         latlon_mask: lat lon mask indicating which coordinates are masked/unmasked
+        openstreetmap_raster: openstreetmap raster data of shape (B, P_H, P_W, T, Band_Sets, D)
+        openstreetmap_raster_mask: openstreetmap raster mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
     """
 
     sentinel2_l2a: Tensor | None = None
@@ -73,6 +80,8 @@ class TokensAndMasks(NamedTuple):
     worldcover_mask: Tensor | None = None
     latlon: Tensor | None = None
     latlon_mask: Tensor | None = None
+    openstreetmap_raster: Tensor | None = None
+    openstreetmap_raster_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
@@ -270,6 +279,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         self, modality: str, input_data: MaskedHeliosSample, patch_size: int
     ) -> tuple[Tensor, Tensor]:
         """Apply embedding to a modality."""
+        logger.debug(f"applying embedding to modality:{modality}")
         masked_modality_name = input_data.get_masked_modality_name(modality)
         modality_mask = getattr(input_data, masked_modality_name)
         modality_data = getattr(input_data, modality)
@@ -286,12 +296,15 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                 token_mask = modality_mask[:, 0::patch_size, 0::patch_size, ..., idx]
                 modality_specific_kwargs = {"patch_size": patch_size}
             patchified_dims = token_mask.shape[1:]
-            # Now apply the embedding to
+            # Now apply the embedding to the patchified data
             if self.is_any_data_seen_by_encoder(token_mask):
                 patchified_data = modality_data[..., channel_set_indices]
-                patchified_data = self.per_modality_embeddings[modality][
+                embedding_module = self.per_modality_embeddings[modality][
                     self._get_embedding_module_name(modality, idx)
-                ](patchified_data, **modality_specific_kwargs)
+                ]
+                patchified_data = embedding_module(
+                    patchified_data, **modality_specific_kwargs
+                )
             else:
                 logger.info(f"modality {modality} is not seen by encoder")
                 patchified_data = torch.zeros(
@@ -301,6 +314,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     dtype=modality_data.dtype,
                     device=modality_data.device,
                 )
+                logger.info(f"{modality} is assigned empty embedding!")
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
@@ -339,6 +353,172 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             modality_mask_name = input_data.get_masked_modality_name(modality)
             output_dict[modality_mask_name] = modality_masks
         return output_dict
+
+
+class Reconstructor(nn.Module):
+    """Module that patchifies and encodes the input data."""
+
+    def __init__(
+        self,
+        supported_modalities: list[ModalitySpec],
+        max_patch_size: int,
+        embedding_size: int,
+    ):
+        """Initialize the patch embeddings.
+
+        Args:
+            supported_modalities: Which modalities from Modality this model
+                instantiation supports
+            max_patch_size: Maximum size of patches
+            embedding_size: Size of embeddings
+        """
+        super().__init__()
+        self.max_patch_size = max_patch_size
+        self.embedding_size = embedding_size
+        self.supported_modalities = supported_modalities
+        # TODO: want to be able to remove certain bands and modalities
+        self.per_modality_reconstructions = nn.ModuleDict({})
+        for modality in self.supported_modalities:
+            self.per_modality_reconstructions[modality.name] = (
+                self._get_patch_reconstruction_module_for_modality(modality)
+            )
+
+    @staticmethod
+    def _get_reconstruction_module_name(modality: str, idx: int) -> str:
+        """Get the reconstruction module name.
+
+        Module Dicts require string keys
+        """
+        return f"{modality}__{idx}"
+
+    def _get_patch_reconstruction_module_for_modality(
+        self, modality: ModalitySpec
+    ) -> nn.Module:
+        """Get the patch reconstruction module for a modality."""
+        # Based on the modality name we choose the way to embed the data
+
+        # I likely will need to know about what the embedding strategy is in the forward as well
+        # Static modality
+        if modality.get_tile_resolution() == 0:
+            # static in space
+            return nn.ModuleDict(
+                {
+                    self._get_reconstruction_module_name(modality.name, idx): nn.Linear(
+                        self.embedding_size, len(channel_set_idxs)
+                    )
+                    for idx, channel_set_idxs in enumerate(
+                        modality.bandsets_as_indices()
+                    )
+                }
+            )
+        else:
+            return nn.ModuleDict(
+                {
+                    self._get_reconstruction_module_name(
+                        modality.name, idx
+                    ): FlexiPatchReconstruction(
+                        out_chans=len(channel_set_idxs),
+                        embedding_size=self.embedding_size,
+                        max_patch_size=self.max_patch_size,
+                    )
+                    for idx, channel_set_idxs in enumerate(
+                        modality.bandsets_as_indices()
+                    )
+                }
+            )
+
+    # TODO: Likely we want a single object that stores all the data related configuration etc per modality including channel grous bands patch size etc
+    def apply_reconstruction_to_modality(
+        self, modality: str, input_data: TokensAndMasks, patch_size: int
+    ) -> tuple[Tensor, Tensor]:
+        """Apply reconstruction to a modality."""
+        masked_modality_name = input_data.get_masked_modality_name(modality)
+        modality_mask = getattr(input_data, masked_modality_name)
+        modality_data = getattr(input_data, modality)
+
+        modality_spec = Modality.get(modality)
+
+        # x: Input tensor with shape [b, h, w, (t), b_s, d]
+        modality_tokens, modality_masks = [], []
+        for idx, channel_set_indices in enumerate(modality_spec.bandsets_as_indices()):
+            data = modality_data[..., idx, :]
+            masks = modality_mask[..., idx]
+            r_model = self.per_modality_reconstructions[modality][
+                self._get_reconstruction_module_name(modality, idx)
+            ]
+            if modality_spec.get_tile_resolution() == 0:
+                data = r_model(data)
+            else:
+                data = r_model(data, patch_size=patch_size)
+            modality_tokens.append(data)
+            masks = repeat(
+                masks,
+                "b h w ... -> b (h p_h) (w p_w) ...",
+                p_h=patch_size,
+                p_w=patch_size,
+            )
+            modality_masks.append(masks)
+        modality_mask = repeat(
+            modality_mask,
+            "b h w ... -> b (h p_h) (w p_w) ...",
+            p_h=patch_size,
+            p_w=patch_size,
+        )
+        return torch.cat(modality_tokens, dim=-1), modality_mask
+
+    def forward(
+        self,
+        input_data: TokensAndMasks,
+        patch_size: int,
+    ) -> TokensAndMasks:
+        """Return flexibly patchified reconstruction for each modality of the input data.
+
+        Given a [B, H, W, (T), b_s, D] inputs, returns a [B, H, W, (T), C] output.
+        """
+        output_dict = {}
+        modalities_to_process = get_modalities_to_process(
+            input_data.modalities, [m.name for m in self.supported_modalities]
+        )
+        for modality in modalities_to_process:
+            modality_tokens, modality_masks = self.apply_reconstruction_to_modality(
+                modality, input_data, patch_size
+            )
+            output_dict[modality] = modality_tokens
+            modality_mask_name = input_data.get_masked_modality_name(modality)
+            output_dict[modality_mask_name] = modality_masks
+        return TokensAndMasks(**output_dict)
+
+
+@dataclass
+class ReconstructorConfig(Config):
+    """Configuration for the Reconstructor."""
+
+    supported_modality_names: list[str]
+    embedding_size: int = 16
+    max_patch_size: int = 8
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        if len(self.supported_modalities) == 0:
+            raise ValueError("At least one modality must be added!")
+        else:
+            for modality in self.supported_modalities:
+                if modality not in Modality.values():
+                    raise ValueError(f"Modality {modality} is not supported")
+
+    @property
+    def supported_modalities(self) -> list[ModalitySpec]:
+        """Get the supported modalities."""
+        return get_modality_specs_from_names(self.supported_modality_names)
+
+    def build(self) -> "Reconstructor":
+        """Build the reconstructor."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"Predictor kwargs: {kwargs}")
+        return Reconstructor(**kwargs)
 
 
 class FlexiHeliosCompositeEncodings(nn.Module):
@@ -703,6 +883,13 @@ class FlexiHeliosBase(nn.Module):
 
         return tokens_only_dict
 
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        for block in self.blocks:
+            block.apply_fsdp(**fsdp_kwargs)
+
+        # fully_shard(self.composite_encodings, **fsdp_kwargs)
+
 
 class Encoder(FlexiHeliosBase):
     """Encoder module that processes masked input samples into token representations."""
@@ -820,13 +1007,6 @@ class Encoder(FlexiHeliosBase):
         return x, indices, updated_mask.to(dtype=org_mask_dtype)
 
     @staticmethod
-    def should_exit(i_blk: int, exit_after_n_layers: int | None) -> bool:
-        """Determine if the current block should exit the attention layers."""
-        if exit_after_n_layers is None:
-            return False
-        return i_blk >= exit_after_n_layers
-
-    @staticmethod
     def add_removed_tokens(
         x: Tensor, indices: Tensor, mask: Tensor
     ) -> tuple[Tensor, Tensor]:
@@ -897,7 +1077,6 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
-        exit_after_n_layers: int | None = None,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -925,14 +1104,11 @@ class Encoder(FlexiHeliosBase):
             exit_ids_seq, _, _ = self.remove_masked_tokens(exit_ids_seq, mask)
             # still linear projections
             exited_tokens, _, _ = self.remove_masked_tokens(exited_tokens, mask)
+
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
-            if self.should_exit(i_blk, exit_after_n_layers):
-                # if exit_after is N, then we exit after the Nth layer
-                # if exit_after is 0, then all layers are skipped
-                break
-
-            if exit_ids_seq is not None:
+            # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
+            if (exit_ids_seq is not None) and (i_blk > 0):
                 # this should only ever be called by the target encoder,
                 # in a torch.no_grad context
                 assert exited_tokens is not None
@@ -976,7 +1152,6 @@ class Encoder(FlexiHeliosBase):
         x: MaskedHeliosSample,
         patch_size: int,
         input_res: int = BASE_GSD,
-        exit_after_n_layers: int | None = None,
         token_exit_cfg: dict | None = None,
     ) -> TokensAndMasks:
         """Process masked input samples into token representations.
@@ -985,7 +1160,6 @@ class Encoder(FlexiHeliosBase):
             x: Masked input sample containing the data to be encoded
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
-            exit_after_n_layers: Layer to exit after
             token_exit_cfg: Configuration for token exit
 
         Returns:
@@ -993,17 +1167,24 @@ class Encoder(FlexiHeliosBase):
         """
         # TODO: Add step to validate the exit config is valid
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
-
-        if (exit_after_n_layers is None) or (exit_after_n_layers > 0):
+        if token_exit_cfg is None or any(
+            [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
+        ):
             patchified_tokens_and_masks = self.apply_attn(
                 x=patchified_tokens_and_masks,
                 timestamps=x.timestamps,
                 patch_size=patch_size,
                 input_res=input_res,
-                exit_after_n_layers=exit_after_n_layers,
                 token_exit_cfg=token_exit_cfg,
             )
         return TokensAndMasks(**patchified_tokens_and_masks)
+
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        super().apply_fsdp(**fsdp_kwargs)
+        fully_shard(self.patch_embeddings, **fsdp_kwargs)
+        register_fsdp_forward_method(self.patch_embeddings, "forward")
+        fully_shard(self, **fsdp_kwargs)
 
 
 class Predictor(FlexiHeliosBase):
@@ -1051,6 +1232,7 @@ class Predictor(FlexiHeliosBase):
             random_channel_embs=random_channel_embeddings,
             supported_modalities=supported_modalities,
         )
+        # TODO: Rename this weird misname
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.encoder_embedding_size = encoder_embedding_size
@@ -1333,6 +1515,11 @@ class Predictor(FlexiHeliosBase):
             output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
             output_dict[masked_modality_name] = modality_mask
         return TokensAndMasks(**output_dict)
+
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        super().apply_fsdp(**fsdp_kwargs)
+        fully_shard(self, **fsdp_kwargs)
 
 
 @dataclass
