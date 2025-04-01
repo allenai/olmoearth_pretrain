@@ -114,7 +114,7 @@ class FlipAndRotateSpace(Transform):
 class TransformConfig(Config):
     """Configuration for the transform."""
 
-    transform_type: str = "flip_and_rotate"
+    transform_type: str = "no_transform"
 
     def validate(self) -> None:
         """Validate the configuration."""

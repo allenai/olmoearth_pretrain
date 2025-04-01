@@ -2,7 +2,7 @@
 
 import contextlib
 from collections.abc import Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any, cast
 
@@ -59,9 +59,11 @@ class HeliosTrainModuleConfig(Config):
     # Training settings
 
     optim_config: OptimConfig
-    transform_config: TransformConfig
     rank_microbatch_size: int
 
+    transform_config: TransformConfig = field(
+        default_factory=lambda: TransformConfig(transform_type="flip_and_rotate")
+    )
     # Model settings
     compile_model: bool = False
     dp_config: DataParallelConfig | None = None

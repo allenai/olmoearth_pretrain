@@ -22,7 +22,6 @@ from upath import UPath
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.data.normalize import Strategy
-from helios.data.transform import TransformConfig
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
 from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
@@ -102,10 +101,6 @@ def build_train_module_config(
             "type": "patch_discrimination_new",  # TODO: Should be registered via enum names
         }
     )
-    TRANSFORM_TYPE = "flip_and_rotate"
-    transform_config = TransformConfig(
-        transform_type=TRANSFORM_TYPE,
-    )
     token_exit_cfg = {modality: 0 for modality in common.supported_modality_names}
 
     WARMUP_EPOCHS = 20
@@ -114,9 +109,7 @@ def build_train_module_config(
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
     train_module_config = LatentMIMTrainModuleConfig(
-        # TODO: change name to optim config
         optim_config=optim_config,
-        transform_config=transform_config,
         masking_config=masking_config,
         warmup_duration=Duration.epochs(WARMUP_EPOCHS),
         loss_config=loss_config,
