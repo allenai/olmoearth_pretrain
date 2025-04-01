@@ -21,6 +21,8 @@ from olmo_core.aliases import PathOrStr
 from olmo_core.config import Config, DType
 from olmo_core.distributed.utils import get_fs_local_rank
 from pyproj import Transformer
+from torch.distributed import DeviceMesh
+from torch.distributed.tensor import distribute_tensor
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from upath import UPath
@@ -143,15 +145,21 @@ class HeliosSample(NamedTuple):
         Returns:
             A new HeliosSample with all tensors moved to the specified device.
         """
-
-        def maybe_move_to_device(tensor: torch.Tensor | None) -> torch.Tensor | None:
-            """Move the tensor to the specified device if it is not None."""
-            if tensor is None:
-                return None
-            return tensor.to(device)
-
         return HeliosSample(
-            **{key: maybe_move_to_device(val) for key, val in self.as_dict().items()}
+            **{
+                key: val.to(device)
+                for key, val in self.as_dict(ignore_nones=True).items()
+                if val is not None
+            }
+        )
+
+    def distribute_tensors(self, device_mesh: DeviceMesh) -> "HeliosSample":
+        """Distribute the tensors to the specified device mesh."""
+        return HeliosSample(
+            **{
+                key: distribute_tensor(val, device_mesh)
+                for key, val in self.as_dict(ignore_nones=True).items()
+            }
         )
 
     @property

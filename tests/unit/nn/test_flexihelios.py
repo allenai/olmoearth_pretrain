@@ -279,28 +279,6 @@ class TestEncoder:
         assert torch.equal(updated_mask, expected_updated_mask)
         assert kept_unmasked_tokens == num_tokens_to_keep
 
-    @pytest.mark.parametrize(
-        "block_idx,exit_after,expected",
-        [
-            (0, None, False),
-            (0, 1, False),
-            (1, 1, True),
-            (1, 2, False),
-            (2, 1, True),
-        ],
-    )
-    def test_should_exit(
-        self, block_idx: int, exit_after: int | None, expected: bool
-    ) -> None:
-        """Test exit condition logic.
-
-        Args:
-            block_idx: Current block index
-            exit_after: Number of layers after which to exit, or None
-            expected: Expected output
-        """
-        assert Encoder.should_exit(block_idx, exit_after) is expected
-
     def test_add_removed_tokens(self) -> None:
         """Test adding removed tokens back into tensor."""
         partial_tokens = torch.tensor(

@@ -1,4 +1,4 @@
-"""Trying to prototype fitting everything into olmo core."""
+"""Base fsdp latentmim experiment."""
 
 import logging
 
@@ -17,19 +17,15 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
+from upath import UPath
 
-from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
+from helios.data.normalize import Strategy
 from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, main
-from helios.nn.flexihelios import (
-    EncoderConfig,
-    PoolingType,
-    PredictorConfig,
-    ReconstructorConfig,
-)
-from helios.nn.mae import MAEConfig
+from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
+from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
+from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -38,33 +34,28 @@ from helios.train.callbacks import (
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
-from helios.train.train_module.mae import MAETrainModuleConfig
+from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 logger = logging.getLogger(__name__)
-MAX_PATCH_SIZE = 16  # NOTE: actual patch_size <= max_patch_size
-MIN_PATCH_SIZE = 4
 
-MAE_MODALITIES = [
-    Modality.SENTINEL2_L2A.name,
-    Modality.SENTINEL1.name,
-    Modality.WORLDCOVER.name,
-]
+MAX_PATCH_SIZE = 8
+MIN_PATCH_SIZE = 1
 
 
-def build_model_config(common: CommonComponents) -> MAEConfig:
+def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    ENCODER_EMBEDDING_SIZE = 128
-    DECODER_EMBEDDING_SIZE = 128
-    ENCODER_DEPTH = 4
-    DECODER_DEPTH = 4
-    ENCODER_NUM_HEADS = 8
-    DECODER_NUM_HEADS = 8
+    ENCODER_EMBEDDING_SIZE = 1536
+    DECODER_EMBEDDING_SIZE = 768
+    ENCODER_DEPTH = 40
+    DECODER_DEPTH = 12
+    ENCODER_NUM_HEADS = 16
+    DECODER_NUM_HEADS = 12
     MLP_RATIO = 4.0
+    TRANSFORM_TYPE = "flip_and_rotate"
     encoder_config = EncoderConfig(
-        supported_modality_names=MAE_MODALITIES,
+        supported_modality_names=common.supported_modality_names,
         embedding_size=ENCODER_EMBEDDING_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
-        min_patch_size=MIN_PATCH_SIZE,
         num_heads=ENCODER_NUM_HEADS,
         depth=ENCODER_DEPTH,
         mlp_ratio=MLP_RATIO,
@@ -79,25 +70,20 @@ def build_model_config(common: CommonComponents) -> MAEConfig:
         mlp_ratio=MLP_RATIO,
         num_heads=DECODER_NUM_HEADS,
         max_sequence_length=12,
-        supported_modality_names=MAE_MODALITIES,
+        supported_modality_names=common.supported_modality_names,
         learnable_channel_embeddings=True,
     )
-    reconstructor_config = ReconstructorConfig(
-        supported_modality_names=MAE_MODALITIES,
-        embedding_size=ENCODER_EMBEDDING_SIZE,
-        max_patch_size=MAX_PATCH_SIZE,
-    )
-    model_config = MAEConfig(
+    model_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
-        reconstructor_config=reconstructor_config,
+        transform_type=TRANSFORM_TYPE,
     )
     return model_config
 
 
 def build_train_module_config(
     common: CommonComponents,
-) -> MAETrainModuleConfig:
+) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     LR = 0.002
     RANK_MICROBATCH_SIZE = 32
@@ -114,16 +100,17 @@ def build_train_module_config(
     )
     loss_config = LossConfig(
         loss_config={
-            "type": "imagel2",  # TODO: Should be registered via enum names
+            "type": "patch_discrimination_new",  # TODO: Should be registered via enum names
         }
     )
-    token_exit_cfg = {modality: 4 for modality in common.supported_modality_names}
-    WARMUP_EPOCHS = 2
-    dp_config = DataParallelConfig(name=DataParallelType.ddp)
+    token_exit_cfg = {modality: 0 for modality in common.supported_modality_names}
+
+    WARMUP_EPOCHS = 20
+    dp_config = DataParallelConfig(name=DataParallelType.fsdp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
-    train_module_config = MAETrainModuleConfig(
+    train_module_config = LatentMIMTrainModuleConfig(
         # TODO: change name to optim config
         optim_config=optim_config,
         masking_config=masking_config,
@@ -166,6 +153,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
+    # NOTE: Change this directory based on the supported modalities
     h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/98856"
     return HeliosDatasetConfig(
         h5py_dir=h5py_dir,
@@ -177,7 +165,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(50)
+    MAX_DURATION = Duration.epochs(300)
     METRICS_COLLECT_INTERVAL = 1
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
@@ -190,6 +178,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         entity=WANDB_USERNAME,
         enabled=True,  # set to False to avoid wandb errors
     )
+    # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
@@ -262,6 +251,16 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     return trainer_config
 
 
+def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
+    """Build the visualize config for an experiment."""
+    return HeliosVisualizeConfig(
+        num_samples=None,
+        output_dir=str(UPath(common.save_folder) / "visualizations"),
+        normalize_strategy=Strategy.PREDEFINED,
+        std_multiplier=2.0,
+    )
+
+
 if __name__ == "__main__":
     main(
         common_components_builder=build_common_components,
@@ -270,4 +269,5 @@ if __name__ == "__main__":
         dataset_config_builder=build_dataset_config,
         dataloader_config_builder=build_dataloader_config,
         trainer_config_builder=build_trainer_config,
+        visualize_config_builder=build_visualize_config,
     )

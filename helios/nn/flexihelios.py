@@ -10,6 +10,7 @@ import torch
 from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor, nn
+from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
 
 from helios.data.constants import Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
@@ -279,6 +280,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         self, modality: str, input_data: MaskedHeliosSample, patch_size: int
     ) -> tuple[Tensor, Tensor]:
         """Apply embedding to a modality."""
+        logger.debug(f"applying embedding to modality:{modality}")
         masked_modality_name = input_data.get_masked_modality_name(modality)
         modality_mask = getattr(input_data, masked_modality_name)
         modality_data = getattr(input_data, modality)
@@ -296,13 +298,15 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                 token_mask = modality_mask[:, 0::patch_size, 0::patch_size, ..., idx]
                 modality_specific_kwargs = {"patch_size": patch_size}
             patchified_dims = token_mask.shape[1:]
-            # Now apply the embedding to
+            # Now apply the embedding to the patchified data
             if self.is_any_data_seen_by_encoder(token_mask):
                 patchified_data = modality_data[..., channel_set_indices]
-
-                patchified_data = self.per_modality_embeddings[modality][
+                embedding_module = self.per_modality_embeddings[modality][
                     self._get_embedding_module_name(modality, idx)
-                ](patchified_data, **modality_specific_kwargs)
+                ]
+                patchified_data = embedding_module(
+                    patchified_data, **modality_specific_kwargs
+                )
             else:
                 patchified_data = torch.empty(
                     modality_data.shape[0],
@@ -879,6 +883,13 @@ class FlexiHeliosBase(nn.Module):
 
         return tokens_only_dict
 
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        for block in self.blocks:
+            block.apply_fsdp(**fsdp_kwargs)
+
+        # fully_shard(self.composite_encodings, **fsdp_kwargs)
+
 
 class Encoder(FlexiHeliosBase):
     """Encoder module that processes masked input samples into token representations."""
@@ -996,13 +1007,6 @@ class Encoder(FlexiHeliosBase):
         return x, indices, updated_mask.to(dtype=org_mask_dtype)
 
     @staticmethod
-    def should_exit(i_blk: int, exit_after_n_layers: int | None) -> bool:
-        """Determine if the current block should exit the attention layers."""
-        if exit_after_n_layers is None:
-            return False
-        return i_blk >= exit_after_n_layers
-
-    @staticmethod
     def add_removed_tokens(
         x: Tensor, indices: Tensor, mask: Tensor
     ) -> tuple[Tensor, Tensor]:
@@ -1073,7 +1077,6 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
-        exit_after_n_layers: int | None = None,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1101,14 +1104,11 @@ class Encoder(FlexiHeliosBase):
             exit_ids_seq, _, _ = self.remove_masked_tokens(exit_ids_seq, mask)
             # still linear projections
             exited_tokens, _, _ = self.remove_masked_tokens(exited_tokens, mask)
+
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
-            if self.should_exit(i_blk, exit_after_n_layers):
-                # if exit_after is N, then we exit after the Nth layer
-                # if exit_after is 0, then all layers are skipped
-                break
-
-            if exit_ids_seq is not None:
+            # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
+            if (exit_ids_seq is not None) and (i_blk > 0):
                 # this should only ever be called by the target encoder,
                 # in a torch.no_grad context
                 assert exited_tokens is not None
@@ -1153,7 +1153,6 @@ class Encoder(FlexiHeliosBase):
         x: MaskedHeliosSample,
         patch_size: int,
         input_res: int = BASE_GSD,
-        exit_after_n_layers: int | None = None,
         token_exit_cfg: dict | None = None,
     ) -> TokensAndMasks:
         """Process masked input samples into token representations.
@@ -1162,7 +1161,6 @@ class Encoder(FlexiHeliosBase):
             x: Masked input sample containing the data to be encoded
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
-            exit_after_n_layers: Layer to exit after
             token_exit_cfg: Configuration for token exit
 
         Returns:
@@ -1170,16 +1168,24 @@ class Encoder(FlexiHeliosBase):
         """
         # TODO: Add step to validate the exit config is valid
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
-        if (exit_after_n_layers is None) or (exit_after_n_layers > 0):
+        if token_exit_cfg is None or any(
+            [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
+        ):
             patchified_tokens_and_masks = self.apply_attn(
                 x=patchified_tokens_and_masks,
                 timestamps=x.timestamps,
                 patch_size=patch_size,
                 input_res=input_res,
-                exit_after_n_layers=exit_after_n_layers,
                 token_exit_cfg=token_exit_cfg,
             )
         return TokensAndMasks(**patchified_tokens_and_masks)
+
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        super().apply_fsdp(**fsdp_kwargs)
+        fully_shard(self.patch_embeddings, **fsdp_kwargs)
+        register_fsdp_forward_method(self.patch_embeddings, "forward")
+        fully_shard(self, **fsdp_kwargs)
 
 
 class Predictor(FlexiHeliosBase):
@@ -1227,6 +1233,7 @@ class Predictor(FlexiHeliosBase):
             random_channel_embs=random_channel_embeddings,
             supported_modalities=supported_modalities,
         )
+        # TODO: Rename this weird misname
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.encoder_embedding_size = encoder_embedding_size
@@ -1470,6 +1477,11 @@ class Predictor(FlexiHeliosBase):
             output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
             output_dict[masked_modality_name] = modality_mask
         return TokensAndMasks(**output_dict)
+
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        super().apply_fsdp(**fsdp_kwargs)
+        fully_shard(self, **fsdp_kwargs)
 
 
 @dataclass
