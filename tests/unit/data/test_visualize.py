@@ -18,7 +18,7 @@ def test_visualize_sample(
     samples = prepare_samples(tmp_path)
     dataset = HeliosDataset(
         supported_modalities=supported_modalities,
-        tile_path=tmp_path,
+        tile_paths=[tmp_path],
         dtype="float32",
         multiprocessed_h5_creation=False,
     )

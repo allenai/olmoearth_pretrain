@@ -15,7 +15,7 @@ def test_helios_dataloader(
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
     prepared_samples = prepare_samples(tmp_path)
     dataset = HeliosDataset(
-        tile_path=tmp_path,
+        tile_paths=[tmp_path],
         supported_modalities=supported_modalities,
         dtype="float32",
         multiprocessed_h5_creation=False,
