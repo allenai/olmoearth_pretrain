@@ -81,7 +81,7 @@ def minimal_dataset_config_builder(common: CommonComponents) -> HeliosDatasetCon
     """Return a minimal HeliosDatasetConfig."""
     TILE_PATH = "test_tile_path"
     return HeliosDatasetConfig(
-        tile_path=TILE_PATH,
+        tile_paths=[TILE_PATH],
         h5py_dir=None,
         supported_modality_names=common.supported_modality_names,
         dtype=DType.float32,
