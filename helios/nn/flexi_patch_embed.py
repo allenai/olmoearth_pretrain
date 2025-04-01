@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
+from olmo_core.distributed.utils import distribute_like
 from torch import Tensor, vmap
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,7 @@ class FlexiPatchEmbed(nn.Module):
             )
         pinv = self.pinvs[new_patch_size]
         pinv = pinv.to(patch_embed.device)
+        pinv = distribute_like(patch_embed, pinv)
 
         def resample_patch_embed(patch_embed: Tensor) -> Tensor:
             h, w = new_patch_size
@@ -178,6 +180,7 @@ class FlexiPatchEmbed(nn.Module):
         batch_size = x.shape[0]
         has_time_dimension = False
         num_timesteps = 0  # ignored if has_time_dimension is False
+
         if len(x.shape) == 5:
             has_time_dimension = True
             num_timesteps = x.shape[3]
@@ -193,7 +196,6 @@ class FlexiPatchEmbed(nn.Module):
         assert (
             isinstance(patch_size, tuple) and len(patch_size) == 2
         ), "patch_size must be a 2-tuple"
-
         # Resize conv weights
         if patch_size == self.patch_size:
             weight = self.proj.weight
@@ -203,7 +205,16 @@ class FlexiPatchEmbed(nn.Module):
         x = F.conv2d(x, weight, bias=self.proj.bias, stride=patch_size)
         # At this point x has embedding dim sized channel dimension
         if has_time_dimension:
-            x = rearrange(x, "(b t) d h w -> b h w t d", b=batch_size, t=num_timesteps)
+            _, d, h, w = x.shape
+            x = rearrange(
+                x,
+                "(b t) d h w -> b h w t d",
+                b=batch_size,
+                t=num_timesteps,
+                d=d,
+                h=h,
+                w=w,
+            )
         else:
             x = rearrange(x, "b d h w -> b h w d")
 

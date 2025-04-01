@@ -6,7 +6,6 @@ import pytest
 import torch
 
 from helios.data.constants import Modality, ModalitySpec
-from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import Encoder, Predictor
 from helios.nn.latent_mim import LatentMIM
 from helios.train.loss import PatchDiscriminationLoss
@@ -122,8 +121,7 @@ def test_latentmim_with_loss(
         drop_path=DROP_PATH,
         learnable_channel_embeddings=True,
     )
-    transform = TransformConfig(transform_type="no_transform").build()
-    latentmim = LatentMIM(encoder, predictor, transform)
+    latentmim = LatentMIM(encoder, predictor)
     output = latentmim.forward(x, patch_size)
     output = predictor.forward(output, timestamps, patch_size, input_res)
     patched_H = H // patch_size

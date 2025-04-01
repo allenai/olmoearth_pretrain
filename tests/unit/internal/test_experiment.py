@@ -8,6 +8,7 @@ from olmo_core.train import TrainerConfig
 
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
+from helios.data.transform import TransformConfig
 from helios.internal.experiment import (
     CommonComponents,
     HeliosExperimentConfig,
@@ -47,7 +48,6 @@ def minimal_model_config_builder(common: CommonComponents) -> LatentMIMConfig:
     ENCODER_NUM_HEADS = 2
     DECODER_NUM_HEADS = 8
     MLP_RATIO = 4.0
-    TRANSFORM_TYPE = "flip_and_rotate"
     encoder_config = EncoderConfig(
         supported_modality_names=common.supported_modality_names,
         embedding_size=ENCODER_EMBEDDING_SIZE,
@@ -72,7 +72,6 @@ def minimal_model_config_builder(common: CommonComponents) -> LatentMIMConfig:
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
-        transform_type=TRANSFORM_TYPE,
     )
     return model_config
 
@@ -143,7 +142,7 @@ def minimal_train_module_config_builder(
         }
     )
     token_exit_cfg = {modality: 0 for modality in common.supported_modality_names}
-
+    transform_config = TransformConfig(transform_type="flip_and_rotate")
     train_module_config = LatentMIMTrainModuleConfig(
         optim_config=optim_config,
         masking_config=masking_config,
@@ -151,6 +150,7 @@ def minimal_train_module_config_builder(
         token_exit_cfg=token_exit_cfg,
         rank_microbatch_size=RANK_MICRO_BATCH_SIZE,
         max_grad_norm=1.0,
+        transform_config=transform_config,
     )
     return train_module_config
 

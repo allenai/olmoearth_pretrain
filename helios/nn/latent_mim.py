@@ -3,10 +3,12 @@
 from copy import deepcopy
 from dataclasses import dataclass
 
+import torch
 import torch.nn as nn
 from olmo_core.config import Config
+from torch.distributed import DeviceMesh
+from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
 
-from helios.data.transform import Transform, TransformConfig
 from helios.nn.flexihelios import EncoderConfig, PredictorConfig, TokensAndMasks
 from helios.nn.utils import DistributedMixins
 from helios.train.masking import MaskedHeliosSample
@@ -19,15 +21,12 @@ class LatentMIM(nn.Module, DistributedMixins):
         self,
         encoder: nn.Module,
         decoder: nn.Module,
-        # TODO: Move transforms to TrainModule
-        transform: Transform,
     ):
         """Initialize the Latent MIM Style.
 
         Args:
             encoder: The encoder to use.
             decoder: The decoder to use.
-            transform: The transform to use.
         """
         super().__init__()
         self.encoder = encoder
@@ -35,7 +34,6 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
-        self.transform = transform
 
     def forward(self, x: MaskedHeliosSample, patch_size: int) -> TokensAndMasks:
         """Forward pass for the Latent MIM Style."""
@@ -44,6 +42,23 @@ class LatentMIM(nn.Module, DistributedMixins):
         decoded = self.decoder(latent, timestamps=x.timestamps, patch_size=patch_size)
         return decoded
 
+    def apply_fsdp(
+        self,
+        dp_mesh: DeviceMesh | None = None,
+        param_dtype: torch.dtype | None = None,
+        reduce_dtype: torch.dtype = torch.float32,
+        prefetch_factor: int = 0,
+    ) -> None:
+        """Apply FSDP to the model."""
+        fsdp_config = dict(mesh=dp_mesh)
+
+        self.encoder.apply_fsdp(**fsdp_config)
+        self.decoder.apply_fsdp(**fsdp_config)
+        self.target_encoder.apply_fsdp(**fsdp_config)
+        # TODO: More finegrained wrapping of the encoder transformer layers next time
+        fully_shard(self, **fsdp_config)
+        register_fsdp_forward_method(self.target_encoder, "forward")
+
 
 @dataclass
 class LatentMIMConfig(Config):
@@ -51,7 +66,6 @@ class LatentMIMConfig(Config):
 
     encoder_config: "EncoderConfig"
     decoder_config: "PredictorConfig"
-    transform_type: str = "no_transform"
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -78,9 +92,7 @@ class LatentMIMConfig(Config):
         self.validate()
         encoder = self.encoder_config.build()
         decoder = self.decoder_config.build()
-        transform = TransformConfig(transform_type=self.transform_type).build()
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
-            transform=transform,
         )

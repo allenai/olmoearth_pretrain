@@ -2,6 +2,8 @@
 
 import calendar
 import random
+import sys
+import types
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,6 +17,11 @@ from rasterio.transform import from_origin
 from helios.data.constants import BandSet, Modality, ModalitySpec
 from helios.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
 from helios.dataset.sample import SampleInformation
+
+# Avoid triton imports from olmo-core during tests
+sys.modules["triton"] = types.SimpleNamespace(
+    runtime=types.SimpleNamespace(autotuner=object(), driver=object())  # type: ignore
+)
 
 
 @pytest.fixture(scope="session", autouse=True)

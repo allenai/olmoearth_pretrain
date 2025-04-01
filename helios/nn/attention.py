@@ -1,9 +1,12 @@
 """Attention Components for Helios."""
 
+from typing import Any
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
+from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
 
@@ -378,3 +381,7 @@ class Block(nn.Module):
         x = x + self.drop_path(self.ls1(self.attn(self.norm1(x), y, attn_mask)))
         x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
         return x
+
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        fully_shard(self, **fsdp_kwargs)

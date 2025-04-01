@@ -6,7 +6,6 @@ import pytest
 import torch
 
 from helios.data.constants import Modality, ModalitySpec
-from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import Encoder, Predictor, Reconstructor, TokensAndMasks
 from helios.nn.mae import MAE
 from helios.train.loss import ImageL2Loss
@@ -119,8 +118,7 @@ def test_mae_with_loss(
         max_patch_size=MAX_PATCH_SIZE,
         embedding_size=ENCODER_EMBEDDING_SIZE,
     )
-    transform = TransformConfig(transform_type="no_transform").build()
-    mae = MAE(encoder, predictor, reconstructor, transform)
+    mae = MAE(encoder, predictor, reconstructor)
     output = mae.forward(x, patch_size)
     assert output.sentinel2_l2a is not None
     assert output.sentinel2_l2a_mask is not None
