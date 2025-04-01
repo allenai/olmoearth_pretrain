@@ -112,12 +112,12 @@ def build_train_module_config(
     )
     loss_config_a = LossConfig(
         loss_config={
-            "type": "patch_discrimination",
+            "type": "patch_discrimination_new",
         }
     )
     loss_config_b = LossConfig(
         loss_config={
-            "type": "patch_discrimination",
+            "type": "patch_discrimination_new",
         }
     )
     token_exit_cfg_a = {
@@ -179,9 +179,8 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/98856"
     return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
+        h5py_dir=None,
         tile_path=None,
         supported_modality_names=common.supported_modality_names,
         dtype=DType.float32,
