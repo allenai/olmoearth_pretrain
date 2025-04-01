@@ -17,6 +17,7 @@ from olmo_core.train.train_module.transformer import (
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
+from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.latent_mim import LatentMIM
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
@@ -117,6 +118,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
         ema_decay: tuple[float, float] = (0.996, 1.0),
         warmup_duration: Duration = Duration.epochs(2),
+        regularizer_config: LossConfig | None = None,
     ):
         """Initialize the training module.
 
@@ -140,6 +142,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
             ema_decay: EMA decay rate for target encoder, as a tuple of (start_ema_decay, end_ema_decay)
             token_exit_cfg: The token exit configuration for the model.
             warmup_duration: The warmup duration for the model.
+            regularizer_config: An optional regularizer configuration for the model.
         """
         super().__init__(
             model=model,
@@ -161,10 +164,21 @@ class LatentMIMTrainModule(HeliosTrainModule):
         self.token_exit_cfg = token_exit_cfg
         self.base_loss = loss_config.build()
         self.masking_strategy = masking_config.build()
+        self.regularizer = (
+            regularizer_config.build() if regularizer_config is not None else None
+        )
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
+
+    def add_regularizer_to_loss(
+        self, loss: torch.Tensor, latent: TokensAndMasks
+    ) -> torch.Tensor:
+        """If a regularizer is present, add it to the loss."""
+        if self.regularizer is None:
+            return loss
+        return loss + self.regularizer.compute(latent, None)
 
     def eval_loss_fn(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -227,12 +241,14 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     microbatch, patch_size=patch_size
                 )
                 # Run Encoder and decoder on the augmented input
-                decoded, target_output = self.model_forward(
+                latent, decoded, target_output = self.model_forward(
                     masked_batch, patch_size, self.token_exit_cfg
                 )
                 loss = self.loss_fn(decoded, target_output)
                 # Scale loss by number of microbatches
                 loss = loss / num_microbatches
+                loss = self.add_regularizer_to_loss(loss, latent)
+
                 loss_val = get_local_tensor(loss)
                 total_batch_loss += loss_val
 
@@ -241,10 +257,10 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     logger.warning(
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
                     )
-                    del decoded, target_output
+                    del latent, decoded, target_output
                     break
 
-                del decoded, target_output
+                del latent, decoded, target_output
                 loss.backward()
 
         self.trainer.record_metric(
@@ -267,10 +283,10 @@ class LatentMIMTrainModule(HeliosTrainModule):
 
     def model_forward(
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
-            decoded = self.model.forward(batch, patch_size)
+            latent, decoded = self.model.forward(batch, patch_size)
             with torch.no_grad():
                 logger.info("target encoder running here")
                 target_output = self.model.target_encoder.forward(
@@ -278,4 +294,4 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
-            return decoded, target_output
+            return latent, decoded, target_output

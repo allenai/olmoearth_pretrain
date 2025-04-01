@@ -17,6 +17,7 @@ from olmo_core.train.train_module.transformer import (
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
+from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.latent_mim import LatentMIM
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
@@ -131,6 +132,7 @@ class GalileoTrainModule(HeliosTrainModule):
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
         ema_decay: tuple[float, float] = (0.996, 1.0),
         warmup_duration: Duration = Duration.epochs(2),
+        regularizer_config: LossConfig | None = None,
     ):
         """Initialize the training module.
 
@@ -156,6 +158,7 @@ class GalileoTrainModule(HeliosTrainModule):
             token_exit_cfg_a: The token exit configuration for the model.
             token_exit_cfg_b: The token exit configuration for the model.
             warmup_duration: The warmup duration for the model.
+            regularizer_config: An optional regularizer configuration for the model.
         """
         super().__init__(
             model=model,
@@ -180,6 +183,9 @@ class GalileoTrainModule(HeliosTrainModule):
         self.token_exit_cfg_b = token_exit_cfg_b
         self.base_loss_b = loss_config_b.build()
         self.masking_strategy_b = masking_config_b.build()
+        self.regularizer = (
+            regularizer_config.build() if regularizer_config is not None else None
+        )
 
     def loss_fn_a(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -192,6 +198,14 @@ class GalileoTrainModule(HeliosTrainModule):
     def eval_loss_fn(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         raise NotImplementedError("eval loss fn not implemented")
+
+    def add_regularizer_to_loss(
+        self, loss: torch.Tensor, latent: TokensAndMasks
+    ) -> torch.Tensor:
+        """If a regularizer is present, add it to the loss."""
+        if self.regularizer is None:
+            return loss
+        return loss + self.regularizer.compute(latent, None)
 
     def update_target_encoder(self) -> None:
         """Update the target encoder."""
@@ -255,7 +269,7 @@ class GalileoTrainModule(HeliosTrainModule):
                     )
 
                     # Run Encoder and decoder on the augmented input
-                    decoded, target_output = self.model_forward_a(
+                    latent, decoded, target_output = self.model_forward_a(
                         masked_batch, patch_size, self.token_exit_cfg_a
                     )
                     loss = self.loss_fn_a(decoded, target_output)
@@ -265,11 +279,12 @@ class GalileoTrainModule(HeliosTrainModule):
                     )
 
                     # Run Encoder and decoder on the augmented input
-                    decoded, target_output = self.model_forward_b(
+                    latent, decoded, target_output = self.model_forward_b(
                         masked_batch, patch_size, self.token_exit_cfg_b
                     )
                     loss = self.loss_fn_b(decoded, target_output)
                 # Scale loss by number of microbatches
+                self.add_regularizer_to_loss(loss, latent)
                 loss = loss / num_microbatches
                 loss_val = get_local_tensor(loss)
                 total_batch_loss += loss_val
@@ -279,10 +294,10 @@ class GalileoTrainModule(HeliosTrainModule):
                     logger.warning(
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
                     )
-                    del decoded, target_output
+                    del latent, decoded, target_output
                     break
 
-                del decoded, target_output
+                del latent, decoded, target_output
                 loss.backward()
 
         if dry_run:
@@ -303,10 +318,10 @@ class GalileoTrainModule(HeliosTrainModule):
 
     def model_forward_a(
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
-            decoded = self.model.forward_a(batch, patch_size)
+            latent, decoded = self.model.forward_a(batch, patch_size)
             with torch.no_grad():
                 logger.info("target encoder running here")
                 target_output = self.model.target_encoder.forward(
@@ -314,14 +329,14 @@ class GalileoTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
-            return decoded, target_output
+            return latent, decoded, target_output
 
     def model_forward_b(
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
-            decoded = self.model.forward_b(batch, patch_size)
+            latent, decoded = self.model.forward_b(batch, patch_size)
             with torch.no_grad():
                 logger.info("target encoder running here")
                 target_output = self.model.target_encoder.forward(
@@ -329,4 +344,4 @@ class GalileoTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
-            return decoded, target_output
+            return latent, decoded, target_output

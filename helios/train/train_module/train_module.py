@@ -32,6 +32,8 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
 
+from helios.train.loss import LossConfig
+
 logger = getLogger(__name__)
 
 
@@ -76,6 +78,8 @@ class HeliosTrainModuleConfig(Config):
     # Checkpoint settings
     state_dict_save_opts: dict[str, Any] | None = None
     state_dict_load_opts: dict[str, Any] | None = None
+
+    regularizer_config: LossConfig | None = None
 
     def build(
         self,

@@ -561,14 +561,14 @@ class KoLeoLoss(Loss):
         return indices
 
     def compute(
-        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+        self, predictions: TokensAndMasks, targets: None, **kwargs: Any
     ) -> Tensor:
         """Compute the KoLeo regularization term.
 
         Args:
             predictions: Model predictions. Unlike other losses, these are
                 _online encoder outputs_, not decoder outputs.
-            targets: Ground truth targets. Unused but kept for consistency.
+            targets: Unused, and only kept for consistency.
             **kwargs: Additional keyword arguments.
 
         Returns:
