@@ -157,9 +157,10 @@ def parse_modality_csv(
 
 
 def parse_helios_dataset(
-    helios_path: UPath, supported_modalities: list[ModalitySpec] = Modality.values()
+    helios_paths: list[UPath],
+    supported_modalities: list[ModalitySpec] = Modality.values(),
 ) -> dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]]:
-    """Parse the various per-modality tiles present in a Helios dataset.
+    """Parse the various per-modality tiles present in one or more Helios datasets.
 
     Returns:
         a mapping from modality -> time span (e.g. yearly / two-week) -> list of tiles.
@@ -186,18 +187,21 @@ def parse_helios_dataset(
         # CSV to get the ModalityTiles under that time span.
         tiles[modality] = {}
         for time_span in time_spans:
-            # Reconstruct the CSV filename from the grid resolution, modality, and time span.
-            tile_resolution = modality.get_tile_resolution()
-            csv_fname = (
-                helios_path
-                / f"{tile_resolution}_{modality.name}{time_span.get_suffix()}.csv"  # type: ignore
-            )
-            logger.info(f"Parsing {modality.name} {time_span} {csv_fname}")
-            tiles[modality][time_span] = parse_modality_csv(  # type: ignore
-                helios_path,
-                modality,
-                time_span,  # type: ignore
-                csv_fname,
-            )
+            tiles[modality][time_span] = []
+            for helios_path in helios_paths:
+                # Reconstruct the CSV filename from the grid resolution, modality, and time span.
+                tile_resolution = modality.get_tile_resolution()
+                csv_fname = (
+                    helios_path
+                    / f"{tile_resolution}_{modality.name}{time_span.get_suffix()}.csv"  # type: ignore
+                )
+                logger.info(f"Parsing {modality.name} {time_span} {csv_fname}")
+                tiles[modality][time_span] += parse_modality_csv(  # type: ignore
+                    helios_path,
+                    modality,
+                    time_span,  # type: ignore
+                    csv_fname,
+                )
+                print(modality, time_span, helios_path, len(tiles[modality][time_span]))
 
     return tiles

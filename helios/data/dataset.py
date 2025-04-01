@@ -338,7 +338,7 @@ class HeliosDataset(Dataset):
         supported_modalities: list[ModalitySpec],
         dtype: DType,
         h5py_dir: UPath | None = None,
-        tile_path: UPath | None = None,
+        tile_paths: list[UPath] | None = None,
         normalize: bool = True,
         multiprocessed_h5_creation: bool = True,
     ):
@@ -353,7 +353,7 @@ class HeliosDataset(Dataset):
 
         Args:
             supported_modalities: The modalities to include in the dataset.
-            tile_path: The path to the raw dataset (image tile directory). If None we will use the h5py_dir to load the dataset. Mutually exclusive with h5py_dir.
+            tile_paths: The paths to the raw dataset (image tile directory). If None we will use the h5py_dir to load the dataset. Mutually exclusive with h5py_dir.
             dtype: The dtype of the data.
             normalize: If True, apply normalization to the data, if False, do not apply
                 normalization.
@@ -365,13 +365,13 @@ class HeliosDataset(Dataset):
         Returns:
             None
         """
-        if h5py_dir is None and tile_path is None:
-            raise ValueError("Either h5py_dir or tile_path must be provided")
-        if h5py_dir is not None and tile_path is not None:
-            raise ValueError("Only one of h5py_dir or tile_path can be provided")
+        if h5py_dir is None and tile_paths is None:
+            raise ValueError("Either h5py_dir or tile_paths must be provided")
+        if h5py_dir is not None and tile_paths is not None:
+            raise ValueError("Only one of h5py_dir or tile_paths can be provided")
         if h5py_dir is not None:
             self.h5py_dir = h5py_dir
-            self.tile_path = h5py_dir.parent.parent
+            self.tile_paths = h5py_dir.parent.parent
             # Ensure that the supported modalities are present in the h5py directory
             for modality in supported_modalities:
                 if modality.name not in self.h5py_dir.parent.name:
@@ -379,7 +379,7 @@ class HeliosDataset(Dataset):
                         f"The modality {modality.name} is not present in the h5py directory"
                     )
         else:
-            self.tile_path = tile_path
+            self.tile_paths = tile_paths
             self.h5py_dir: Path | None = None  # type: ignore
 
         self.multiprocessed_h5_creation = multiprocessed_h5_creation
@@ -408,7 +408,7 @@ class HeliosDataset(Dataset):
             raise RuntimeError("Dataset must be prepared before creating a fingerprint")
         sha256_hash = hashlib.sha256()
         sha256_hash.update(
-            f"tile_path={self.tile_path},"
+            f"tile_paths={self.tile_paths},"
             f"supported_modalities={sorted([m.name for m in self.supported_modalities])},"
             f"sample_size={len(self)},"
             f"dtype={self.dtype}".encode()
@@ -487,7 +487,7 @@ class HeliosDataset(Dataset):
             return
 
         self.h5py_dir = (
-            self.tile_path
+            self.tile_paths[0]
             / self.h5py_folder
             / "_".join(
                 sorted([modality.name for modality in self.supported_modalities])
@@ -581,7 +581,7 @@ class HeliosDataset(Dataset):
 
     def _get_samples(self) -> list[SampleInformation]:
         """Get the samples from the raw dataset (image tile directory)."""
-        tiles = parse_helios_dataset(self.tile_path, self.supported_modalities)
+        tiles = parse_helios_dataset(self.tile_paths, self.supported_modalities)
         samples = image_tiles_to_samples(tiles, self.supported_modalities)
         logger.info(f"Total samples: {len(samples)}")
         logger.info("Distribution of samples before filtering:\n")
@@ -803,7 +803,7 @@ class HeliosDataset(Dataset):
 
         norm_dict["total_n"] = len(self)
         norm_dict["sampled_n"] = len(indices_to_sample)
-        norm_dict["tile_path"] = self.tile_path
+        norm_dict["tile_paths"] = self.tile_paths
 
         return norm_dict
 
@@ -900,7 +900,7 @@ class HeliosDatasetConfig(Config):
 
     h5py_dir: str | None
     supported_modality_names: list[str]
-    tile_path: str | None = None
+    tile_paths: list[str] | None = None
     dtype: DType = DType.float32
     normalize: bool = True
 
@@ -915,10 +915,10 @@ class HeliosDatasetConfig(Config):
         """
         # Validate tile_path
         # Check that either a tile path or h5py_dir is provided
-        if self.tile_path is None and self.h5py_dir is None:
-            raise ValueError("Either a tile path or h5py_dir must be provided")
-        if self.tile_path is not None and self.h5py_dir is not None:
-            raise ValueError("Only one of tile_path or h5py_dir must be provided")
+        if self.tile_paths is None and self.h5py_dir is None:
+            raise ValueError("Either tile paths or h5py_dir must be provided")
+        if self.tile_paths is not None and self.h5py_dir is not None:
+            raise ValueError("Only one of tile_paths or h5py_dir must be provided")
 
         # Validate supported_modalities
         if not isinstance(self.supported_modalities, list):
@@ -934,9 +934,11 @@ class HeliosDatasetConfig(Config):
         return get_modality_specs_from_names(self.supported_modality_names)
 
     @property
-    def tile_upath(self) -> UPath:
+    def tile_upaths(self) -> UPath | None:
         """Get the tile path."""
-        return UPath(self.tile_path)
+        if self.tile_paths is None:
+            return None
+        return [UPath(tile_path) for tile_path in self.tile_paths]
 
     @property
     def h5py_dir_upath(self) -> UPath:
@@ -950,7 +952,7 @@ class HeliosDatasetConfig(Config):
         if self.h5py_dir is not None:
             kwargs["h5py_dir"] = self.h5py_dir_upath
         else:
-            kwargs["tile_path"] = self.tile_upath
+            kwargs["tile_paths"] = self.tile_upaths
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"HeliosDataset kwargs: {kwargs}")
