@@ -345,8 +345,8 @@ class HeliosDataset(Dataset):
         self,
         supported_modalities: list[ModalitySpec],
         dtype: DType,
+        tile_paths: list[UPath],
         h5py_dir: UPath | None = None,
-        tile_paths: list[UPath] | None = None,
         normalize: bool = True,
         multiprocessed_h5_creation: bool = True,
     ):
@@ -373,13 +373,9 @@ class HeliosDataset(Dataset):
         Returns:
             None
         """
-        if h5py_dir is None and tile_paths is None:
-            raise ValueError("Either h5py_dir or tile_paths must be provided")
-        if h5py_dir is not None and tile_paths is not None:
-            raise ValueError("Only one of h5py_dir or tile_paths can be provided")
+        self.tile_paths = tile_paths
         if h5py_dir is not None:
             self.h5py_dir = h5py_dir
-            self.tile_paths = h5py_dir.parent.parent
             # Ensure that the supported modalities are present in the h5py directory
             for modality in supported_modalities:
                 if modality.name not in self.h5py_dir.parent.name:
@@ -387,7 +383,6 @@ class HeliosDataset(Dataset):
                         f"The modality {modality.name} is not present in the h5py directory"
                     )
         else:
-            self.tile_paths = tile_paths
             self.h5py_dir: Path | None = None  # type: ignore
 
         self.multiprocessed_h5_creation = multiprocessed_h5_creation
@@ -906,9 +901,9 @@ class HeliosDataset(Dataset):
 class HeliosDatasetConfig(Config):
     """Configuration for the HeliosDataset."""
 
+    tile_paths: list[str]
     h5py_dir: str | None
     supported_modality_names: list[str]
-    tile_paths: list[str] | None = None
     dtype: DType = DType.float32
     normalize: bool = True
 
@@ -921,13 +916,6 @@ class HeliosDatasetConfig(Config):
         Raises:
             ValueError: If any arguments are invalid
         """
-        # Validate tile_path
-        # Check that either a tile path or h5py_dir is provided
-        if self.tile_paths is None and self.h5py_dir is None:
-            raise ValueError("Either tile paths or h5py_dir must be provided")
-        if self.tile_paths is not None and self.h5py_dir is not None:
-            raise ValueError("Only one of tile_paths or h5py_dir must be provided")
-
         # Validate supported_modalities
         if not isinstance(self.supported_modalities, list):
             raise ValueError("supported_modalities must be a list")
@@ -944,8 +932,6 @@ class HeliosDatasetConfig(Config):
     @property
     def tile_upaths(self) -> UPath | None:
         """Get the tile path."""
-        if self.tile_paths is None:
-            return None
         return [UPath(tile_path) for tile_path in self.tile_paths]
 
     @property
