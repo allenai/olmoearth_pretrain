@@ -76,7 +76,10 @@ def build_launch_config(
         allow_dirty=False,
         priority=BeakerPriority.high,
         env_vars=[
-            BeakerEnvVar(name="NCCL_DEBUG", value="INFO" if nccl_debug else "WARN")
+            BeakerEnvVar(name="NCCL_DEBUG", value="INFO" if nccl_debug else "WARN"),
+            BeakerEnvVar(
+                name="GOOGLE_APPLICATION_CREDENTIALS", value="/etc/gcp_credentials.json"
+            ),
         ],
         env_secrets=[
             BeakerEnvSecret(name="BEAKER_TOKEN", secret=f"{beaker_user}_BEAKER_TOKEN"),
@@ -84,8 +87,11 @@ def build_launch_config(
                 name="WANDB_API_KEY", secret=f"{beaker_user}_WANDB_API_KEY"
             ),  # nosec
             BeakerEnvSecret(name="GITHUB_TOKEN", secret=f"{beaker_user}_GITHUB_TOKEN"),  # nosec
+            BeakerEnvSecret(name="GCP_CREDENTIALS", secret="HELIOS_GCP_CREDENTIALS"),  # nosec
         ],
         setup_steps=[
+            # Write GCP credentials.
+            'echo "$GCP_CREDENTIALS" > $GOOGLE_APPLICATION_CREDENTIALS',
             # Clone private repo.
             "conda install gh --channel conda-forge",
             # assumes that conda is installed, which is true for our beaker images.
