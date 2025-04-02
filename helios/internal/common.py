@@ -34,6 +34,10 @@ def get_root_dir(cluster: str) -> str:
     if any(weka_cluster_name in cluster for weka_cluster_name in WEKA_CLUSTER_NAMES):
         root_dir = f"/weka/{DEFAULT_HELIOS_WEKA_BUCKET.bucket}/{PROJECT_NAME}"
     elif "augusta" in cluster:
+        # There does not seem to be any way to set the result directory in olmo-core.
+        # Here we use /unused/ which is the default result directory in beaker-py, it
+        # should work but it is not meant to be used like this, it is just meant to be
+        # a placeholder.
         root_dir = f"/unused/{PROJECT_NAME}"
     elif "local" in cluster:
         root_dir = "./local_output"
@@ -60,7 +64,14 @@ def build_launch_config(
     if isinstance(clusters, str):
         clusters = [clusters]
     weka_buckets: list[BeakerWekaBucket]
+    # We cannot mount Weka on Augusta.
+    # We just check if the first cluster is Augusta here since we assume users
+    # targeting Augusta won't target any other cluster.
     if "augusta" in clusters[0]:
+        if len(clusters) > 1:
+            raise ValueError(
+                "Jobs targeting Augusta should not target other clusters since Weka will not be mounted"
+            )
         weka_buckets = []
     else:
         weka_buckets = [DEFAULT_HELIOS_WEKA_BUCKET]
