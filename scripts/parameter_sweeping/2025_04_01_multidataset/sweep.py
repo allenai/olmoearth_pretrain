@@ -77,7 +77,8 @@ TINYVAR_MODEL_ARGS = " ".join(
 
 BASE_MODEL_CFG = {
     "encoder_config.embedding_size": 768,
-    "decoder_config.embedding_size": 768,
+    "decoder_config.encoder_embedding_size": 768,
+    "decoder_config.decoder_embedding_size": 768,
     "encoder_config.depth": 12,
     "decoder_config.depth": 12,
     "encoder_config.num_heads": 12,
@@ -89,7 +90,8 @@ BASE_MODEL_ARGS = " ".join(
 
 BASEVAR_MODEL_CFG = {
     "encoder_config.embedding_size": 768,
-    "decoder_config.embedding_size": 768,
+    "decoder_config.encoder_embedding_size": 768,
+    "decoder_config.decoder_embedding_size": 768,
     "encoder_config.depth": 12,
     "decoder_config.depth": 4,
     "encoder_config.num_heads": 12,
