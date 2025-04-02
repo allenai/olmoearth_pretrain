@@ -34,7 +34,7 @@ def get_root_dir(cluster: str) -> str:
     if any(weka_cluster_name in cluster for weka_cluster_name in WEKA_CLUSTER_NAMES):
         root_dir = f"/weka/{DEFAULT_HELIOS_WEKA_BUCKET.bucket}/{PROJECT_NAME}"
     elif "augusta" in cluster:
-        raise ValueError("Augusta is not supported yet")
+        root_dir = f"/unused/{PROJECT_NAME}"
     elif "local" in cluster:
         root_dir = "./local_output"
     else:
