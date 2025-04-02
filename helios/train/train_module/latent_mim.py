@@ -173,9 +173,9 @@ class LatentMIMTrainModule(HeliosTrainModule):
             regularizer_config.build() if regularizer_config is not None else None
         )
 
-        self.metric_name = self.base_loss.name
+        self.total_loss_name = self.base_loss.name
         if self.regularizer is not None:
-            self.metric_name = f"{self.base_loss.name}+{self.regularizer.name}"
+            self.total_loss_name = f"{self.base_loss.name}+{self.regularizer.name}"
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -237,7 +237,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 loss.backward()
 
         self.trainer.record_metric(
-            f"train/{self.metric_name}",
+            f"train/{self.total_loss_name}",
             total_batch_loss,
             ReduceType.mean,
         )
