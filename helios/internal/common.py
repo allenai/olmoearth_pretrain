@@ -57,7 +57,13 @@ def build_launch_config(
     THis will be the default setup, any changes that are temporary should be overriden
     on the commandline
     """
-    weka_buckets: list[BeakerWekaBucket] = [DEFAULT_HELIOS_WEKA_BUCKET]
+    if isinstance(clusters, str):
+        clusters = [clusters]
+    weka_buckets: list[BeakerWekaBucket]
+    if "augusta" in clusters[0]:
+        weka_buckets = []
+    else:
+        weka_buckets = [DEFAULT_HELIOS_WEKA_BUCKET]
 
     beaker_user = get_beaker_username()
     return BeakerLaunchConfig(
@@ -66,7 +72,7 @@ def build_launch_config(
         cmd=cmd,
         task_name=task_name,
         workspace=workspace,
-        clusters=clusters if isinstance(clusters, list) else [clusters],
+        clusters=clusters,
         weka_buckets=weka_buckets,
         beaker_image=f"henryh/{OLMoCoreBeakerImage.stable}",  # we can all use the same image for now
         num_nodes=1,
