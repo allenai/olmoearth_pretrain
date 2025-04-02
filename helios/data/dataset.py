@@ -380,12 +380,15 @@ class HeliosDataset(Dataset):
         if h5py_dir is not None:
             self.h5py_dir = h5py_dir
             self.tile_path = h5py_dir.parent.parent
-            # Ensure that the supported modalities are present in the h5py directory
-            for modality in supported_modalities:
-                if modality.name not in self.h5py_dir.parent.name:
-                    raise ValueError(
-                        f"The modality {modality.name} is not present in the h5py directory"
-                    )
+            # TODO: FIX THIS WHEN WEKA PROBLEM GONE
+            try:
+                for modality in supported_modalities:
+                    if modality.name not in self.h5py_dir.parent.name:
+                        raise ValueError(
+                            f"The modality {modality.name} is not present in the h5py directory"
+                        )
+            except Exception as e:
+                logger.error(f"Error checking modalities in h5py directory: {e}")
         else:
             self.tile_path = tile_path
             self.h5py_dir: Path | None = None  # type: ignore
