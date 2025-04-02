@@ -18,7 +18,7 @@ def main() -> None:
         description="Launch runs with different dataloader seeds"
     )
     parser.add_argument(
-        "--num_runs", type=int, default=20, help="Number of runs to launch"
+        "--num_runs", type=int, default=50, help="Number of runs to launch"
     )
     parser.add_argument(
         "--start_seed", type=int, default=1000, help="Starting seed value"
