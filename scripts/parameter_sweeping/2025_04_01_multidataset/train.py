@@ -1,6 +1,7 @@
 """Base script for this collection of experiments."""
 
 import logging
+import random
 
 from olmo_core.config import DType
 from olmo_core.distributed.parallel.data_parallel import (
@@ -85,11 +86,11 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 2e-3
+    LR = 2e-4
     RANK_MICROBATCH_SIZE = 128
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.74
-    WD = 2e-3
+    WD = 0.02
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config = MaskingConfig(
         strategy_config={
@@ -136,17 +137,15 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
     NUM_WORKERS = 32
     GLOBAL_BATCH_SIZE = 128
-    PREFETCH_FACTOR = 4
     TOKEN_BUDGET = 1500
 
     SAMPLE_HW_P_LIST = list(range(5, 13))
 
     dataloader_config = HeliosDataLoaderConfig(
         global_batch_size=GLOBAL_BATCH_SIZE,
-        seed=3622,
+        seed=random.randint(0, 999999),
         work_dir=common.save_folder,
         num_workers=NUM_WORKERS,
-        prefetch_factor=PREFETCH_FACTOR,
         sampled_hw_p_list=SAMPLE_HW_P_LIST,
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
