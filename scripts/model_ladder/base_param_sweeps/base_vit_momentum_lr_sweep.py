@@ -27,10 +27,10 @@ MODEL_SIZE_ARGS = {
     },
 }
 
-EMA_DECAYS = [0.946, 0.974, 0.987, 0.992, 0.997, 0.9993]
+EMA_DECAYS = [0.9993]
 EMA_DECAYS = EMA_DECAYS[::-1]
 
-LEARNING_RATES = [3e-4, 1e-3, 2e-3]
+LEARNING_RATES = [2e-4, 3e-4, 1e-3, 2e-3]
 
 # Base command template
 BASE_COMMAND = (
