@@ -124,9 +124,7 @@ for token_exit_args, model_args in itertools.product(
     MODEL_ARGS,
 ):
     # Construct run name indicating hyperparameters
-    run_name = (
-        f"latentmim_token_exit_{token_exit_args[1]}_model_{model_args[1]}_google_saturn"
-    )
+    run_name = f"latentmim_token_exit_{token_exit_args[1]}_model_{model_args[1]}_google_saturn2"
 
     if "base" in model_args[1]:
         # Lower batch size, otherwise it is too much memory usage.
