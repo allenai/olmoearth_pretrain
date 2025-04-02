@@ -539,7 +539,7 @@ class HeliosDataset(Dataset):
                 num_samples = int(self.h5py_dir.name)
             except Exception as e:
                 logger.error(f"Error getting number of samples from h5py_dir: {e}")
-                num_samples = 98856
+            num_samples = 98856
         if samples is None:
             samples = []
         self.latlon_distribution = self.get_geographic_distribution(samples)
