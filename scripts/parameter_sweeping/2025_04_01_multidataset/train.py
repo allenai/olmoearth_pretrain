@@ -158,7 +158,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     return HeliosDatasetConfig(
-        h5py_dir="gs://ai2-helios/dataset/osm_sampling/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/348102",
+        h5py_dir="gs://ai2-helios-us-central1/dataset/osm_sampling/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/348102",
         tile_paths=[
             "/weka/dfive-default/helios/dataset/osm_sampling/",
             "/weka/dfive-default/helios/dataset/presto/",
