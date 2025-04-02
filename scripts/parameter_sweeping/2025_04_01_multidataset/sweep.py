@@ -53,7 +53,8 @@ TOKEN_EXIT_ARGS = [
 
 TINY_MODEL_CFG = {
     "encoder_config.embedding_size": 192,
-    "decoder_config.embedding_size": 192,
+    "decoder_config.encoder_embedding_size": 192,
+    "decoder_config.decoder_embedding_size": 192,
     "encoder_config.depth": 12,
     "decoder_config.depth": 12,
     "encoder_config.num_heads": 3,
@@ -65,7 +66,8 @@ TINY_MODEL_ARGS = " ".join(
 
 TINYVAR_MODEL_CFG = {
     "encoder_config.embedding_size": 192,
-    "decoder_config.embedding_size": 192,
+    "decoder_config.encoder_embedding_size": 192,
+    "decoder_config.decoder_embedding_size": 192,
     "encoder_config.depth": 12,
     "decoder_config.depth": 4,
     "encoder_config.num_heads": 3,
