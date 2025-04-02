@@ -171,7 +171,7 @@ def main() -> None:
                 )
 
                 # Construct run name indicating hyperparameters
-                run_name = f"6latent_mim_{masking_type}_patch_disc_new_exit_{exit_config}_{size_str}"
+                run_name = f"7latent_mim_{masking_type}_patch_disc_new_exit_{exit_config}_{size_str}"
 
                 # Construct full command
                 command = BASE_COMMAND.format(
