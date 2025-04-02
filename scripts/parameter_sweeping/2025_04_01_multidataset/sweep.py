@@ -112,7 +112,7 @@ MODEL_ARGS = [
 
 # Base command template
 BASE_COMMAND = (
-    "python3 scripts/parameter_sweeping/2025_04_01_multidataset/train.py launch {run_name} ai2/jupiter-cirrascale-2 "
+    "python3 scripts/parameter_sweeping/2025_04_01_multidataset/train.py launch {run_name} ai2/saturn-cirrascale "
     "--train_module.rank_microbatch_size={rank_microbatch_size} "
     "{token_exit_args} "
     "{model_args}"
@@ -124,7 +124,7 @@ for token_exit_args, model_args in itertools.product(
     MODEL_ARGS,
 ):
     # Construct run name indicating hyperparameters
-    run_name = f"latentmim_token_exit_{token_exit_args[1]}_model_{model_args[1]}"
+    run_name = f"latentmim_token_exit_{token_exit_args[1]}_model_{model_args[1]}_saturn"
 
     if "base" in model_args[1]:
         # Lower batch size, otherwise it is too much memory usage.
