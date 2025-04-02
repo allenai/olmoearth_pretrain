@@ -120,7 +120,7 @@ for token_exit_args, model_args in itertools.product(
     MODEL_ARGS,
 ):
     # Construct run name indicating hyperparameters
-    run_name = f"3latentmim_tiny_token_exit_{token_exit_args[1]}_model_{model_args[1]}"
+    run_name = f"latentmim_token_exit_{token_exit_args[1]}_model_{model_args[1]}"
 
     rank_microbatch_size = 128
 
