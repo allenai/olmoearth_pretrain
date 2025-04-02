@@ -124,7 +124,11 @@ for token_exit_args, model_args in itertools.product(
     # Construct run name indicating hyperparameters
     run_name = f"latentmim_token_exit_{token_exit_args[1]}_model_{model_args[1]}"
 
-    rank_microbatch_size = 128
+    if "base" in model_args[1]:
+        # Lower batch size, otherwise it is too much memory usage.
+        rank_microbatch_size = 64
+    else:
+        rank_microbatch_size = 128
 
     # Construct full command
     command = BASE_COMMAND.format(
