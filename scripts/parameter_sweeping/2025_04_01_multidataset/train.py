@@ -86,11 +86,11 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 2e-4
+    LR = 2e-3
     RANK_MICROBATCH_SIZE = 128
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.74
-    WD = 0.02
+    WD = 2e-3
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config = MaskingConfig(
         strategy_config={
@@ -135,7 +135,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
 
-    NUM_WORKERS = 32
+    NUM_WORKERS = 8
     GLOBAL_BATCH_SIZE = 128
     TOKEN_BUDGET = 1500
 
@@ -157,7 +157,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     return HeliosDatasetConfig(
-        h5py_dir="gs://ai2-helios/dataset/osm_sampling/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/348102",
+        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/348102",
         tile_paths=[
             "/weka/dfive-default/helios/dataset/osm_sampling/",
             "/weka/dfive-default/helios/dataset/presto/",
