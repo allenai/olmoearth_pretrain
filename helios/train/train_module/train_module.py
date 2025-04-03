@@ -486,10 +486,9 @@ class HeliosTrainModule(TrainModule):
             for param, target_param in zip(
                 self.model.encoder.parameters(), self.model.target_encoder.parameters()
             ):
-                # TODO: Make this an in place operation
-                target_param.data = cur_ema_value * get_full_tensor(
-                    target_param.data
-                ) + (1 - cur_ema_value) * get_full_tensor(param.data)
+                get_full_tensor(target_param.data).mul_(cur_ema_value).add_(
+                    get_full_tensor(param.data), alpha=(1 - cur_ema_value)
+                )
 
     def eval_batch(
         self, batch: dict[str, Any], labels: torch.Tensor | None = None
