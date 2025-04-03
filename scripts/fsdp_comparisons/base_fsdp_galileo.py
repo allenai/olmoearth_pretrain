@@ -71,7 +71,7 @@ MLP_RATIO = 4.0
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
     ENCODER_EMBEDDING_SIZE = 1536
-    DECODER_EMBEDDING_SIZE = 768
+    DECODER_EMBEDDING_SIZE = 1536
     ENCODER_DEPTH = 40
     DECODER_DEPTH = 12
     ENCODER_NUM_HEADS = 16
@@ -111,7 +111,7 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> GalileoTrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 0.002
+    LR = 0.0004
     RANK_MICROBATCH_SIZE = 32
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
@@ -149,8 +149,12 @@ def build_train_module_config(
     }
     token_exit_cfg_b = {modality: 0 for modality in common.supported_modality_names}
 
-    WARMUP_EPOCHS = 10
-    dp_config = DataParallelConfig(name=DataParallelType.fsdp)
+    WARMUP_EPOCHS = 20
+    dp_config = DataParallelConfig(
+        name=DataParallelType.fsdp,
+        param_dtype=DType.bfloat16,
+        reduce_dtype=DType.float32,
+    )
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
@@ -177,7 +181,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
     NUM_WORKERS = 2
-    GLOBAL_BATCH_SIZE = 128
+    GLOBAL_BATCH_SIZE = 256
     PREFETCH_FACTOR = 4
     SAMPLE_HW_P_LIST = list(range(5, 13))
     TOKEN_BUDGET = 1500
