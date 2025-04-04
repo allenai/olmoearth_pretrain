@@ -23,77 +23,13 @@ Eurosat best:
 
 import subprocess  # nosec
 
-from helios.internal.utils import build_token_exit_config
+from helios.internal.utils import MODEL_SIZE_ARGS, build_token_exit_config
 
 MASKING_TYPES = [
     "random",
     "space_time",
 ]
-MODEL_SIZE_ARGS = {
-    "tiny": {
-        "decoder_depth": 12,
-        "encoder_embedding_size": 192,
-        "decoder_embedding_size": 192,
-        "encoder_depth": 12,
-        "encoder_num_heads": 3,
-        "decoder_num_heads": 3,
-        "mlp_ratio": 4.0,
-    },
-    "base": {
-        "decoder_depth": 12,
-        "encoder_embedding_size": 768,
-        "decoder_embedding_size": 768,
-        "encoder_depth": 12,
-        "encoder_num_heads": 12,
-        "decoder_num_heads": 12,
-        "mlp_ratio": 4.0,
-    },
-    "large": {
-        "decoder_depth": 24,
-        "encoder_embedding_size": 1024,
-        "decoder_embedding_size": 1024,
-        "encoder_depth": 24,
-        "encoder_num_heads": 16,
-        "decoder_num_heads": 16,
-        "mlp_ratio": 4.0,
-    },
-    "large_shallow_decoder": {
-        "decoder_depth": 6,
-        "encoder_embedding_size": 1024,
-        "decoder_embedding_size": 1024,
-        "encoder_depth": 24,
-        "encoder_num_heads": 16,
-        "decoder_num_heads": 16,
-        "mlp_ratio": 4.0,
-    },
-    "base_shallow_decoder": {
-        "decoder_depth": 6,
-        "encoder_embedding_size": 768,
-        "decoder_embedding_size": 768,
-        "encoder_depth": 12,
-        "encoder_num_heads": 12,
-        "decoder_num_heads": 12,
-        "mlp_ratio": 4.0,
-    },
-    "large_super_shallow_decoder": {
-        "decoder_depth": 2,
-        "encoder_embedding_size": 1024,
-        "decoder_embedding_size": 1024,
-        "encoder_depth": 24,
-        "encoder_num_heads": 16,
-        "decoder_num_heads": 16,
-        "mlp_ratio": 4.0,
-    },
-    "base_super_shallow_decoder": {
-        "decoder_depth": 2,
-        "encoder_embedding_size": 768,
-        "decoder_embedding_size": 768,
-        "encoder_depth": 12,
-        "encoder_num_heads": 12,
-        "decoder_num_heads": 12,
-        "mlp_ratio": 4.0,
-    },
-}
+
 
 EXIT_CONFIG_TYPES = ["zero", "full"]
 
@@ -102,7 +38,7 @@ LEARNING_RATE_ARGS = [4e-5, 4e-4, 2e-3]
 
 # Base command template
 BASE_COMMAND = (
-    "python3 scripts/model_ladder/latent_mim_base_script.py launch {run_name} ai2/jupiter-cirrascale-2 "
+    "python3 scripts/model_ladder/latent_mim_base_model_ladder_script.py launch {run_name} ai2/jupiter-cirrascale-2 "
     "--model.encoder_config.embedding_size={encoder_embedding_size} "
     "--model.decoder_config.encoder_embedding_size={encoder_embedding_size} "
     "--model.decoder_config.decoder_embedding_size={decoder_embedding_size} "
