@@ -153,7 +153,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
     NUM_WORKERS = 8
-    GLOBAL_BATCH_SIZE = 128
+    GLOBAL_BATCH_SIZE = 512
     PREFETCH_FACTOR = 4
     SAMPLE_HW_P_LIST = list(range(5, 13))
     TOKEN_BUDGET = 1500
@@ -211,42 +211,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
-        ),
-        "mados": DownstreamTaskConfig(
-            dataset="mados",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-        ),
-        "sen1floods11": DownstreamTaskConfig(
-            dataset="sen1floods11",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-        ),
-        "pastis": DownstreamTaskConfig(
-            dataset="pastis",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-        ),
-        "pastis-r": DownstreamTaskConfig(
-            dataset="pastis-r",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
         ),
     }
     # Let us not use garbage collector fallback
