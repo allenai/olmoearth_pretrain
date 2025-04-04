@@ -120,6 +120,8 @@ BASE_COMMAND = (
     "--train_module.masking_config_a.strategy_config.type={masking_type_a} "
     "--train_module.masking_config_b.strategy_config.type={masking_type_b} "
     "--train_module.optim_config.lr={lr} "
+    "--dataset.h5py_dir={dataset_path} "
+    "--trainer.callbacks.wandb.project=04042025_galileo_model_ladder "
     "--launch.num_gpus=4"
 )
 
@@ -145,6 +147,7 @@ def main() -> None:
                 command = BASE_COMMAND.format(
                     run_name=run_name,
                     **args,
+                    dataset_path=dataset_path,
                     masking_type_a=masking_combination[0],
                     masking_type_b=masking_combination[1],
                     lr=lr,
