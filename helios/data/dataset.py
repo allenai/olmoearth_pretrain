@@ -37,7 +37,7 @@ from helios.data.constants import (
     TimeSpan,
 )
 from helios.data.normalize import Normalizer, Strategy
-from helios.data.utils import convert_to_db, update_streaming_stats
+from helios.data.utils import convert_to_db
 from helios.dataset.parse import ModalityTile, parse_helios_dataset
 from helios.dataset.sample import (
     SampleInformation,
@@ -740,77 +740,6 @@ class HeliosDataset(Dataset):
         if self.sample_indices is None:
             raise ValueError("Dataset is not prepared")
         return self.sample_indices.shape[0]
-
-    def compute_normalization_values(
-        self,
-        estimate_from: int | None = None,
-    ) -> dict[str, Any]:
-        """Compute the normalization values for the dataset in a streaming manner.
-
-        Args:
-            estimate_from: The number of samples to estimate the normalization values from.
-
-        Returns:
-            dict: A dictionary containing the normalization values for the dataset.
-        """
-        if estimate_from is not None:
-            indices_to_sample = random.sample(list(range(len(self))), k=estimate_from)
-        else:
-            indices_to_sample = list(range(len(self)))
-
-        norm_dict: dict[str, Any] = {}
-
-        for i in tqdm(indices_to_sample):
-            get_item_args = GetItemArgs(
-                idx=i, patch_size=1, sampled_hw_p=IMAGE_TILE_SIZE
-            )
-            _, sample = self[get_item_args]
-            for modality in sample.modalities:
-                # Shall we compute the norm stats for worldcover?
-                if modality == "timestamps" or modality == "latlon":
-                    continue
-                modality_data = sample.as_dict(ignore_nones=True)[modality]
-                modality_spec = Modality.get(modality)
-                modality_bands = modality_spec.band_order
-                if modality_data is None:
-                    continue
-                if modality not in norm_dict:
-                    norm_dict[modality] = {}
-                    for band in modality_bands:
-                        norm_dict[modality][band] = {
-                            "mean": 0.0,
-                            "var": 0.0,
-                            "std": 0.0,
-                            "count": 0,
-                        }
-                # Compute the normalization stats for the modality
-                for idx, band in enumerate(modality_bands):
-                    modality_band_data = modality_data[:, :, :, idx]  # (H, W, T, C)
-                    current_stats = norm_dict[modality][band]
-                    new_count, new_mean, new_var = update_streaming_stats(
-                        current_stats["count"],
-                        current_stats["mean"],
-                        current_stats["var"],
-                        modality_band_data,
-                    )
-                    # Update the normalization stats
-                    norm_dict[modality][band]["count"] = new_count
-                    norm_dict[modality][band]["mean"] = new_mean
-                    norm_dict[modality][band]["var"] = new_var
-
-        # Compute the standard deviation
-        for modality in norm_dict:
-            for band in norm_dict[modality]:
-                norm_dict[modality][band]["std"] = (
-                    norm_dict[modality][band]["var"]
-                    / norm_dict[modality][band]["count"]
-                ) ** 0.5
-
-        norm_dict["total_n"] = len(self)
-        norm_dict["sampled_n"] = len(indices_to_sample)
-        norm_dict["tile_paths"] = self.tile_paths
-
-        return norm_dict
 
     @classmethod
     def load_sample(
