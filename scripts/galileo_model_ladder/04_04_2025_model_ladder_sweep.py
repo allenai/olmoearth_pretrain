@@ -107,7 +107,7 @@ DATASET_ARGS = {
 
 # Base command template
 BASE_COMMAND = (
-    "python3 scripts/galileo_model_ladder/base_galileo_model_ladder.py dry_run {run_name} ai2/jupiter-cirrascale-2 "
+    "python3 scripts/galileo_model_ladder/base_galileo_model_ladder.py launch {run_name} ai2/jupiter-cirrascale-2 "
     "--model.encoder_config.embedding_size={encoder_embedding_size} "
     "--model.decoder_config.encoder_embedding_size={encoder_embedding_size} "
     "--model.decoder_config.decoder_embedding_size={decoder_embedding_size} "
