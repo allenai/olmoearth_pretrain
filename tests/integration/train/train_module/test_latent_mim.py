@@ -159,7 +159,7 @@ class MockTrainer:
 
 
 def test_train_batch_without_missing_modalities(
-    samples_without_missing_modalities: list[HeliosSample],
+    samples_without_missing_modalities: list[tuple[int, HeliosSample]],
     latent_mim_model: LatentMIM,
     train_module_config: LatentMIMTrainModuleConfig,
     set_random_seeds: None,
@@ -185,7 +185,7 @@ def test_train_batch_without_missing_modalities(
 
 
 def test_train_batch_with_missing_modalities(
-    samples_with_missing_modalities: list[HeliosSample],
+    samples_with_missing_modalities: list[tuple[int, HeliosSample]],
     latent_mim_model: LatentMIM,
     train_module_config: LatentMIMTrainModuleConfig,
     set_random_seeds: None,
