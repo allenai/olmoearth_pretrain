@@ -157,6 +157,7 @@ def main() -> None:
 
                 # Execute the command
                 subprocess.run(command, shell=True, check=True)  # nosec
+                return
 
 
 if __name__ == "__main__":
