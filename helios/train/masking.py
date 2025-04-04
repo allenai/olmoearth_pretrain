@@ -551,6 +551,70 @@ class ModalityMaskingStrategy(MaskingStrategy):
         return MaskedHeliosSample(**output_dict)
 
 
+@MASKING_STRATEGY_REGISTRY.register("staticmodality")
+class StaticModalityMaskingStrategy(MaskingStrategy):
+    """Mask specific modalities."""
+
+    def __init__(
+        self,
+        encode_modalities: list[str],
+        decode_modalities: list[str],
+    ) -> None:
+        """Initialize the masking strategy.
+
+        Args:
+            encode_modalities: the modalities to provide to the online encoder.
+            decode_modalities: the modalities to decode.
+        """
+        self._encode_modalities = encode_modalities
+        self._decode_modalities = decode_modalities
+        num_modalities = len(encode_modalities) + len(decode_modalities)
+        self._encode_ratio = len(encode_modalities) / num_modalities
+        self._decode_ratio = len(decode_modalities) / num_modalities
+
+    def apply_mask(
+        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedHeliosSample:
+        """Apply the masking strategy.
+
+        Args:
+            batch: Input data of type HeliosSample
+            patch_size: Optional patch size for spatial masking strategies
+            **kwargs: Additional arguments for maskings
+
+        Returns:
+            MaskedHeliosSample containing the masked data and mask
+        """
+        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
+
+        present_modalities = list(batch.as_dict(ignore_nones=True).keys())
+        present_modalities = [b for b in present_modalities if b != "timestamps"]
+
+        for idx, modality in enumerate(present_modalities):
+            instance = getattr(batch, modality)
+            output_dict[modality] = instance
+
+            if isinstance(instance, torch.Tensor):
+                device: torch.device | None = instance.device
+            else:
+                device = None
+
+            if modality in self._encode_modalities:
+                mask_value = MaskValue.ONLINE_ENCODER
+            elif modality in self._decode_modalities:
+                mask_value = MaskValue.DECODER
+            else:
+                mask_value = MaskValue.TARGET_ENCODER_ONLY
+
+            mask = (
+                torch.ones(*instance.shape, dtype=torch.int32, device=device)
+                * mask_value.value
+            )
+            output_dict[MaskedHeliosSample.get_masked_modality_name(modality)] = mask
+
+        return MaskedHeliosSample(**output_dict)
+
+
 @MASKING_STRATEGY_REGISTRY.register("space_time")
 class SpaceTimeMaskingStrategy(MaskingStrategy):
     """Randomly select space or time masking and apply it to the input data."""
