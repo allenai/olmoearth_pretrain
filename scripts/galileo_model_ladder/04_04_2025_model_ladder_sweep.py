@@ -141,7 +141,7 @@ def main() -> None:
             for dataset_name, dataset_path in DATASET_ARGS.items():
                 for lr in LEARNING_RATE_ARGS:
                     # Construct run name indicating hyperparameters
-                    run_name = f"galileo_dataset_{dataset_name}_{masking_combination[0]}_{masking_combination[1]}_{lr}_{size_str}"
+                    run_name = f"1_galileo_dataset_{dataset_name}_{masking_combination[0]}_{masking_combination[1]}_{lr}_{size_str}"
 
                 # Construct full command
                 command = BASE_COMMAND.format(
@@ -157,7 +157,6 @@ def main() -> None:
 
                 # Execute the command
                 subprocess.run(command, shell=True, check=True)  # nosec
-                return
 
 
 if __name__ == "__main__":
