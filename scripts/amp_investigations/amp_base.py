@@ -44,12 +44,12 @@ MIN_PATCH_SIZE = 1
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    ENCODER_EMBEDDING_SIZE = 128
-    DECODER_EMBEDDING_SIZE = 128
-    ENCODER_DEPTH = 4
-    DECODER_DEPTH = 4
-    ENCODER_NUM_HEADS = 8
-    DECODER_NUM_HEADS = 8
+    ENCODER_EMBEDDING_SIZE = 768
+    DECODER_EMBEDDING_SIZE = 768
+    ENCODER_DEPTH = 12
+    DECODER_DEPTH = 12
+    ENCODER_NUM_HEADS = 12
+    DECODER_NUM_HEADS = 12
     MLP_RATIO = 4.0
     encoder_config = EncoderConfig(
         supported_modality_names=common.supported_modality_names,
@@ -84,7 +84,7 @@ def build_train_module_config(
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     LR = 0.002
-    RANK_MICROBATCH_SIZE = 128
+    RANK_MICROBATCH_SIZE = 16
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
     WD = 0.02
@@ -109,13 +109,14 @@ def build_train_module_config(
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
     train_module_config = LatentMIMTrainModuleConfig(
+        # TODO: change name to optim config
         optim_config=optim_config,
         masking_config=masking_config,
         warmup_duration=Duration.epochs(WARMUP_EPOCHS),
         loss_config=loss_config,
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         token_exit_cfg=token_exit_cfg,
-        autocast_precision=DType.bfloat16,
+        autocast_precision="bfloat16",
         max_grad_norm=1.0,
         dp_config=dp_config,
         scheduler=scheduler,
@@ -128,9 +129,9 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
 
-    NUM_WORKERS = 8
-    GLOBAL_BATCH_SIZE = 128
-    PREFETCH_FACTOR = 4
+    NUM_WORKERS = 0
+    GLOBAL_BATCH_SIZE = 16
+    PREFETCH_FACTOR = 2
     TOKEN_BUDGET = 1500
 
     SAMPLE_HW_P_LIST = list(range(5, 13))

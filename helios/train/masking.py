@@ -11,7 +11,7 @@ from class_registry import ClassRegistry
 from einops import rearrange, repeat
 from olmo_core.config import Config
 
-from helios.data.constants import Modality, ModalitySpec
+from helios.data.constants import MISSING_VALUE, Modality, ModalitySpec
 from helios.data.dataset import HeliosSample
 from helios.types import ArrayTensor
 
@@ -199,6 +199,21 @@ class MaskingStrategy:
         """
         raise NotImplementedError("Subclasses must implement this method")
 
+    def get_missing_mask(self, instance: torch.Tensor) -> torch.Tensor:
+        """Get the missing mask for the input data."""
+        missing_mask = instance == MISSING_VALUE
+        mask = missing_mask.all(dim=tuple(range(1, instance.ndim)))
+        return mask
+
+    def fill_mask_with_missing_values(
+        self, instance: torch.Tensor, mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Apply a missing mask to the input data."""
+        missing_mask = self.get_missing_mask(instance)
+        if missing_mask is not None:
+            mask[missing_mask] = MaskValue.MISSING.value
+        return mask
+
     def _create_random_mask(
         self,
         modality: ModalitySpec,
@@ -330,7 +345,7 @@ class TimeMaskingStrategy(MaskingStrategy):
             raise ValueError("patch_size must be provided for time masking")
         output_dict: dict[str, ArrayTensor | None] = {}
         temporal_mask = None
-        for modality_name in batch._fields:
+        for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
             if instance is None:
                 # set instance and mask to None
@@ -360,8 +375,8 @@ class TimeMaskingStrategy(MaskingStrategy):
                     mask = repeat(
                         temporal_mask, "b t -> b h w t b_s", h=h, w=w, b_s=b_s
                     )
-                    mask = mask.view(*shape[:-1], b_s)
-
+                    mask = mask.view(*shape[:-1], b_s).contiguous()
+                mask = self.fill_mask_with_missing_values(instance, mask)
                 output_dict[modality_name] = instance
                 output_dict[
                     MaskedHeliosSample.get_masked_modality_name(modality_name)
@@ -442,7 +457,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
             raise ValueError("patch_size must be provided for space masking")
         output_dict: dict[str, ArrayTensor | None] = {}
         spatial_mask = None
-        for modality_name in batch._fields:
+        for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
             if instance is None:
                 # set instance and mask to None
@@ -475,8 +490,8 @@ class SpaceMaskingStrategy(MaskingStrategy):
                         t = 1
                     b_s = modality.num_band_sets
                     mask = repeat(spatial_mask, "... -> ... t b_s", t=t, b_s=b_s)
-                    mask = mask.view(*shape[:-1], b_s)
-
+                    mask = mask.view(*shape[:-1], b_s).contiguous()
+                mask = self.fill_mask_with_missing_values(instance, mask)
                 output_dict[modality_name] = instance
                 output_dict[
                     MaskedHeliosSample.get_masked_modality_name(modality_name)
@@ -514,9 +529,7 @@ class ModalityMaskingStrategy(MaskingStrategy):
             MaskedHeliosSample containing the masked data and mask
         """
         output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
-
-        present_modalities = list(batch.as_dict(ignore_nones=True).keys())
-        present_modalities = [b for b in present_modalities if b != "timestamps"]
+        present_modalities = [b for b in batch.modalities if b != "timestamps"]
 
         num_present_modalities = len(present_modalities)
         encode_modalities = max(1, int(self.encode_ratio * num_present_modalities))
@@ -550,7 +563,9 @@ class ModalityMaskingStrategy(MaskingStrategy):
             b_s = shape[-1]
             b, h, w, t = list(shape[:-1]) + [1] * (4 - len(shape[:-1]))
             mask = repeat(modality_mask, "b -> b h w t b_s", h=h, w=w, b_s=b_s, t=t)
-            mask = mask.view(*shape)
+            # Ensure we don't do index_put_ on expanded tensors is deprecated.
+            mask = mask.view(*shape).contiguous()
+            mask = self.fill_mask_with_missing_values(instance, mask)
             output_dict[MaskedHeliosSample.get_masked_modality_name(modality)] = mask
 
         return MaskedHeliosSample(**output_dict)
@@ -665,7 +680,7 @@ class RandomMaskingStrategy(MaskingStrategy):
         if patch_size is None:
             raise ValueError("patch_size must be provided for random masking")
         output_dict: dict[str, ArrayTensor | None] = {}
-        for modality_name in batch._fields:
+        for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
             if instance is None:
                 # set instance and mask to None
@@ -686,7 +701,7 @@ class RandomMaskingStrategy(MaskingStrategy):
                 mask = self._create_random_mask(
                     Modality.get(modality_name), instance.shape, patch_size, device
                 )
-
+                mask = self.fill_mask_with_missing_values(instance, mask)
                 output_dict[modality_name] = instance
                 output_dict[
                     MaskedHeliosSample.get_masked_modality_name(modality_name)

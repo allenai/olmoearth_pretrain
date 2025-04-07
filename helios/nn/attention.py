@@ -385,3 +385,7 @@ class Block(nn.Module):
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         fully_shard(self, **fsdp_kwargs)
+
+    def apply_compile(self) -> None:
+        """Apply torch.compile to the model."""
+        self.compile()

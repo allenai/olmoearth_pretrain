@@ -14,7 +14,7 @@ from olmo_core.config import Config
 from torch import Tensor
 
 from helios.data.constants import Modality
-from helios.nn.flexihelios import TokensAndMasks
+from helios.nn.flexihelios import PoolingType, TokensAndMasks
 from helios.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
@@ -228,9 +228,9 @@ class PatchDiscriminationLoss(Loss):
         """
         all_preds, all_masks = predictions.flatten_tokens_and_masks()
         all_targets = targets.flatten_tokens_and_masks()[0]
-
-        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        decoder_mask = all_masks == MaskValue.DECODER.value
+        pred = all_preds[decoder_mask].unsqueeze(dim=0)
+        target = all_targets[decoder_mask].unsqueeze(dim=0)
         bs, nt, _ = pred.shape
 
         if self.pred2unit:
@@ -243,7 +243,6 @@ class PatchDiscriminationLoss(Loss):
 
         scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
         count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
-
         if self.mask_other_samples:
             logit_mask = torch.full_like(scores, -torch.finfo(scores.dtype).max)
             start = 0
@@ -251,8 +250,6 @@ class PatchDiscriminationLoss(Loss):
                 end = start + c
                 logit_mask[:, start:end, start:end] = 0
                 start += c
-            logger.info(f"logit_mask: {logit_mask.shape}")
-            logger.info(f"scores: {scores.shape}")
             scores = scores + logit_mask
 
         labels = torch.arange(nt, dtype=torch.long, device=pred.device)[None].repeat(
@@ -515,6 +512,90 @@ class CrossEntropyLoss(Loss):
         target = all_targets[all_masks == MaskValue.DECODER.value]
 
         return F.cross_entropy(pred, target.squeeze())
+
+
+@LOSS_REGISTRY.register("KoLeo")
+class KoLeoLoss(Loss):
+    """Loss function for cross entropy.
+
+    The KoLeo regularizer derives from the
+    Kozachenko-Leonenko differential entropy estimator and
+    encourages a uniform span of the features within a batch.
+
+    https://github.com/facebookresearch/dinov2/blob/main/dinov2/loss/koleo_loss.py
+    """
+
+    name = "KoLeo"
+
+    def __init__(
+        self,
+        weight: float = 0.1,
+        mode: str = "instance",
+        eps: float = 1e-8,
+    ) -> None:
+        """Initialize KoLeo regularizer.
+
+        Args:
+            weight: a weight to apply to the regularization value. Default value follows Dinov2
+            eps: small value to avoid division by zero.
+            mode: one of "instance" or "patch" - whether to compute
+                nearest neighbourst at the instance or patch level
+        """
+        self.eps = eps
+        self.pdist = torch.nn.PairwiseDistance(2, eps=eps)
+        if mode not in ["instance", "patch"]:
+            raise ValueError(f"Unsupported mode {mode}")
+        self.mode = mode
+        self.weight = weight
+
+    @staticmethod
+    def pairwise_nearest_neighbours(x: torch.Tensor) -> torch.Tensor:
+        """Pairwise nearest neighbors for L2-normalized vectors.
+
+        Uses Torch rather than Faiss to remain on GPU.
+
+        Args:
+            x: embeddings against which we want to compute nearest neighbours.
+
+        Returns:
+            indices: indices of nearest neighbour (i.e. indices[i] will return
+            the index for the nearest neighbour of the ith embedding).
+        """
+        # parwise dot products (= inverse distance)
+        dots = torch.mm(x, x.t())
+        n = x.shape[0]
+        dots.view(-1)[:: (n + 1)].fill_(-1)  # Trick to fill diagonal with -1
+        # max inner prod -> min distance
+        _, indices = torch.max(dots, dim=1)
+        return indices
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: None, **kwargs: Any
+    ) -> Tensor:
+        """Compute the KoLeo regularization term.
+
+        Args:
+            predictions: Model predictions. Unlike other losses, these are
+                _online encoder outputs_, not decoder outputs.
+            targets: Unused, and only kept for consistency.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        if self.mode == "patch":
+            all_preds, all_masks = predictions.flatten_tokens_and_masks()
+            online_encodings = all_preds[all_masks == MaskValue.ONLINE_ENCODER.value]
+        else:
+            online_encodings = predictions.pool_unmasked_tokens(
+                PoolingType.MEAN, spatial_pooling=False
+            )
+
+        # apply l2 norm
+        online_encodings = F.normalize(online_encodings, eps=self.eps, p=2, dim=-1)
+        idx_of_nn = self.pairwise_nearest_neighbours(online_encodings)
+        distances_to_nn = self.pdist(online_encodings, online_encodings[idx_of_nn])
+        return self.weight * -torch.log(distances_to_nn + self.eps).mean()
 
 
 @dataclass

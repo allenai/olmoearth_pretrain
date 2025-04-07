@@ -21,11 +21,7 @@ def test_helios_dataloader(
         multiprocessed_h5_creation=False,
     )
 
-    # Mock the _get_samples method to return the prepared samples
-    # Do this before calling prepare()
-    dataset._get_samples = lambda: prepared_samples  # type: ignore
-
-    dataset.prepare()
+    dataset.prepare(prepared_samples)
     assert isinstance(dataset, HeliosDataset)
     dataloader = HeliosDataLoader(
         dataset=dataset,
@@ -56,7 +52,3 @@ def test_helios_dataloader(
     assert dataloader.batches_processed == batches_processed
 
     assert batches_processed == 1
-
-
-# TODO: Add test for global indices
-# TODO: Add test for multi-threading

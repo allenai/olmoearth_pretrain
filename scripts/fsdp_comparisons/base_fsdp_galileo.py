@@ -71,13 +71,12 @@ MLP_RATIO = 4.0
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
     ENCODER_EMBEDDING_SIZE = 1536
-    DECODER_EMBEDDING_SIZE = 768
+    DECODER_EMBEDDING_SIZE = 1536
     ENCODER_DEPTH = 40
     DECODER_DEPTH = 12
     ENCODER_NUM_HEADS = 16
     DECODER_NUM_HEADS = 12
     MLP_RATIO = 4.0
-    TRANSFORM_TYPE = "flip_and_rotate"
     encoder_config = EncoderConfig(
         supported_modality_names=common.supported_modality_names,
         embedding_size=ENCODER_EMBEDDING_SIZE,
@@ -102,7 +101,6 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
     model_config = GalileoConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
-        transform_type=TRANSFORM_TYPE,
     )
     return model_config
 
@@ -111,10 +109,10 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> GalileoTrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 0.002
+    LR = 4e-5
     RANK_MICROBATCH_SIZE = 32
     ENCODE_RATIO = 0.1
-    DECODE_RATIO = 0.75
+    DECODE_RATIO = 0.72
     WD = 0.02
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config_a = MaskingConfig(
@@ -142,20 +140,23 @@ def build_train_module_config(
         }
     )
     token_exit_cfg_a = {
-        Modality.SENTINEL2_L2A.name: 4,
-        Modality.LATLON.name: 4,
-        Modality.SENTINEL1.name: 4,
+        Modality.SENTINEL2_L2A.name: 40,
+        Modality.LATLON.name: 40,
+        Modality.SENTINEL1.name: 40,
         Modality.WORLDCOVER.name: 0,
     }
     token_exit_cfg_b = {modality: 0 for modality in common.supported_modality_names}
 
-    WARMUP_EPOCHS = 10
-    dp_config = DataParallelConfig(name=DataParallelType.fsdp)
+    WARMUP_EPOCHS = 20
+    dp_config = DataParallelConfig(
+        name=DataParallelType.fsdp,
+        param_dtype=DType.bfloat16,
+        reduce_dtype=DType.float32,
+    )
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
     train_module_config = GalileoTrainModuleConfig(
-        # TODO: change name to optim config
         optim_config=optim_config,
         warmup_duration=Duration.epochs(WARMUP_EPOCHS),
         masking_config_a=masking_config_a,
@@ -177,7 +178,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
     NUM_WORKERS = 2
-    GLOBAL_BATCH_SIZE = 128
+    GLOBAL_BATCH_SIZE = 512
     PREFETCH_FACTOR = 4
     SAMPLE_HW_P_LIST = list(range(5, 13))
     TOKEN_BUDGET = 1500

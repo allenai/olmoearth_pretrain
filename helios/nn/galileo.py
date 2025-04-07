@@ -8,7 +8,11 @@ import torch
 import torch.nn as nn
 from olmo_core.config import Config
 from torch.distributed import DeviceMesh
-from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
+from torch.distributed.fsdp import (
+    MixedPrecisionPolicy,
+    fully_shard,
+    register_fsdp_forward_method,
+)
 
 from helios.nn.flexihelios import EncoderConfig, PredictorConfig, TokensAndMasks
 from helios.nn.utils import DistributedMixins
@@ -39,19 +43,23 @@ class Galileo(nn.Module, DistributedMixins):
         for p in self.target_encoder.parameters():
             p.requires_grad = False
 
-    def forward_a(self, x: MaskedHeliosSample, patch_size: int) -> TokensAndMasks:
+    def forward_a(
+        self, x: MaskedHeliosSample, patch_size: int
+    ) -> tuple[TokensAndMasks, TokensAndMasks]:
         """Forward pass for the Latent MIM Style."""
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         latent = self.encoder(x, patch_size=patch_size)
         decoded = self.decoder_a(latent, timestamps=x.timestamps, patch_size=patch_size)
-        return decoded
+        return latent, decoded
 
-    def forward_b(self, x: MaskedHeliosSample, patch_size: int) -> TokensAndMasks:
+    def forward_b(
+        self, x: MaskedHeliosSample, patch_size: int
+    ) -> tuple[TokensAndMasks, TokensAndMasks]:
         """Forward pass for the Latent MIM Style."""
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         latent = self.encoder(x, patch_size=patch_size)
         decoded = self.decoder_b(latent, timestamps=x.timestamps, patch_size=patch_size)
-        return decoded
+        return latent, decoded
 
     def apply_fsdp(
         self,
@@ -61,7 +69,10 @@ class Galileo(nn.Module, DistributedMixins):
         prefetch_factor: int = 0,
     ) -> None:
         """Apply FSDP to the model."""
-        fsdp_config = dict(mesh=dp_mesh)
+        mp_policy = MixedPrecisionPolicy(
+            param_dtype=param_dtype, reduce_dtype=reduce_dtype
+        )
+        fsdp_config = dict(mesh=dp_mesh, mp_policy=mp_policy)
 
         self.encoder.apply_fsdp(**fsdp_config)
         self.decoder_a.apply_fsdp(**fsdp_config)
@@ -72,6 +83,13 @@ class Galileo(nn.Module, DistributedMixins):
         register_fsdp_forward_method(self.target_encoder, "forward")
         register_fsdp_forward_method(self, "forward_a")
         register_fsdp_forward_method(self, "forward_b")
+
+    def apply_compile(self) -> None:
+        """Apply torch.compile to the model."""
+        self.encoder.apply_compile()
+        self.decoder_a.apply_compile()
+        self.decoder_b.apply_compile()
+        self.target_encoder.apply_compile()
 
 
 @dataclass
