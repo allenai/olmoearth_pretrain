@@ -122,7 +122,7 @@ def test_latentmim_with_loss(
         learnable_channel_embeddings=True,
     )
     latentmim = LatentMIM(encoder, predictor)
-    output = latentmim.forward(x, patch_size)
+    _, output = latentmim.forward(x, patch_size)
     output = predictor.forward(output, timestamps, patch_size, input_res)
     patched_H = H // patch_size
     patched_W = W // patch_size

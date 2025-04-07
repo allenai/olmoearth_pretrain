@@ -17,10 +17,7 @@ from olmo_core.distributed.parallel import (
     get_dp_mesh,
     get_dp_process_group,
 )
-from olmo_core.distributed.utils import (
-    get_full_tensor,
-    get_world_size,
-)
+from olmo_core.distributed.utils import get_full_tensor, get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
@@ -36,6 +33,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
 
 from helios.data.transform import TransformConfig
+from helios.nn.flexihelios import TokensAndMasks
+from helios.train.loss import LossConfig
 
 logger = getLogger(__name__)
 
@@ -85,18 +84,10 @@ class HeliosTrainModuleConfig(Config):
     # Checkpoint settings
     state_dict_save_opts: dict[str, Any] | None = None
     state_dict_load_opts: dict[str, Any] | None = None
+    regularizer_config: LossConfig | None = None
 
-    def build(
-        self,
-        model: Any,
-        device: torch.device | None = None,
-    ) -> "HeliosTrainModule":
-        """Build the corresponding :class:`HeliosTrainModule`.
-
-        Args:
-            model: The model to train.
-            device: The device to train on.
-        """
+    def prepare_kwargs(self) -> dict[str, Any]:
+        """Prepare the kwargs for the train module."""
         kwargs = self.as_dict(exclude_none=True, recurse=False)
         if (autocast_precision := kwargs.pop("autocast_precision", None)) is not None:
             kwargs["autocast_precision"] = cast(DType, autocast_precision).as_pt()
@@ -112,6 +103,20 @@ class HeliosTrainModuleConfig(Config):
             kwargs["state_dict_load_opts"] = dist_cp_sd.StateDictOptions(
                 **state_dict_load_opts
             )
+        return kwargs
+
+    def build(
+        self,
+        model: Any,
+        device: torch.device | None = None,
+    ) -> "HeliosTrainModule":
+        """Build the corresponding :class:`HeliosTrainModule`.
+
+        Args:
+            model: The model to train.
+            device: The device to train on.
+        """
+        kwargs = self.prepare_kwargs()
         return HeliosTrainModule(
             model=model,
             device=device,
@@ -484,3 +489,21 @@ class HeliosTrainModule(TrainModule):
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         """Evaluate a batch."""
         raise NotImplementedError("eval batch not implemented")
+
+    def compute_regularization(self, latent: TokensAndMasks) -> torch.Tensor | None:
+        """If a regularizer is present, compute it."""
+        regularizer = getattr(self, "regularizer", None)
+        if regularizer is None:
+            return None
+        return regularizer.compute(latent, None)
+
+    def log_regularization(self, total_batch_reg: torch.Tensor) -> None:
+        """If a regularizer is present, log its values."""
+        regularizer = getattr(self, "regularizer", None)
+        if regularizer is None:
+            return None
+        self.trainer.record_metric(
+            f"train/{regularizer.name}",
+            total_batch_reg,
+            ReduceType.mean,
+        )
