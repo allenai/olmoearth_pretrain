@@ -170,7 +170,9 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/98856"
     return HeliosDatasetConfig(
         h5py_dir=h5py_dir,
-        tile_path=None,
+        tile_paths=[
+            "/weka/dfive-default/helios/dataset/presto/",
+        ],
         supported_modality_names=common.supported_modality_names,
         dtype=DType.float32,
     )
