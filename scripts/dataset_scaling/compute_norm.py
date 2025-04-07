@@ -107,13 +107,15 @@ def parse_supported_modalities(supported_modalities: str) -> list[str]:
 
 # Use the config to build the dataset
 dataset_config = HeliosDatasetConfig(
-    tile_path=UPath(args_dict["tile_path"]),
+    # tile_path=UPath(args_dict["tile_path"]),
+    h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/102695",
     supported_modality_names=parse_supported_modalities(
         args_dict["supported_modalities"]
     ),
     normalize=False,
 )
 dataset = dataset_config.build()
+logger.info(f"Dataset: {dataset.normalize}")
 
 norm_dict = compute_normalization_values(
     dataset=dataset,

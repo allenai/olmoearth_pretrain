@@ -20,6 +20,7 @@ from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
 from helios.data.dataloader import HeliosDataLoaderConfig
+from helios.data.constants import Modality
 from helios.data.dataset import HeliosDatasetConfig
 from helios.data.normalize import Strategy
 from helios.internal.common import build_common_components
@@ -128,7 +129,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
 
-    NUM_WORKERS = 8
+    NUM_WORKERS = 0
     GLOBAL_BATCH_SIZE = 128
     PREFETCH_FACTOR = 4
     TOKEN_BUDGET = 1500
@@ -152,10 +153,18 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     # NOTE: Change this directory based on the supported modalities
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/98856"
     return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
-        tile_path=None,
+        h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/102695",
+        use_samples_with_missing_supported_modalities=True,
+        training_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.WORLDCOVER.name,
+            Modality.SRTM.name,
+            # Modality.NAIP.name,
+            Modality.LANDSAT.name,
+            Modality.OPENSTREETMAP_RASTER.name,
+        ],
         supported_modality_names=common.supported_modality_names,
         dtype=DType.float32,
     )
@@ -257,6 +266,7 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
         normalize_strategy=Strategy.PREDEFINED,
         std_multiplier=2.0,
     )
+
 
 
 if __name__ == "__main__":

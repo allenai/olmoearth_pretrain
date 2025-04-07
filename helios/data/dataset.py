@@ -64,6 +64,8 @@ class HeliosSample(NamedTuple):
     sentinel1: ArrayTensor | None = None  # [B, H, W, T, len(S1_bands)]
     worldcover: ArrayTensor | None = None  # [B, H, W, 1, len(WC_bands)]
     openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
+    srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
+    landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
@@ -371,6 +373,7 @@ class HeliosDataset(Dataset):
         self,
         supported_modalities: list[ModalitySpec],
         dtype: DType,
+        training_modalities: list[str] | None = None,
         h5py_dir: UPath | None = None,
         tile_path: UPath | None = None,
         normalize: bool = True,
@@ -412,7 +415,7 @@ class HeliosDataset(Dataset):
             for modality in supported_modalities:
                 if modality.name not in self.h5py_dir.parent.name:
                     raise ValueError(
-                        f"The modality {modality.name} is not present in the h5py directory"
+                        f"The modality {modality.name} is not present in the h5py directory "
                     )
         else:
             self.tile_path = tile_path
@@ -420,7 +423,11 @@ class HeliosDataset(Dataset):
 
         self.multiprocessed_h5_creation = multiprocessed_h5_creation
         self.supported_modalities = supported_modalities
-        self.use_samples_missing_supported_modalities = (
+        if training_modalities is None:
+            self.training_modalities = supported_modalities
+        else:
+            self.training_modalities = training_modalities
+        self.use_samples_with_missing_supported_modalities = (
             use_samples_with_missing_supported_modalities
         )
 
@@ -650,40 +657,74 @@ class HeliosDataset(Dataset):
                 logger.info("Skipping sample because it has unsupported modalities")
                 continue
 
-            if self.use_samples_missing_supported_modalities:
+            if not self.use_samples_with_missing_supported_modalities:
                 if any(
                     modality not in sample.modalities
                     for modality in self.supported_modalities
                 ):
+                    logger.info("Skipping sample because all supported modalities are not present")
                     continue
             if sample.time_span != TimeSpan.YEAR:
+                logger.info("Skipping sample because it is not the yearly frequency data")
                 continue
             # check if sample modalities have s1 and s2
             has_s1 = Modality.SENTINEL1 in sample.modalities
             has_s2 = Modality.SENTINEL2_L2A in sample.modalities
-            if not has_s2:
-                # If any of our samples don't have S2 this will be a problem
-                continue
+            # if not has_s2:
+            #     # If any of our samples don't have S2 this will be a problem
+            #     continue
             if has_s1:
                 sentinel1_months = len(
                     set(sample.modalities[Modality.SENTINEL1].images)
                 )
                 if sentinel1_months != 12:
+                    logger.info("Skipping sample because it has less than 12 months of S1 data")
                     continue
             if has_s2:
                 sentinel2_months = len(
                     set(sample.modalities[Modality.SENTINEL2_L2A].images)
                 )
                 if sentinel2_months != 12:
+                    logger.info("Skipping sample because it has less than 12 months of S2 data")
                     continue
             if has_s1 and has_s2:
                 # Check if S1 and S2 all have the same 12 months of data
                 if sentinel1_months != sentinel2_months:
+                    logger.info("Skipping sample because S1 and S2 have different number of months")
                     continue
             filtered_samples.append(sample)
         logger.info(f"Number of samples after filtering: {len(filtered_samples)}")
         logger.info("Distribution of samples after filtering:")
         self._log_modality_distribution(filtered_samples)
+
+        # Create and write a csv saying what modalites are contained in each sample and the time span
+        # Each sample should have columns for each modality and a column for the start time and end time
+        # in the modality column 1 means the modality is present and 0 means it is not
+        csv_path = self.tile_path / self.h5py_folder / "samples_metadata.csv"
+        os.makedirs(csv_path.parent, exist_ok=True)
+        logger.info(f"Writing metadata CSV to {csv_path}")
+
+        # Create a DataFrame to store the metadata
+        metadata_dict = {
+            "sample_index": [],
+        }
+
+        # Add columns for each supported modality
+        for modality in self.supported_modalities:
+            metadata_dict[modality.name] = []
+
+        # Populate the DataFrame with metadata from each sample
+        for i, sample in enumerate(filtered_samples):
+            metadata_dict["sample_index"].append(i)
+
+            # Set modality presence (1 if present, 0 if not)
+            for modality in self.supported_modalities:
+                metadata_dict[modality.name].append(1 if modality in sample.modalities else 0)
+
+        # Write the DataFrame to a CSV file
+        df = pd.DataFrame(metadata_dict)
+        df.to_csv(csv_path, index=False)
+        logger.info(f"Created metadata CSV with {len(filtered_samples)} samples")
         return filtered_samples
 
     @classmethod
@@ -838,15 +879,15 @@ class HeliosDataset(Dataset):
         """Fill the sample with missing values."""
         missing_modalities = []
         sample = HeliosSample(**sample_dict)
-        for modality in self.supported_modalities:
-            if modality.name not in sample_dict.keys():
-                logger.info(f"Filling {modality.name} with missing values")
-                sample_dict[modality.name] = np.full(
-                    sample.get_expected_shape(modality.name),
+        for modality in self.training_modalities:
+            if modality not in sample_dict.keys():
+                logger.info(f"Filling {modality} with missing values")
+                sample_dict[modality] = np.full(
+                    sample.get_expected_shape(modality),
                     fill_value=MISSING_VALUE,
                     dtype=self.dtype,
                 )
-                missing_modalities.append(modality.name)
+                missing_modalities.append(modality)
         return HeliosSample(**sample_dict), missing_modalities
 
     def apply_subset(self, sample: HeliosSample, args: GetItemArgs) -> HeliosSample:
@@ -863,9 +904,16 @@ class HeliosDataset(Dataset):
 
     def read_h5_file(self, h5_file_path: UPath) -> dict[str, Any]:
         """Read the h5 file."""
+        sample_dict = {}
         with h5_file_path.open("rb") as f:
             with h5py.File(f, "r") as h5file:
-                sample_dict = {k: v[()] for k, v in h5file.items()}
+                logger.info(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
+                # Not sure lat lon should be here
+                sample_dict = {k: v[()] for k, v in h5file.items() if k in self.training_modalities or k in ["latlon", "timestamps"]}
+                # log all the shapes of the modalities
+                for modality in self.training_modalities:
+                    if modality in sample_dict:
+                        logger.info(f"Shape of {modality}: {sample_dict[modality].shape}")
         return sample_dict
 
     def __getitem__(self, args: GetItemArgs) -> tuple[int, HeliosSample]:
@@ -913,6 +961,7 @@ class HeliosDatasetConfig(Config):
     tile_path: str | None = None
     dtype: DType = DType.float32
     normalize: bool = True
+    training_modalities: list[str] | None = None
     use_samples_with_missing_supported_modalities: bool = False
 
     def validate(self) -> None:
