@@ -153,7 +153,7 @@ class FlexiPatchEmbed(nn.Module):
             self.pinvs[str(new_patch_size)] = Parameter(
                 self._calculate_pinv(self.patch_size, new_patch_size),
                 requires_grad=False,
-            )
+            ).to(self.device)
         pinv = self.pinvs[str(new_patch_size)]
         pinv = distribute_like(patch_embed, pinv)
 
