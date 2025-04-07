@@ -152,7 +152,8 @@ class FlexiPatchEmbed(nn.Module):
                 self.patch_size, new_patch_size
             )
         pinv = self.pinvs[new_patch_size]
-        pinv = pinv.to(patch_embed.device)
+        # Dynamically make sure that pinv is on the right device and dtype
+        pinv = pinv.to(device=patch_embed.device, dtype=patch_embed.dtype)
         pinv = distribute_like(patch_embed, pinv)
 
         def resample_patch_embed(patch_embed: Tensor) -> Tensor:

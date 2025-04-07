@@ -9,7 +9,7 @@ from helios.data.constants import Modality, ModalitySpec
 from helios.nn.flexihelios import Encoder, Predictor
 from helios.nn.latent_mim import LatentMIM
 from helios.train.loss import PatchDiscriminationLoss
-from helios.train.masking import MaskedHeliosSample, MaskValue
+from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +34,10 @@ def modality_band_set_len_and_total_bands(
 
 def test_latentmim_with_loss(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:
     """Test the full end to end forward pass of the model with an exit configuration and loss."""
+    # Define supported modalities
     supported_modalities = [
         Modality.SENTINEL2_L2A,
         Modality.LATLON,
@@ -47,48 +49,10 @@ def test_latentmim_with_loss(
     latlon_num_band_sets, latlon_num_bands = modality_band_set_len_and_total_bands[
         "latlon"
     ]
-    B, H, W, T, C = (
-        1,
-        4,
-        4,
-        2,
-        sentinel2_l2a_num_bands,
-    )
-    # Create dummy sentinel2_l2a data: shape (B, H, W, T, C)
-    sentinel2_l2a = torch.randn(B, H, W, T, C)
-    # Here we assume 0 (ONLINE_ENCODER) means the token is visible.
-    sentinel2_l2a_mask = torch.zeros(B, H, W, T, C, dtype=torch.long)
-    # Dummy latitude-longitude data.
-    latlon = torch.randn(B, latlon_num_bands)
-    latlon_mask = (
-        torch.ones(B, latlon_num_bands, dtype=torch.float32) * MaskValue.DECODER.value
-    )
-    worldcover = torch.randn(B, H, W, 1, 1)
-    worldcover_mask = (
-        torch.ones(B, H, W, 1, 1, dtype=torch.float32) * MaskValue.DECODER.value
-    )
-    # Generate valid timestamps:
-    # - days: range 1..31,
-    # - months: range 1..13,
-    # - years: e.g. 2018-2019.
-    days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
-    months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
-    years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
-    timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
-
-    masked_sample_dict = {
-        "sentinel2_l2a": sentinel2_l2a,
-        "sentinel2_l2a_mask": sentinel2_l2a_mask,
-        "latlon": latlon,
-        "latlon_mask": latlon_mask,
-        "worldcover": worldcover,
-        "worldcover_mask": worldcover_mask,
-        "timestamps": timestamps,
-    }
+    B, H, W, T, C = masked_sample_dict["sentinel2_l2a"].shape
     x = MaskedHeliosSample(**masked_sample_dict)
 
     patch_size = 4
-    input_res = 1
     # Shared constants for encoder and predictor
     MAX_PATCH_SIZE = 8
     NUM_HEADS = 2
@@ -122,8 +86,9 @@ def test_latentmim_with_loss(
         learnable_channel_embeddings=True,
     )
     latentmim = LatentMIM(encoder, predictor)
+
     _, output = latentmim.forward(x, patch_size)
-    output = predictor.forward(output, timestamps, patch_size, input_res)
+    output = predictor.forward(output, x.timestamps, patch_size, input_res=1)
     patched_H = H // patch_size
     patched_W = W // patch_size
     assert output.sentinel2_l2a is not None
@@ -171,8 +136,6 @@ def test_latentmim_with_loss(
         1,
         1,
     )
-
-    # this reflects the forward_model function in latentmim
     loss_fn = PatchDiscriminationLoss()
     with torch.no_grad():
         logger.info("target encoder running here")

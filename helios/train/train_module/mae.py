@@ -220,7 +220,9 @@ class MAETrainModule(HeliosTrainModule):
                 )
 
                 # Run Encoder and decoder on the augmented input
-                loss, latent, reconstructed = self.model(masked_batch, patch_size)
+                loss, latent, reconstructed = self.model_forward(
+                    masked_batch, patch_size
+                )
                 labels_dict = masked_batch.as_dict()
                 labels_dict.pop("timestamps", None)
                 labels = TokensAndMasks(**labels_dict)

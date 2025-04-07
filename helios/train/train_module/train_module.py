@@ -192,12 +192,24 @@ class HeliosTrainModule(TrainModule):
             "Number of encoder parameters: %d",
             sum(p.numel() for p in self.model.encoder.parameters()),
         )
+        if hasattr(self.model, "decoder"):
+            logger.info(
+                "Number of decoder parameters: %d",
+                sum(p.numel() for p in self.model.decoder.parameters()),
+            )
 
         self.device = device or get_default_device()
-        self.world_mesh = build_world_mesh(dp=dp_config, device_type=self.device.type)
-        logger.info(
-            f"Data parallel world size = {get_world_size(self.dp_process_group):,d}"
-        )
+
+        if dp_config is not None:
+            self.world_mesh = build_world_mesh(
+                dp=dp_config, device_type=self.device.type
+            )
+            logger.info(
+                f"Data parallel world size = {get_world_size(self.dp_process_group):,d}"
+            )
+        else:
+            self.world_mesh = None
+
         self.warmup_duration = warmup_duration
         # Maybe apply activation checkpointing.
         if ac_config is not None:
@@ -212,17 +224,29 @@ class HeliosTrainModule(TrainModule):
 
         # Maybe compile.
         if compile_model:
-            self.model.apply_compile()
-            logger.info("Applied torch.compile() to the model")
+            if torch.cuda.is_available():
+                self.model.apply_compile()
+                logger.info("Applied torch.compile() to the model")
+            else:
+                logger.warning(
+                    "torch.compile() not applied because CUDA is not available"
+                )
 
         # Maybe shard/replicate according to data parallel config.
         self._dp_config = dp_config
         if dp_config is not None:
             dp_mesh = get_dp_mesh(self.world_mesh)
             if dp_config.name in (DataParallelType.fsdp):
+                param_dtype = (
+                    dp_config.param_dtype.as_pt()
+                    if dp_config.param_dtype is not None
+                    else None
+                )
                 # TODO: MIXED PRecision is not yet supported
                 self.model.apply_fsdp(
                     dp_mesh=dp_mesh,
+                    param_dtype=param_dtype,
+                    reduce_dtype=dp_config.reduce_dtype.as_pt(),
                 )
                 logger.info("Applied FSDP to the model")
             elif dp_config.name == DataParallelType.ddp:
@@ -254,6 +278,8 @@ class HeliosTrainModule(TrainModule):
     @property
     def dp_process_group(self) -> dist.ProcessGroup | None:
         """Get the data parallel process group."""
+        if self.world_mesh is None:
+            return None
         return get_dp_process_group(self.world_mesh)
 
     @property
@@ -479,10 +505,9 @@ class HeliosTrainModule(TrainModule):
             for param, target_param in zip(
                 self.model.encoder.parameters(), self.model.target_encoder.parameters()
             ):
-                # TODO: Make this an in place operation
-                target_param.data = cur_ema_value * get_full_tensor(
-                    target_param.data
-                ) + (1 - cur_ema_value) * get_full_tensor(param.data)
+                get_full_tensor(target_param.data).mul_(cur_ema_value).add_(
+                    get_full_tensor(param.data), alpha=(1 - cur_ema_value)
+                )
 
     def eval_batch(
         self, batch: dict[str, Any], labels: torch.Tensor | None = None

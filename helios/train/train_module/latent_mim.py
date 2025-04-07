@@ -194,7 +194,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         numbers of tokens making the loss for token averaged losses
         like l1 and l2 weight microbatches with less tokens relatively more.
 
-        NOTE: For contrastive losses, the loss is invariant to the global batch size across GPUS as well
+        NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
         self.update_target_encoder()
         # Set the model to train mode
@@ -259,7 +259,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         with self._model_forward_context():
             latent, decoded = self.model.forward(batch, patch_size)
             with torch.no_grad():
-                logger.info("target encoder running here")
+                logger.info("Target Encoder forward pass...")
                 target_output = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,

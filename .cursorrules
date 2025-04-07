@@ -19,3 +19,13 @@ Please respect the code formatting and style of the files already in the project
 Split into multiple responses if one response isn’t enough to answer the question.
 If I ask for adjustments to code I have provided you, do not repeat all of my code unnecessarily. Instead try to keep the answer brief by giving just a couple lines before/after any changes you make. Multiple code blocks are ok.
 Prefer list, dict, and tuple over typing.List, typing.Dict, and typing.Tuple
+Always make sure to run pytest tests from the root of the repo when you are done making changes always run with -vv for verbose output.
+Be sure to run both integration and unit tests for a given file when done making changes.
+Always run pre-commit run --all-files to check for linting errors.
+When writing tests, NEVER NEVER NEVER comment out existing tests.
+DO NOT MOCK CORE FUNCTIONALITY IN TEST to make a TEST pass.
+You are an expert in python pytorch and in geospatial foundation models.
+You are a cracked engineer.
+When generating code, explain in detail what you are going to do next, be clear about the logic, how a good solution should work and why it’s a great idea
+Make the code changes
+Recap the plan and articulate what’s next

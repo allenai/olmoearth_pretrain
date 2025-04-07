@@ -30,6 +30,7 @@ from upath import UPath
 from helios.data.constants import (
     BASE_RESOLUTION,
     IMAGE_TILE_SIZE,
+    MISSING_VALUE,
     PROJECTION_CRS,
     TIMESTAMPS,
     Modality,
@@ -133,8 +134,20 @@ class HeliosSample(NamedTuple):
 
     @property
     def modalities(self) -> list[str]:
-        """Get the modalities present in the sample."""
-        return list(self.as_dict(ignore_nones=True).keys())
+        """Get the modalities present in the sample.
+
+        Includes timestamps and latlon
+        """
+        return [modality for modality in self.as_dict(ignore_nones=True).keys()]
+
+    @property
+    def missing_modalities(self) -> list[str]:
+        """Get the modalities missing from the sample."""
+        return [
+            modality
+            for modality in self.as_dict(ignore_nones=True).keys()
+            if self.as_dict(ignore_nones=True)[modality] is None
+        ]
 
     def to_device(self, device: torch.device) -> "HeliosSample":
         """Move all tensors to the specified device.
@@ -212,6 +225,18 @@ class HeliosSample(NamedTuple):
         if self.timestamps is None:
             raise ValueError("Timestamps are not present in the sample")
         return self.timestamps.shape[-2]
+
+    def get_expected_shape(self, attribute: str) -> tuple[int, ...]:
+        """Get the expected shape of an attribute."""
+        modality_spec = Modality.get(attribute)
+        if modality_spec.is_spacetime_varying:
+            return (self.height, self.width, self.time, modality_spec.num_bands)
+        elif modality_spec.is_space_only_varying:
+            return (self.height, self.width, 1, modality_spec.num_bands)
+        elif modality_spec.is_time_only_varying:
+            return (1, 1, self.time, modality_spec.num_bands)
+        else:
+            return (1, 1, 1, modality_spec.num_bands)
 
     def _get_max_t_within_token_budget(
         self, h_w_p: int, max_tokens_per_instance: int
@@ -310,6 +335,7 @@ def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSa
     # Stack tensors while handling None values
     def stack_or_none(attr: str) -> torch.Tensor | None:
         """Stack the tensors while handling None values."""
+        # For partially missing samples we use MISSING_VALUE so we only check the first sample
         if getattr(batch[0][1], attr) is None:
             return None
         stacked_tensor = torch.stack(
@@ -348,6 +374,7 @@ class HeliosDataset(Dataset):
         tile_paths: list[UPath],
         h5py_dir: UPath | None = None,
         normalize: bool = True,
+        use_samples_with_missing_supported_modalities: bool = False,
         multiprocessed_h5_creation: bool = True,
     ):
         """Initialize the dataset.
@@ -363,6 +390,7 @@ class HeliosDataset(Dataset):
             supported_modalities: The modalities to include in the dataset.
             tile_paths: The paths to the raw dataset (image tile directory). If None we will use the h5py_dir to load the dataset. Mutually exclusive with h5py_dir.
             dtype: The dtype of the data.
+            use_samples_with_missing_supported_modalities: If True, use samples that are missing a supported modality.
             normalize: If True, apply normalization to the data, if False, do not apply
                 normalization.
             h5py_dir: The path to the h5py directory containing preprocessed data. If None, the dataset will be created from raw data. Mutually exclusive with tile_path.
@@ -387,6 +415,10 @@ class HeliosDataset(Dataset):
 
         self.multiprocessed_h5_creation = multiprocessed_h5_creation
         self.supported_modalities = supported_modalities
+        self.use_samples_missing_supported_modalities = (
+            use_samples_with_missing_supported_modalities
+        )
+
         self.dtype = dtype
         self.normalize = normalize
         if self.normalize:
@@ -604,22 +636,29 @@ class HeliosDataset(Dataset):
         for sample in samples:
             if sample.grid_tile.resolution_factor != resolution_factor:
                 continue
-            # Check if all the modalities are available that are read in
+            # Check if all the modalities are supported that are read in
             if not all(
-                modality in sample.modalities
-                for modality in self.supported_modalities
+                modality in self.supported_modalities
+                for modality in sample.modalities
                 if not modality.ignore_when_parsing
             ):
+                logger.info("Skipping sample because it has unsupported modalities")
                 continue
-            if not all(
-                modality in sample.modalities
-                for modality in self.supported_modalities
-                if modality != Modality.LATLON
-            ):
+
+            if self.use_samples_missing_supported_modalities:
+                if any(
+                    modality not in sample.modalities
+                    for modality in self.supported_modalities
+                ):
+                    continue
+            if sample.time_span != TimeSpan.YEAR:
                 continue
             # check if sample modalities have s1 and s2
             has_s1 = Modality.SENTINEL1 in sample.modalities
             has_s2 = Modality.SENTINEL2_L2A in sample.modalities
+            if not has_s2:
+                # If any of our samples don't have S2 this will be a problem
+                continue
             if has_s1:
                 sentinel1_months = len(
                     set(sample.modalities[Modality.SENTINEL1].images)
@@ -636,8 +675,6 @@ class HeliosDataset(Dataset):
                 # Check if S1 and S2 all have the same 12 months of data
                 if sentinel1_months != sentinel2_months:
                     continue
-            if sample.time_span != TimeSpan.YEAR:
-                continue
             filtered_samples.append(sample)
         logger.info(f"Number of samples after filtering: {len(filtered_samples)}")
         logger.info("Distribution of samples after filtering:")
@@ -790,6 +827,42 @@ class HeliosDataset(Dataset):
                     h5file.create_dataset(modality_name, data=image)
         return sample_dict
 
+    def fill_sample_with_missing_values(
+        self, sample_dict: dict[str, Any]
+    ) -> tuple[HeliosSample, list[str]]:
+        """Fill the sample with missing values."""
+        missing_modalities = []
+        sample = HeliosSample(**sample_dict)
+        for modality in self.supported_modalities:
+            if modality.name not in sample_dict.keys():
+                logger.info(f"Filling {modality.name} with missing values")
+                sample_dict[modality.name] = np.full(
+                    sample.get_expected_shape(modality.name),
+                    fill_value=MISSING_VALUE,
+                    dtype=self.dtype,
+                )
+                missing_modalities.append(modality.name)
+        return HeliosSample(**sample_dict), missing_modalities
+
+    def apply_subset(self, sample: HeliosSample, args: GetItemArgs) -> HeliosSample:
+        """Apply the subset to the sample."""
+        if args.token_budget is not None:
+            sample_subset = sample.subset(
+                patch_size=args.patch_size,
+                max_tokens_per_instance=args.token_budget,
+                sampled_hw_p=args.sampled_hw_p,
+            )
+        else:
+            sample_subset = sample
+        return sample_subset
+
+    def read_h5_file(self, h5_file_path: UPath) -> dict[str, Any]:
+        """Read the h5 file."""
+        with h5_file_path.open("rb") as f:
+            with h5py.File(f, "r") as h5file:
+                sample_dict = {k: v[()] for k, v in h5file.items()}
+        return sample_dict
+
     def __getitem__(self, args: GetItemArgs) -> tuple[int, HeliosSample]:
         """Get the sample at the given index."""
         h5_file_path = self._get_h5_file_path(args.idx)
@@ -800,19 +873,11 @@ class HeliosDataset(Dataset):
             )
         # We are currently reading the entire h5 file into memory this can be made faster by chunking the dataset appropriately and only reading in the optimal chunks
         # THis io is the current bottleneck of the getitem operation
-        with h5_file_path.open("rb") as f:
-            with h5py.File(f, "r") as h5file:
-                sample_dict = {k: v[()] for k, v in h5file.items()}
-        sample = HeliosSample(**sample_dict)
-        if args.token_budget is not None:
-            result = sample.subset(
-                patch_size=args.patch_size,
-                max_tokens_per_instance=args.token_budget,
-                sampled_hw_p=args.sampled_hw_p,
-            )
-        else:
-            result = sample
-        sample_dict = result.as_dict(ignore_nones=True)
+        sample_dict = self.read_h5_file(h5_file_path)
+
+        sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
+        subset_sample = self.apply_subset(sample, args)
+        sample_dict = subset_sample.as_dict(ignore_nones=True)
 
         # Sample modalities should be written into the metadata of the h5 dataset
         sample_modalities = list(
@@ -821,12 +886,16 @@ class HeliosDataset(Dataset):
 
         if self.normalize:
             for modality in sample_modalities:
+                # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
+                if modality.name in missing_modalities:
+                    continue
                 sample_dict[modality.name] = self.normalize_image(
                     modality, sample_dict[modality.name]
                 )
                 sample_dict[modality.name] = sample_dict[modality.name].astype(
                     self.dtype
                 )
+
         return args.patch_size, HeliosSample(**sample_dict)
 
 
@@ -839,6 +908,7 @@ class HeliosDatasetConfig(Config):
     supported_modality_names: list[str]
     dtype: DType = DType.float32
     normalize: bool = True
+    use_samples_with_missing_supported_modalities: bool = False
 
     def validate(self) -> None:
         """Validate the configuration and build kwargs.

@@ -1,5 +1,6 @@
 """Simple set up of latent predictor."""
 
+import logging
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -7,11 +8,17 @@ import torch
 import torch.nn as nn
 from olmo_core.config import Config
 from torch.distributed import DeviceMesh
-from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
+from torch.distributed.fsdp import (
+    MixedPrecisionPolicy,
+    fully_shard,
+    register_fsdp_forward_method,
+)
 
 from helios.nn.flexihelios import EncoderConfig, PredictorConfig, TokensAndMasks
 from helios.nn.utils import DistributedMixins
 from helios.train.masking import MaskedHeliosSample
+
+logger = logging.getLogger(__name__)
 
 
 class LatentMIM(nn.Module, DistributedMixins):
@@ -52,7 +59,10 @@ class LatentMIM(nn.Module, DistributedMixins):
         prefetch_factor: int = 0,
     ) -> None:
         """Apply FSDP to the model."""
-        fsdp_config = dict(mesh=dp_mesh)
+        mp_policy = MixedPrecisionPolicy(
+            param_dtype=param_dtype, reduce_dtype=reduce_dtype
+        )
+        fsdp_config = dict(mesh=dp_mesh, mp_policy=mp_policy)
 
         self.encoder.apply_fsdp(**fsdp_config)
         self.decoder.apply_fsdp(**fsdp_config)
@@ -60,6 +70,16 @@ class LatentMIM(nn.Module, DistributedMixins):
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
+
+    def apply_compile(self) -> None:
+        """Apply torch.compile to the model."""
+        logger.info("Applying torch.compile to the model")
+        self.encoder.apply_compile()
+        logger.info("Applied torch.compile to the encoder")
+        self.decoder.apply_compile()
+        logger.info("Applied torch.compile to the decoder")
+        self.target_encoder.apply_compile()
+        logger.info("Applied torch.compile to the target encoder")
 
 
 @dataclass

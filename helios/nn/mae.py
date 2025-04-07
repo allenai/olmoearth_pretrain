@@ -45,6 +45,12 @@ class MAE(nn.Module, DistributedMixins):
         reconstructed = self.reconstructor(decoded, patch_size=patch_size)
         return latent, reconstructed
 
+    def apply_compile(self) -> None:
+        """Apply torch.compile to the model."""
+        self.encoder.apply_compile()
+        self.decoder.apply_compile()
+        # TODO: add aaply for constructor
+
 
 @dataclass
 class MAEConfig(Config):

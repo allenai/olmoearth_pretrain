@@ -228,9 +228,9 @@ class PatchDiscriminationLoss(Loss):
         """
         all_preds, all_masks = predictions.flatten_tokens_and_masks()
         all_targets = targets.flatten_tokens_and_masks()[0]
-
-        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        decoder_mask = all_masks == MaskValue.DECODER.value
+        pred = all_preds[decoder_mask].unsqueeze(dim=0)
+        target = all_targets[decoder_mask].unsqueeze(dim=0)
         bs, nt, _ = pred.shape
 
         if self.pred2unit:
@@ -243,7 +243,6 @@ class PatchDiscriminationLoss(Loss):
 
         scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
         count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
-
         if self.mask_other_samples:
             logit_mask = torch.full_like(scores, -torch.finfo(scores.dtype).max)
             start = 0
@@ -251,8 +250,6 @@ class PatchDiscriminationLoss(Loss):
                 end = start + c
                 logit_mask[:, start:end, start:end] = 0
                 start += c
-            logger.info(f"logit_mask: {logit_mask.shape}")
-            logger.info(f"scores: {scores.shape}")
             scores = scores + logit_mask
 
         labels = torch.arange(nt, dtype=torch.long, device=pred.device)[None].repeat(

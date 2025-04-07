@@ -1,4 +1,6 @@
-"""Unit tests for the core model code."""
+"""Unit tests for the flexihelios module."""
+
+import logging
 
 import pytest
 import torch
@@ -17,12 +19,16 @@ from helios.nn.flexihelios import (
 )
 from helios.train.masking import MaskValue
 
+logger = logging.getLogger(__name__)
+
 
 class TestFlexiHeliosCompositeEncodings:
     """Unit tests for the FlexiHeliosCompositeEncodings class."""
 
     @pytest.fixture
-    def flexi_helios_composite_encodings(self) -> FlexiHeliosCompositeEncodings:
+    def flexi_helios_composite_encodings(
+        self,
+    ) -> FlexiHeliosCompositeEncodings:
         """Create composite encoder fixture for testing."""
         flexi_helios_composite_encodings = FlexiHeliosCompositeEncodings(
             embedding_size=16,
@@ -38,7 +44,8 @@ class TestFlexiHeliosCompositeEncodings:
         return flexi_helios_composite_encodings
 
     def test_apply_encodings_per_modality_latlon(
-        self, flexi_helios_composite_encodings: FlexiHeliosCompositeEncodings
+        self,
+        flexi_helios_composite_encodings: FlexiHeliosCompositeEncodings,
     ) -> None:
         """Test applying encodings to different modalities."""
         B, D = 4, 16
@@ -70,17 +77,20 @@ class TestFlexiHeliosCompositeEncodings:
         assert not (enc == 0).all()
 
     def test_apply_encodings_per_modality_worldcover(
-        self, flexi_helios_composite_encodings: FlexiHeliosCompositeEncodings
+        self,
+        flexi_helios_composite_encodings: FlexiHeliosCompositeEncodings,
     ) -> None:
         """Test applying encodings to different modalities."""
         B, H, W, C, D = 4, 4, 4, 1, 16
         patch_size = 4
         input_res = 10
-        worldcover_tokens = torch.zeros(B, H, W, C, D)
+        worldcover_tokens = torch.randn(B, H, W, C, D)
         wc_enc = flexi_helios_composite_encodings._apply_encodings_per_modality(
             "worldcover", worldcover_tokens, None, patch_size, input_res
         )
         assert not (wc_enc == 0).all()
+        assert not (wc_enc == worldcover_tokens).all()
+        assert worldcover_tokens.shape == wc_enc.shape
 
     def test_apply_encodings_per_modality_grad(
         self, flexi_helios_composite_encodings: FlexiHeliosCompositeEncodings
@@ -346,14 +356,22 @@ class TestPredictor:
         )
 
     def test_add_masks(self, predictor: Predictor) -> None:
-        """Test that marked tokens are replaced with the learnable mask token."""
-        B, H, W, T, C_G, D = 1, 2, 2, 1, 5, 8
-        sentinel2_l2a_tokens = torch.randn(B, H, W, T, C_G, D)
-
-        sentinel2_l2a_mask = torch.zeros(B, H, W, T, C_G).float()
+        """Test adding masks to tokens."""
+        B, H, W, T, C, D = (
+            1,
+            2,
+            2,
+            1,
+            2,
+            8,
+        )  # Changed D from 16 to 8 to match predictor's embedding size
+        sentinel2_l2a_tokens = torch.randn(B, H, W, T, C, D)
+        sentinel2_l2a_mask = torch.zeros(B, H, W, T, C, dtype=torch.float32)
+        # Set one pixel to be decoded (mask value 2)
         sentinel2_l2a_mask[0, 0, 0, 0, 0] = MaskValue.DECODER.value
-        latlon = torch.randn(B, 1, D)
-        latlon_mask = torch.randint(0, 2, (B, 1)).float()
+
+        latlon = torch.randn(B, 2, D)
+        latlon_mask = torch.zeros(B, 2, dtype=torch.float32)
 
         tokens_and_masks = {
             "sentinel2_l2a": sentinel2_l2a_tokens,
@@ -363,55 +381,260 @@ class TestPredictor:
         }
         replaced_dict = predictor.add_masks(tokens_and_masks)
 
-        # We expect replaced_dict to have the key "sentinel2_l2a", shaped like sentinel2_l2a_tokens
+        # We expect replaced_dict to have the key "sentinel2_l2a"
         assert (
             "sentinel2_l2a" in replaced_dict
-        ), "Expected an output key for modality sentinel2_l2a"
+        ), "Expected replaced_dict to have key 'sentinel2_l2a'"
+
         replaced_sentinel2_l2a = replaced_dict["sentinel2_l2a"]
         assert replaced_sentinel2_l2a.shape == sentinel2_l2a_tokens.shape, (
-            f"Expected shape {sentinel2_l2a_tokens.shape} for replaced tokens, "
+            f"Expected shape {sentinel2_l2a_tokens.shape}, "
             f"got {replaced_sentinel2_l2a.shape}"
         )
-        replaced_location = replaced_sentinel2_l2a[
-            0, 0, 0, 0, 0, :
-        ]  # the single pixel & channel we set to 2
 
+        # Check the single pixel we set to be decoded
+        replaced_location = replaced_sentinel2_l2a[0, 0, 0, 0, 0, :]
+
+        # Check an unchanged location
         unchanged_location = replaced_sentinel2_l2a[0, 0, 0, 0, 1, :]
 
         assert torch.allclose(
             replaced_location, predictor.mask_token, atol=1e-6
-        ), "Tokens at masked=2 location were not replaced by the learnable mask token."
-
+        ), "Tokens at masked location should be replaced with mask token."
         assert torch.allclose(
             unchanged_location, sentinel2_l2a_tokens[0, 0, 0, 0, 1, :], atol=1e-6
         ), "Tokens at non-masked location should remain the same."
 
     def test_split_x_y(self) -> None:
-        """Test splitting the tokens into x and y."""
+        """Test splitting the tokens into decoded, unmasked, and missing groups."""
         tokens = torch.tensor(
-            [[5, 6, 7, 8, 2, 13, 14, 15, 16], [5, 6, 7, 1, 2, 3, 4, 15, 16]]
+            [[1, 2, 3, 4, 5, 6, 7, 8, 9], [10, 11, 12, 13, 14, 15, 16, 17, 18]]
         ).unsqueeze(-1)
-        mask = torch.tensor([[0, 0, 0, 0, 1, 1, 2, 2, 2], [0, 0, 0, 1, 1, 1, 1, 2, 2]])
+        # should we handle target encoder values here?
+        mask = torch.tensor(
+            [
+                [
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.DECODER.value,
+                ],
+                [
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.DECODER.value,
+                ],
+            ]
+        )
 
-        x, y, x_mask, y_mask, _ = Predictor.split_x_y(tokens, mask)
-        assert torch.equal(x, torch.tensor([[14, 15, 16], [15, 16, 1]]).unsqueeze(-1))
-        assert torch.equal(y, torch.tensor([[5, 6, 7, 8], [4, 5, 6, 7]]).unsqueeze(-1))
-        assert torch.equal(x_mask, torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        assert torch.equal(y_mask, torch.tensor([[1, 1, 1, 1], [0, 1, 1, 1]]))
+        # Add some missing tokens (value MISSING)
+        mask[0, 0] = MaskValue.MISSING.value  # First token in first batch is missing
+        mask[1, 1] = MaskValue.MISSING.value  # Second token in second batch is missing
+
+        (
+            tokens_to_decode,
+            unmasked_tokens,
+            tokens_to_decode_mask,
+            unmasked_tokens_mask,
+            indices,
+        ) = Predictor.split_x_y(tokens, mask)
+
+        # Check shapes
+        assert unmasked_tokens.shape == (2, 6, 1)
+        assert tokens_to_decode.shape == (2, 3, 1)
+
+        expected_unmasked_tokens = torch.tensor(
+            [[1, 2, 3, 4, 5, 6], [10, 12, 13, 14, 15, 16]]
+        )
+        assert torch.equal(unmasked_tokens.squeeze(-1), expected_unmasked_tokens)
+        assert torch.equal(
+            unmasked_tokens_mask, torch.tensor([[0, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]])
+        )
+
+        expected_tokens_to_decode = torch.tensor([[7, 8, 9], [17, 18, 11]])
+        assert torch.equal(tokens_to_decode.squeeze(-1), expected_tokens_to_decode)
+        assert torch.equal(tokens_to_decode_mask, torch.tensor([[1, 1, 1], [1, 1, 0]]))
+
+    def test_split_and_recombine_with_missing_tokens(self) -> None:
+        """Test splitting the tokens into decoded, unmasked, and missing groups with missing tokens."""
+        # Create a batch with two samples, with tokens in a non-sorted order
+        # and different numbers of missing tokens per batch
+        tokens = torch.tensor(
+            [
+                [1, 2, 3, 4, 5, 6, 7, 8, 9],  # First batch
+                [10, 11, 12, 13, 14, 15, 16, 17, 18],  # Second batch
+            ]
+        ).unsqueeze(-1)
+
+        # Create masks with different patterns of missing tokens
+        # First batch: 1 missing token, 3 decoder tokens, 5 encoder tokens
+        # Second batch: 3 missing tokens, 2 decoder tokens, 4 encoder tokens
+        # The tokens are intentionally not sorted by mask value
+        mask = torch.tensor(
+            [
+                [
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                ],
+                [
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                ],
+            ]
+        )
+
+        (
+            tokens_to_decode,
+            unmasked_tokens,
+            tokens_to_decode_mask,
+            unmasked_tokens_mask,
+            indices,
+        ) = Predictor.split_x_y(tokens, mask)
+
+        # Check shapes
+        assert tokens_to_decode.shape == (2, 3, 1)
+        assert unmasked_tokens.shape == (2, 5, 1)
+
+        expected_unmasked_tokens = torch.tensor([[1, 3, 5, 7, 9], [17, 11, 14, 16, 18]])
+        assert torch.equal(unmasked_tokens.squeeze(-1), expected_unmasked_tokens)
+
+        expected_unmasked_tokens_mask = torch.tensor([[1, 1, 1, 1, 1], [0, 1, 1, 1, 1]])
+        assert torch.equal(unmasked_tokens_mask, expected_unmasked_tokens_mask)
+
+        expected_tokens_to_decode = torch.tensor([[2, 6, 8], [12, 15, 10]])
+        assert torch.equal(tokens_to_decode.squeeze(-1), expected_tokens_to_decode)
+
+        expected_tokens_to_decode_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+        assert torch.equal(tokens_to_decode_mask, expected_tokens_to_decode_mask)
+
+        # Test that we can combine the tokens back correctly
+        combined_tokens = Predictor.combine_x_y(
+            tokens_to_decode=tokens_to_decode,
+            unmasked_tokens=unmasked_tokens,
+            tokens_to_decode_mask=tokens_to_decode_mask,
+            unmasked_tokens_mask=unmasked_tokens_mask,
+            indices=indices,
+        )
+        # Check the shape of the combined tokens
+        assert combined_tokens.shape == tokens.shape
+        missing_mask = mask == MaskValue.MISSING.value
+        # Check that all values are the same but missing values in mask are set to 0
+        assert (combined_tokens[missing_mask] == 0).all()
+        target_encoder_only_mask = mask == MaskValue.TARGET_ENCODER_ONLY.value
+        missing_or_target_encoder_only_mask = missing_mask | target_encoder_only_mask
+        # Ensuring Encode decode tokens are put back together correctly
+        assert torch.equal(
+            combined_tokens[~missing_or_target_encoder_only_mask],
+            tokens[~missing_or_target_encoder_only_mask],
+        )
+
+    def test_split_and_recombine_with_missing_tokens_and_target_encoder_only_tokens(
+        self,
+    ) -> None:
+        """Test splitting the tokens into decoded, unmasked, and missing groups with missing tokens and target encoder only tokens."""
+        tokens = torch.tensor(
+            [
+                [1, 2, 3, 4, 5, 6, 7, 8, 9],  # First batch
+                [10, 11, 12, 13, 14, 15, 16, 17, 18],  # Second batch
+            ]
+        ).unsqueeze(-1)
+
+        mask = torch.tensor(
+            [
+                [
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.TARGET_ENCODER_ONLY.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.TARGET_ENCODER_ONLY.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                ],
+                [
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.TARGET_ENCODER_ONLY.value,
+                    MaskValue.MISSING.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.TARGET_ENCODER_ONLY.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                ],
+            ]
+        )
+
+        (
+            tokens_to_decode,
+            unmasked_tokens,
+            tokens_to_decode_mask,
+            unmasked_tokens_mask,
+            indices,
+        ) = Predictor.split_x_y(tokens, mask)
+
+        combined_tokens = Predictor.combine_x_y(
+            tokens_to_decode=tokens_to_decode,
+            unmasked_tokens=unmasked_tokens,
+            tokens_to_decode_mask=tokens_to_decode_mask,
+            unmasked_tokens_mask=unmasked_tokens_mask,
+            indices=indices,
+        )
+        # check that it is zero wherever there is a target encoder only token
+        target_encoder_only_mask = mask == MaskValue.TARGET_ENCODER_ONLY.value
+        missing_mask = mask == MaskValue.MISSING.value
+        missing_or_target_encoder_only_mask = missing_mask | target_encoder_only_mask
+        assert (combined_tokens[missing_or_target_encoder_only_mask] == 0).all()
+        assert torch.equal(
+            combined_tokens[~missing_or_target_encoder_only_mask],
+            tokens[~missing_or_target_encoder_only_mask],
+        )
 
     def test_combine_x_y(self) -> None:
-        """Test combining the x and y tokens."""
+        """Test combining the decoded, unmasked, and missing groups back into the original tokens."""
         # x is the query (i.e. the masked tokens)
-        x = torch.tensor([[14, 15, 16], [15, 16, 1]]).unsqueeze(-1)
+        tokens_to_decode = torch.tensor([[14, 15, 16], [15, 16, 1]]).unsqueeze(-1)
         # y is the keys and values (i.e. the unmasked tokens)
-        y = torch.tensor([[5, 6, 7, 8], [4, 5, 6, 7]]).unsqueeze(-1)
-        x_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
-        y_mask = torch.tensor([[1, 1, 1, 1], [0, 1, 1, 1]])
+        unmasked_tokens = torch.tensor([[5, 6, 7, 8], [4, 5, 6, 7]]).unsqueeze(-1)
+        tokens_to_decode_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+        unmasked_tokens_mask = torch.tensor([[1, 1, 1, 1], [0, 1, 1, 1]])
         indices = torch.tensor(
             [[6, 7, 8, 4, 5, 0, 1, 2, 3], [7, 8, 3, 4, 5, 6, 0, 1, 2]]
         )
 
-        tokens = Predictor.combine_x_y(x, y, x_mask, y_mask, indices)
+        tokens = Predictor.combine_x_y(
+            tokens_to_decode=tokens_to_decode,
+            unmasked_tokens=unmasked_tokens,
+            tokens_to_decode_mask=tokens_to_decode_mask,
+            unmasked_tokens_mask=unmasked_tokens_mask,
+            indices=indices,
+        )
         assert torch.equal(
             tokens,
             torch.tensor(
