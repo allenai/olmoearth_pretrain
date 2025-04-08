@@ -306,7 +306,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     patchified_data, **modality_specific_kwargs
                 )
             else:
-                logger.info(f"modality {modality} is not seen by encoder")
+                logger.info(f"modality {modality} bandset {idx} is not seen by encoder")
                 patchified_data = torch.zeros(
                     modality_data.shape[0],
                     *patchified_dims,
@@ -314,7 +314,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     dtype=modality_data.dtype,
                     device=modality_data.device,
                 )
-                logger.info(f"{modality} is assigned empty embedding!")
+                logger.info(f"{modality} bandset {idx} is assigned empty embedding!")
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
