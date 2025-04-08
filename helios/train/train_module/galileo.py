@@ -259,7 +259,7 @@ class GalileoTrainModule(HeliosTrainModule):
                     self.token_exit_cfg_b,
                 )
 
-                loss = loss_a + loss_b / 2
+                loss = (loss_a + loss_b) / 2
 
                 # Scale loss by number of microbatches
                 reg_term_a = self.compute_regularization(latent_a)
