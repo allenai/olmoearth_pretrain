@@ -101,8 +101,8 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     LR = 0.002
     RANK_MICROBATCH_SIZE = 32
-    ENCODE_RATIO = 0.4
-    DECODE_RATIO = 0.6
+    ENCODE_RATIO = 0.1
+    DECODE_RATIO = 0.9
     WD = 0.02
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config = MaskingConfig(
@@ -114,7 +114,7 @@ def build_train_module_config(
     )
     loss_config = LossConfig(
         loss_config={
-            "type": "imagel2",  # TODO: Should be registered via enum names
+            "type": "mae",
         }
     )
     token_exit_cfg = {modality: 4 for modality in common.supported_modality_names}

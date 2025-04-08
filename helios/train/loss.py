@@ -426,19 +426,24 @@ class L2Loss(Loss):
         return F.mse_loss(pred, target)
 
 
-@LOSS_REGISTRY.register("imagel2")
-class ImageL2Loss(Loss):
-    """Loss function for L2 (mean squared error) over images."""
+@LOSS_REGISTRY.register("mae")
+class MAELoss(Loss):
+    """Loss function masked auto-encoding (reconstruction)."""
 
-    name = "ImageL2"
+    name = "MAE"
 
-    def __init__(self, only_decode: bool = True):
-        """Initialize all patch discrimination loss.
+    def __init__(
+        self, loss_function: str = "MSELoss", only_decode: bool = False, **kwargs: Any
+    ):
+        """Initialize MAE loss.
 
         Args:
+            loss_function: pytorch loss to use
             only_decode: only calculate loss on DECODER masked tokens, otherwise all
+            **kwargs: arguments for pytorch loss constructor
         """
         self.only_decode = only_decode
+        self.loss = getattr(torch.nn, loss_function)(reduction="sum", **kwargs)
 
     # data: [B, H, W, T, C]
     def _flatten_helios_data(self, data: TokensAndMasks) -> tuple[Tensor, Tensor]:
@@ -466,7 +471,7 @@ class ImageL2Loss(Loss):
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
     ) -> Tensor:
-        """Compute L2 loss between predictions and targets.
+        """Compute MAE loss between predictions and targets.
 
         Args:
             predictions: Model predictions.
@@ -491,7 +496,7 @@ class ImageL2Loss(Loss):
             decode = label_masks != MaskValue.MISSING.value
         data = data * decode
         labels = labels * decode
-        return F.mse_loss(data, labels, reduction="sum") / torch.count_nonzero(decode)
+        return self.loss(data, labels) / torch.count_nonzero(decode)
 
 
 @LOSS_REGISTRY.register("cross_entropy")
