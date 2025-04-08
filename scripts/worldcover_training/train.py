@@ -94,7 +94,7 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> MAETrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 0.0001
+    LR = 0.00005
     RANK_MICROBATCH_SIZE = 32
     WD = 0.02
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
@@ -203,26 +203,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             eval_interval=Duration.epochs(1),
         ),
-        "sen1floods11": DownstreamTaskConfig(
-            dataset="sen1floods11",
-            batch_size=32,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(1),
-        ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
-            batch_size=4,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(1),
-        ),
-        "pastis-r": DownstreamTaskConfig(
-            dataset="pastis-r",
             batch_size=4,
             num_workers=2,
             pooling_type=PoolingType.MEAN,
