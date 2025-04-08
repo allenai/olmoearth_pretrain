@@ -192,7 +192,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(5),
+            eval_interval=Duration.epochs(1),
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
@@ -201,7 +201,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
+            eval_interval=Duration.epochs(1),
         ),
         "sen1floods11": DownstreamTaskConfig(
             dataset="sen1floods11",
@@ -210,7 +210,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
+            eval_interval=Duration.epochs(1),
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
@@ -219,7 +219,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
+            eval_interval=Duration.epochs(1),
         ),
         "pastis-r": DownstreamTaskConfig(
             dataset="pastis-r",
@@ -228,7 +228,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
+            eval_interval=Duration.epochs(1),
         ),
     }
     trainer_config = (
