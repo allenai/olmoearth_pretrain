@@ -3,10 +3,6 @@
 import logging
 
 from olmo_core.config import DType
-from olmo_core.distributed.parallel.data_parallel import (
-    DataParallelConfig,
-    DataParallelType,
-)
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
@@ -99,7 +95,7 @@ def build_train_module_config(
 ) -> MAETrainModuleConfig:
     """Build the train module config for an experiment."""
     LR = 0.0001
-    RANK_MICROBATCH_SIZE = 8
+    RANK_MICROBATCH_SIZE = 32
     WD = 0.02
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config = MaskingConfig(
@@ -111,13 +107,13 @@ def build_train_module_config(
     )
     loss_config = LossConfig(
         loss_config={
-            "type": "l1",  # TODO: Should be registered via enum names
+            "type": "imagel2",  # TODO: Should be registered via enum names
         }
     )
     token_exit_cfg = {modality: 12 for modality in common.supported_modality_names}
 
     WARMUP_EPOCHS = 1
-    dp_config = DataParallelConfig(name=DataParallelType.ddp)
+    dp_config = None
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
@@ -142,10 +138,10 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # TODO: Include collate function here
 
     NUM_WORKERS = 8
-    GLOBAL_BATCH_SIZE = 64
+    GLOBAL_BATCH_SIZE = 128
     TOKEN_BUDGET = 1500
 
-    SAMPLE_HW_P_LIST = list(range(8, 32))
+    SAMPLE_HW_P_LIST = list(range(8, 16))
 
     dataloader_config = HeliosDataLoaderConfig(
         global_batch_size=GLOBAL_BATCH_SIZE,

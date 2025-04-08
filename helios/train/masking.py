@@ -625,6 +625,7 @@ class StaticModalityMaskingStrategy(MaskingStrategy):
                 torch.ones(*instance.shape, dtype=torch.int32, device=device)
                 * mask_value.value
             )
+            mask = self.fill_mask_with_missing_values(instance, mask)
             output_dict[MaskedHeliosSample.get_masked_modality_name(modality)] = mask
 
         return MaskedHeliosSample(**output_dict)
