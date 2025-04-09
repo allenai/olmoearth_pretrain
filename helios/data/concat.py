@@ -1,4 +1,4 @@
-"""Concat dataset."""
+"""Concat dataset for Helios."""
 
 import bisect
 import hashlib
@@ -18,9 +18,14 @@ logger = logging.getLogger(__name__)
 
 
 class HeliosConcatDataset(ConcatDataset):
-    """Dataset based on ConcatDataset for concatenating HeliosDataset.
+    """Dataset based on ConcatDataset for concatenating multiple HeliosDatasets.
 
-    Since we use __getitem__ in strange way we need to have custom HeliosConcatDataset.
+    The resulting HeliosConcatDataset acts as a concatenated version of the individual
+    HeliosDatasets.
+
+    We need to use custom HeliosConcatDataset because we have a custom way to access
+    __getitem__ (instead of just integer index), and we need to support various
+    functions and attributes expected by the HeliosDataLoader and various callbacks.
     """
 
     def __getitem__(self, args: GetItemArgs) -> Any:
@@ -44,6 +49,7 @@ class HeliosConcatDataset(ConcatDataset):
     @property
     def fingerprint_version(self) -> str:
         """The version of the fingerprint."""
+        # We make sure fingerprint version is the same for all sub datasets.
         version = self.datasets[0].fingerprint_version
         for dataset in self.datasets:
             if dataset.fingerprint_version != version:
@@ -55,6 +61,7 @@ class HeliosConcatDataset(ConcatDataset):
     @property
     def fingerprint(self) -> str:
         """Can be used to identify/compare a dataset."""
+        # Compute fingerprint that combines the fingerprints of sub datasets.
         sha256_hash = hashlib.sha256()
         for dataset in self.datasets:
             if not hasattr(dataset, "fingerprint"):
@@ -82,7 +89,7 @@ class HeliosConcatDataset(ConcatDataset):
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
         """Return the supported modalities."""
-        # We make sure supported modalities is same for all datasets.
+        # We make sure supported modalities is same for all sub datasets.
         supported_modalities = self.datasets[0].supported_modalities
         for dataset in self.datasets:
             if dataset.supported_modalities != supported_modalities:
@@ -94,7 +101,7 @@ class HeliosConcatDataset(ConcatDataset):
 
 @dataclass
 class HeliosConcatDatasetConfig(Config):
-    """Configuration for the HeliosDataset."""
+    """Configuration for the HeliosConcatDataset."""
 
     dataset_configs: list[Config]
 
