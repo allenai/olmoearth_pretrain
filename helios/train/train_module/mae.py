@@ -41,7 +41,7 @@ class MAETrainModuleConfig(HeliosTrainModuleConfig):
     """
 
     loss_config: LossConfig = field(
-        default_factory=lambda: LossConfig(loss_config={"type": "l1"})
+        default_factory=lambda: LossConfig(loss_config={"type": "mae"})
     )
     masking_config: MaskingConfig = field(
         default_factory=lambda: MaskingConfig(strategy_config={"type": "random"})

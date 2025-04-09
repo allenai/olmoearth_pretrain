@@ -8,7 +8,7 @@ import torch
 from helios.data.constants import Modality, ModalitySpec
 from helios.nn.flexihelios import Encoder, Predictor, Reconstructor, TokensAndMasks
 from helios.nn.mae import MAE
-from helios.train.loss import ImageL2Loss
+from helios.train.loss import MAELoss
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
@@ -138,7 +138,7 @@ def test_mae_with_loss(
     assert (output.sentinel2_l2a_mask == x.sentinel2_l2a_mask).all()
 
     # this reflects the forward_model function in mae
-    loss_fn = ImageL2Loss()
+    loss_fn = MAELoss()
     reconstructed = output
     labels = x.as_dict()
     labels.pop("timestamps")
