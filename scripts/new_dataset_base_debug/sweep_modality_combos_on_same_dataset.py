@@ -3,6 +3,8 @@
 for latent_mim_debug.py.
 """
 
+import argparse
+import os
 import subprocess  # nosec
 
 from helios.data.constants import Modality, ModalitySpec
@@ -36,20 +38,14 @@ MODALITY_COMBINATIONS = (
     OLD_MODALITIES_OPENSTREETMAP,
 )
 
-# Base command template
-BASE_COMMAND = (
-    "python3 scripts/new_dataset_base_debug/latent_mim_debug.py "
-    "launch {run_name} ai2/jupiter-cirrascale-2 {modality_args}"
-)
-
 
 def format_training_modalities(modalities: list[ModalitySpec]) -> str:
     """Format the training modalities as a single comma-separated list."""
-    # These modalities are used exactly as they are in latent_mim_debug.py
+    # These modalities are used exactly as they are in the base script
     # when defining TRAINING_MODALITIES
     formatted_modalities = []
     for m in modalities:
-        # Convert modality name to lowercase to match format in latent_mim_debug.py
+        # Convert modality name to lowercase to match format in base script
         modality_value = m.name.lower()
         formatted_modalities.append(f'"{modality_value}"')
 
@@ -59,22 +55,55 @@ def format_training_modalities(modalities: list[ModalitySpec]) -> str:
     return f"--common.training_modalities=[{modality_list}]"
 
 
-# Iterate over all combinations of modalities
-for modality_combo in MODALITY_COMBINATIONS:
-    # Generate a descriptive name for the run
-    modality_combo_name = "_".join([m.name.lower() for m in modality_combo])
-    run_name = f"new_filtering_latentmim_modalities_{modality_combo_name}"
+def main() -> None:
+    """Main function to run the script."""
+    parser = argparse.ArgumentParser(
+        description="Sweep different combinations of training modalities."
+    )
+    parser.add_argument(
+        "--base_script_path",
+        type=str,
+        help="Path to the base Python script to run with different modality combinations",
+    )
+    parser.add_argument(
+        "--cluster",
+        type=str,
+        default="ai2/jupiter-cirrascale-2",
+        help="Cluster to run on",
+    )
+    args = parser.parse_args()
 
-    # Format the modality arguments
-    modality_args = format_training_modalities(modality_combo)
+    # Ensure the base script exists
+    if not os.path.exists(args.base_script_path):
+        raise FileNotFoundError(f"Base script not found: {args.base_script_path}")
 
-    # Construct full command
-    command = BASE_COMMAND.format(
-        run_name=run_name,
-        modality_args=modality_args,
+    # Base command template using the provided script path
+    base_command = (
+        f"python3 {args.base_script_path} "
+        f"launch {{run_name}} {args.cluster} {{modality_args}}"
     )
 
-    print(f"Launching: {command}")
+    # Iterate over all combinations of modalities
+    for modality_combo in MODALITY_COMBINATIONS:
+        # Generate a descriptive name for the run
+        modality_combo_name = "_".join([m.name.lower() for m in modality_combo])
+        script_name = os.path.basename(args.base_script_path).replace(".py", "")
+        run_name = f"{script_name}_modalities_{modality_combo_name}"
 
-    # Execute the command
-    subprocess.run(command, shell=True, check=True)  # nosec
+        # Format the modality arguments
+        modality_args = format_training_modalities(modality_combo)
+
+        # Construct full command
+        command = base_command.format(
+            run_name=run_name,
+            modality_args=modality_args,
+        )
+
+        print(f"Launching: {command}")
+
+        # Execute the command
+        subprocess.run(command, shell=True, check=True)  # nosec
+
+
+if __name__ == "__main__":
+    main()
