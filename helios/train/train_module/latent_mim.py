@@ -196,7 +196,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
 
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
-        self.update_target_encoder()
+        # self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
         total_batch_loss = torch.tensor(0.0, device=self.device)
@@ -260,7 +260,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
             latent, decoded = self.model.forward(batch, patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
-                target_output = self.model.target_encoder.forward(
+                target_output = self.model.encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
