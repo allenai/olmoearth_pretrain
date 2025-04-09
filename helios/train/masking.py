@@ -1,6 +1,7 @@
 """Masking module."""
 
 import logging
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, NamedTuple
@@ -185,8 +186,6 @@ class MaskingStrategy:
     Be sure to implement apply_mask in subclasses.
     """
 
-    generator: np.random.Generator
-
     def apply_mask(
         self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
     ) -> MaskedHeliosSample:
@@ -229,32 +228,37 @@ class MaskingStrategy:
 
         if modality.is_spatial or modality.is_multitemporal:
             b = shape[0]
-            num_tokens = np.prod(mask_shape[1:])
+            num_tokens = math.prod(mask_shape[1:])
         else:
-            num_tokens = np.prod(mask_shape[:-1])
+            num_tokens = math.prod(mask_shape[:-1])
 
         encode_tokens = int(num_tokens * self.encode_ratio)
         decode_tokens = int(num_tokens * self.decode_ratio)
         target_tokens = int(num_tokens - (encode_tokens + decode_tokens))
-
-        # we do this as a numpy array to take advantage of
-        # numpy's permuted function
-        flat_mask_tokens = np.concatenate(
-            (
-                np.ones(target_tokens, dtype=np.int_)
-                * MaskValue.TARGET_ENCODER_ONLY.value,
-                np.ones(decode_tokens, dtype=np.int_) * MaskValue.DECODER.value,
-                np.ones(encode_tokens, dtype=np.int_) * MaskValue.ONLINE_ENCODER.value,
-            )
+        flat_mask_tokens = torch.cat(
+            [
+                torch.full(
+                    (encode_tokens,), MaskValue.ONLINE_ENCODER.value, device=device
+                ),
+                torch.full((decode_tokens,), MaskValue.DECODER.value, device=device),
+                torch.full(
+                    (target_tokens,), MaskValue.TARGET_ENCODER_ONLY.value, device=device
+                ),
+            ]
         )
-        if modality.is_spatial or modality.is_multitemporal:
-            flat_mask_tokens = repeat(flat_mask_tokens, "t -> b t", b=b)
-            flat_mask_tokens = self.generator.permuted(flat_mask_tokens, axis=1)
-        else:
-            flat_mask_tokens = self.generator.permuted(flat_mask_tokens)
 
-        mask = torch.as_tensor(flat_mask_tokens, device=device)
-        mask = mask.view(*mask_shape)
+        if modality.is_spatial or modality.is_multitemporal:
+            masks = [
+                flat_mask_tokens[torch.randperm(num_tokens, device=device)]
+                for i in range(b)
+            ]
+            flat_mask_tokens = torch.stack(masks)
+        else:
+            flat_mask_tokens = flat_mask_tokens[
+                torch.randperm(num_tokens, device=device)
+            ]
+
+        mask = flat_mask_tokens.view(*mask_shape)
         if modality.is_spatial:
             mask = repeat(
                 mask, "b h w ... -> b (h hp) (w wp) ...", hp=patch_size, wp=patch_size
@@ -291,7 +295,6 @@ class TimeMaskingStrategy(MaskingStrategy):
         """Initialize the masking strategy."""
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
-        self.generator = np.random.default_rng(0)
 
     def _create_temporal_mask(
         self,
@@ -306,19 +309,21 @@ class TimeMaskingStrategy(MaskingStrategy):
         decode_times = max(int(self.decode_ratio * t), 1)
         target_times = t - encode_times - decode_times
 
-        flat_mask = np.concatenate(
-            (
-                np.ones(target_times, dtype=np.int_)
-                * MaskValue.TARGET_ENCODER_ONLY.value,
-                np.ones(decode_times, dtype=np.int_) * MaskValue.DECODER.value,
-                np.ones(encode_times, dtype=np.int_) * MaskValue.ONLINE_ENCODER.value,
-            )
+        flat_mask = torch.cat(
+            [
+                torch.full(
+                    (encode_times,), MaskValue.ONLINE_ENCODER.value, device=device
+                ),
+                torch.full((decode_times,), MaskValue.DECODER.value, device=device),
+                torch.full(
+                    (target_times,), MaskValue.TARGET_ENCODER_ONLY.value, device=device
+                ),
+            ]
         )
 
         # numpy to for permuted function
-        mask = repeat(flat_mask, "t -> b t", b=b)
-        mask = self.generator.permuted(mask, axis=1)
-        mask = torch.as_tensor(mask, device=device)
+        masks = [flat_mask[torch.randperm(t, device=device)] for i in range(b)]
+        mask = torch.stack(masks)
         return mask
 
     def apply_mask(
@@ -391,7 +396,6 @@ class SpaceMaskingStrategy(MaskingStrategy):
         """Initialize the masking strategy."""
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
-        self.generator = np.random.default_rng(0)
 
     def _create_spatial_mask(
         self,
@@ -414,23 +418,28 @@ class SpaceMaskingStrategy(MaskingStrategy):
         decode_patches = int(self.decode_ratio * patches)
         target_patches = patches - encode_patches - decode_patches
 
-        flat_mask = np.concatenate(
-            (
-                np.ones(target_patches, dtype=np.int_)
-                * MaskValue.TARGET_ENCODER_ONLY.value,
-                np.ones(decode_patches, dtype=np.int_) * MaskValue.DECODER.value,
-                np.ones(encode_patches, dtype=np.int_) * MaskValue.ONLINE_ENCODER.value,
-            )
+        flat_mask = torch.cat(
+            [
+                torch.full(
+                    (encode_patches,), MaskValue.ONLINE_ENCODER.value, device=device
+                ),
+                torch.full((decode_patches,), MaskValue.DECODER.value, device=device),
+                torch.full(
+                    (target_patches,),
+                    MaskValue.TARGET_ENCODER_ONLY.value,
+                    device=device,
+                ),
+            ]
         )
 
-        # numpy to for permuted function
-        batch_mask = repeat(flat_mask, "x -> b x", b=b)
-        random_batch_mask = self.generator.permuted(batch_mask, axis=1)
+        masks = [flat_mask[torch.randperm(patches, device=device)] for i in range(b)]
+        random_batch_mask = torch.stack(masks)
         patch_mask = rearrange(random_batch_mask, "b (h w) -> b h w", h=h_p, w=w_p)
 
-        mask = np.repeat(patch_mask, repeats=patch_size, axis=1)
-        mask = np.repeat(mask, repeats=patch_size, axis=2)
-        mask = torch.as_tensor(mask, device=device)
+        mask = repeat(
+            patch_mask, "b h w -> b (h hp) (w wp)", hp=patch_size, wp=patch_size
+        )
+
         return mask
 
     def apply_mask(
@@ -506,7 +515,6 @@ class ModalityMaskingStrategy(MaskingStrategy):
         """Initialize the masking strategy."""
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
-        self.generator = np.random.default_rng(0)
 
     def apply_mask(
         self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
@@ -533,20 +541,23 @@ class ModalityMaskingStrategy(MaskingStrategy):
             num_present_modalities - encode_modalities - decode_modalities
         )
 
-        band_mask_per_instance = np.concatenate(
-            (
-                np.ones(target_modalities, dtype=np.int_)
-                * MaskValue.TARGET_ENCODER_ONLY.value,
-                np.ones(decode_modalities, dtype=np.int_) * MaskValue.DECODER.value,
-                np.ones(encode_modalities, dtype=np.int_)
-                * MaskValue.ONLINE_ENCODER.value,
-            )
+        # TODO get device for this
+        band_mask_per_instance = torch.cat(
+            [
+                torch.full((encode_modalities,), MaskValue.ONLINE_ENCODER.value),
+                torch.full((decode_modalities,), MaskValue.DECODER.value),
+                torch.full((target_modalities,), MaskValue.TARGET_ENCODER_ONLY.value),
+            ]
         )
-        batch_mask = repeat(band_mask_per_instance, "x -> b x", b=batch.batch_size)
-        random_batch_mask = self.generator.permuted(batch_mask, axis=1)
-        for idx, modality in enumerate(present_modalities):
-            instance = getattr(batch, modality)
-            output_dict[modality] = instance
+        batch_masks = [
+            band_mask_per_instance[torch.randperm(num_present_modalities)]
+            for i in range(batch.batch_size)
+        ]
+        random_batch_mask = torch.stack(batch_masks)
+        for idx, modality_name in enumerate(present_modalities):
+            instance = getattr(batch, modality_name)
+            output_dict[modality_name] = instance
+            modality = Modality.get(modality_name)
 
             if isinstance(instance, torch.Tensor):
                 device: torch.device | None = instance.device
@@ -555,13 +566,15 @@ class ModalityMaskingStrategy(MaskingStrategy):
 
             modality_mask = torch.tensor(random_batch_mask[:, idx], device=device)
             shape = instance.shape
-            b_s = shape[-1]
+            b_s = modality.num_band_sets
             b, h, w, t = list(shape[:-1]) + [1] * (4 - len(shape[:-1]))
             mask = repeat(modality_mask, "b -> b h w t b_s", h=h, w=w, b_s=b_s, t=t)
             # Ensure we don't do index_put_ on expanded tensors is deprecated.
-            mask = mask.view(*shape).contiguous()
+            mask = mask.view(*shape[:-1], b_s).contiguous()
             mask = self.fill_mask_with_missing_values(instance, mask)
-            output_dict[MaskedHeliosSample.get_masked_modality_name(modality)] = mask
+            output_dict[MaskedHeliosSample.get_masked_modality_name(modality_name)] = (
+                mask
+            )
 
         return MaskedHeliosSample(**output_dict)
 
@@ -646,7 +659,6 @@ class RandomMaskingStrategy(MaskingStrategy):
         """Initialize the masking strategy."""
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
-        self.generator = np.random.default_rng(0)
 
     def apply_mask(
         self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any

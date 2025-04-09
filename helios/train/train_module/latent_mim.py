@@ -199,8 +199,8 @@ class LatentMIMTrainModule(HeliosTrainModule):
         # self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
-        total_batch_loss = torch.tensor(0.0, device=self.device)
-        total_batch_reg = torch.tensor(0.0, device=self.device)
+        total_batch_loss = torch.zeros([], device=self.device)
+        total_batch_reg = torch.zeros([], device=self.device)
         patch_size, batch_data = batch
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)

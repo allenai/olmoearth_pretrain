@@ -9,6 +9,7 @@ from helios.data.dataset import HeliosSample
 from helios.train.masking import (
     MaskValue,
     ModalityMaskingStrategy,
+    ModalitySpaceTimeMaskingStrategy,
     RandomMaskingStrategy,
     SpaceMaskingStrategy,
     TimeMaskingStrategy,
@@ -213,6 +214,63 @@ def test_time_structure_masking_and_unmask() -> None:
             mask = getattr(unmasked_sample, modality_name)
             if mask is not None:
                 assert (mask == 0).all()
+
+
+def test_modality_space_time_masking_and_unmask() -> None:
+    """Test time structure masking ratios."""
+    b, h, w, t = 100, 16, 16, 8
+
+    patch_size = 4
+
+    days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
+    months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
+    years = torch.randint(2018, 2020, (b, 1, t), dtype=torch.long)
+    timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
+    sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
+    latlon_num_bands = Modality.LATLON.num_bands
+    worldcover_num_bands = Modality.WORLDCOVER.num_bands
+    batch = HeliosSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
+        latlon=torch.ones((b, latlon_num_bands)),
+        timestamps=timestamps,
+        worldcover=torch.ones((b, h, w, worldcover_num_bands)),
+    )
+    encode_ratio, decode_ratio = 0.5, 0.5
+    strategy = ModalitySpaceTimeMaskingStrategy(
+        encode_ratio=encode_ratio,
+        decode_ratio=decode_ratio,
+    )
+    # Run random masking a few times just to make sure it works
+    for i in range(10):
+        masked_sample = strategy.apply_mask(
+            batch,
+            patch_size=patch_size,
+        )
+        for modality_name in masked_sample._fields:
+            if modality_name.endswith("mask"):
+                unmasked_modality_name = masked_sample.get_unmasked_modality_name(
+                    modality_name
+                )
+                modality = Modality.get(unmasked_modality_name)
+                mask = getattr(masked_sample, modality_name)
+                data = getattr(masked_sample, unmasked_modality_name)
+                logger.info(f"Mask name: {modality_name}")
+                if mask is None:
+                    continue
+                # TODO check ratios depending on masking strategy?
+                assert (
+                    mask.shape[:-1] == data.shape[:-1]
+                ), f"{modality_name} has incorrect shape"
+                assert (
+                    mask.shape[-1] == modality.num_band_sets
+                ), f"{modality_name} has incorrect num band sets {mask.shape} {modality.num_band_sets}"
+
+        unmasked_sample = masked_sample.unmask()
+        for modality_name in unmasked_sample._fields:
+            if modality_name.endswith("mask"):
+                mask = getattr(unmasked_sample, modality_name)
+                if mask is not None:
+                    assert (mask == 0).all()
 
 
 def test_create_random_mask_with_missing_mask() -> None:
@@ -644,7 +702,12 @@ def test_modality_mask_and_unmask() -> None:
     for modality_name in masked_sample._fields:
         logger.info(f"Modality name: {modality_name}")
         if modality_name.endswith("mask"):
+            unmasked_modality_name = masked_sample.get_unmasked_modality_name(
+                modality_name
+            )
+            modality = Modality.get(unmasked_modality_name)
             mask = getattr(masked_sample, modality_name)
+            data = getattr(masked_sample, unmasked_modality_name)
             logger.info(f"Mask name: {modality_name}")
             if mask is None:
                 continue
@@ -657,12 +720,11 @@ def test_modality_mask_and_unmask() -> None:
             mask_per_modality.append(unique_per_instance)
 
             assert (
-                mask.shape
-                == getattr(
-                    batch,
-                    masked_sample.get_unmasked_modality_name(modality_name),
-                ).shape
+                mask.shape[:-1] == data.shape[:-1]
             ), f"{modality_name} has incorrect shape"
+            assert (
+                mask.shape[-1] == modality.num_band_sets
+            ), f"{modality_name} has incorrect num band sets"
 
     # shape [b, num_modalities]
     total_mask = torch.concat(mask_per_modality, dim=-1)

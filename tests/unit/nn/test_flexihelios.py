@@ -271,7 +271,7 @@ class TestEncoder:
         x = torch.tensor([[0, 1, 0], [1, 0, 1]]).float()
         x = repeat(x, "b n -> b n d", d=d)
         print(f"x shape: {x.shape}")
-        mask = torch.tensor([[1, 0, 1], [0, 1, 0]]).float()
+        mask = torch.tensor([[0, 1, 0], [1, 0, 1]]).bool()
 
         expected_tokens = torch.tensor(
             [
@@ -279,11 +279,11 @@ class TestEncoder:
                 [[1.0, 1.0], [1.0, 1.0]],
             ]
         )
-        num_tokens_to_keep = torch.sum(~mask.bool())
+        num_tokens_to_keep = torch.sum(mask)
         expected_indices = torch.tensor([[1, 0, 2], [0, 2, 1]])
-        expected_updated_mask = torch.tensor([[0.0, 1.0], [0.0, 0.0]])
+        expected_updated_mask = torch.tensor([[1, 0], [1, 1]]).bool()
         tokens, indices, updated_mask = Encoder.remove_masked_tokens(x, mask)
-        kept_unmasked_tokens = torch.sum(~updated_mask.bool())
+        kept_unmasked_tokens = torch.sum(updated_mask)
         assert torch.equal(tokens, expected_tokens)
         assert torch.equal(indices, expected_indices)
         assert torch.equal(updated_mask, expected_updated_mask)
@@ -305,10 +305,10 @@ class TestEncoder:
         )
         partial_mask = torch.tensor(
             [
-                [0.0, 0.0],
-                [0.0, 1.0],
+                [1, 1],
+                [1, 0],
             ]
-        )
+        ).bool()
 
         expected_out = torch.tensor(
             [
@@ -318,10 +318,10 @@ class TestEncoder:
         )
         expected_mask = torch.tensor(
             [
-                [0.0, 0.0, 1.0],
-                [1.0, 0.0, 1.0],
+                [1, 1, 0],
+                [0, 1, 0],
             ]
-        )
+        ).bool()
 
         out, full_mask = Encoder.add_removed_tokens(
             partial_tokens, indices, partial_mask

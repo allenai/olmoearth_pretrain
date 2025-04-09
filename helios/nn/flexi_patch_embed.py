@@ -5,16 +5,13 @@ by https://github.com/bwconrad/flexivit/
 """
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from typing import Any
 
-import numpy as np
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from olmo_core.distributed.utils import distribute_like
-from torch import Tensor, vmap
+from torch import Tensor
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +26,6 @@ class FlexiPatchEmbed(nn.Module):
         embedding_size: int = 128,
         norm_layer: nn.Module | None = None,
         bias: bool = True,
-        patch_size_seq: Sequence[int] = (1, 2, 3, 4, 5, 6),
         interpolation: str = "bicubic",
         antialias: bool = True,
     ) -> None:
@@ -44,7 +40,6 @@ class FlexiPatchEmbed(nn.Module):
             embedding_size: Network embedding dimension size
             norm_layer: Optional normalization layer
             bias: Whether to use bias in convolution
-            patch_size_seq: List of patch sizes to randomly sample from
             interpolation: Resize interpolation type
             antialias: Whether to apply antialiasing resizing (TODO: Add a link or more info)
         """
@@ -67,11 +62,6 @@ class FlexiPatchEmbed(nn.Module):
         self.interpolation = interpolation
         self.antialias = antialias
 
-        self.patch_size_seq = patch_size_seq
-
-        # Pre-calculate pinvs
-        self.pinvs = self._cache_pinvs()
-
     @staticmethod
     def to_2tuple(x: Any) -> Any:
         """Convert a value to a 2-tuple by either converting an iterable or repeating a scalar.
@@ -91,79 +81,6 @@ class FlexiPatchEmbed(nn.Module):
             assert len(list(x)) == 2, "x must be a 2-tuple"
             return tuple(x)
         return (x, x)
-
-    def _cache_pinvs(self) -> dict:
-        """Pre-calculate all pinv matrices."""
-        pinvs = {}
-        for ps in self.patch_size_seq:
-            tuple_ps = self.to_2tuple(ps)
-            pinvs[tuple_ps] = self._calculate_pinv(self.patch_size, tuple_ps)
-        return pinvs
-
-    def _resize(self, x: Tensor, shape: tuple[int, int]) -> Tensor:
-        """Resize the input tensor to the target shape.
-
-        Args:
-            x: Input tensor
-            shape: Target shape
-
-        Returns:
-            Resized tensor
-        """
-        x_resized = F.interpolate(
-            x[None, None, ...],
-            shape,
-            mode=self.interpolation,
-            antialias=self.antialias,
-        )
-        return x_resized[0, 0, ...]
-
-    def _calculate_pinv(
-        self, old_shape: tuple[int, int], new_shape: tuple[int, int]
-    ) -> Tensor:
-        """Calculate the pseudo-inverse of the resize matrix.
-
-        Args:
-            old_shape: Shape of the original patch
-            new_shape: Shape of the new patch
-
-        Returns:
-            Pseudo-inverse of the resize matrix
-        """
-        mat = []
-        for i in range(np.prod(old_shape)):
-            basis_vec = torch.zeros(old_shape)
-            basis_vec[np.unravel_index(i, old_shape)] = 1.0
-            mat.append(self._resize(basis_vec, new_shape).reshape(-1))
-        resize_matrix = torch.stack(mat)
-        return torch.linalg.pinv(resize_matrix)
-
-    def resize_patch_embed(
-        self, patch_embed: Tensor, new_patch_size: tuple[int, int]
-    ) -> Tensor:
-        """Resize patch_embed to target resolution via pseudo-inverse resizing."""
-        # Return original kernel if no resize is necessary
-        if self.patch_size == new_patch_size:
-            return patch_embed
-
-        # Calculate pseudo-inverse of resize matrix
-        if new_patch_size not in self.pinvs:
-            self.pinvs[new_patch_size] = self._calculate_pinv(
-                self.patch_size, new_patch_size
-            )
-        pinv = self.pinvs[new_patch_size]
-        # Dynamically make sure that pinv is on the right device and dtype
-        pinv = pinv.to(device=patch_embed.device, dtype=patch_embed.dtype)
-        pinv = distribute_like(patch_embed, pinv)
-
-        def resample_patch_embed(patch_embed: Tensor) -> Tensor:
-            h, w = new_patch_size
-            resampled_kernel = pinv @ patch_embed.reshape(-1)
-            return rearrange(resampled_kernel, "(h w) -> h w", h=h, w=w)
-
-        v_resample_patch_embed = vmap(vmap(resample_patch_embed, 0, 0), 1, 1)
-
-        return v_resample_patch_embed(patch_embed)
 
     def forward(
         self,
@@ -197,13 +114,21 @@ class FlexiPatchEmbed(nn.Module):
         assert (
             isinstance(patch_size, tuple) and len(patch_size) == 2
         ), "patch_size must be a 2-tuple"
-        # Resize conv weights
-        if patch_size == self.patch_size:
-            weight = self.proj.weight
-        else:
-            weight = self.resize_patch_embed(self.proj.weight, patch_size)
+        # Resize input
+        if patch_size != self.patch_size:
+            shape = x.shape[-2:]
+            new_shape = (
+                shape[0] // patch_size[0] * self.patch_size[0],
+                shape[1] // patch_size[1] * self.patch_size[1],
+            )
+            x = F.interpolate(
+                x,
+                size=new_shape,
+                mode=self.interpolation,
+                antialias=self.antialias,
+            )
         # Apply conv with resized weights
-        x = F.conv2d(x, weight, bias=self.proj.bias, stride=patch_size)
+        x = self.proj(x)
         # At this point x has embedding dim sized channel dimension
         if has_time_dimension:
             _, d, h, w = x.shape
