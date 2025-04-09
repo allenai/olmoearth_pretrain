@@ -12,6 +12,7 @@ from class_registry import ClassRegistry
 from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor
+from torch.linalg import vector_norm
 
 from helios.data.constants import Modality
 from helios.nn.flexihelios import PoolingType, TokensAndMasks
@@ -550,7 +551,9 @@ class InfoNCELoss(Loss):
         # online_encodings_b = predictions.pool_unmasked_tokens(
         #     PoolingType.MEAN, spatial_pooling=False
         # )
-        logits = predictions @ targets.transpose(-2, -1)
+        logits = vector_norm(predictions, dim=-1) @ vector_norm(
+            targets, dim=-1
+        ).transpose(-2, -1)
 
         # Positive keys are the entries on the diagonal
         labels = torch.arange(len(predictions), device=predictions.device)
