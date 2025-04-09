@@ -2,7 +2,7 @@ ai2-olmo-core @ git+https://github.com/allenai/olmo-core.git@8919dff
 beaker-py>=1.32.0
 cartopy
 class-registry
-einops==0.7.0
+einops>=0.7.0
 gcsfs
 geobench
 GitPython>=3.0,<4.0
