@@ -979,7 +979,6 @@ class HeliosDataset(Dataset):
         sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
         subset_sample = self.apply_subset(sample, args)
         sample_dict = subset_sample.as_dict(ignore_nones=True)
-        logger.info(f"Sample args {args}")
         logger.info(f"Sample dict keys {sample_dict.keys()}")
         # Sample modalities should be written into the metadata of the h5 dataset
         sample_modalities = list(
@@ -988,7 +987,6 @@ class HeliosDataset(Dataset):
 
         if self.normalize:
             for modality in sample_modalities:
-                logger.info(f"Normalizing modality {modality.name}")
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality.name in missing_modalities:
                     continue
