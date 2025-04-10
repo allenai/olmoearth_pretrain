@@ -2,30 +2,12 @@
 
 from pathlib import Path
 
-import pytest
-
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoader
 from helios.data.dataset import HeliosDataset, collate_helios
-from helios.dataset.convert_to_h5py import ConvertToH5py
 
 
-@pytest.fixture
-def setup_h5py_dir(
-    tmp_path: Path, prepare_samples_and_supported_modalities: tuple
-) -> None:
-    """Setup the h5py directory."""
-    prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
-    prepared_samples = prepare_samples(tmp_path)
-    convert_to_h5py = ConvertToH5py(
-        tile_path=tmp_path,
-        supported_modalities=[m for m in supported_modalities if m != Modality.LATLON],
-        multiprocessed_h5_creation=False,
-    )
-    convert_to_h5py.prepare_h5_dataset(prepared_samples)
-
-
-def test_helios_dataloader(tmp_path: Path, setup_h5py_dir: None) -> None:
+def test_helios_dataloader(tmp_path: Path, setup_h5py_dir: Path) -> None:
     """Test the HeliosDataloader class."""
     training_modalities = [
         Modality.SENTINEL2_L2A.name,
@@ -33,10 +15,8 @@ def test_helios_dataloader(tmp_path: Path, setup_h5py_dir: None) -> None:
         Modality.WORLDCOVER.name,
         Modality.OPENSTREETMAP_RASTER.name,
     ]
-    print(f"Training modalities: {training_modalities}")
-    h5py_dir = tmp_path / "h5py_data" / "_".join(sorted(training_modalities)) / "1"
     dataset = HeliosDataset(
-        h5py_dir=h5py_dir,
+        h5py_dir=setup_h5py_dir,
         training_modalities=training_modalities,
         dtype="float32",
     )
