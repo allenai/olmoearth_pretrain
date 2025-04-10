@@ -41,20 +41,19 @@ class CommonComponents(Config):
 
     run_name: str
     save_folder: str
-    supported_modality_names: list[str]
     launch: BeakerLaunchConfig
     training_modalities: list[str]
     # callbacks: dict[str, Callback]
 
     def validate(self) -> None:
         """Validate the common components."""
-        if not isinstance(self.supported_modality_names, list):
-            raise ValueError("supported_modality_names must be a list")
+        if not isinstance(self.training_modalities, list):
+            raise ValueError("training_modalities must be a list")
         if not all(
-            modality in Modality.names() for modality in self.supported_modality_names
+            modality in Modality.names() for modality in self.training_modalities
         ):
             raise ValueError(
-                "supported_modality_names must contain only valid modality names"
+                "training_modalities must contain only valid modality names"
             )
 
 

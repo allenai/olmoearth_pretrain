@@ -349,6 +349,7 @@ class GetItemArgs(NamedTuple):
     token_budget: int | None = None
 
 
+# TODO should training modalities be str or modality_spec
 class HeliosDataset(Dataset):
     """Helios dataset."""
 
@@ -421,8 +422,15 @@ class HeliosDataset(Dataset):
             supported_modalities.append("openstreetmap_raster")
         num_samples = int(self.h5py_dir.name)
 
+        tile_path = self.h5py_dir.parent.parent.parent
+
+        logger.info(f"tile_path: {tile_path}")
+        logger.info(f"supported_modalities: {supported_modalities}")
+        logger.info(f"num_samples: {num_samples}")
+        logger.info(f"dtype: {self.dtype}")
+
         sha256_hash.update(
-            f"tile_path={self.tile_path},"
+            f"tile_path={tile_path},"
             f"supported_modalities={sorted(supported_modalities)},"
             f"sample_size={num_samples},"
             f"dtype={self.dtype}".encode()
@@ -715,12 +723,10 @@ class HeliosDataset(Dataset):
 class HeliosDatasetConfig(Config):
     """Configuration for the HeliosDataset."""
 
-    h5py_dir: str | None
-    supported_modality_names: list[str]
-    tile_path: str | None = None
+    h5py_dir: str
+    training_modalities: list[str]
     dtype: DType = DType.float32
     normalize: bool = True
-    training_modalities: list[str] | None = None
     use_samples_with_missing_supported_modalities: bool = False
 
     def validate(self) -> None:
@@ -732,30 +738,15 @@ class HeliosDatasetConfig(Config):
         Raises:
             ValueError: If any arguments are invalid
         """
-        # Validate tile_path
-        # Check that either a tile path or h5py_dir is provided
-        if self.tile_path is None and self.h5py_dir is None:
-            raise ValueError("Either a tile path or h5py_dir must be provided")
-        if self.tile_path is not None and self.h5py_dir is not None:
-            raise ValueError("Only one of tile_path or h5py_dir must be provided")
 
         # Validate supported_modalities
-        if not isinstance(self.supported_modalities, list):
-            raise ValueError("supported_modalities must be a list")
-        if not all(isinstance(m, ModalitySpec) for m in self.supported_modalities):
-            raise ValueError(
-                "All elements in supported_modalities must be ModalitySpec"
-            )
+        if not isinstance(self.training_modalities, list):
+            raise ValueError("training_modalities must be a list")
+        # if not all(isinstance(m, ModalitySpec) for m in self.training_modalities):
+        #     raise ValueError(
+        #         "All elements in supported_modalities must be ModalitySpec"
+        #     )
 
-    @property
-    def supported_modalities(self) -> list[ModalitySpec]:
-        """Get the supported modalities."""
-        return get_modality_specs_from_names(self.supported_modality_names)
-
-    @property
-    def tile_upath(self) -> UPath:
-        """Get the tile path."""
-        return UPath(self.tile_path)
 
     @property
     def h5py_dir_upath(self) -> UPath:
@@ -766,11 +757,6 @@ class HeliosDatasetConfig(Config):
         """Build the dataset."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
-        if self.h5py_dir is not None:
-            kwargs["h5py_dir"] = self.h5py_dir_upath
-        else:
-            kwargs["tile_path"] = self.tile_upath
-        kwargs.pop("supported_modality_names")
-        kwargs["supported_modalities"] = self.supported_modalities
+        kwargs["h5py_dir"] = self.h5py_dir_upath
         logger.info(f"HeliosDataset kwargs: {kwargs}")
         return HeliosDataset(**kwargs)
