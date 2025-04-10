@@ -203,8 +203,6 @@ def launch(config: HeliosExperimentConfig) -> None:
 
 def prep(config: HeliosExperimentConfig) -> None:
     """Prepare the dataset for an experiment.
-
-    This builds the H5s and saves them to weka to be shared across experiments.
     """
     dataset = config.dataset.build()
     # TODO: akward harcoding of the collator here

@@ -29,7 +29,6 @@ from helios.data.constants import (
 from helios.data.normalize import Normalizer, Strategy
 from helios.dataset.convert_to_h5py import ConvertToH5py
 from helios.dataset.sample import SampleInformation
-from helios.dataset.utils import get_modality_specs_from_names
 from helios.types import ArrayTensor
 
 logger = logging.getLogger(__name__)

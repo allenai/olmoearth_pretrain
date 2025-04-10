@@ -4,6 +4,7 @@ import logging
 import multiprocessing as mp
 import os
 from typing import Any
+from dataclasses import dataclass
 
 import h5py
 import numpy as np
@@ -11,6 +12,8 @@ import pandas as pd
 from einops import rearrange
 from tqdm import tqdm
 from upath import UPath
+from olmo_core.config import Config
+from helios.dataset.utils import get_modality_specs_from_names
 
 from helios.data.constants import Modality, ModalitySpec, TimeSpan
 from helios.data.utils import convert_to_db
@@ -20,6 +23,22 @@ from helios.dataset.sample import (ModalityTile, SampleInformation,
                                    load_image_for_sample)
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ConvertToH5pyConfig(Config):
+    """Configuration for converting GeoTiffs to H5py files."""
+    tile_path: str
+    supported_modality_names: list[str]  # List of modality names (e.g., ["SENTINEL2_L2A", "SENTINEL1"])
+    multiprocessed_h5_creation: bool = True
+
+
+    def build(self) -> "ConvertToH5py":
+        """Build the ConvertToH5py object."""
+        return ConvertToH5py(
+            tile_path=UPath(self.tile_path),
+            supported_modalities=get_modality_specs_from_names(self.supported_modality_names),
+        )
 
 
 class ConvertToH5py:
