@@ -140,7 +140,15 @@ class TokensAndMasks(NamedTuple):
             mask_attr_name = self.get_masked_modality_name(attr_name)
             attr = getattr(self, attr_name)
             masked_attr = getattr(self, mask_attr_name)
-            if attr is not None:
+            # Loop through each item in the batch to check if any are decoded
+            has_decoded = False
+            for batch_idx in range(masked_attr.shape[0]):
+                if masked_attr is not None:
+                    if not (masked_attr[batch_idx] == MaskValue.DECODER.value).any():
+                        logger.info(f"modality {attr_name} is not seen decoded at all ")
+                        has_decoded = True
+
+            if attr is not None and not has_decoded:
                 if masked_attr is None:
                     raise ValueError(
                         f"Can't have present {attr_name} but None {mask_attr_name}"
