@@ -23,7 +23,6 @@ from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig, collate_helios
 from helios.data.normalize import Normalizer, Strategy
 from helios.data.visualize import visualize_sample
-from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 from helios.train.train_module.train_module import HeliosTrainModuleConfig
 
@@ -75,7 +74,7 @@ class HeliosExperimentConfig(Config):
     run_name: str
     launch: BeakerLaunchConfig
     model: Config
-    dataset: HeliosDatasetConfig  # will likely be fixed for us
+    dataset: Config  # will likely be fixed for us
     data_loader: HeliosDataLoaderConfig  # will likely be fixed for us
     train_module: HeliosTrainModuleConfig
     trainer: TrainerConfig
@@ -304,8 +303,8 @@ class SubCmd(StrEnum):
 def main(
     *,
     common_components_builder: Callable,
-    model_config_builder: Callable[[CommonComponents], LatentMIMConfig],
-    dataset_config_builder: Callable[[CommonComponents], HeliosDatasetConfig],
+    model_config_builder: Callable[[CommonComponents], Config],
+    dataset_config_builder: Callable[[CommonComponents], Config],
     dataloader_config_builder: Callable[[CommonComponents], HeliosDataLoaderConfig],
     trainer_config_builder: Callable[[CommonComponents], TrainerConfig],
     train_module_config_builder: Callable[

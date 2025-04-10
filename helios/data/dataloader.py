@@ -24,6 +24,7 @@ from olmo_core.utils import get_default_device
 from torch.utils.data import default_collate
 from upath import UPath
 
+from helios.data.concat import HeliosConcatDataset
 from helios.data.constants import IMAGE_TILE_SIZE, Modality
 from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
 
@@ -41,7 +42,7 @@ class HeliosDataLoader(DataLoaderBase):
 
     def __init__(
         self,
-        dataset: HeliosDataset,
+        dataset: HeliosDataset | HeliosConcatDataset,
         work_dir: UPath,
         global_batch_size: int,
         min_patch_size: int,
@@ -70,9 +71,6 @@ class HeliosDataLoader(DataLoaderBase):
             fs_local_rank=fs_local_rank,
         )
         self.dataset = dataset
-        assert isinstance(self.dataset, HeliosDataset)  # type: ignore
-        if not self.dataset.is_dataset_prepared:
-            raise RuntimeError("Dataset must be prepared before creating a dataloader")
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         if token_budget is None:
@@ -184,7 +182,7 @@ class HeliosDataLoader(DataLoaderBase):
             return self._global_indices
         if not self._global_indices_file.is_file():
             raise RuntimeError(
-                "Missing global indices file, did you forget to call 'reshuffle()'?"
+                f"Missing global indices file {self._global_indices_file}, did you forget to call 'reshuffle()'?"
             )
         return np.memmap(self._global_indices_file, mode="r", dtype=np.uint32)
 
@@ -487,8 +485,6 @@ class HeliosDataLoaderConfig(Config):
     ) -> "HeliosDataLoader":
         """Build the HeliosDataLoader."""
         self.validate()
-        if not isinstance(dataset, HeliosDataset):
-            raise ValueError("Dataset must be a HeliosDataset")
         dataset.prepare()
 
         return HeliosDataLoader(
