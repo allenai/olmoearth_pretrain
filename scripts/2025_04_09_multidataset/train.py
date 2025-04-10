@@ -111,7 +111,11 @@ def build_train_module_config(
     token_exit_cfg = {modality: 0 for modality in common.supported_modality_names}
 
     WARMUP_EPOCHS = 10
-    dp_config = DataParallelConfig(name=DataParallelType.ddp)
+    dp_config = DataParallelConfig(
+        name=DataParallelType.fsdp,
+        param_dtype=DType.bfloat16,
+        reduce_dtype=DType.float32,
+    )
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()

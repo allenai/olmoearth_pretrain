@@ -126,7 +126,7 @@ for token_exit_args, model_args in itertools.product(
     MODEL_ARGS,
 ):
     # Construct run name indicating hyperparameters
-    run_name = f"20250409_01_exit_{token_exit_args[1]}_model_{model_args[1]}"
+    run_name = f"20250409_02_exit_{token_exit_args[1]}_model_{model_args[1]}"
 
     if "base" in model_args[1]:
         # Lower batch size, otherwise it is too much memory usage.
