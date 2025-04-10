@@ -178,7 +178,7 @@ class MAETrainModule(HeliosTrainModule):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass of the model."""
         with self._model_forward_context():
-            reconstructed = self.model(masked_batch, patch_size)
+            _, reconstructed = self.model(masked_batch, patch_size)
             labels_dict = masked_batch.as_dict()
             labels_dict.pop("timestamps", None)
             labels = TokensAndMasks(**labels_dict)
