@@ -462,29 +462,32 @@ class HeliosDataset(Dataset):
         logger.info(f"columns: {metadata_df.columns}")
         # For now we want to filter out any samples that have NAIP DATA or don't have any of the training modalities
         # Get the indices of samples that have NAIP data
-        naip_indices = metadata_df[metadata_df["naip"] == 1].index
-        self.naip_indices = naip_indices
-        logger.info(f"NAIP indices: {naip_indices}")
+        if "naip" in metadata_df.columns:
+            naip_indices = metadata_df[metadata_df["naip"] == 1].index
+            self.naip_indices = naip_indices
+        else:
+            self.naip_indices = np.array([])
+        logger.info(f"NAIP indices: {self.naip_indices}")
 
         # Get the indices of samples that don't have any training modalities
         no_training_indices = metadata_df[
             metadata_df[self.training_modalities].sum(axis=1) == 0
         ].index
         # Filter these indices out
-        logger.info(f"Filtering out {len(naip_indices)} samples with NAIP data")
+        logger.info(f"Filtering out {len(self.naip_indices)} samples with NAIP data")
         logger.info(
             f"Filtering out {len(no_training_indices)} samples without any training modalities"
         )
-        self.sample_indices = np.setdiff1d(self.sample_indices, naip_indices)
+        self.sample_indices = np.setdiff1d(self.sample_indices, self.naip_indices)
         self.sample_indices = np.setdiff1d(self.sample_indices, no_training_indices)
         # raise an error if any of the naip indices are still in the sample indices
         if any(index in self.naip_indices for index in self.sample_indices):
             raise ValueError("Some NAIP indices are still in the sample indices")
         logger.info(
-            f"Filtered {len(naip_indices) + len(no_training_indices)} samples to {self.sample_indices.shape} samples"
+            f"Filtered {len(self.naip_indices) + len(no_training_indices)} samples to {self.sample_indices.shape} samples"
         )
 
-    def prepare(self, samples: list[SampleInformation] | None = None) -> None:
+    def prepare(self) -> None:
         """Prepare the dataset.
 
         THIS SHOULD BE CALLED BY THE MAIN PROCESS ONLY and should happen
@@ -498,9 +501,7 @@ class HeliosDataset(Dataset):
         logger.info("H5 files already exist, skipping creation")
         logger.info(f"H5 files exist in {self.h5py_dir}")
         num_samples = int(self.h5py_dir.name)
-        if samples is None:
-            samples = []
-        self.latlon_distribution = self.get_geographic_distribution(samples)
+        self.latlon_distribution = self.get_geographic_distribution()
         self.sample_indices = np.arange(num_samples)
         self._filter_sample_indices_for_training()
 
@@ -547,9 +548,7 @@ class HeliosDataset(Dataset):
                 f"{'+'.join(sorted(combination))}: {count} samples ({percentage:.1f}%)"
             )
 
-    def get_geographic_distribution(
-        self, samples: list[SampleInformation]
-    ) -> np.ndarray:
+    def get_geographic_distribution(self) -> np.ndarray:
         """Get the geographic distribution of the dataset.
 
         Returns:
@@ -559,15 +558,6 @@ class HeliosDataset(Dataset):
         if self.latlon_distribution_path.exists():
             with self.latlon_distribution_path.open("rb") as f:
                 return np.load(f)
-        if len(samples) == 0:
-            raise ValueError("No samples provided")
-        latlons = []
-        for sample in samples:
-            latlon = sample.get_latlon()
-            latlons.append(latlon)
-        latlons = np.vstack(latlons)
-        self.save_latlon_distribution(latlons)
-        return latlons
 
     def get_sample_data_for_histogram(
         self, num_samples: int = 100, num_values: int = 100

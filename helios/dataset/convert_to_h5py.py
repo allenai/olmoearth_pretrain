@@ -294,12 +294,23 @@ class ConvertToH5py:
         self._log_modality_distribution(filtered_samples)
         return filtered_samples
 
-    def run(self) -> None:
-        """Run the conversion."""
-        # TODO:
+    def get_and_filter_samples(self) -> list[SampleInformation]:
+        """Get and filter samples.
+
+        This parses csvs, loads images, and filters samples to adjust to the HeliosSample format.
+        """
         samples = self._get_samples()
         samples = self._filter_samples(samples)
+        return samples
+
+    def prepare_h5_dataset(self, samples: list[SampleInformation]) -> None:
+        """Prepare the h5 dataset."""
         self.set_h5py_dir(len(samples))
         self.save_sample_metadata(samples)
         logger.info("Attempting to create H5 files may take some time...")
         self.create_h5_dataset(samples)
+
+    def run(self) -> None:
+        """Run the conversion."""
+        samples = self.get_and_filter_samples()
+        self.prepare_h5_dataset(samples)
