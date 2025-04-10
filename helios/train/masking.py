@@ -60,8 +60,8 @@ class MaskedHeliosSample(NamedTuple):
     srtm_mask: ArrayTensor | None = None
     landsat: ArrayTensor | None = None
     landsat_mask: ArrayTensor | None = None
-    # naip: ArrayTensor | None = None
-    # naip_mask: ArrayTensor | None = None
+    naip: ArrayTensor | None = None
+    naip_mask: ArrayTensor | None = None
 
     def as_dict(self, return_none: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
