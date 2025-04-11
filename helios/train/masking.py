@@ -745,11 +745,13 @@ class SelectableModalityMaskingStrategy(MaskingStrategy):
             all_modalities[idx] for idx in modality_indices[0:num_to_mask]
         ]
 
+        logger.debug("Decided to mask modalities: %s", cur_mask_modalities)
         for modality in cur_mask_modalities:
             if modality in self.decodable_modalities:
                 value = MaskValue.DECODER.value
             else:
                 value = MaskValue.MISSING.value
+            logger.debug("Filling modality %s mask with %s", modality, value)
             getattr(masked_sample, modality)[:] = value
 
         return masked_sample
