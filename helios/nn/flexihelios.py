@@ -976,7 +976,6 @@ class Encoder(FlexiHeliosBase):
             updated_mask: [B, T]
             where T is the max number of unmasked tokens for an instance
         """
-        # At this point when we flip the mask 1 means keep 0 means remove
         sorted_mask, indices = torch.sort(mask, dim=1, descending=True, stable=True)
         # Now all the places where we want to keep the token are at the front of the tensor
         x = x.gather(1, indices[:, :, None].expand_as(x))
