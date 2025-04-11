@@ -220,6 +220,8 @@ class MaskingStrategy:
         shape: torch.Size,
         patch_size: int,
         device: torch.device | None = None,
+        encode_ratio: float | None = None,
+        decode_ratio: float | None = None,
     ) -> ArrayTensor:
         mask_shape = list(shape)
         mask_shape[-1] = modality.num_band_sets
@@ -233,8 +235,13 @@ class MaskingStrategy:
         else:
             num_tokens = np.prod(mask_shape[:-1])
 
-        encode_tokens = int(num_tokens * self.encode_ratio)
-        decode_tokens = int(num_tokens * self.decode_ratio)
+        if encode_ratio is None:
+            encode_ratio = self.encode_ratio
+        if decode_ratio is None:
+            decode_ratio = self.decode_ratio
+
+        encode_tokens = int(num_tokens * encode_ratio)
+        decode_tokens = int(num_tokens * decode_ratio)
         target_tokens = int(num_tokens - (encode_tokens + decode_tokens))
 
         # we do this as a numpy array to take advantage of
@@ -704,6 +711,112 @@ class RandomMaskingStrategy(MaskingStrategy):
         return MaskedHeliosSample(**output_dict)
 
 
+@MASKING_STRATEGY_REGISTRY.register("random_range")
+class RandomRangeMaskingStrategy(MaskingStrategy):
+    """Randomly masks the input data."""
+
+    def __init__(
+        self,
+        min_encode_ratio: float = 0.1,
+        max_encode_ratio: float = 0.5,
+        min_decode_ratio: float = 0.1,
+        max_decode_ratio: float = 0.5,
+    ) -> None:
+        """Initialize the masking strategy."""
+        self.min_encode_ratio = min_encode_ratio
+        self.max_encode_ratio = max_encode_ratio
+        self.min_decode_ratio = min_decode_ratio
+        self.max_decode_ratio = max_decode_ratio
+        self._encode_ratio = (min_encode_ratio + max_encode_ratio) / 2
+        self._decode_ratio = (min_decode_ratio + max_decode_ratio) / 2
+        self.generator = np.random.default_rng(0)
+
+    def apply_mask(
+        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedHeliosSample:
+        """Apply random masking to the input data.
+
+        All Masking happens in unpatchified form and not grouped across bandsets
+        as the modality data is unpatchified and not grouped across bandsets
+
+        The mask created for the space-time varying modality will be different than
+        for the static modality.
+
+        For space-time varying data, we will mask out the same ratio of values for
+        all the instances in the batch. However, since a static modality might have
+        very few tokens in a batch (e.g. 1 for latlons) instead we mask out a certain
+        ratios of values across the entire batch.
+
+        Args:
+            batch: Input data of type HeliosSample
+            patch_size: patch size applied to sample
+            **kwargs: Additional arguments for maskings
+
+        Returns:
+            MaskedHeliosSample containing the masked data and mask
+        """
+        if patch_size is None:
+            raise ValueError("patch_size must be provided for random masking")
+        output_dict: dict[str, ArrayTensor | None] = {}
+        for modality_name in batch.modalities:
+            instance = getattr(batch, modality_name)
+            if instance is None:
+                # set instance and mask to None
+                output_dict[modality_name] = None
+                output_dict[
+                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                ] = None
+            else:
+                if modality_name == "timestamps":
+                    output_dict[modality_name] = instance
+                    continue
+
+                if isinstance(instance, torch.Tensor):
+                    device: torch.device | None = instance.device
+                else:
+                    device = None
+
+                modality = Modality.get(modality_name)
+
+                if modality.is_spatial or modality.is_multitemporal:
+                    # Create masks per element so that we can leverage _create_random_mask
+                    # while also ensuring each example can have its own encode and decode
+                    # ratios.
+                    batch_size = instance.shape[0]
+                    example_encode_ratios = self.generator.uniform(
+                        self.min_encode_ratio, self.max_encode_ratio, (batch_size,)
+                    )
+                    example_decode_ratios = self.generator.uniform(
+                        self.min_decode_ratio, self.max_decode_ratio, (batch_size,)
+                    )
+                    example_masks = []
+                    for batch_idx in range(batch_size):
+                        example_masks.append(
+                            self._create_random_mask(
+                                modality,
+                                instance[batch_idx : batch_idx + 1].shape,
+                                patch_size,
+                                device,
+                                encode_ratio=example_encode_ratios[batch_idx],
+                                decode_ratio=example_decode_ratios[batch_idx],
+                            )
+                        )
+                    mask = torch.cat(example_masks, dim=0)
+
+                else:
+                    # For ones that could be single token we just pass the whole batch.
+                    mask = self._create_random_mask(
+                        modality, instance.shape, patch_size, device
+                    )
+
+                mask = self.fill_mask_with_missing_values(instance, mask)
+                output_dict[modality_name] = instance
+                output_dict[
+                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                ] = mask
+        return MaskedHeliosSample(**output_dict)
+
+
 @MASKING_STRATEGY_REGISTRY.register("selectable_modality")
 class SelectableModalityMaskingStrategy(MaskingStrategy):
     """Like modality masking but we mask some for decoding and others fully.
@@ -752,7 +865,70 @@ class SelectableModalityMaskingStrategy(MaskingStrategy):
             else:
                 value = MaskValue.MISSING.value
             logger.debug("Filling modality %s mask with %s", modality, value)
-            getattr(masked_sample, modality)[:] = value
+            getattr(
+                masked_sample, MaskedHeliosSample.get_masked_modality_name(modality)
+            )[:] = value
+
+        return masked_sample
+
+
+@MASKING_STRATEGY_REGISTRY.register("selectable_random_range_modality")
+class SelectableRandomRangeModalityMaskingStrategy(MaskingStrategy):
+    """Like modality masking but we mask some for decoding and others fully.
+
+    Plus we also apply random range masking for the remaining modalities.
+    """
+
+    def __init__(
+        self,
+        decodable_modalities: list[str],
+        fully_mask_modalities: list[str],
+        max_to_mask: int,
+        min_encode_ratio: float = 0.1,
+        max_encode_ratio: float = 0.5,
+        min_decode_ratio: float = 0.1,
+        max_decode_ratio: float = 0.5,
+    ) -> None:
+        """Initialize the masking strategy."""
+        self.decodable_modalities = decodable_modalities
+        self.fully_mask_modalities = fully_mask_modalities
+        self.max_to_mask = max_to_mask
+        self._encode_ratio = (min_encode_ratio + max_encode_ratio) / 2
+        self._decode_ratio = (min_decode_ratio + max_decode_ratio) / 2
+        self.generator = np.random.default_rng(0)
+        self.random_strategy = RandomRangeMaskingStrategy(
+            min_encode_ratio, max_encode_ratio, min_decode_ratio, max_decode_ratio
+        )
+
+    def apply_mask(
+        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedHeliosSample:
+        """Apply random masking, plus mask certain additional modalities."""
+        # First apply random range masking.
+        masked_sample = self.random_strategy.apply_mask(batch, patch_size, **kwargs)
+
+        # Decide how many and which modalities to mask per example.
+        all_modalities = self.decodable_modalities + self.fully_mask_modalities
+        batch_size = getattr(batch, all_modalities[0]).shape[0]
+
+        for batch_idx in range(batch_size):
+            # Choose additional modalities to mask entirely (either set DECODER or
+            # MISSING).
+            modality_indices = np.arange(len(all_modalities))
+            self.generator.shuffle(modality_indices)
+            num_to_mask = self.generator.integers(self.max_to_mask + 1)
+            cur_mask_modalities = [
+                all_modalities[idx] for idx in modality_indices[0:num_to_mask]
+            ]
+
+            for modality in cur_mask_modalities:
+                if modality in self.decodable_modalities:
+                    value = MaskValue.DECODER.value
+                else:
+                    value = MaskValue.MISSING.value
+                getattr(
+                    masked_sample, MaskedHeliosSample.get_masked_modality_name(modality)
+                )[batch_idx] = value
 
         return masked_sample
 
