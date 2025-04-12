@@ -7,17 +7,17 @@
 import subprocess  # nosec
 
 MODEL_TRAINING_CONFIGS = {
-    "tiny": {
-        "decoder_depth": 4,
-        "encoder_embedding_size": 192,
-        "decoder_embedding_size": 192,
-        "encoder_depth": 12,
-        "encoder_num_heads": 3,
-        "decoder_num_heads": 3,
-        "mlp_ratio": 4.0,
-        "lr": 0.0001,
-        "wd": 0.02,
-    },
+    # "tiny": {
+    #     "decoder_depth": 4,
+    #     "encoder_embedding_size": 192,
+    #     "decoder_embedding_size": 192,
+    #     "encoder_depth": 12,
+    #     "encoder_num_heads": 3,
+    #     "decoder_num_heads": 3,
+    #     "mlp_ratio": 4.0,
+    #     "lr": 0.0001,
+    #     "wd": 0.02,
+    # },
     # "base": {
     #     "decoder_depth": 4,
     #     "encoder_embedding_size": 768,
@@ -37,8 +37,8 @@ MODEL_TRAINING_CONFIGS = {
         "encoder_num_heads": 16,
         "decoder_num_heads": 16,
         "mlp_ratio": 4.0,
-        "lr": 0.00004,
-        "wd": 0.03,
+        "lr": 0.0001,
+        "wd": 0.02,
     },
 }
 
@@ -47,7 +47,7 @@ BASE_SCRIPT_NAMES = [
     "latentmim_dataset_osm_presto",
 ]
 
-DECODER_RATIOS = [0.5, 0.7, 0.9]
+DECODER_RATIOS = [0.75, 0.9]
 
 BASE_COMMAND = (
     "python3 scripts/model_ladder/2025_04_11/{script_name}_script.py launch {run_name} ai2/jupiter-cirrascale-2 "
@@ -69,7 +69,7 @@ BASE_COMMAND = (
 for script_name in BASE_SCRIPT_NAMES:
     for model_name, model_config in MODEL_TRAINING_CONFIGS.items():
         for decoder_ratio in DECODER_RATIOS:
-            run_name = f"{script_name}_{model_name}_decoder_{decoder_ratio}_smaller_lr"
+            run_name = f"{script_name}_{model_name}_decoder_{decoder_ratio}_lr_1e-4"
             command = BASE_COMMAND.format(
                 script_name=script_name,
                 run_name=run_name,
