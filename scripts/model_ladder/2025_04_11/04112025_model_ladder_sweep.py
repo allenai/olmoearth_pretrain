@@ -47,7 +47,7 @@ BASE_SCRIPT_NAMES = [
     "latentmim_dataset_osm_presto",
 ]
 
-DECODER_RATIOS = [0.5, 0.7, 0.9]
+DECODER_RATIOS = [0.5, 0.7, 0.8]
 
 BASE_COMMAND = (
     "python3 scripts/model_ladder/2025_04_11/{script_name}_script.py launch {run_name} ai2/jupiter-cirrascale-2 "
