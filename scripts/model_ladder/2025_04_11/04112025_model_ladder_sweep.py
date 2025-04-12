@@ -4,6 +4,8 @@
 # (2) dataset size: presto / presto + osm
 # (3) decoder ratio: 0.5 / 0.7 / 0.9
 
+import subprocess  # nosec
+
 MODEL_TRAINING_CONFIGS = {
     "tiny": {
         "decoder_depth": 4,
@@ -75,3 +77,5 @@ for script_name in BASE_SCRIPT_NAMES:
                 decode_ratio=decoder_ratio,
             )
             print(command)
+            # Execute the command
+            subprocess.run(command, shell=True, check=True)  # nosec
