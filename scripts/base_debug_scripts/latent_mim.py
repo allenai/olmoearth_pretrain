@@ -21,7 +21,6 @@ from upath import UPath
 
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
-from helios.data.normalize import Strategy
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
 from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
@@ -254,7 +253,6 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
     return HeliosVisualizeConfig(
         num_samples=None,
         output_dir=str(UPath(common.save_folder) / "visualizations"),
-        normalize_strategy=Strategy.PREDEFINED,
         std_multiplier=2.0,
     )
 
