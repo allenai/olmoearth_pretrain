@@ -6,10 +6,10 @@ import logging
 import random
 from typing import Any
 
+from olmo_core.utils import prepare_cli_environment
 from tqdm import tqdm
-from upath import UPath
 
-from helios.data.constants import IMAGE_TILE_SIZE, Modality
+from helios.data.constants import IMAGE_TILE_SIZE, MISSING_VALUE, Modality
 from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosDatasetConfig
 from helios.data.utils import update_streaming_stats
 
@@ -34,9 +34,7 @@ def compute_normalization_values(
         indices_to_sample = random.sample(list(range(dataset_len)), k=estimate_from)
     else:
         indices_to_sample = list(range(dataset_len))
-
     norm_dict: dict[str, Any] = {}
-
     for i in tqdm(indices_to_sample):
         get_item_args = GetItemArgs(idx=i, patch_size=1, sampled_hw_p=IMAGE_TILE_SIZE)
         _, sample = dataset[get_item_args]
@@ -48,6 +46,11 @@ def compute_normalization_values(
             modality_spec = Modality.get(modality)
             modality_bands = modality_spec.band_order
             if modality_data is None:
+                continue
+            if (modality_data == MISSING_VALUE).all():
+                logger.info(
+                    f"Skipping modality {i} because modality {modality} has no valid data"
+                )
                 continue
             if modality not in norm_dict:
                 norm_dict[modality] = {}
@@ -82,49 +85,51 @@ def compute_normalization_values(
 
     norm_dict["total_n"] = dataset_len
     norm_dict["sampled_n"] = len(indices_to_sample)
-    norm_dict["tile_path"] = dataset.tile_path
+    path = dataset.h5py_dir or dataset.tile_path
+    norm_dict["tile_path"] = str(path)
 
     return norm_dict
 
 
-args = argparse.ArgumentParser()
+if __name__ == "__main__":
+    prepare_cli_environment()
+    args = argparse.ArgumentParser()
+    args.add_argument("--h5py_dir", type=str, required=True)
+    args.add_argument("--supported_modalities", type=str, required=True)
+    args.add_argument("--estimate_from", type=int, required=False, default=None)
+    args.add_argument("--output_path", type=str, required=True)
+    args_dict = args.parse_args().__dict__  # type: ignore
 
-args.add_argument("--tile_path", type=str, required=True)
-args.add_argument("--supported_modalities", type=str, required=True)
-args.add_argument("--estimate_from", type=int, required=False, default=None)
-args.add_argument("--output_path", type=str, required=True)
-args_dict = args.parse_args().__dict__  # type: ignore
+    logger.info(
+        f"Computing normalization stats with modalities {args_dict['supported_modalities']}"
+    )
 
-logger.info(
-    f"Computing normalization stats for {args_dict['tile_path']} with modalities {args_dict['supported_modalities']}"
-)
+    def parse_supported_modalities(supported_modalities: str) -> list[str]:
+        """Parse the supported modalities from a string."""
+        return supported_modalities.split(",")
 
+    # FOr some reason landsat and naip were missi g from every sample
+    supported_modalities = parse_supported_modalities(args_dict["supported_modalities"])
+    logger.info(f"Supported modalities: {supported_modalities}")
+    # Use the config to build the dataset
+    dataset_config = HeliosDatasetConfig(
+        h5py_dir=args_dict["h5py_dir"],
+        supported_modality_names=supported_modalities,
+        normalize=False,
+    )
+    dataset = dataset_config.build()
+    dataset.prepare()
+    logger.info(f"Dataset: {dataset.normalize}")
 
-def parse_supported_modalities(supported_modalities: str) -> list[str]:
-    """Parse the supported modalities from a string."""
-    return supported_modalities.split(",")
+    norm_dict = compute_normalization_values(
+        dataset=dataset,
+        estimate_from=args_dict["estimate_from"],
+    )
+    logger.info(f"Normalization stats: {norm_dict}")
 
+    with open(args_dict["output_path"], "w") as f:
+        json.dump(norm_dict, f)
 
-# Use the config to build the dataset
-dataset_config = HeliosDatasetConfig(
-    tile_path=UPath(args_dict["tile_path"]),
-    supported_modality_names=parse_supported_modalities(
-        args_dict["supported_modalities"]
-    ),
-    normalize=False,
-)
-dataset = dataset_config.build()
-
-norm_dict = compute_normalization_values(
-    dataset=dataset,
-    estimate_from=args_dict["estimate_from"],
-)
-logger.info(f"Normalization stats: {norm_dict}")
-
-with open(args_dict["output_path"], "w") as f:
-    json.dump(norm_dict, f)
-
-
-# Example usage:
-# 20250304 run:
-# python3 compute_norm.py --tile_path "/weka/dfive-default/helios/dataset/presto" --supported_modalities "sentinel2_l2a,sentinel1,worldcover" --output_path "/weka/dfive-default/yawenz/helios/data/norm_configs/computed_20250304.json"
+    # Example usage:
+    # 20250304 run:
+    # python3 compute_norm.py --tile_path "/weka/dfive-default/helios/dataset/presto" --supported_modalities "sentinel2_l2a,sentinel1,worldcover" --output_path "/weka/dfive-default/yawenz/helios/data/norm_configs/computed_20250304.json"

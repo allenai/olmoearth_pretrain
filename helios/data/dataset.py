@@ -2,25 +2,17 @@
 
 import hashlib
 import logging
-import multiprocessing as mp
-import os
 import random
-import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import floor
-from pathlib import Path
 from typing import Any, NamedTuple, cast
 
 import h5py
 import numpy as np
 import pandas as pd
 import torch
-from einops import rearrange
-from olmo_core.aliases import PathOrStr
 from olmo_core.config import Config, DType
-from olmo_core.distributed.utils import get_fs_local_rank
-from pyproj import Transformer
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
 from torch.utils.data import Dataset
@@ -28,24 +20,15 @@ from tqdm import tqdm
 from upath import UPath
 
 from helios.data.constants import (
-    BASE_RESOLUTION,
     IMAGE_TILE_SIZE,
     MISSING_VALUE,
-    PROJECTION_CRS,
     TIMESTAMPS,
     Modality,
     ModalitySpec,
-    TimeSpan,
 )
 from helios.data.normalize import Normalizer, Strategy
-from helios.data.utils import convert_to_db
-from helios.dataset.parse import ModalityTile, parse_helios_dataset
-from helios.dataset.sample import (
-    SampleInformation,
-    image_tiles_to_samples,
-    load_image_for_sample,
-)
-from helios.dataset.utils import get_modality_specs_from_names
+from helios.dataset.convert_to_h5py import ConvertToH5py
+from helios.dataset.sample import SampleInformation
 from helios.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
@@ -64,6 +47,10 @@ class HeliosSample(NamedTuple):
     sentinel1: ArrayTensor | None = None  # [B, H, W, T, len(S1_bands)]
     worldcover: ArrayTensor | None = None  # [B, H, W, 1, len(WC_bands)]
     openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
+    srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
+    landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
+    # Unsure what the shapes should be for this one
+    naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
@@ -361,21 +348,17 @@ class GetItemArgs(NamedTuple):
     token_budget: int | None = None
 
 
+# TODO should training modalities be str or modality_spec
 class HeliosDataset(Dataset):
     """Helios dataset."""
 
-    PROJECTION_CRS = PROJECTION_CRS
-    h5py_folder: str = "h5py_data"
-
     def __init__(
         self,
-        supported_modalities: list[ModalitySpec],
+        h5py_dir: UPath,
+        training_modalities: list[str],
         dtype: DType,
-        h5py_dir: UPath | None = None,
-        tile_path: UPath | None = None,
         normalize: bool = True,
         use_samples_with_missing_supported_modalities: bool = False,
-        multiprocessed_h5_creation: bool = True,
     ):
         """Initialize the dataset.
 
@@ -387,40 +370,22 @@ class HeliosDataset(Dataset):
             :meth:`prepare()` in the main process before doing anything else.
 
         Args:
-            supported_modalities: The modalities to include in the dataset.
-            tile_path: The path to the raw dataset (image tile directory). If None we will use the h5py_dir to load the dataset. Mutually exclusive with h5py_dir.
+            h5py_dir: The path to the h5py directory containing preprocessed data.
+            training_modalities: The modalities to use for training.
             dtype: The dtype of the data.
-            use_samples_with_missing_supported_modalities: If True, use samples that are missing a supported modality.
             normalize: If True, apply normalization to the data, if False, do not apply
                 normalization.
-            h5py_dir: The path to the h5py directory containing preprocessed data. If None, the dataset will be created from raw data. Mutually exclusive with tile_path.
-
-            h5py_folder: The folder name to store the h5py files when creating from raw data.
-            multiprocessed_h5_creation: If True, create the h5py files in parallel using multiprocessing.
+            use_samples_with_missing_supported_modalities: If True, use samples that are missing a supported modality.
 
         Returns:
             None
         """
-        if h5py_dir is None and tile_path is None:
-            raise ValueError("Either h5py_dir or tile_path must be provided")
-        if h5py_dir is not None and tile_path is not None:
-            raise ValueError("Only one of h5py_dir or tile_path can be provided")
-        if h5py_dir is not None:
-            self.h5py_dir = h5py_dir
-            self.tile_path = h5py_dir.parent.parent
-            # Ensure that the supported modalities are present in the h5py directory
-            for modality in supported_modalities:
-                if modality.name not in self.h5py_dir.parent.name:
-                    raise ValueError(
-                        f"The modality {modality.name} is not present in the h5py directory"
-                    )
-        else:
-            self.tile_path = tile_path
-            self.h5py_dir: Path | None = None  # type: ignore
+        self.h5py_dir = h5py_dir
+        if not self.h5py_dir.exists():
+            raise FileNotFoundError(f"H5PY directory does not exist: {self.h5py_dir}")
 
-        self.multiprocessed_h5_creation = multiprocessed_h5_creation
-        self.supported_modalities = supported_modalities
-        self.use_samples_missing_supported_modalities = (
+        self.training_modalities = training_modalities
+        self.use_samples_with_missing_supported_modalities = (
             use_samples_with_missing_supported_modalities
         )
 
@@ -430,9 +395,6 @@ class HeliosDataset(Dataset):
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
 
-        self._fs_local_rank = get_fs_local_rank()
-        self._work_dir: Path | None = None  # type: ignore
-        self._work_dir_set = False
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
 
@@ -447,97 +409,87 @@ class HeliosDataset(Dataset):
         if not self.is_dataset_prepared:
             raise RuntimeError("Dataset must be prepared before creating a fingerprint")
         sha256_hash = hashlib.sha256()
+        # Parse from the h5py_dir
+        supported_modalities_folder = self.h5py_dir.parent.name
+        supported_modalities = supported_modalities_folder.split("_")
+        # join back sentinel_l2a and openstreetmap_raster if applicable
+        if "l2a" in supported_modalities:
+            supported_modalities.remove("l2a")
+            supported_modalities.remove("sentinel2")
+            supported_modalities.append("sentinel2_l2a")
+        if "raster" in supported_modalities:
+            supported_modalities.remove("raster")
+            supported_modalities.remove("openstreetmap")
+            supported_modalities.append("openstreetmap_raster")
+        num_samples = int(self.h5py_dir.name)
+
+        tile_path = self.h5py_dir.parent.parent.parent
+
+        logger.info(f"tile_path: {tile_path}")
+        logger.info(f"supported_modalities: {supported_modalities}")
+        logger.info(f"num_samples: {num_samples}")
+        logger.info(f"dtype: {self.dtype}")
+
         sha256_hash.update(
-            f"tile_path={self.tile_path},"
-            f"supported_modalities={sorted([m.name for m in self.supported_modalities])},"
-            f"sample_size={len(self)},"
+            f"tile_path={tile_path},"
+            f"supported_modalities={sorted(supported_modalities)},"
+            f"sample_size={num_samples},"
             f"dtype={self.dtype}".encode()
         )
         return sha256_hash.hexdigest()
 
     @property
-    def fs_local_rank(self) -> int:
-        """Get the fs local rank."""
-        return self._fs_local_rank
-
-    @fs_local_rank.setter
-    def fs_local_rank(self, _fs_local_rank: int) -> None:
-        """Set the fs local rank."""
-        self._fs_local_rank = _fs_local_rank
+    def sample_metadata_path(self) -> UPath:
+        """Get the path to the sample metadata file."""
+        return self.h5py_dir / ConvertToH5py.sample_metadata_fname
 
     @property
-    def work_dir(self) -> Path:
-        """Get the working directory."""
-        if self._work_dir is not None:
-            return self._work_dir
-        else:
-            return Path(tempfile.gettempdir())
-
-    @work_dir.setter
-    def work_dir(self, _work_dir: PathOrStr) -> None:
-        """Set the working directory."""
-        self._work_dir = Path(_work_dir)
-        self._work_dir_set = True
+    def latlon_distribution_path(self) -> UPath:
+        """Get the path to the latlon distribution file."""
+        return self.h5py_dir / ConvertToH5py.latlon_distribution_fname
 
     @property
-    def work_dir_set(self) -> bool:
-        """Check if the working directory was explicitly set."""
-        return self._work_dir_set
+    def is_dataset_prepared(self) -> bool:
+        """Check if the dataset is prepared."""
+        return self.sample_indices is not None
 
-    def process_sample_into_h5(
-        self, index_sample_tuple: tuple[int, SampleInformation]
-    ) -> None:
-        """Process a sample into an h5 file."""
-        i, sample = index_sample_tuple
-        h5_file_path = self._get_h5_file_path(i)
-        if h5_file_path.exists():
-            return
-        self._create_h5_file(sample, h5_file_path)
+    def _filter_sample_indices_for_training(self) -> None:
+        """Filter the sample indices for training.
 
-    def create_h5_dataset(self, samples: list[SampleInformation]) -> None:
-        """Create a dataset of the samples in h5 format in a shared weka directory under the given fingerprint."""
-        total_sample_indices = len(samples)
-
-        if self.multiprocessed_h5_creation:
-            num_processes = max(1, mp.cpu_count() - 2)
-            logger.info(f"Creating H5 dataset using {num_processes} processes")
-            with mp.Pool(processes=num_processes) as pool:
-                # Process samples in parallel and track progress with tqdm
-                _ = list(
-                    tqdm(
-                        pool.imap(self.process_sample_into_h5, enumerate(samples)),
-                        total=total_sample_indices,
-                        desc="Creating H5 files",
-                    )
-                )
-        else:
-            for i, sample in enumerate(samples):
-                self.process_sample_into_h5((i, sample))
-
-    def set_h5py_dir(self, num_samples: int) -> None:
-        """Set the h5py directory.
-
-        This can only be set once to ensure consistency.
-
-        Args:
-            num_samples: Number of samples in the dataset
+        Updates the sample indices numpy array to only include the indices we want to train on.
         """
-        if self.h5py_dir is not None:
-            logger.warning("h5py_dir is already set, ignoring new value")
-            return
+        # Read the metadata CSV
+        metadata_df = pd.read_csv(self.sample_metadata_path)
+        logger.info(f"Metadata CSV has {len(metadata_df)} samples")
+        logger.info(f"columns: {metadata_df.columns}")
+        # For now we want to filter out any samples that have NAIP DATA or don't have any of the training modalities
+        # Get the indices of samples that have NAIP data
+        if "naip" in metadata_df.columns:
+            naip_indices = metadata_df[metadata_df["naip"] == 1].index
+            self.naip_indices = naip_indices
+        else:
+            self.naip_indices = np.array([])
+        logger.info(f"NAIP indices: {self.naip_indices}")
 
-        self.h5py_dir = (
-            self.tile_path
-            / self.h5py_folder
-            / "_".join(
-                sorted([modality.name for modality in self.supported_modalities])
-            )
-            / str(num_samples)
+        # Get the indices of samples that don't have any training modalities
+        no_training_indices = metadata_df[
+            metadata_df[self.training_modalities].sum(axis=1) == 0
+        ].index
+        # Filter these indices out
+        logger.info(f"Filtering out {len(self.naip_indices)} samples with NAIP data")
+        logger.info(
+            f"Filtering out {len(no_training_indices)} samples without any training modalities"
         )
-        logger.info(f"Setting h5py_dir to {self.h5py_dir}")
-        os.makedirs(self.h5py_dir, exist_ok=True)
+        self.sample_indices = np.setdiff1d(self.sample_indices, self.naip_indices)
+        self.sample_indices = np.setdiff1d(self.sample_indices, no_training_indices)
+        # raise an error if any of the naip indices are still in the sample indices
+        if any(index in self.naip_indices for index in self.sample_indices):
+            raise ValueError("Some NAIP indices are still in the sample indices")
+        logger.info(
+            f"Filtered {len(self.naip_indices) + len(no_training_indices)} samples to {self.sample_indices.shape} samples"
+        )
 
-    def prepare(self, samples: list[SampleInformation] | None = None) -> None:
+    def prepare(self) -> None:
         """Prepare the dataset.
 
         THIS SHOULD BE CALLED BY THE MAIN PROCESS ONLY and should happen
@@ -547,38 +499,15 @@ class HeliosDataset(Dataset):
         if self.is_dataset_prepared:
             logger.info("Dataset is already prepared")
             return
-        if self.h5py_dir is None:
-            logger.warning(
-                "h5py_dir is not set, Generating H5 files from raw tile directory"
-            )
-            if samples is None:
-                samples = self._get_samples()  # type: ignore
-            if len(samples) == 0:
-                raise ValueError("No samples provided")
-            samples = self._filter_samples(samples)  # type: ignore
-            num_samples = len(samples)
-            self.set_h5py_dir(num_samples)
 
-            logger.info("Attempting to create H5 files may take some time...")
-            self.create_h5_dataset(samples)
-        else:
-            logger.info("H5 files already exist, skipping creation")
-            logger.info(f"H5 files exist in {self.h5py_dir}")
-            num_samples = int(self.h5py_dir.name)
-        if samples is None:
-            samples = []
-        self.latlon_distribution = self.get_geographic_distribution(samples)
+        logger.info("H5 files already exist, skipping creation")
+        logger.info(f"H5 files exist in {self.h5py_dir}")
+        num_samples = int(self.h5py_dir.name)
+        self.latlon_distribution = self.get_geographic_distribution()
         self.sample_indices = np.arange(num_samples)
+        self._filter_sample_indices_for_training()
 
-    @property
-    def is_dataset_prepared(self) -> bool:
-        """Check if the dataset is prepared."""
-        return self.sample_indices is not None and self.h5py_dir.exists()
-
-    @property
-    def latlon_distribution_path(self) -> UPath:
-        """Get the path to the latlon distribution file."""
-        return self.h5py_dir / "latlon_distribution.npy"
+    # TODO: Needs to be gotten or owned from th other class
 
     def save_latlon_distribution(self, latlons: np.ndarray) -> None:
         """Save the latlon distribution to a file."""
@@ -588,6 +517,7 @@ class HeliosDataset(Dataset):
 
     def _log_modality_distribution(self, samples: list[SampleInformation]) -> None:
         """Log the modality distribution."""
+        # TODO: have a version that reads this from the sample metadata file
         # Log modality distribution
         modality_counts: dict[str, int] = {}
         modality_combinations: dict[frozenset[str], int] = {}
@@ -620,90 +550,7 @@ class HeliosDataset(Dataset):
                 f"{'+'.join(sorted(combination))}: {count} samples ({percentage:.1f}%)"
             )
 
-    def _get_samples(self) -> list[SampleInformation]:
-        """Get the samples from the raw dataset (image tile directory)."""
-        tiles = parse_helios_dataset(self.tile_path, self.supported_modalities)
-        samples = image_tiles_to_samples(tiles, self.supported_modalities)
-        logger.info(f"Total samples: {len(samples)}")
-        logger.info("Distribution of samples before filtering:\n")
-        self._log_modality_distribution(samples)
-        return samples
-
-    def _filter_samples(
-        self, samples: list[SampleInformation]
-    ) -> list[SampleInformation]:
-        """Filter samples to adjust to the HeliosSample format."""
-        logger.info(f"Number of samples before filtering: {len(samples)}")
-        filtered_samples = []
-        # For now, we use sentinel2 as the base grid with resolution factor 16
-        # Avoid samples with NAIP which has a resolution factor of 1
-        resolution_factor = Modality.SENTINEL2_L2A.tile_resolution_factor
-        for sample in samples:
-            if sample.grid_tile.resolution_factor != resolution_factor:
-                continue
-            # Check if all the modalities are supported that are read in
-            if not all(
-                modality in self.supported_modalities
-                for modality in sample.modalities
-                if not modality.ignore_when_parsing
-            ):
-                logger.info("Skipping sample because it has unsupported modalities")
-                continue
-
-            if self.use_samples_missing_supported_modalities:
-                if any(
-                    modality not in sample.modalities
-                    for modality in self.supported_modalities
-                ):
-                    continue
-            if sample.time_span != TimeSpan.YEAR:
-                continue
-            # check if sample modalities have s1 and s2
-            has_s1 = Modality.SENTINEL1 in sample.modalities
-            has_s2 = Modality.SENTINEL2_L2A in sample.modalities
-            if not has_s2:
-                # If any of our samples don't have S2 this will be a problem
-                continue
-            if has_s1:
-                sentinel1_months = len(
-                    set(sample.modalities[Modality.SENTINEL1].images)
-                )
-                if sentinel1_months != 12:
-                    continue
-            if has_s2:
-                sentinel2_months = len(
-                    set(sample.modalities[Modality.SENTINEL2_L2A].images)
-                )
-                if sentinel2_months != 12:
-                    continue
-            if has_s1 and has_s2:
-                # Check if S1 and S2 all have the same 12 months of data
-                if sentinel1_months != sentinel2_months:
-                    continue
-            filtered_samples.append(sample)
-        logger.info(f"Number of samples after filtering: {len(filtered_samples)}")
-        logger.info("Distribution of samples after filtering:")
-        self._log_modality_distribution(filtered_samples)
-        return filtered_samples
-
-    @classmethod
-    def get_latlon(cls, sample: SampleInformation) -> np.ndarray:
-        """Get the latlon of the sample."""
-        # Get coordinates at projection units, and then transform to latlon
-        grid_resolution = sample.grid_tile.resolution_factor * BASE_RESOLUTION
-        x, y = (
-            (sample.grid_tile.col + 0.5) * grid_resolution * IMAGE_TILE_SIZE,
-            (sample.grid_tile.row + 0.5) * -grid_resolution * IMAGE_TILE_SIZE,
-        )
-        transformer = Transformer.from_crs(
-            sample.grid_tile.crs, cls.PROJECTION_CRS, always_xy=True
-        )
-        lon, lat = transformer.transform(x, y)
-        return np.array([lat, lon])
-
-    def get_geographic_distribution(
-        self, samples: list[SampleInformation]
-    ) -> np.ndarray:
+    def get_geographic_distribution(self) -> np.ndarray:
         """Get the geographic distribution of the dataset.
 
         Returns:
@@ -713,15 +560,6 @@ class HeliosDataset(Dataset):
         if self.latlon_distribution_path.exists():
             with self.latlon_distribution_path.open("rb") as f:
                 return np.load(f)
-        if len(samples) == 0:
-            raise ValueError("No samples provided")
-        latlons = []
-        for sample in samples:
-            latlon = self.get_latlon(sample)
-            latlons.append(latlon)
-        latlons = np.vstack(latlons)
-        self.save_latlon_distribution(latlons)
-        return latlons
 
     def get_sample_data_for_histogram(
         self, num_samples: int = 100, num_values: int = 100
@@ -769,32 +607,11 @@ class HeliosDataset(Dataset):
 
         return sample_data
 
-    def _get_timestamps(self, sample: SampleInformation) -> np.ndarray:
-        """Get the timestamps of the sample."""
-        sample_sentinel2_l2a = sample.modalities[Modality.SENTINEL2_L2A]
-        timestamps = [i.start_time for i in sample_sentinel2_l2a.images]
-        dt = pd.to_datetime(timestamps)
-        # Note that month should be 0-indexed
-        return np.array([dt.day, dt.month - 1, dt.year]).T
-
     def __len__(self) -> int:
         """Get the length of the dataset."""
         if self.sample_indices is None:
             raise ValueError("Dataset is not prepared")
         return self.sample_indices.shape[0]
-
-    @classmethod
-    def load_sample(
-        self, sample_modality: ModalityTile, sample: SampleInformation
-    ) -> np.ndarray:
-        """Load the sample."""
-        image = load_image_for_sample(sample_modality, sample)
-
-        if image.ndim == 4:
-            modality_data = rearrange(image, "t c h w -> h w t c")
-        else:
-            modality_data = rearrange(image, "c h w -> h w c")
-        return modality_data
 
     def normalize_image(self, modality: ModalitySpec, image: np.ndarray) -> np.ndarray:
         """Normalize the image."""
@@ -805,48 +622,21 @@ class HeliosDataset(Dataset):
         except Exception:
             return self.normalizer_predefined.normalize(modality, image)
 
-    def _get_h5_file_path(self, index: int) -> UPath:
-        """Get the h5 file path."""
-        return self.h5py_dir / f"sample_{index}.h5"
-
-    def _create_h5_file(
-        self, sample: SampleInformation, h5_file_path: UPath
-    ) -> dict[str, Any]:
-        """Create the h5 file."""
-        sample_dict = {}
-        for modality in sample.modalities:
-            sample_modality = sample.modalities[modality]
-            image = self.load_sample(sample_modality, sample)
-            # Convert Sentinel1 data to dB
-            if modality == Modality.SENTINEL1:
-                image = convert_to_db(image)
-            sample_dict[modality.name] = image
-            # Get latlon and timestamps from Sentinel2 data
-            if modality == Modality.SENTINEL2_L2A:
-                sample_dict["latlon"] = self.get_latlon(sample).astype(self.dtype)
-                sample_dict["timestamps"] = self._get_timestamps(sample)
-        # Save h5 file on WEKA
-        with h5_file_path.open("wb") as f:
-            with h5py.File(f, "w") as h5file:
-                for modality_name, image in sample_dict.items():
-                    h5file.create_dataset(modality_name, data=image)
-        return sample_dict
-
     def fill_sample_with_missing_values(
         self, sample_dict: dict[str, Any]
     ) -> tuple[HeliosSample, list[str]]:
         """Fill the sample with missing values."""
         missing_modalities = []
         sample = HeliosSample(**sample_dict)
-        for modality in self.supported_modalities:
-            if modality.name not in sample_dict.keys():
-                logger.info(f"Filling {modality.name} with missing values")
-                sample_dict[modality.name] = np.full(
-                    sample.get_expected_shape(modality.name),
+        for modality in self.training_modalities:
+            if modality not in sample_dict.keys():
+                logger.debug(f"Filling {modality} with missing values")
+                sample_dict[modality] = np.full(
+                    sample.get_expected_shape(modality),
                     fill_value=MISSING_VALUE,
                     dtype=self.dtype,
                 )
-                missing_modalities.append(modality.name)
+                missing_modalities.append(modality)
         return HeliosSample(**sample_dict), missing_modalities
 
     def apply_subset(self, sample: HeliosSample, args: GetItemArgs) -> HeliosSample:
@@ -863,14 +653,29 @@ class HeliosDataset(Dataset):
 
     def read_h5_file(self, h5_file_path: UPath) -> dict[str, Any]:
         """Read the h5 file."""
+        sample_dict = {}
         with h5_file_path.open("rb") as f:
             with h5py.File(f, "r") as h5file:
-                sample_dict = {k: v[()] for k, v in h5file.items()}
+                logger.info(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
+                # Not sure lat lon should be here
+                sample_dict = {
+                    k: v[()]
+                    for k, v in h5file.items()
+                    if k in self.training_modalities or k in ["latlon", "timestamps"]
+                }
         return sample_dict
+
+    def _get_h5_file_path(self, index: int) -> UPath:
+        """Get the h5 file path."""
+        return self.h5py_dir / ConvertToH5py.sample_file_pattern.format(index=index)
 
     def __getitem__(self, args: GetItemArgs) -> tuple[int, HeliosSample]:
         """Get the sample at the given index."""
-        h5_file_path = self._get_h5_file_path(args.idx)
+        if hasattr(self, "sample_indices") and self.sample_indices is not None:
+            index = self.sample_indices[args.idx]
+        else:
+            index = args.idx
+        h5_file_path = self._get_h5_file_path(index)
 
         if not h5_file_path.exists():
             raise FileNotFoundError(
@@ -880,10 +685,11 @@ class HeliosDataset(Dataset):
         # THis io is the current bottleneck of the getitem operation
         sample_dict = self.read_h5_file(h5_file_path)
 
+        # Fill any training modalities that are not present in the h5 file with missing values
         sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
         subset_sample = self.apply_subset(sample, args)
         sample_dict = subset_sample.as_dict(ignore_nones=True)
-
+        logger.info(f"Sample dict keys {sample_dict.keys()}")
         # Sample modalities should be written into the metadata of the h5 dataset
         sample_modalities = list(
             [Modality.get(key) for key in sample_dict.keys() if key != "timestamps"]
@@ -908,9 +714,8 @@ class HeliosDataset(Dataset):
 class HeliosDatasetConfig(Config):
     """Configuration for the HeliosDataset."""
 
-    h5py_dir: str | None
-    supported_modality_names: list[str]
-    tile_path: str | None = None
+    h5py_dir: str
+    training_modalities: list[str]
     dtype: DType = DType.float32
     normalize: bool = True
     use_samples_with_missing_supported_modalities: bool = False
@@ -924,30 +729,9 @@ class HeliosDatasetConfig(Config):
         Raises:
             ValueError: If any arguments are invalid
         """
-        # Validate tile_path
-        # Check that either a tile path or h5py_dir is provided
-        if self.tile_path is None and self.h5py_dir is None:
-            raise ValueError("Either a tile path or h5py_dir must be provided")
-        if self.tile_path is not None and self.h5py_dir is not None:
-            raise ValueError("Only one of tile_path or h5py_dir must be provided")
-
         # Validate supported_modalities
-        if not isinstance(self.supported_modalities, list):
-            raise ValueError("supported_modalities must be a list")
-        if not all(isinstance(m, ModalitySpec) for m in self.supported_modalities):
-            raise ValueError(
-                "All elements in supported_modalities must be ModalitySpec"
-            )
-
-    @property
-    def supported_modalities(self) -> list[ModalitySpec]:
-        """Get the supported modalities."""
-        return get_modality_specs_from_names(self.supported_modality_names)
-
-    @property
-    def tile_upath(self) -> UPath:
-        """Get the tile path."""
-        return UPath(self.tile_path)
+        if not isinstance(self.training_modalities, list):
+            raise ValueError("training_modalities must be a list")
 
     @property
     def h5py_dir_upath(self) -> UPath:
@@ -958,11 +742,6 @@ class HeliosDatasetConfig(Config):
         """Build the dataset."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
-        if self.h5py_dir is not None:
-            kwargs["h5py_dir"] = self.h5py_dir_upath
-        else:
-            kwargs["tile_path"] = self.tile_upath
-        kwargs.pop("supported_modality_names")
-        kwargs["supported_modalities"] = self.supported_modalities
+        kwargs["h5py_dir"] = self.h5py_dir_upath
         logger.info(f"HeliosDataset kwargs: {kwargs}")
         return HeliosDataset(**kwargs)

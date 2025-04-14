@@ -67,4 +67,9 @@ weka: `weka://dfive-default`
 
 ## Helios Dataset
 
+The dataset for training is stored in h5 datasets. A trainining datset can be created from tiles via `python3 internal/run_h5_conversion.py` script.
+
 - 80K dataset with S1, S2, Landsat, NAIP, WORLDCOVER, and OSM `/weka/dfive-default/helios/dataset/20250223/`
+- ~100k dataset with S1, S2, Landsat, NAIP, WORLDCOVER, Landsat, SRTM, and  OSM sampled based on Galileo locations `/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861`
+
+- ~300k dataset with S1, S2, Landsat, NAIP, WORLDCOVER, Landsat, SRTM, and  OSM sampled base on open street map classes `/weka/dfive-default/helios/dataset/osm_sampling/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324192`

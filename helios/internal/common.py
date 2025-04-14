@@ -144,14 +144,15 @@ def build_common_components(
     overrides: list[str],
 ) -> CommonComponents:
     """Build the common components for an experiment."""
-    # Variables to be changed per user
-    SUPPORTED_MODALITIES = [
+    TRAINING_MODALITIES = [
         Modality.SENTINEL2_L2A.name,
-        Modality.LATLON.name,
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
+        # Modality.SRTM.name,
+        # Modality.NAIP.name,
+        # Modality.LANDSAT.name,
+        # Modality.OPENSTREETMAP_RASTER.name,
     ]
-
     cmd_to_launch = SubCmd.train
     if cmd == SubCmd.launch_prep:
         cmd_to_launch = SubCmd.prep
@@ -167,6 +168,6 @@ def build_common_components(
     return CommonComponents(
         run_name=run_name,
         save_folder=f"{root_dir}/checkpoints/{beaker_user.lower()}/{run_name}",
-        supported_modality_names=SUPPORTED_MODALITIES,
         launch=launch_config,
+        training_modalities=TRAINING_MODALITIES,
     )

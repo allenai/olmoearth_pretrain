@@ -14,8 +14,7 @@ from matplotlib.figure import Figure
 from upath import UPath
 
 from helios.data.constants import Modality
-from helios.data.dataset import HeliosDataset
-from helios.data.normalize import Normalizer
+from helios.data.dataset import GetItemArgs, HeliosDataset
 from helios.data.utils import convert_to_db
 
 logger = logging.getLogger(__name__)
@@ -38,7 +37,6 @@ WORLDCOVER_LEGEND = {
 def visualize_sample(
     dataset: HeliosDataset,
     sample_index: int,
-    normalizer: Normalizer,
     out_dir: str | Path | UPath,
 ) -> Figure:
     """Visualize a sample from the Helios Dataset in a grid format.
@@ -57,20 +55,25 @@ def visualize_sample(
         wc_classes_sorted[-1] + 1
     ]  # e.g., up to 101 if last is 100
     wc_norm = mcolors.BoundaryNorm(wc_bounds, wc_cmap.N)
-    samples = dataset._get_samples()
-    samples = dataset._filter_samples(samples)
-    sample = samples[sample_index]
     logger.info(f"Visualizing sample index: {sample_index}")
 
-    # Gather all modalities (including LATLON)
-    modalities = [(m_spec, m_tile) for m_spec, m_tile in sample.modalities.items()]
+    args = GetItemArgs(
+        idx=sample_index,
+        patch_size=1,
+        sampled_hw_p=256,
+    )
+    _, sample = dataset[args]
+    modalities = sample.modalities
     if not modalities:
         logger.warning("No modalities found in this sample.")
         return
     total_rows = len(modalities)
     # At least 1 column, but also handle the largest band_order among the modalities
     max_bands = 1
-    for modality_spec, _ in modalities:
+    for modality_name in modalities:
+        if modality_name == "timestamps":
+            continue
+        modality_spec = Modality.get(modality_name)
         if modality_spec != Modality.LATLON:
             max_bands = max(max_bands, len(modality_spec.band_order))
 
@@ -82,7 +85,8 @@ def visualize_sample(
     )
 
     # Load lat/lon data, e.g. [lat, lon]
-    latlon_data = HeliosDataset.get_latlon(sample)
+    assert sample.latlon is not None
+    latlon_data = sample.latlon
     lat = float(latlon_data[0])
     lon = float(latlon_data[1])
 
@@ -110,16 +114,18 @@ def visualize_sample(
     # Hide unused columns
     for empty_col in range(max_bands - 1, 0, -1):
         axes[0, empty_col].axis("off")
-
-    for row_idx, (modality_spec, modality_tile) in enumerate(modalities, start=1):
-        logger.info(f"Plotting modality: {modality_spec.name}")
-
+    sample_dict = sample.as_dict()
+    for row_idx, (modality_name, modality_data) in enumerate(
+        sample_dict.items(), start=1
+    ):
+        assert modality_data is not None
+        if modality_name == "timestamps" or modality_name == Modality.LATLON.name:
+            continue
+        logger.info(f"Plotting modality: {modality_name}")
+        modality_spec = Modality.get(modality_name)
         # 4B. Plot other modalities
-        modality_data = HeliosDataset.load_sample(modality_tile, sample)
         if modality_spec == Modality.SENTINEL1:
             modality_data = convert_to_db(modality_data)
-        if not modality_spec == Modality.WORLDCOVER:
-            modality_data = normalizer.normalize(modality_spec, modality_data)
         logger.info(f"Modality data shape (loaded): {modality_data.shape}")
 
         # If temporal [H, W, T, C], take first time step

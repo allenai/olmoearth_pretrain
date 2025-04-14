@@ -5,10 +5,19 @@ from dataclasses import dataclass
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import rasterio
 import rasterio.windows
+from pyproj import Transformer
 
-from helios.data.constants import IMAGE_TILE_SIZE, Modality, ModalitySpec, TimeSpan
+from helios.data.constants import (
+    BASE_RESOLUTION,
+    IMAGE_TILE_SIZE,
+    PROJECTION_CRS,
+    Modality,
+    ModalitySpec,
+    TimeSpan,
+)
 
 from .parse import GridTile, ModalityTile
 
@@ -37,6 +46,44 @@ class SampleInformation:
     # The time spans from which the ModalityTiles are sourced should either match the
     # time span of the sample, or should be TimeSpan.STATIC.
     modalities: dict[ModalitySpec, ModalityTile]
+
+    def get_latlon(self) -> np.ndarray:
+        """Get the latlon of the sample."""
+        # Get coordinates at projection units, and then transform to latlon
+        grid_resolution = self.grid_tile.resolution_factor * BASE_RESOLUTION
+        x, y = (
+            (self.grid_tile.col + 0.5) * grid_resolution * IMAGE_TILE_SIZE,
+            (self.grid_tile.row + 0.5) * -grid_resolution * IMAGE_TILE_SIZE,
+        )
+        transformer = Transformer.from_crs(
+            self.grid_tile.crs, PROJECTION_CRS, always_xy=True
+        )
+        lon, lat = transformer.transform(x, y)
+        return np.array([lat, lon])
+
+    def get_timestamps(self) -> np.ndarray:
+        """Get the timestamps of the sample."""
+        # Assume that all multitemporal modalities have the same timestamps
+        for modality in self.modalities:
+            if modality.is_multitemporal:
+                sample_modality = self.modalities[modality]
+                timestamps = [i.start_time for i in sample_modality.images]
+                dt = pd.to_datetime(timestamps)
+                if len(timestamps) != 12:
+                    raise ValueError(
+                        "Expected 12 timestamps for multitemporal modality, must adapt if this is to change"
+                    )
+                return np.array([dt.day, dt.month - 1, dt.year]).T
+
+        # Now try non-multitemporal modalities as backups
+        for modality in self.modalities:
+            if not modality.is_multitemporal:
+                sample_modality = self.modalities[modality]
+                timestamps = [i.start_time for i in sample_modality.images]
+                dt = pd.to_datetime(timestamps)
+                return np.array([dt.day, dt.month - 1, dt.year]).T
+
+        raise ValueError("No multitemporal or non-multitemporal modalities found")
 
 
 def image_tiles_to_samples(

@@ -16,6 +16,7 @@ from rasterio.transform import from_origin
 
 from helios.data.constants import MISSING_VALUE, BandSet, Modality, ModalitySpec
 from helios.data.dataset import HeliosSample
+from helios.dataset.convert_to_h5py import ConvertToH5py
 from helios.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
 from helios.dataset.sample import SampleInformation
 from helios.train.masking import MaskValue
@@ -207,6 +208,25 @@ def prepare_samples_and_supported_modalities() -> (
             Modality.OPENSTREETMAP_RASTER,
         ],
     )
+
+
+@pytest.fixture
+def setup_h5py_dir(
+    tmp_path: Path, prepare_samples_and_supported_modalities: tuple
+) -> Path:
+    """Setup the h5py directory."""
+    prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
+    prepared_samples = prepare_samples(tmp_path)
+    convert_to_h5py = ConvertToH5py(
+        tile_path=tmp_path,
+        supported_modalities=[m for m in supported_modalities if m != Modality.LATLON],
+        multiprocessed_h5_creation=False,
+    )
+    convert_to_h5py.prepare_h5_dataset(prepared_samples)
+    supported_modalities = [
+        m.name for m in supported_modalities if m != Modality.LATLON
+    ]
+    return tmp_path / "h5py_data" / "_".join(sorted(supported_modalities)) / "1"
 
 
 @pytest.fixture

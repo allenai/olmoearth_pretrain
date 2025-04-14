@@ -287,21 +287,31 @@ class HeliosDataLoader(DataLoaderBase):
         logger.info("Getting mock batch NOT FROM DATASET")
         rng = get_rng(42)
         output_dict = {}
-        if Modality.SENTINEL2_L2A in self.dataset.supported_modalities:
+        # ToDO: change to training modalities
+        logger.info(f"Training modalities: {self.dataset.training_modalities}")
+        if Modality.SENTINEL2_L2A.name in self.dataset.training_modalities:
             mock_sentinel2_l2a = rng.random((256, 256, 12, 12), dtype=np.float32)
             output_dict["sentinel2_l2a"] = mock_sentinel2_l2a
-        if Modality.SENTINEL1 in self.dataset.supported_modalities:
+        if Modality.SENTINEL1.name in self.dataset.training_modalities:
             mock_sentinel1 = rng.random((256, 256, 12, 2), dtype=np.float32)
             output_dict["sentinel1"] = mock_sentinel1
-        if Modality.WORLDCOVER in self.dataset.supported_modalities:
+        if Modality.WORLDCOVER.name in self.dataset.training_modalities:
             mock_worldcover = rng.random((256, 256, 1, 1), dtype=np.float32)
             output_dict["worldcover"] = mock_worldcover
-        if Modality.LATLON in self.dataset.supported_modalities:
+        if Modality.LATLON.name in self.dataset.training_modalities:
             mock_latlon = rng.random((2,), dtype=np.float32)
             output_dict["latlon"] = mock_latlon
-        if Modality.OPENSTREETMAP_RASTER in self.dataset.supported_modalities:
+        if Modality.OPENSTREETMAP_RASTER.name in self.dataset.training_modalities:
             mock_openstreetmap_raster = rng.random((256, 256, 1, 30), dtype=np.float32)
             output_dict["openstreetmap_raster"] = mock_openstreetmap_raster
+        if Modality.SRTM.name in self.dataset.training_modalities:
+            mock_srtm = rng.random((256, 256, 1, 1), dtype=np.float32)
+            output_dict["srtm"] = mock_srtm
+        if Modality.LANDSAT.name in self.dataset.training_modalities:
+            mock_landsat = rng.random(
+                (256, 256, 12, Modality.LANDSAT.num_bands), dtype=np.float32
+            )
+            output_dict["landsat"] = mock_landsat
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))

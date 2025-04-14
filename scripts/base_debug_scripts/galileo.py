@@ -57,7 +57,7 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
     MLP_RATIO = 4.0
 
     encoder_config = EncoderConfig(
-        supported_modality_names=common.supported_modality_names,
+        supported_modality_names=common.training_modalities,
         embedding_size=ENCODER_EMBEDDING_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         num_heads=ENCODER_NUM_HEADS,
@@ -74,7 +74,7 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
         mlp_ratio=MLP_RATIO,
         num_heads=DECODER_NUM_HEADS,
         max_sequence_length=12,
-        supported_modality_names=common.supported_modality_names,
+        supported_modality_names=common.training_modalities,
         learnable_channel_embeddings=True,
     )
     model_config = GalileoConfig(
@@ -89,7 +89,7 @@ def build_train_module_config(
 ) -> GalileoTrainModuleConfig:
     """Build the train module config for an experiment."""
     LR = 0.002
-    RANK_MICROBATCH_SIZE = 128
+    RANK_MICROBATCH_SIZE = 64
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
     WD = 0.02
@@ -123,8 +123,15 @@ def build_train_module_config(
         Modality.LATLON.name: 4,
         Modality.SENTINEL1.name: 4,
         Modality.WORLDCOVER.name: 0,
+        Modality.SRTM.name: 2,
+        Modality.OPENSTREETMAP_RASTER.name: 0,
+        Modality.LANDSAT.name: 4,
     }
-    token_exit_cfg_b = {modality: 0 for modality in common.supported_modality_names}
+    if any(modality not in token_exit_cfg_a for modality in common.training_modalities):
+        raise ValueError(
+            f"All modalities must be in token_exit_cfg_a: {common.training_modalities}"
+        )
+    token_exit_cfg_b = {modality: 0 for modality in common.training_modalities}
     WARMUP_EPOCHS = 10
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
@@ -177,11 +184,11 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/latlon_sentinel1_sentinel2_l2a_worldcover/98856"
+    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
     return HeliosDatasetConfig(
         h5py_dir=h5py_dir,
-        tile_path=None,
-        supported_modality_names=common.supported_modality_names,
+        training_modalities=common.training_modalities,
+        use_samples_with_missing_supported_modalities=True,
         dtype=DType.float32,
     )
 

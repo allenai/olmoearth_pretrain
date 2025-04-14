@@ -29,7 +29,7 @@ def minimal_common_components() -> CommonComponents:
     return CommonComponents(
         run_name="test_run",
         save_folder="test_save_folder",
-        supported_modality_names=["sentinel2", "sentinel1", "worldcover", "naip"],
+        training_modalities=["sentinel2", "sentinel1", "worldcover", "naip"],
         launch=BeakerLaunchConfig(
             name="test_run",
             cmd=["dummy_cmd"],
@@ -49,7 +49,7 @@ def minimal_model_config_builder(common: CommonComponents) -> LatentMIMConfig:
     DECODER_NUM_HEADS = 8
     MLP_RATIO = 4.0
     encoder_config = EncoderConfig(
-        supported_modality_names=common.supported_modality_names,
+        supported_modality_names=common.training_modalities,
         embedding_size=ENCODER_EMBEDDING_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         num_heads=ENCODER_NUM_HEADS,
@@ -66,7 +66,7 @@ def minimal_model_config_builder(common: CommonComponents) -> LatentMIMConfig:
         mlp_ratio=MLP_RATIO,
         num_heads=DECODER_NUM_HEADS,
         max_sequence_length=12,
-        supported_modality_names=common.supported_modality_names,
+        supported_modality_names=common.training_modalities,
         learnable_channel_embeddings=True,
     )
     model_config = LatentMIMConfig(
@@ -78,11 +78,10 @@ def minimal_model_config_builder(common: CommonComponents) -> LatentMIMConfig:
 
 def minimal_dataset_config_builder(common: CommonComponents) -> HeliosDatasetConfig:
     """Return a minimal HeliosDatasetConfig."""
-    TILE_PATH = "test_tile_path"
+    h5py_dir = "test_tile_path"
     return HeliosDatasetConfig(
-        tile_path=TILE_PATH,
-        h5py_dir=None,
-        supported_modality_names=common.supported_modality_names,
+        h5py_dir=h5py_dir,
+        training_modalities=common.training_modalities,
         dtype=DType.float32,
     )
 
@@ -141,7 +140,7 @@ def minimal_train_module_config_builder(
             "type": "patch_discrimination",
         }
     )
-    token_exit_cfg = {modality: 0 for modality in common.supported_modality_names}
+    token_exit_cfg = {modality: 0 for modality in common.training_modalities}
     transform_config = TransformConfig(transform_type="flip_and_rotate")
     train_module_config = LatentMIMTrainModuleConfig(
         optim_config=optim_config,
@@ -246,11 +245,11 @@ def test_overrides_with_common_prefix() -> None:
         trainer_config_builder=minimal_trainer_config_builder,
         train_module_config_builder=minimal_train_module_config_builder,
         visualize_config_builder=None,
-        overrides=["common.supported_modality_names=[sentinel2, sentinel1]"],
+        overrides=["common.training_modalities=[sentinel2, sentinel1]"],
     )
 
     assert isinstance(config, HeliosExperimentConfig)
-    assert config.dataset.supported_modality_names == ["sentinel2", "sentinel1"]
+    assert config.dataset.training_modalities == ["sentinel2", "sentinel1"]
 
 
 def test_build_config_invalid_override_raises() -> None:

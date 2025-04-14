@@ -5,27 +5,26 @@ from pathlib import Path
 
 from helios.data.constants import Modality
 from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
-from helios.dataset.parse import ModalityTile
-from helios.dataset.sample import SampleInformation
 
 logger = logging.getLogger(__name__)
 
 
 def test_helios_dataset(
-    tmp_path: Path, prepare_samples_and_supported_modalities: tuple
+    setup_h5py_dir: Path,
 ) -> None:
     """Test the HeliosDataset class."""
-    prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
-    prepared_samples = prepare_samples(tmp_path)
+    training_modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.WORLDCOVER.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+    ]
     dataset = HeliosDataset(
-        tile_path=tmp_path,
-        supported_modalities=supported_modalities,
+        h5py_dir=setup_h5py_dir,
         dtype="float32",
-        multiprocessed_h5_creation=False,
+        training_modalities=training_modalities,
     )
-    # Mock the _get_samples method to return the prepared samples
-    # Do this before calling prepare()
-    dataset._get_samples = lambda: prepared_samples  # type: ignore
+
     dataset.prepare()
 
     assert len(dataset) == 1
@@ -50,17 +49,30 @@ class TestHeliosDataset:
 
     def test_load_sample_correct_band_order(
         self,
-        tmp_path: Path,
-        prepare_samples_and_supported_modalities: tuple,
+        setup_h5py_dir: Path,
         set_random_seeds: None,  # calls the fixture
     ) -> None:
         """Test the load_sample method."""
-        prepare_samples, _ = prepare_samples_and_supported_modalities
-        samples = prepare_samples(tmp_path)
-        logger.info(f"samples: {len(samples)}")
-        sample: SampleInformation = samples[0]
-        sample_modality: ModalityTile = sample.modalities[Modality.SENTINEL2_L2A]
-        image = HeliosDataset.load_sample(sample_modality, sample)
+        training_modalities = [
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.WORLDCOVER.name,
+            Modality.OPENSTREETMAP_RASTER.name,
+        ]
+        dataset = HeliosDataset(
+            h5py_dir=setup_h5py_dir,
+            dtype="float32",
+            training_modalities=training_modalities,
+            normalize=False,
+        )
+        args = GetItemArgs(
+            idx=0,
+            patch_size=1,
+            sampled_hw_p=256,
+        )
+        _, helios_sample = dataset[args]
+        image = helios_sample.sentinel2_l2a
+        assert image is not None
         sentinel2_bandset_indices = Modality.SENTINEL2_L2A.bandsets_as_indices()
         # checking that sample data is loaded in the order corresponding to the bandset indices
         # These are manually extracted values from each band and dependent on the seed (call with conftest.py)
