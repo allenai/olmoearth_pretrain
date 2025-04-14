@@ -69,7 +69,7 @@ BASE_COMMAND = (
 for script_name in BASE_SCRIPT_NAMES:
     for model_name, model_config in MODEL_TRAINING_CONFIGS.items():
         for decoder_ratio in DECODER_RATIOS:
-            run_name = f"{script_name}_{model_name}_decoder_{decoder_ratio}"
+            run_name = f"{script_name}_{model_name}_decoder_{decoder_ratio}_small_bs"
             command = BASE_COMMAND.format(
                 script_name=script_name,
                 run_name=run_name,
