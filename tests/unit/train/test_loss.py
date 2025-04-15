@@ -8,6 +8,7 @@ from helios.nn.flexihelios import TokensAndMasks
 from helios.train.loss import (
     AdjustedPatchDiscriminationLoss,
     CrossEntropyLoss,
+    InfoNCELoss,
     L1Loss,
     L2Loss,
     PatchDiscriminationLoss,
@@ -222,3 +223,18 @@ def test_cross_entropy_loss() -> None:
     loss_value = loss.compute(preds, targets)
     # loss for BCE, prediction of .5 for both classes
     assert torch.isclose(loss_value, -torch.log(torch.tensor(0.5)), 0.0001)
+
+
+def test_infonce_loss() -> None:
+    """Just test that it runs as expected."""
+    b, d = 16, 128
+
+    loss = InfoNCELoss()
+    loss_value = loss.compute(torch.ones((b, d)), torch.zeros((b, d)))
+    # not very good! since they are all the same
+    # predictions and values
+    assert loss_value > 0.5
+    # check the weight
+    loss = InfoNCELoss(weight=0.1)
+    w_loss_value = loss.compute(torch.ones((b, d)), torch.zeros((b, d)))
+    assert 0.1 * loss_value == w_loss_value
