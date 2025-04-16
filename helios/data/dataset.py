@@ -471,22 +471,32 @@ class HeliosDataset(Dataset):
             self.naip_indices = np.array([])
         logger.info(f"NAIP indices: {self.naip_indices}")
 
-        # Get the indices of samples that don't have any training modalities
-        no_training_indices = metadata_df[
-            metadata_df[self.training_modalities].sum(axis=1) == 0
+        # Get the indices of samples that don't have any training modalities that are
+        # multi-temporal.
+        multitemporal_training_modalities = [
+            modality
+            for modality in self.training_modalities
+            if Modality.get(modality).is_multitemporal
+        ]
+        if len(multitemporal_training_modalities) == 0:
+            raise ValueError("no multi-temporal modalities are specified for training")
+        no_multitemporal_indices = metadata_df[
+            metadata_df[multitemporal_training_modalities].sum(axis=1) == 0
         ].index
         # Filter these indices out
         logger.info(f"Filtering out {len(self.naip_indices)} samples with NAIP data")
         logger.info(
-            f"Filtering out {len(no_training_indices)} samples without any training modalities"
+            f"Filtering out {len(no_multitemporal_indices)} samples without any training modalities"
         )
         self.sample_indices = np.setdiff1d(self.sample_indices, self.naip_indices)
-        self.sample_indices = np.setdiff1d(self.sample_indices, no_training_indices)
+        self.sample_indices = np.setdiff1d(
+            self.sample_indices, no_multitemporal_indices
+        )
         # raise an error if any of the naip indices are still in the sample indices
         if any(index in self.naip_indices for index in self.sample_indices):
             raise ValueError("Some NAIP indices are still in the sample indices")
         logger.info(
-            f"Filtered {len(self.naip_indices) + len(no_training_indices)} samples to {self.sample_indices.shape} samples"
+            f"Filtered {len(self.naip_indices) + len(no_multitemporal_indices)} samples to {self.sample_indices.shape} samples"
         )
 
     def prepare(self) -> None:
