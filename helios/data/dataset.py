@@ -478,6 +478,8 @@ class HeliosDataset(Dataset):
             for modality in self.training_modalities
             if Modality.get(modality).is_multitemporal
         ]
+        if len(multitemporal_training_modalities) == 0:
+            raise ValueError("no multi-temporal modalities are specified for training")
         no_multitemporal_indices = metadata_df[
             metadata_df[multitemporal_training_modalities].sum(axis=1) == 0
         ].index
