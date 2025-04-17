@@ -141,7 +141,6 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         token_budget=TOKEN_BUDGET,
-        cache_dir=f"/data/helios/{common.run_name}",
     )
     return dataloader_config
 
@@ -154,12 +153,14 @@ def build_dataset_config(common: CommonComponents) -> Config:
             training_modalities=common.training_modalities,
             use_samples_with_missing_supported_modalities=False,
             dtype=DType.float32,
+            cache_dir="/helios_cache/presto",
         ),
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324192",
             training_modalities=common.training_modalities,
             use_samples_with_missing_supported_modalities=False,
             dtype=DType.float32,
+            cache_dir="/helios_cache/osm_sampling",
         ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
