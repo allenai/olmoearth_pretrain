@@ -4,28 +4,25 @@
       "band_sets": [
         {
           "bands": [
-            "snow_cover",
-            "snow_depth",
-            "volumetric_soil_water_layer_1",
-            "volumetric_soil_water_layer_2",
-            "volumetric_soil_water_layer_3",
-            "volumetric_soil_water_layer_4",
-            "soil_temperature_level_1",
-            "10m_u_component_of_wind",
-            "10m_v_component_of_wind",
-            "2m_temperature",
-            "skin_temperature",
-            "total_precipitation"
+            "snow-cover",
+            "snow-depth",
+            "soil-temperature-level-1",
+            "10m-u-component-of-wind",
+            "10m-v-component-of-wind",
+            "2m-temperature",
+            "skin-temperature",
+            "total-precipitation"
           ],
           "dtype": "float32"
         }
       ],
       "data_source": {
+        "duration": "365d",
         "name": "rslearn.data_sources.climate_data_store.ERA5LandMonthlyMeans",
         "query_config": {
-          "max_matches": 12,
-          "space_mode": "INTERSECTS"
-        }
+          "max_matches": 12
+        },
+        "time_offset": "-180d"
       },
       "type": "raster"
     }

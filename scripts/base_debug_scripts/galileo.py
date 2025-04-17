@@ -159,11 +159,12 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     """Build the dataloader config for an experiment."""
     # things should be set during building
     # TODO: Include collate function here
+
     NUM_WORKERS = 8
     GLOBAL_BATCH_SIZE = 128
     PREFETCH_FACTOR = 4
-    SAMPLE_HW_P_LIST = list(range(5, 13))
     TOKEN_BUDGET = 1500
+    SAMPLE_HW_P_LIST = list(range(5, 13))
     # GBS * PREFETCH_FACTOR * NUM_WORKERS is the total number of instances that can be put into prefetch queue
 
     dataloader_config = HeliosDataLoaderConfig(

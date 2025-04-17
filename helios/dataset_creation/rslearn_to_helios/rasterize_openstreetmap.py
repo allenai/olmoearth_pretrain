@@ -267,4 +267,5 @@ if __name__ == "__main__":
         csv_row["image_idx"] = "0"
     with dst_metadata_fname.open("w") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
         writer.writerows(csv_rows)
