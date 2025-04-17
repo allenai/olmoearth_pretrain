@@ -178,7 +178,10 @@ class Modality:
     SENTINEL1 = ModalitySpec(
         name="sentinel1",
         tile_resolution_factor=16,
-        band_sets=[BandSet(["vv", "vh"], 16)],
+        band_sets=[
+            BandSet(["vv"], 16),
+            BandSet(["vh"], 16),
+        ],
         is_multitemporal=True,
         ignore_when_parsing=False,
     )
@@ -203,11 +206,20 @@ class Modality:
         tile_resolution_factor=16,
         band_sets=[
             # 10 m/pixel bands.
-            BandSet(["B02", "B03", "B04", "B08"], 16),
+            BandSet(["B02"], 16),
+            BandSet(["B03"], 16),
+            BandSet(["B04"], 16),
+            BandSet(["B08"], 16),
             # 20 m/pixel bands.
-            BandSet(["B05", "B06", "B07", "B8A", "B11", "B12"], 32),
+            BandSet(["B05"], 32),
+            BandSet(["B06"], 32),
+            BandSet(["B07"], 32),
+            BandSet(["B8A"], 32),
+            BandSet(["B11"], 32),
+            BandSet(["B12"], 32),
             # 60 m/pixel bands that we store at 40 m/pixel.
-            BandSet(["B01", "B09"], 64),
+            BandSet(["B01"], 64),
+            BandSet(["B09"], 64),
         ],
         is_multitemporal=True,
         ignore_when_parsing=False,
