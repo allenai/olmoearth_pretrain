@@ -1,4 +1,4 @@
-"""Launch Beaker jobs to get Sentinel-2 L1C data."""
+"""Launch GCP Batch jobs to get Sentinel-2 L1C data."""
 
 import argparse
 import multiprocessing
@@ -29,9 +29,6 @@ LAYER_NAMES = [
     "sentinel2_mo11",
     "sentinel2_mo12",
 ]
-
-BEAKER_BUDGET = "ai2/d5"
-BEAKER_WORKSPACE = "ai2/earth-systems"
 
 
 def is_window_pending(window: Window) -> bool:
@@ -64,7 +61,7 @@ def launch_job(
     ds_path: str,
     window_names: list[str],
 ) -> None:
-    """Launch a Beaker job that ingests the specified windows.
+    """Launch a Batch job that ingests the specified windows.
 
     Args:
         client: the Google Batch client to use to start the jobs.
@@ -136,7 +133,7 @@ def launch_job(
 if __name__ == "__main__":
     multiprocessing.set_start_method("forkserver")
     parser = argparse.ArgumentParser(
-        description="Launch Beaker jobs to get Sentinel-2 L1C data",
+        description="Launch GCP Batch jobs to get Sentinel-2 L1C data",
     )
     parser.add_argument(
         "--ds_path",
@@ -171,7 +168,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--batch_size",
         type=int,
-        help="Batch size, i.e., number of windows to ingest per Beaker job",
+        help="Batch size, i.e., number of windows to ingest per GCP Batch job",
         default=50,
     )
     parser.add_argument(

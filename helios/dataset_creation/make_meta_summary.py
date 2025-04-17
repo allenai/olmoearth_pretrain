@@ -3,6 +3,7 @@
 import argparse
 import csv
 
+import tqdm
 from upath import UPath
 
 from helios.data.constants import Modality, ModalitySpec, TimeSpan
@@ -30,7 +31,8 @@ def make_meta_summary(
     csv_rows = []
     modality_dir = get_modality_dir(helios_path, modality, time_span)
     meta_dir = get_modality_temp_meta_dir(helios_path, modality, time_span)
-    for fname in meta_dir.iterdir():
+    meta_fnames = list(meta_dir.iterdir())
+    for fname in tqdm.tqdm(meta_fnames):
         with fname.open() as f:
             reader = csv.DictReader(f)
             if reader.fieldnames is None:

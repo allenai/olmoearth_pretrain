@@ -27,6 +27,7 @@ def launch_worldcover_job(
     clusters: list[str],
     workspace: str = "ai2/earth-systems",
     budget: str = "ai2/d5",
+    tile_size: int | None = None,
 ) -> None:
     """Launch worldcover job.
 
@@ -37,6 +38,7 @@ def launch_worldcover_job(
         clusters: list of Beaker clusters to target.
         workspace: the Beaker workspace.
         budget: the Beaker budget.
+        tile_size: the tile size.
     """
     unique_name = str(uuid.uuid4())[:8]
     description = f"compute_worldcover_histograms_{unique_name}"
@@ -47,6 +49,23 @@ def launch_worldcover_job(
         mount_path="/weka/dfive-default",
     )
 
+    command = [
+        "python",
+        "-u",
+        "compute_worldcover_histograms.py",
+        "--tile_names",
+        ",".join(tile_names),
+        "--out_dir",
+        out_dir,
+    ]
+    if tile_size is not None:
+        command.extend(
+            [
+                "--tile_size",
+                str(tile_size),
+            ]
+        )
+
     spec = ExperimentSpec(
         budget=budget,
         description=description,
@@ -54,15 +73,7 @@ def launch_worldcover_job(
             TaskSpec.new(
                 name=description,
                 beaker_image=beaker_image,
-                command=[
-                    "python",
-                    "-u",
-                    "compute_worldcover_histograms.py",
-                    "--tile_names",
-                    ",".join(tile_names),
-                    "--out_dir",
-                    out_dir,
-                ],
+                command=command,
                 constraints=Constraints(cluster=clusters),
                 resources=TaskResources(gpu_count=1),
                 priority=Priority.high,
@@ -110,6 +121,12 @@ if __name__ == "__main__":
         help="Process this many tiles in each job",
         default=10,
     )
+    parser.add_argument(
+        "--tile_size",
+        type=int,
+        help="the tile size",
+        default=None,
+    )
     args = parser.parse_args()
 
     # Read the grid that lists all the different ESA WorldCover files.
@@ -138,5 +155,9 @@ if __name__ == "__main__":
         batches = random.sample(batches, args.max_jobs)
     for batch in tqdm(batches, desc="Launching Beaker jobs"):
         launch_worldcover_job(
-            batch, args.out_dir, args.beaker_image, args.clusters.split(",")
+            tile_names=batch,
+            out_dir=args.out_dir,
+            beaker_image=args.beaker_image,
+            clusters=args.clusters.split(","),
+            tile_size=args.tile_size,
         )

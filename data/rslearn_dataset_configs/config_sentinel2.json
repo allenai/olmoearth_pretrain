@@ -609,7 +609,7 @@
         "predictor": 2,
         "zstd_level": 1
       },
-      "path_suffix": "/tmp/rslearn_helios_tile_store"
+      "path_suffix": "file:///tmp/rslearn_helios_tile_store"
     }
   }
 }

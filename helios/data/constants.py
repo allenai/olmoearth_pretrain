@@ -330,6 +330,28 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    ERA5 = ModalitySpec(
+        name="era5",
+        tile_resolution_factor=256,
+        band_sets=[
+            BandSet(
+                [
+                    "snow-cover",
+                    "snow-depth",
+                    "soil-temperature-level-1",
+                    "10m-u-component-of-wind",
+                    "10m-v-component-of-wind",
+                    "2m-temperature",
+                    "skin-temperature",
+                    "total-precipitation",
+                ],
+                256,
+            ),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=True,
+    )
+
     LATLON = ModalitySpec(
         name="latlon",
         tile_resolution_factor=0,
