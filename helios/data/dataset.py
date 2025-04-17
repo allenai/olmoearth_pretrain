@@ -387,6 +387,8 @@ class HeliosDataset(Dataset):
         if not self.h5py_dir.exists():
             raise FileNotFoundError(f"H5PY directory does not exist: {self.h5py_dir}")
         self.cache_dir = cache_dir
+        if self.cache_dir is not None:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.training_modalities = training_modalities
         self.use_samples_with_missing_supported_modalities = (
