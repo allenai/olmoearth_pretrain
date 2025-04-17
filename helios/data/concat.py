@@ -10,8 +10,6 @@ import numpy as np
 from olmo_core.config import Config
 from torch.utils.data import ConcatDataset, Dataset
 
-from helios.data.constants import ModalitySpec
-
 from .dataset import GetItemArgs
 
 logger = logging.getLogger(__name__)
@@ -95,18 +93,6 @@ class HeliosConcatDataset(ConcatDataset):
                 raise ValueError(
                     "expected all sub datasets to have same training modalities"
                 )
-
-    @property
-    def supported_modalities(self) -> list[ModalitySpec]:
-        """Return the supported modalities."""
-        # We make sure supported modalities is same for all sub datasets.
-        supported_modalities = self.datasets[0].supported_modalities
-        for dataset in self.datasets:
-            if dataset.supported_modalities != supported_modalities:
-                raise ValueError(
-                    "expected all sub datasets to have the same supported modalities"
-                )
-        return supported_modalities
 
 
 @dataclass
