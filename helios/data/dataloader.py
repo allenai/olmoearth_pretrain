@@ -4,9 +4,7 @@ import logging
 import math
 import multiprocessing as mp
 import os
-import shutil
-import signal
-import sys
+import subprocess  # nosec
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,25 +33,6 @@ from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
 logger = logging.getLogger(__name__)
 
 BASE_TOKEN_BUDGET = 1500
-
-
-def get_cleanup_signal_handler(tmp_dir: str) -> Callable[[int, Any], None]:
-    """Make a signal handler that cleans up the specified directory before exiting.
-
-    This should be passed as the handler to signal.signal.
-
-    Args:
-        tmp_dir: the directory to delete when the signal is received.
-    """
-
-    def cleanup_signal_handler(signo: int, stack_frame: Any) -> None:
-        logger.error(
-            f"cleanup_signal_handler: caught signal {signo}, cleaning up {tmp_dir}"
-        )
-        shutil.rmtree(tmp_dir)
-        sys.exit(1)
-
-    return cleanup_signal_handler
 
 
 class HeliosDataLoader(DataLoaderBase):
@@ -120,10 +99,12 @@ class HeliosDataLoader(DataLoaderBase):
             os.makedirs(self.cache_dir, exist_ok=True)
             self.dataset.set_cache_dir(self.cache_dir)
             if fs_local_rank == 0:
-                logger.info(f"preparing cache directory at {self.cache_dir}")
-                signal.signal(
-                    signal.SIGTERM, get_cleanup_signal_handler(self.cache_dir)
+                logger.warning(
+                    f"preparing cache directory cleanup for {self.cache_dir} in process {os.getpid()}"
                 )
+                subprocess.Popen(
+                    ["python", "-m", "helios.data.cleanup_handler", self.cache_dir.path]
+                )  # nosec
 
     @property
     def total_batches(self) -> int:
