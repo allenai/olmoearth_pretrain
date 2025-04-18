@@ -668,7 +668,7 @@ class HeliosDataset(Dataset):
         with h5_file_path.open("rb") as f:
             # We will not see a sample again before the total amount of ram is eclipsed so we can disable the rdcc
             with h5py.File(f, "r", rdcc_nbytes=64 * 1024 * 1024, rdcc_nslots=1, rdcc_w0=1.0) as h5file:
-                logger.info(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
+                logger.debug(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
                 # Not sure lat lon should be here
                 sample_dict = {
                     k: v[()]
@@ -695,10 +695,10 @@ class HeliosDataset(Dataset):
             )
         # We are currently reading the entire h5 file into memory this can be made faster by chunking the dataset appropriately and only reading in the optimal chunks
         # Time the IO operation which is the current bottleneck
-        start_io_time = time.time()
+        # start_io_time = time.time()
         sample_dict = self.read_h5_file(h5_file_path)
-        io_time = time.time() - start_io_time
-        logger.info(f"IO time: {io_time:.4f}s")
+        # io_time = time.time() - start_io_time
+        # logger.info(f"IO time: {io_time:.4f}s")
 
         # Fill missing values
         sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
@@ -706,6 +706,7 @@ class HeliosDataset(Dataset):
         # Apply subsetting
         subset_sample = self.apply_subset(sample, args)
         sample_dict = subset_sample.as_dict(ignore_nones=True)
+        return args.patch_size, HeliosSample(**sample_dict)
 
         logger.info(f"Sample dict keys {sample_dict.keys()}")
         # Sample modalities should be written into the metadata of the h5 dataset

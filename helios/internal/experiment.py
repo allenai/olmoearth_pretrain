@@ -4,6 +4,7 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+import time
 from typing import cast
 
 import numpy as np
@@ -183,7 +184,6 @@ def visualize(config: HeliosExperimentConfig) -> None:
         visualize_sample(dataset, sample_index, config.visualize_config.output_dir)
     logger.info("Done visualizing the dataset")
 
-
 def launch(config: HeliosExperimentConfig) -> None:
     """Launch an experiment."""
     logger.info("Launching the experiment")
@@ -191,6 +191,46 @@ def launch(config: HeliosExperimentConfig) -> None:
     # Set follow=False if you don't want to stream the logs to the terminal
     config.launch.launch(follow=False)
 
+
+def measure_io(config: HeliosExperimentConfig) -> None:
+    """Measure the IO for an experiment."""
+    logger.info("Measuring the IO for an experiment")
+    dataset = config.dataset.build()
+    data_loader = config.data_loader.build(
+        dataset, collator=collate_helios, dp_process_group=None
+    )
+    data_loader.reshuffle(epoch=1)
+
+    batch_times = []
+    batch_sizes = []
+    num_batches = 10  # Number of batches to measure
+
+    logger.info(f"Measuring IO time for {num_batches} batches...")
+    batch_size = data_loader.global_batch_size
+    data_iter = iter(data_loader)
+    for i in range(num_batches):
+        start_time = time.time()
+        # Simulate processing by accessing the data
+        batch = next(data_iter)
+        end_time = time.time()
+
+        batch_time = end_time - start_time
+        batch_times.append(batch_time)
+        batch_sizes.append(batch_size)
+
+        logger.info(f"Batch {i}: Loaded in {batch_time:.4f} seconds, size: {batch_size}")
+
+        if i >= num_batches - 1:
+            break
+    # Calculate statistics
+    avg_batch_time = sum(batch_times) / len(batch_times)
+    std_batch_time = np.std(batch_times)
+    total_instances = sum(batch_sizes)
+    avg_instance_time = sum(batch_time * size for batch_time, size in zip(batch_times, batch_sizes)) / total_instances
+
+    logger.info(f"Average batch loading time: {avg_batch_time:.4f} seconds (std: {std_batch_time:.4f})")
+    logger.info(f"Average instance loading time: {avg_instance_time:.4f} seconds")
+    logger.info(f"Total throughput: {total_instances / sum(batch_times):.2f} instances/second")
 
 def prep(config: HeliosExperimentConfig) -> None:
     """Prepare the dataset for an experiment."""
@@ -229,6 +269,7 @@ class SubCmd(StrEnum):
     launch_prep = "launch_prep"
     dry_run = "dry_run"
     visualize = "visualize"
+    measure_io = "measure_io"
 
     def prepare_environment(self) -> None:
         """Prepare the environment for the given subcommand."""
@@ -238,6 +279,7 @@ class SubCmd(StrEnum):
             SubCmd.prep,
             SubCmd.launch_prep,
             SubCmd.visualize,
+            SubCmd.measure_io,
         ):
             prepare_cli_environment()
         elif self == SubCmd.train:
@@ -285,6 +327,8 @@ class SubCmd(StrEnum):
             prep(config)
         elif self == SubCmd.launch_prep:
             launch_prep(config)
+        elif self == SubCmd.measure_io:
+            measure_io(config)
         else:
             raise NotImplementedError(self)
 
