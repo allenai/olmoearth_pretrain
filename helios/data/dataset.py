@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import random
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from math import floor
@@ -359,6 +360,7 @@ class HeliosDataset(Dataset):
         dtype: DType,
         normalize: bool = True,
         use_samples_with_missing_supported_modalities: bool = False,
+        cache_dir: UPath | None = None,
     ):
         """Initialize the dataset.
 
@@ -376,6 +378,7 @@ class HeliosDataset(Dataset):
             normalize: If True, apply normalization to the data, if False, do not apply
                 normalization.
             use_samples_with_missing_supported_modalities: If True, use samples that are missing a supported modality.
+            cache_dir: optional local directory to cache the H5 files.
 
         Returns:
             None
@@ -383,6 +386,9 @@ class HeliosDataset(Dataset):
         self.h5py_dir = h5py_dir
         if not self.h5py_dir.exists():
             raise FileNotFoundError(f"H5PY directory does not exist: {self.h5py_dir}")
+        self.cache_dir = cache_dir
+        if self.cache_dir is not None:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.training_modalities = training_modalities
         self.use_samples_with_missing_supported_modalities = (
@@ -663,6 +669,18 @@ class HeliosDataset(Dataset):
 
     def read_h5_file(self, h5_file_path: UPath) -> dict[str, Any]:
         """Read the h5 file."""
+        if self.cache_dir is not None:
+            cache_file_path = self.cache_dir / h5_file_path.name
+            logger.info(f"Caching H5 file {h5_file_path} to {cache_file_path}")
+            if not cache_file_path.exists():
+                # Copy to a temp file first and then atomically rename it to avoid
+                # concurrency issues.
+                tmp_file_path = self.cache_dir / (h5_file_path.name + ".tmp")
+                with h5_file_path.open("rb") as src, tmp_file_path.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                tmp_file_path.rename(cache_file_path)
+            h5_file_path = cache_file_path
+
         sample_dict = {}
         with h5_file_path.open("rb") as f:
             with h5py.File(f, "r") as h5file:
@@ -729,6 +747,7 @@ class HeliosDatasetConfig(Config):
     dtype: DType = DType.float32
     normalize: bool = True
     use_samples_with_missing_supported_modalities: bool = False
+    cache_dir: str | None = None
 
     def validate(self) -> None:
         """Validate the configuration and build kwargs.
@@ -748,10 +767,16 @@ class HeliosDatasetConfig(Config):
         """Get the h5py directory."""
         return UPath(self.h5py_dir)
 
+    @property
+    def cache_dir_upath(self) -> UPath:
+        """Get the cache directory."""
+        return UPath(self.cache_dir)
+
     def build(self) -> "HeliosDataset":
         """Build the dataset."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
         kwargs["h5py_dir"] = self.h5py_dir_upath
+        kwargs["cache_dir"] = self.cache_dir_upath
         logger.info(f"HeliosDataset kwargs: {kwargs}")
         return HeliosDataset(**kwargs)

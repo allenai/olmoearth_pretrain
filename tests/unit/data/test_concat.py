@@ -16,7 +16,7 @@ class MockDataset(Dataset):
     def __init__(self, items: list[int]):
         """Create a new MockDataset."""
         self.items = items
-        self.supported_modalities = [Modality.SENTINEL2_L2A]
+        self.training_modalities = [Modality.SENTINEL2_L2A]
         self.fingerprint_version = MOCK_FINGERPRINT_VERSION
         self.fingerprint = "0"
         # Create fake latlon distribution by using each integer item as a lat/lon
