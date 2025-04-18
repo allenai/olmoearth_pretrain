@@ -52,7 +52,7 @@ class ConvertToH5pyConfig(Config):
 class ConvertToH5py:
     """Class for converting a dataset of GeoTiffs into a training dataset set up of h5py files."""
 
-    h5py_folder: str = "h5py_data"
+    h5py_folder: str = "h5py_data_test_compression"
     latlon_distribution_fname: str = "latlon_distribution.npy"
     sample_metadata_fname: str = "sample_metadata.csv"
     sample_file_pattern: str = "sample_{index}.h5"
@@ -185,7 +185,12 @@ class ConvertToH5py:
                     logger.info(
                         f"Writing modality {modality_name} to h5 file path {h5_file_path}"
                     )
-                    h5file.create_dataset(modality_name, data=image)
+                    h5file.create_dataset(
+                        modality_name,
+                        data=image,
+                        compression="lzf",
+                        shuffle=True
+                    )
         return sample_dict
 
     def _log_modality_distribution(self, samples: list[SampleInformation]) -> None:
@@ -302,6 +307,8 @@ class ConvertToH5py:
         """
         samples = self._get_samples()
         samples = self._filter_samples(samples)
+        # Trying different compression settings
+        samples = samples[:10000]
         return samples
 
     def prepare_h5_dataset(self, samples: list[SampleInformation]) -> None:

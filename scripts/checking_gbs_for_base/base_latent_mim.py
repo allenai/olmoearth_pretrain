@@ -85,7 +85,7 @@ def build_train_module_config(
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     LR = 0.002
-    RANK_MICROBATCH_SIZE = 64
+    RANK_MICROBATCH_SIZE = 128
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
     WD = 0.02
@@ -129,9 +129,9 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
 
-    NUM_WORKERS = 4
-    GLOBAL_BATCH_SIZE = 512
-    PREFETCH_FACTOR = 2
+    NUM_WORKERS = 0
+    GLOBAL_BATCH_SIZE = 128
+    PREFETCH_FACTOR = 0
     TOKEN_BUDGET = 1500
     SAMPLE_HW_P_LIST = list(range(5, 13))
 
@@ -153,6 +153,8 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     # NOTE: Change this directory based on the supported modalities
     h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
+    # h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/compressed/118861/"
+    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data_test_compression/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1000/"
     return HeliosDatasetConfig(
         h5py_dir=h5py_dir,
         use_samples_with_missing_supported_modalities=True,

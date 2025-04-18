@@ -12,6 +12,7 @@ import h5py
 import numpy as np
 import pandas as pd
 import torch
+import time
 from olmo_core.config import Config, DType
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
@@ -665,7 +666,8 @@ class HeliosDataset(Dataset):
         """Read the h5 file."""
         sample_dict = {}
         with h5_file_path.open("rb") as f:
-            with h5py.File(f, "r") as h5file:
+            # We will not see a sample again before the total amount of ram is eclipsed so we can disable the rdcc
+            with h5py.File(f, "r", rdcc_nbytes=64 * 1024 * 1024, rdcc_nslots=1, rdcc_w0=1.0) as h5file:
                 logger.info(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
                 # Not sure lat lon should be here
                 sample_dict = {
@@ -692,13 +694,19 @@ class HeliosDataset(Dataset):
                 f"H5 file {h5_file_path} does not exist, Be Sure to run prepare before starting Training"
             )
         # We are currently reading the entire h5 file into memory this can be made faster by chunking the dataset appropriately and only reading in the optimal chunks
-        # THis io is the current bottleneck of the getitem operation
+        # Time the IO operation which is the current bottleneck
+        start_io_time = time.time()
         sample_dict = self.read_h5_file(h5_file_path)
+        io_time = time.time() - start_io_time
+        logger.info(f"IO time: {io_time:.4f}s")
 
-        # Fill any training modalities that are not present in the h5 file with missing values
+        # Fill missing values
         sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
+
+        # Apply subsetting
         subset_sample = self.apply_subset(sample, args)
         sample_dict = subset_sample.as_dict(ignore_nones=True)
+
         logger.info(f"Sample dict keys {sample_dict.keys()}")
         # Sample modalities should be written into the metadata of the h5 dataset
         sample_modalities = list(
