@@ -205,8 +205,8 @@ class Modality:
         tile_resolution_factor=16,
         band_sets=[
             BandSet(["B01", "B02", "B03", "B04"], 16),
-            BandSet(["B05", "B06", "B07", "B08", "B8A"], 32),
-            BandSet(["B09", "B11", "B12"], 64),
+            BandSet(["B05", "B06", "B07", "B08", "B8A", "B09"], 32),
+            BandSet(["B11", "B12"], 64),
         ],
         is_multitemporal=True,
         ignore_when_parsing=False,
