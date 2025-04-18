@@ -689,7 +689,7 @@ class HeliosDataset(Dataset):
         elapsed = time.time() - self.last_read_time
         time_to_sleep = self.sec_per_sample - elapsed
         self.last_read_time = time.time()
-        logger.info(f"Sleeping for {time_to_sleep}")
+        logger.error(f"{elapsed} elapsed since last read, sleeping for {time_to_sleep}")
         if time_to_sleep <= 0:
             return
         time.sleep(time_to_sleep)
