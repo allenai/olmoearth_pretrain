@@ -43,12 +43,12 @@ MIN_PATCH_SIZE = 1
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    ENCODER_EMBEDDING_SIZE = 128
-    DECODER_EMBEDDING_SIZE = 128
-    ENCODER_DEPTH = 4
-    DECODER_DEPTH = 4
-    ENCODER_NUM_HEADS = 8
-    DECODER_NUM_HEADS = 8
+    ENCODER_EMBEDDING_SIZE = 192
+    DECODER_EMBEDDING_SIZE = 192
+    ENCODER_DEPTH = 12
+    DECODER_DEPTH = 12
+    ENCODER_NUM_HEADS = 3
+    DECODER_NUM_HEADS = 3
     MLP_RATIO = 4.0
     encoder_config = EncoderConfig(
         supported_modality_names=common.training_modalities,
@@ -131,7 +131,6 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     GLOBAL_BATCH_SIZE = 128
     PREFETCH_FACTOR = 4
     TOKEN_BUDGET = 1500
-
     SAMPLE_HW_P_LIST = list(range(5, 13))
 
     dataloader_config = HeliosDataLoaderConfig(
