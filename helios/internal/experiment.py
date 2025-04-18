@@ -191,9 +191,10 @@ def launch(config: HeliosExperimentConfig) -> None:
     # Set follow=False if you don't want to stream the logs to the terminal
     config.launch.launch(follow=False)
 
-
 def measure_io(config: HeliosExperimentConfig) -> None:
     """Measure the IO for an experiment."""
+    import psutil
+
     logger.info("Measuring the IO for an experiment")
     dataset = config.dataset.build()
     data_loader = config.data_loader.build(
@@ -208,6 +209,10 @@ def measure_io(config: HeliosExperimentConfig) -> None:
     batch_sizes = []
     num_batches = 10  # Number of batches to measure
 
+    # Get initial disk IO counters
+    initial_io = psutil.disk_io_counters()
+    initial_read_bytes = initial_io.read_bytes if initial_io else 0
+
     logger.info(f"Measuring IO time for {num_batches} batches...")
     batch_size = data_loader.global_batch_size
     data_iter = iter(data_loader)
@@ -221,19 +226,33 @@ def measure_io(config: HeliosExperimentConfig) -> None:
         batch_times.append(batch_time)
         batch_sizes.append(batch_size)
 
-        logger.info(f"Batch {i}: Loaded in {batch_time:.4f} seconds, size: {batch_size}")
+        # Get current disk IO counters
+        current_io = psutil.disk_io_counters()
+        current_read_bytes = current_io.read_bytes if current_io else 0
+        read_gb = (current_read_bytes - initial_read_bytes) / (1024 * 1024 * 1024)
+
+        logger.info(f"Batch {i}: Loaded in {batch_time:.4f} seconds, size: {batch_size}, read: {read_gb:.2f} GB")
 
         if i >= num_batches - 1:
             break
+
+    # Final IO counters
+    final_io = psutil.disk_io_counters()
+    final_read_bytes = final_io.read_bytes if final_io else 0
+    total_read_gb = (final_read_bytes - initial_read_bytes) / (1024 * 1024 * 1024)
+
     # Calculate statistics
     avg_batch_time = sum(batch_times) / len(batch_times)
     std_batch_time = np.std(batch_times)
     total_instances = sum(batch_sizes)
     avg_instance_time = sum(batch_time * size for batch_time, size in zip(batch_times, batch_sizes)) / total_instances
+    read_throughput_gbps = total_read_gb / sum(batch_times)
 
     logger.info(f"Average batch loading time: {avg_batch_time:.4f} seconds (std: {std_batch_time:.4f})")
     logger.info(f"Average instance loading time: {avg_instance_time:.4f} seconds")
     logger.info(f"Total throughput: {total_instances / sum(batch_times):.2f} instances/second")
+    logger.info(f"Total data read: {total_read_gb:.4f} GB")
+    logger.info(f"Disk read throughput: {read_throughput_gbps:.4f} GB/s")
 
 def prep(config: HeliosExperimentConfig) -> None:
     """Prepare the dataset for an experiment."""

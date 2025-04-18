@@ -52,7 +52,7 @@ class ConvertToH5pyConfig(Config):
 class ConvertToH5py:
     """Class for converting a dataset of GeoTiffs into a training dataset set up of h5py files."""
 
-    h5py_folder: str = "h5py_data_test_compression"
+    h5py_folder: str = "h5py_data_test_chunking"
     latlon_distribution_fname: str = "latlon_distribution.npy"
     sample_metadata_fname: str = "sample_metadata.csv"
     sample_file_pattern: str = "sample_{index}.h5"
@@ -178,6 +178,7 @@ class ConvertToH5py:
             if modality == Modality.SENTINEL1:
                 image = convert_to_db(image)
             sample_dict[modality.name] = image
+
         # Save h5 file on WEKA
         with h5_file_path.open("wb") as f:
             with h5py.File(f, "w") as h5file:
@@ -185,12 +186,32 @@ class ConvertToH5py:
                     logger.info(
                         f"Writing modality {modality_name} to h5 file path {h5_file_path}"
                     )
-                    h5file.create_dataset(
-                        modality_name,
-                        data=image,
-                        compression="lzf",
-                        shuffle=True
-                    )
+                    if modality_name == "timestamps":
+                        h5file.create_dataset(
+                            modality_name,
+                            data=image,
+                        )
+                        continue
+                    num_channels = image.shape[-1]
+                    modality_spec = Modality.get(modality_name)
+                    if modality_spec.is_multitemporal:
+                        time_length = image.shape[-2]
+                    else:
+                        time_length = 1
+                    if modality_spec.is_spacetime_varying:
+                        chunks= (4,4, time_length, num_channels)
+                        h5file.create_dataset(
+                            modality_name,
+                            data=image,
+                            chunks=chunks,
+                            # compression="lzf",
+                            # shuffle=True
+                        )
+                    else:
+                        h5file.create_dataset(
+                            modality_name,
+                            data=image,
+                        )
         return sample_dict
 
     def _log_modality_distribution(self, samples: list[SampleInformation]) -> None:
@@ -269,7 +290,11 @@ class ConvertToH5py:
         """Filter samples to adjust to the HeliosSample format."""
         logger.info(f"Number of samples before filtering: {len(samples)}")
         filtered_samples = []
+        i = 0
         for sample in samples:
+            i += 1
+            if i > 10000:
+                break
             if not all(
                 modality in self.supported_modalities
                 for modality in sample.modalities
@@ -307,8 +332,6 @@ class ConvertToH5py:
         """
         samples = self._get_samples()
         samples = self._filter_samples(samples)
-        # Trying different compression settings
-        samples = samples[:10000]
         return samples
 
     def prepare_h5_dataset(self, samples: list[SampleInformation]) -> None:
