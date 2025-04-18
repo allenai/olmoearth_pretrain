@@ -410,6 +410,7 @@ def _get_batch_item_params_iterator(
                 filtered_hw_p_to_sample_array > 0
             ]
             sampled_hw_p = np.random.choice(filtered_hw_p_to_sample_array)
+            logger.info(f"idx: {idx}, patch_size: {patch_size}, sampled_hw_p: {sampled_hw_p}")
         yield idx, int(patch_size), int(sampled_hw_p)
         instances_processed += 1
 

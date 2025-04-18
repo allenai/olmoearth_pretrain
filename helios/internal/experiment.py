@@ -199,7 +199,10 @@ def measure_io(config: HeliosExperimentConfig) -> None:
     data_loader = config.data_loader.build(
         dataset, collator=collate_helios, dp_process_group=None
     )
-    data_loader.reshuffle(epoch=1)
+    # Select a random epoch for reshuffling
+    random_epoch = np.random.randint(1, 100)  # Choose a random epoch between 1 and 99
+    data_loader.reshuffle(epoch=random_epoch)
+    logger.info(f"Reshuffling data with random epoch: {random_epoch}")
 
     batch_times = []
     batch_sizes = []

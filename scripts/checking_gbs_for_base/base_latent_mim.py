@@ -154,7 +154,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     # NOTE: Change this directory based on the supported modalities
     h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
     # h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/compressed/118861/"
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data_test_compression/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/10000/"
+    # h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data_test_compression/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/10000/"
     return HeliosDatasetConfig(
         h5py_dir=h5py_dir,
         use_samples_with_missing_supported_modalities=True,

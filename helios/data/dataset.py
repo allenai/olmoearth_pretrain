@@ -316,6 +316,57 @@ class HeliosSample(NamedTuple):
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
 
+def get_max_t_within_token_budget(modalities: list[str], h_w_p: int, max_tokens_per_instance: int
+    ) -> int:
+        """Find max t possible when subsetting.
+
+        Given a sampled h_w_p (the number of tokens along the h and w dimensions)
+        return the maximum t allowed within the
+        max_tokens budget so that the patchified
+        HeliosSample will have fewer than max_tokens tokens.
+
+        This function assumes we apply (H, W, T=1 patchifying)
+        """
+        used_tokens = 0
+        time_multiply_tokens = 0
+        for attribute in modalities:
+            if attribute == "timestamps":
+                continue
+            modality_spec = Modality.get(attribute)
+            if modality_spec.is_spacetime_varying:
+                # for now, lets assume fixed resolution
+                time_multiply_tokens += (h_w_p**2) * modality_spec.num_band_sets
+            elif modality_spec.is_space_only_varying:
+                # for now, lets assume fixed resolution
+                used_tokens += (h_w_p**2) * modality_spec.num_band_sets
+            elif modality_spec.is_time_only_varying:
+                time_multiply_tokens += modality_spec.num_band_sets
+            elif modality_spec.is_static_in_space_and_time:
+                used_tokens += modality_spec.num_band_sets
+        if time_multiply_tokens == 0:
+            # no time-varying inputs, so our return value of t
+            # doesn't matter
+            return 1
+        remaining_tokens = max_tokens_per_instance - used_tokens
+        max_t_within_budget = remaining_tokens / time_multiply_tokens
+        if max_t_within_budget < 1:
+            raise ValueError("patch_size too small for this sample and budget")
+        # return min(floor(max_t_within_budget), self.time)
+        return max_t_within_budget
+
+def get_subset_dimensions(modalities: list[str], patch_size: int, max_tokens_per_instance: int, sampled_hw_p: int) -> dict:
+    """Get the subset dimensions for a HeliosSample."""
+    max_t = get_max_t_within_token_budget(modalities, sampled_hw_p, max_tokens_per_instance)
+    sampled_hw = sampled_hw_p * patch_size
+    # We will need to be able to get the height and widths of the data dynamically in some way but for now it is the same
+    height = 256
+    width = 256
+    time = 12
+    start_h = np.random.choice(height - sampled_hw + 1)
+    start_w = np.random.choice(width - sampled_hw + 1)
+    start_t = np.random.choice(int(time - max_t + 1))
+    return {"start_h": int(start_h), "start_w": int(start_w), "start_t": int(start_t), "max_t": int(max_t),
+            "end_h": int(start_h + sampled_hw), "end_w": int(start_w + sampled_hw), "end_t": int(start_t + max_t)}
 
 def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSample]:
     """Collate function that automatically handles any modalities present in the samples."""
@@ -668,6 +719,7 @@ class HeliosDataset(Dataset):
         with h5_file_path.open("rb") as f:
             # We will not see a sample again before the total amount of ram is eclipsed so we can disable the rdcc
             with h5py.File(f, "r", rdcc_nbytes=64 * 1024 * 1024, rdcc_nslots=1, rdcc_w0=1.0) as h5file:
+            # with h5py.File(f, "r") as h5file:
                 logger.debug(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
                 # Not sure lat lon should be here
                 sample_dict = {
@@ -693,20 +745,86 @@ class HeliosDataset(Dataset):
             raise FileNotFoundError(
                 f"H5 file {h5_file_path} does not exist, Be Sure to run prepare before starting Training"
             )
+        subset = True
+        if subset:
+
+            start_time = time.time()
+
+            dimensions = get_subset_dimensions(self.training_modalities, args.patch_size, args.token_budget, args.sampled_hw_p)
+            with h5_file_path.open("rb") as f:
+                # We will not see a sample again before the total amount of ram is eclipsed so we can disable the rdcc
+                # with h5py.File(f, "r", rdcc_nbytes=64 * 1024 * 1024, rdcc_nslots=1, rdcc_w0=1.0) as h5file:
+                with h5py.File(f, "r") as h5file:
+                    logger.debug(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
+                    # Not sure lat lon should be here
+                    sample_dict = {}
+                    for attribute, modality in h5file.items():
+                        if attribute not in self.training_modalities and attribute != "timestamps" and attribute != "latlon":
+                            continue
+                        assert modality is not None
+                        if attribute == "timestamps":
+                            sample_dict[attribute] = modality[dimensions["start_t"] : dimensions["start_t"] + dimensions["max_t"]]
+                            continue
+                        modality_spec = Modality.get(attribute)
+                        if modality_spec.is_spacetime_varying:
+                            # for now, lets assume fixed resolution
+                            sample_dict[attribute] = modality[
+                                dimensions["start_h"] : dimensions["end_h"],
+                                dimensions["start_w"] : dimensions["end_w"],
+                                dimensions["start_t"] : dimensions["end_t"],
+                            ]
+                        elif modality_spec.is_space_only_varying:
+                            # for now, lets assume fixed resolution
+                            sample_dict[attribute] = modality[
+                                dimensions["start_h"] : dimensions["end_h"],
+                                dimensions["start_w"] : dimensions["end_w"],
+                            ]
+                        elif modality_spec.is_time_only_varying:
+                            sample_dict[attribute] = modality[
+                                dimensions["start_t"] : dimensions["end_t"],
+                            ]
+                        elif modality_spec.is_static_in_space_and_time:
+                            sample_dict[attribute] = modality[()]
+
+            end_time = time.time()
+            logger.info(f"Data loading time: {end_time - start_time:.4f}s")
+
+            # Count bytes for each non-None attribute
+            total_bytes = 0
+            for attr_name, attr_data in sample_dict.items():
+                if attr_data is not None:
+                    attr_bytes = attr_data.nbytes
+                    total_bytes += attr_bytes
+                    logger.debug(f"Attribute {attr_name}: {attr_bytes / (1024 * 1024):.2f} MB")
+            logger.info(f"Total data loaded: {total_bytes / (1024 * 1024):.2f} MB")
+
+            sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
+            return args.patch_size, HeliosSample(**sample_dict)
+
         # We are currently reading the entire h5 file into memory this can be made faster by chunking the dataset appropriately and only reading in the optimal chunks
         # Time the IO operation which is the current bottleneck
-        # start_io_time = time.time()
-        sample_dict = self.read_h5_file(h5_file_path)
-        # io_time = time.time() - start_io_time
-        # logger.info(f"IO time: {io_time:.4f}s")
+        if not subset:
+            start_io_time = time.time()
+            sample_dict = self.read_h5_file(h5_file_path)
+            io_time = time.time() - start_io_time
+            logger.info(f"IO time: {io_time:.4f}s")
+            # Count bytes for each non-None attribute
+            total_bytes = 0
+            for attr_name, attr_data in sample_dict.items():
+                if attr_data is not None:
+                    attr_bytes = attr_data.nbytes
+                    total_bytes += attr_bytes
+                    logger.info(f"Attribute {attr_name}: {attr_bytes / (1024 * 1024):.2f} MB")
+            logger.info(f"Total data loaded: {total_bytes / (1024 * 1024):.2f} MB")
 
-        # Fill missing values
-        sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
+            # Fill missing values
+            sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
 
-        # Apply subsetting
-        subset_sample = self.apply_subset(sample, args)
-        sample_dict = subset_sample.as_dict(ignore_nones=True)
-        return args.patch_size, HeliosSample(**sample_dict)
+            # check the type of everyting in the
+            # Apply subsetting
+            subset_sample = self.apply_subset(sample, args)
+            sample_dict = subset_sample.as_dict(ignore_nones=True)
+        return args.patch_size, sample
 
         logger.info(f"Sample dict keys {sample_dict.keys()}")
         # Sample modalities should be written into the metadata of the h5 dataset
