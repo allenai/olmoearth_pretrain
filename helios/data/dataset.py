@@ -333,7 +333,6 @@ def get_max_t_within_token_budget(
     for attribute in modalities:
         if attribute == "timestamps":
             continue
-        logger.info(f"Attribute: {attribute}")
         modality_spec = Modality.get(attribute)
         if modality_spec.is_spacetime_varying:
             # for now, lets assume fixed resolution
@@ -350,7 +349,6 @@ def get_max_t_within_token_budget(
         # doesn't matter
         return 1
     remaining_tokens = max_tokens_per_instance - used_tokens
-    logger.info(f"Remaining tokens: {remaining_tokens}")
     max_t_within_budget = remaining_tokens / time_multiply_tokens
     if max_t_within_budget < 1:
         raise ValueError("patch_size too small for this sample and budget")
@@ -375,8 +373,6 @@ def get_subset_dimensions(
     time = 12
     start_h = np.random.choice(height - sampled_hw + 1)
     start_w = np.random.choice(width - sampled_hw + 1)
-    logger.info(f"Time: {time}")
-    logger.info(f"Max t: {max_t}")
     start_t = np.random.choice(int(time - max_t + 1))
     return {
         "start_h": int(start_h),
@@ -784,7 +780,7 @@ class HeliosDataset(Dataset):
         with h5_file_path.open("rb") as f:
             # We will not see a sample again before the total amount of ram is eclipsed so we can disable the rdcc
             with h5py.File(
-                f, "r", rdcc_nbytes=64 * 1024 * 1024, rdcc_nslots=1, rdcc_w0=1.0
+                f, "r", rdcc_nbytes=0, rdcc_nslots=1, rdcc_w0=1.0
             ) as h5file:
                 # with h5py.File(f, "r") as h5file:
                 logger.debug(
