@@ -779,8 +779,10 @@ class HeliosDataset(Dataset):
         )
         with h5_file_path.open("rb") as f:
             # We will not see a sample again before the total amount of ram is eclipsed so we can disable the rdcc
-            # with h5py.File(f, "r", rdcc_nbytes=64 * 1024 * 1024, rdcc_nslots=1, rdcc_w0=1.0) as h5file:
-            with h5py.File(f, "r") as h5file:
+            with h5py.File(
+                f, "r", rdcc_nbytes=64 * 1024 * 1024, rdcc_nslots=1, rdcc_w0=1.0
+            ) as h5file:
+                # with h5py.File(f, "r") as h5file:
                 logger.debug(
                     f"Reading h5 file {h5_file_path} with keys {h5file.keys()}"
                 )
