@@ -362,7 +362,7 @@ class HeliosDataset(Dataset):
         normalize: bool = True,
         use_samples_with_missing_supported_modalities: bool = False,
         cache_dir: UPath | None = None,
-        samples_per_sec: int | None = None,
+        samples_per_sec: float | None = None,
     ):
         """Initialize the dataset.
 
@@ -779,7 +779,7 @@ class HeliosDatasetConfig(Config):
     normalize: bool = True
     use_samples_with_missing_supported_modalities: bool = False
     cache_dir: str | None = None
-    samples_per_sec: int | None = None
+    samples_per_sec: float | None = None
 
     def validate(self) -> None:
         """Validate the configuration and build kwargs.
