@@ -136,6 +136,15 @@ def build_train_module_config(
     WARMUP_EPOCHS = 20
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
+    # Set up the weight for the contrastive loss
+    CONTRASTIVE_WEIGHT = 1.0
+    contrastive_config = LossConfig(
+        loss_config={
+            "type": "InfoNCE",
+            "weight": CONTRASTIVE_WEIGHT,
+        }
+    )
+
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
     train_module_config = GalileoTrainModuleConfig(
@@ -153,6 +162,7 @@ def build_train_module_config(
         max_grad_norm=1.0,
         dp_config=dp_config,
         scheduler=scheduler,
+        contrastive_config=contrastive_config,
     )
     return train_module_config
 
