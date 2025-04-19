@@ -4,6 +4,7 @@ These Settings are meant to help you get quick results on a single GPU in minima
 """
 
 import logging
+from typing import Any
 
 from olmo_core.config import Config, DType
 from olmo_core.distributed.parallel.data_parallel import (
@@ -316,9 +317,20 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
     )
 
 
+def build_common_components_limited_modalities(*args: Any) -> CommonComponents:
+    """Build the common components for an experiment."""
+    config = build_common_components(*args)
+    config.training_modalities = [
+        Modality.SENTINEL1.name,
+        Modality.SENTINEL2_L2A.name,
+        Modality.WORLDCOVER.name,
+    ]
+    return config
+
+
 if __name__ == "__main__":
     main(
-        common_components_builder=build_common_components,
+        common_components_builder=build_common_components_limited_modalities,
         model_config_builder=build_model_config,
         train_module_config_builder=build_train_module_config,
         dataset_config_builder=build_dataset_config,

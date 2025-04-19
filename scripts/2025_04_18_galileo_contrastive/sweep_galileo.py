@@ -20,7 +20,7 @@ BASE_COMMAND = (
 # 4 experiments
 for decoder_depth in DECODER_DEPTHS:
     for lr in LEARNING_RATES:
-        run_name = f"galileo_base_decoder_{decoder_depth}_lr_{lr}"
+        run_name = f"1_galileo_base_decoder_{decoder_depth}_lr_{lr}"
         command = BASE_COMMAND.format(
             run_name=run_name,
             decoder_depth=decoder_depth,
