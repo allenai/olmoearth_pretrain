@@ -51,7 +51,8 @@ BASE_COMMAND = (
     "--model.encoder_config.mlp_ratio={mlp_ratio} "
     "--model.decoder_config.mlp_ratio={mlp_ratio} "
     "--train_module.optim_config.lr={lr} "
-    "--train_module.contrastive_config.weight={contrastive_weight} "
+    "--train_module.contrastive_config.loss_config.type=InfoNCE "
+    "--train_module.contrastive_config.loss_config.weight={contrastive_weight} "
     "--launch.num_gpus=8"
 )
 
