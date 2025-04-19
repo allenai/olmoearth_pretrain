@@ -119,6 +119,7 @@ def build_train_module_config(
             "type": "patch_discrimination_new",
         }
     )
+    # Maybe we want to increase token exit for base model?
     token_exit_cfg_a = {
         Modality.SENTINEL2_L2A.name: 4,
         Modality.LATLON.name: 4,
