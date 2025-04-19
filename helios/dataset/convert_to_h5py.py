@@ -290,11 +290,7 @@ class ConvertToH5py:
         """Filter samples to adjust to the HeliosSample format."""
         logger.info(f"Number of samples before filtering: {len(samples)}")
         filtered_samples = []
-        i = 0
         for sample in samples:
-            i += 1
-            if i > 10000:
-                break
             if not all(
                 modality in self.supported_modalities
                 for modality in sample.modalities
@@ -332,7 +328,7 @@ class ConvertToH5py:
         """
         samples = self._get_samples()
         samples = self._filter_samples(samples)
-        return samples
+        return samples[:20000]
 
     def prepare_h5_dataset(self, samples: list[SampleInformation]) -> None:
         """Prepare the h5 dataset."""
