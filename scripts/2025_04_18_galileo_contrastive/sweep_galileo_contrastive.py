@@ -13,7 +13,7 @@ CONTRASTIVE_WEIGHTS = [0.05, 0.1, 0.2]
 
 
 BASE_COMMAND = (
-    "python3 scripts/2025_04_18_galileo_contrastive/galileo.py launch {run_name} ai2/titan-cirrascale "
+    "python3 scripts/2025_04_18_galileo_contrastive/galileo.py launch {run_name} ai2/jupiter-cirrascale-2 "
     "--model.decoder_config.depth={decoder_depth} "
     "--train_module.optim_config.lr={lr} "
     "--train_module.contrastive_config.loss_config.type=InfoNCE "
