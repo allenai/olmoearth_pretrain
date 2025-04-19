@@ -198,7 +198,7 @@ def build_dataset_config(common: CommonComponents) -> Config:
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data/sentinel1_sentinel2_l2a_worldcover/116711/",
             training_modalities=common.training_modalities,
-            use_samples_with_missing_supported_modalities=False,  # Check if we want to set this to True
+            use_samples_with_missing_supported_modalities=True,  # Check if we want to set this to True
             dtype=DType.float32,
             cache_dir="/helios_cache/presto",
             samples_per_sec=2
@@ -207,7 +207,7 @@ def build_dataset_config(common: CommonComponents) -> Config:
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data/sentinel1_sentinel2_l2a_worldcover/283204/",
             training_modalities=common.training_modalities,
-            use_samples_with_missing_supported_modalities=False,
+            use_samples_with_missing_supported_modalities=True,
             dtype=DType.float32,
             cache_dir="/helios_cache/osm_sampling",
             samples_per_sec=2
