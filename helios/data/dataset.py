@@ -501,19 +501,19 @@ class HeliosDataset(Dataset):
             metadata_df[multitemporal_training_modalities].sum(axis=1) == 0
         ].index
 
-        # This is a hacky fix to remove any h5 files that are smaller than 5MB
-        # This is because the h5 files are not being created correctly
-        # TODO: fix this
-        if self.sample_indices is not None:
-            bad_h5_indices = []
-            for index in self.sample_indices:
-                h5_file_path = self._get_h5_file_path(index)
-                if h5_file_path.stat().st_size < 1 * 1024 * 1024:
-                    bad_h5_indices.append(index)
-            logger.info(f"Removing {len(bad_h5_indices)} samples with bad h5 files")
-            self.sample_indices = np.setdiff1d(
-                self.sample_indices, np.array(bad_h5_indices)
-            )
+        # # This is a hacky fix to remove any h5 files that are smaller than 5MB
+        # # This is because the h5 files are not being created correctly
+        # # TODO: fix this
+        # if self.sample_indices is not None:
+        #     bad_h5_indices = []
+        #     for index in self.sample_indices:
+        #         h5_file_path = self._get_h5_file_path(index)
+        #         if h5_file_path.stat().st_size < 1 * 1024 * 1024:
+        #             bad_h5_indices.append(index)
+        #     logger.info(f"Removing {len(bad_h5_indices)} samples with bad h5 files")
+        #     self.sample_indices = np.setdiff1d(
+        #         self.sample_indices, np.array(bad_h5_indices)
+        #     )
 
         # Filter these indices out
         logger.info(f"Filtering out {len(self.naip_indices)} samples with NAIP data")

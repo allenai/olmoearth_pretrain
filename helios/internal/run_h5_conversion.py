@@ -24,15 +24,15 @@ logger = logging.getLogger(__name__)
 def build_default_config() -> ConvertToH5pyConfig:
     """Build the default configuration for H5 conversion."""
     return ConvertToH5pyConfig(
-        tile_path="",
+        tile_path="/weka/dfive-default/helios/dataset/osm_sampling/",
         supported_modality_names=[
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.WORLDCOVER.name,
-            Modality.SRTM.name,
-            Modality.NAIP.name,
-            Modality.LANDSAT.name,
-            Modality.OPENSTREETMAP_RASTER.name,
+            # Modality.SRTM.name,
+            # Modality.NAIP.name,
+            # Modality.LANDSAT.name,
+            # Modality.OPENSTREETMAP_RASTER.name,
         ],
         multiprocessed_h5_creation=True,
     )

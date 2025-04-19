@@ -205,7 +205,7 @@ def build_dataset_config(common: CommonComponents) -> Config:
             samples_per_sec=4 / NUM_DATA_LOADER_WORKERS,  # 2/ GBS
         ),
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data/sentinel1_sentinel2_l2a_worldcover/283204/",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data/sentinel1_sentinel2_l2a_worldcover/rerun/283204/",
             training_modalities=common.training_modalities,
             use_samples_with_missing_supported_modalities=True,
             dtype=DType.float32,

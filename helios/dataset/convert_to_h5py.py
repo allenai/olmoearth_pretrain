@@ -99,7 +99,7 @@ class ConvertToH5py:
         total_sample_indices = len(samples)
 
         if self.multiprocessed_h5_creation:
-            num_processes = max(1, mp.cpu_count() - 2)
+            num_processes = max(1, mp.cpu_count() - 4)
             logger.info(f"Creating H5 dataset using {num_processes} processes")
             with mp.Pool(processes=num_processes) as pool:
                 # Process samples in parallel and track progress with tqdm
@@ -240,6 +240,7 @@ class ConvertToH5py:
             / "_".join(
                 sorted([modality.name for modality in self.supported_modalities])
             )
+            / "rerun"
             / str(num_samples)
         )
         logger.info(f"Setting h5py_dir to {self.h5py_dir}")
