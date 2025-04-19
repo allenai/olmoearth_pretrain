@@ -189,7 +189,7 @@ def build_dataset_config(common: CommonComponents) -> Config:
     """Build the dataset config for an experiment."""
     dataset_configs = [
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data/sentinel1_sentinel2_l2a_worldcover/117471/",
+            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data/sentinel1_sentinel2_l2a_worldcover/116711/",
             training_modalities=common.training_modalities,
             use_samples_with_missing_supported_modalities=False,  # Check if we want to set this to True
             dtype=DType.float32,
