@@ -83,8 +83,7 @@ class SampleInformation:
                 dt = pd.to_datetime(timestamps)
                 return np.array([dt.day, dt.month - 1, dt.year]).T
 
-        # raise ValueError("No multitemporal or non-multitemporal modalities found")
-        return np.array([1, 7, 2024]).T
+        raise ValueError("No multitemporal or non-multitemporal modalities found")
 
 
 def image_tiles_to_samples(
