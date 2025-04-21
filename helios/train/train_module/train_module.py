@@ -442,7 +442,7 @@ class HeliosTrainModule(TrainModule):
         with contextlib.ExitStack() as stack:
             # TODO: Implement FSDP Microbatching
             if isinstance(self.model, FSDPModule):
-                assert self.dp_config is not None
+                assert self._dp_config is not None
                 # On the last backward FSDP waits on pending gradient reduction and clears internal data
                 # data structures for backward prefetching.
                 self.model.set_is_last_backward(is_last_mb)
