@@ -1,3 +1,5 @@
+"""Shared constants important for inference throughput benchmarking."""
+
 # BEAKER-LAND
 BEAKER_BUDGET = "ai2/d5"
 BEAKER_WORKSPACE = "ai2/earth-systems"
@@ -5,9 +7,15 @@ BEAKER_IMAGE_NAME = "chrisw/helios-inf-throughput-flashattn-no-mask-2024-04-21_0
 WEKA_BUCKET = "dfive-default"
 BEAKER_TASK_PRIORITY = "normal"
 BEAKER_GPU_TO_CLUSTER_MAP = {
-    "H100": ["ai2/jupiter-cirrascale-2",],
-    "A100": ["ai2/saturn-cirrascale",],
-    "L40S": ["ai2/neptune-cirrascale",],
+    "H100": [
+        "ai2/jupiter-cirrascale-2",
+    ],
+    "A100": [
+        "ai2/saturn-cirrascale",
+    ],
+    "L40S": [
+        "ai2/neptune-cirrascale",
+    ],
 }
 
 # GCP-land
@@ -33,10 +41,10 @@ MODEL_SIZE_MAP = {
 ARTIFACTS_DIR = "/artifacts"
 
 # METRICS
-PER_BATCH_TOKEN_RATE_METRIC = "per_batch_token_rate"
-MEAN_BATCH_TOKEN_RATE_METRIC = "mean_batch_token_rate"
-MEAN_BATCH_TIME_METRIC = "mean_batch_time"
-NUM_TOKENS_PER_BATCH_METRIC = "num_tokens_per_batch"
+PER_BATCH_TOKEN_RATE_METRIC = "per_batch_token_rate"  # nosec
+MEAN_BATCH_TOKEN_RATE_METRIC = "mean_batch_token_rate"  # nosec
+MEAN_BATCH_TIME_METRIC = "mean_batch_time"  # nosec
+NUM_TOKENS_PER_BATCH_METRIC = "num_tokens_per_batch"  # nosec
 
 PARAM_KEYS = dict(
     model_size="MODEL_SIZE",

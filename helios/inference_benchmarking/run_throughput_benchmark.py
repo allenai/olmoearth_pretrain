@@ -1,20 +1,20 @@
+"""Script for performing an inference throughput benchmarking run."""
+
 import json
 import os
 import time
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import torch
 import wandb
-
 from olmo_core.config import Config
 from olmo_core.distributed.checkpoint import load_model_and_optim_state
 
-from helios.nn.flexihelios import TokensAndMasks
-from helios.train.masking import MaskedHeliosSample, MaskValue
 from helios.inference_benchmarking import constants
 from helios.inference_benchmarking.data_models import RunParams
-
+from helios.nn.flexihelios import TokensAndMasks
+from helios.train.masking import MaskedHeliosSample, MaskValue
 
 NUM_S1_BANDS = 4
 NUM_S2_BANDS = 12
@@ -22,7 +22,10 @@ NUM_LANDSAT_BANDS = 11
 
 
 class Helios(torch.nn.Module):
+    """Thin wrapper around Helios checkpoint that loads just the encoder."""
+
     def __init__(self, checkpoint_path: str):
+        """Loads the checkpoint, keeps only the encoder."""
         super().__init__()
 
         # Load the model config and initialize it.
@@ -42,15 +45,16 @@ class Helios(torch.nn.Module):
 
         self.model = model
 
-    def forward(self, x: MaskedHeliosSample, patch_size: int):
+    def forward(self, x: MaskedHeliosSample, patch_size: int) -> TokensAndMasks:
+        """Pass-through."""
         return self.model.forward(x, patch_size=patch_size)
 
 
-def run_benchmarking(
-    model: Helios,
-    metrics: Any,
-    run_params: RunParams
-):
+def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None:
+    """Runs the benchmarking code.
+
+    Requires an instance of the Helios wrapper, a wandb metrics instance, and run params.
+    """
     device = next(model.parameters()).device
 
     if run_params.bf16:
@@ -103,17 +107,20 @@ def run_benchmarking(
 
         latlon = torch.rand(batch_size, 2, device=device, dtype=dtype)  # dims: (B, 2)
         timestamps = torch.ones(
-            batch_size,
-            run_params.num_timesteps,
-            3,
-            dtype=torch.int32,
-            device=device
+            batch_size, run_params.num_timesteps, 3, dtype=torch.int32, device=device
         )  # dims: (B, T, D=3)
 
-        def maybe_make_mask(maybe_t):
+        def maybe_make_mask(maybe_t: torch.Tensor | None) -> torch.Tensor | None:
             if maybe_t is not None:
-                return (torch.ones(maybe_t.shape, dtype=dtype, device=device,)
-                        * MaskValue.ONLINE_ENCODER.value)
+                return (
+                    torch.ones(
+                        maybe_t.shape,
+                        dtype=dtype,
+                        device=device,
+                    )
+                    * MaskValue.ONLINE_ENCODER.value
+                )
+            return None
 
         masked_sample = MaskedHeliosSample(
             timestamps=timestamps,
@@ -128,47 +135,56 @@ def run_benchmarking(
         )
 
         interval_start_time = time.monotonic()
-        tokens_processed_per_batch = []
-        time_taken_per_batch = []
+        tokens_processed_per_batch: list[int] = []
+        time_taken_per_batch: list[float] = []
 
-        while (time.monotonic() - interval_start_time) < run_params.benchmark_interval_s or len(tokens_processed_per_batch) < run_params.min_batches_per_interval:
+        while (
+            time.monotonic() - interval_start_time
+        ) < run_params.benchmark_interval_s or len(
+            tokens_processed_per_batch
+        ) < run_params.min_batches_per_interval:
             batch_start = time.monotonic()
 
+            results: TokensAndMasks
             if run_params.bf16:
                 with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                    results: TokensAndMasks = model.forward(
-                        masked_sample,
-                        patch_size=run_params.patch_size
+                    results = model.forward(
+                        masked_sample, patch_size=run_params.patch_size
                     )
             else:
-                results: TokensAndMasks = model.forward(
-                    masked_sample,
-                    patch_size=run_params.patch_size
-                )
+                results = model.forward(masked_sample, patch_size=run_params.patch_size)
 
             num_s1_tokens = calculate_num_token_embeddings(results.sentinel1)
             num_s2_tokens = calculate_num_token_embeddings(results.sentinel2_l2a)
             num_landsat_tokens = calculate_num_token_embeddings(results.landsat)
-            tokens_processed_per_batch.append(num_s1_tokens + num_s2_tokens + num_landsat_tokens)
+            tokens_processed_per_batch.append(
+                num_s1_tokens + num_s2_tokens + num_landsat_tokens
+            )
             time_taken_per_batch.append(time.monotonic() - batch_start)
 
         metrics_to_submit = {
-            constants.PER_BATCH_TOKEN_RATE_METRIC: wandb.Histogram(np.array(
-                [
-                    tokens_processed_per_batch,
-                    time_taken_per_batch,
-                ]
-            )),
-            constants.MEAN_BATCH_TOKEN_RATE_METRIC: sum(tokens_processed_per_batch) / sum(time_taken_per_batch),
-            constants.MEAN_BATCH_TIME_METRIC: sum(time_taken_per_batch) / len(time_taken_per_batch),
-            constants.NUM_TOKENS_PER_BATCH_METRIC: sum(tokens_processed_per_batch) / len(tokens_processed_per_batch)
+            constants.PER_BATCH_TOKEN_RATE_METRIC: wandb.Histogram(
+                np.array(
+                    [
+                        tokens_processed_per_batch,
+                        time_taken_per_batch,
+                    ]
+                )
+            ),
+            constants.MEAN_BATCH_TOKEN_RATE_METRIC: sum(tokens_processed_per_batch)
+            / sum(time_taken_per_batch),
+            constants.MEAN_BATCH_TIME_METRIC: sum(time_taken_per_batch)
+            / len(time_taken_per_batch),
+            constants.NUM_TOKENS_PER_BATCH_METRIC: sum(tokens_processed_per_batch)
+            / len(tokens_processed_per_batch),
         }
 
         print(f"Metrics for {batch_size} were: {metrics_to_submit}")
         metrics.log(metrics_to_submit, step=idx)
 
 
-def calculate_num_token_embeddings(t: Optional[torch.Tensor]) -> int:
+def calculate_num_token_embeddings(t: torch.Tensor | None) -> int:
+    """Determines how many tokens are represented in the given tensor."""
     if t is not None:
         batch_size, p_height, p_width, timestamps, bandsets, _ = tuple(t.shape)
         return batch_size * p_height * p_width * timestamps * bandsets
@@ -199,11 +215,7 @@ if __name__ == "__main__":
         print("helios loaded and on gpu")
         if torch.cuda.is_available():
             model.to("cuda:0")
-        run_benchmarking(
-            model,
-            metrics,
-            run_params
-        )
+        run_benchmarking(model, metrics, run_params)
 
     except Exception as e:
         wandb.finish(exit_code=1, quiet=True)
