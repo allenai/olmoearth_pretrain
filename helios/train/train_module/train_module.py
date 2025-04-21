@@ -28,6 +28,7 @@ from olmo_core.train.train_module.transformer import (
 )
 from olmo_core.utils import gc_cuda, get_default_device
 from torch.distributed.checkpoint.metadata import Metadata
+from torch.distributed.fsdp import FSDPModule
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
@@ -437,13 +438,14 @@ class HeliosTrainModule(TrainModule):
     def _train_microbatch_context(
         self, micro_batch_idx: int, num_micro_batches: int
     ) -> Generator[None, None, None]:
+        is_last_mb = micro_batch_idx == num_micro_batches - 1
         with contextlib.ExitStack() as stack:
             # TODO: Implement FSDP Microbatching
-            # if isinstance(self.model, FSDPModule):
-            #     assert self.dp_config is not None
-            #     # On the last backward FSDP waits on pending gradient reduction and clears internal data
-            #     # data structures for backward prefetching.
-            #     self.model.set_is_last_backward(is_last_mb)
+            if isinstance(self.model, FSDPModule):
+                assert self.dp_config is not None
+                # On the last backward FSDP waits on pending gradient reduction and clears internal data
+                # data structures for backward prefetching.
+                self.model.set_is_last_backward(is_last_mb)
             if isinstance(self.model, DDP) and micro_batch_idx != num_micro_batches - 1:
                 # For DDP, only sync gradients on the final micro batch.
                 stack.enter_context(self.model.no_sync())
@@ -480,6 +482,7 @@ class HeliosTrainModule(TrainModule):
         foreach: bool | None = None,
     ) -> torch.Tensor:
         """Clip the gradients."""
+        # TODO: IS FSDP redudant
         if isinstance(self.model, FSDP):
             return self.model.clip_grad_norm_(max_grad_norm)
         # Pipeline parallel grad clipping required nightly torch
