@@ -76,7 +76,7 @@ def build_launch_config(
                     "Jobs targeting Augusta should not target other clusters since Weka will not be mounted"
                 )
             weka_buckets = []
-        if "titan" in c:
+        if "titan" or "jupiter" in c:
             if len(clusters) > 1:
                 raise ValueError(
                     "Jobs targeting Titan should not target other clusters since Titan uses pytorch 2.7"
