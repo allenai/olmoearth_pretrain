@@ -52,7 +52,7 @@ class ConvertToH5pyConfig(Config):
 class ConvertToH5py:
     """Class for converting a dataset of GeoTiffs into a training dataset set up of h5py files."""
 
-    h5py_folder: str = "h5py_data_test_chunking"
+    h5py_folder: str = "h5py_data_test_chunking_2_2_2"
     latlon_distribution_fname: str = "latlon_distribution.npy"
     sample_metadata_fname: str = "sample_metadata.csv"
     sample_file_pattern: str = "sample_{index}.h5"
@@ -99,7 +99,7 @@ class ConvertToH5py:
         total_sample_indices = len(samples)
 
         if self.multiprocessed_h5_creation:
-            num_processes = max(1, mp.cpu_count() - 2)
+            num_processes = max(1, mp.cpu_count() - 16)
             logger.info(f"Creating H5 dataset using {num_processes} processes")
             with mp.Pool(processes=num_processes) as pool:
                 # Process samples in parallel and track progress with tqdm
@@ -180,8 +180,8 @@ class ConvertToH5py:
             sample_dict[modality.name] = image
 
         # Save h5 file on WEKA
-        with h5_file_path.open("wb") as f:
-            with h5py.File(f, "w") as h5file:
+        with h5_file_path.open("w+b") as f:
+            with h5py.File(f, "a") as h5file:
                 for modality_name, image in sample_dict.items():
                     logger.info(
                         f"Writing modality {modality_name} to h5 file path {h5_file_path}"
@@ -196,10 +196,15 @@ class ConvertToH5py:
                     modality_spec = Modality.get(modality_name)
                     if modality_spec.is_multitemporal:
                         time_length = image.shape[-2]
+                        if time_length == 12:
+                            time_length = 2
                     else:
                         time_length = 1
                     if modality_spec.is_spacetime_varying:
-                        chunks= (4,4, time_length, num_channels)
+                        logger.info(f"time_length: {time_length}")
+                        logger.info(f"image.shape: {image.shape}")
+                        logger.info(f"num_channels: {num_channels}")
+                        chunks= (2,2, time_length, num_channels)
                         h5file.create_dataset(
                             modality_name,
                             data=image,
@@ -290,6 +295,7 @@ class ConvertToH5py:
         """Filter samples to adjust to the HeliosSample format."""
         logger.info(f"Number of samples before filtering: {len(samples)}")
         filtered_samples = []
+        i = 0
         for sample in samples:
             if not all(
                 modality in self.supported_modalities
@@ -316,6 +322,9 @@ class ConvertToH5py:
                     sample.modalities.pop(modality)
 
             filtered_samples.append(sample)
+            i += 1
+            if i > 1000:
+                break
         logger.info(f"Number of samples after filtering: {len(filtered_samples)}")
         logger.info("Distribution of samples after filtering:")
         self._log_modality_distribution(filtered_samples)
@@ -328,7 +337,7 @@ class ConvertToH5py:
         """
         samples = self._get_samples()
         samples = self._filter_samples(samples)
-        return samples[:20000]
+        return samples[:50000]
 
     def prepare_h5_dataset(self, samples: list[SampleInformation]) -> None:
         """Prepare the h5 dataset."""
