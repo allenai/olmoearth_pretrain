@@ -74,6 +74,7 @@ class Galileo(nn.Module, DistributedMixins):
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         latent = self.encoder(x, patch_size=patch_size)
         decoded = self.decoder_b(latent, timestamps=x.timestamps, patch_size=patch_size)
+        # what if we did learnable pooling here?
         pooled_for_contrastive = latent.pool_unmasked_tokens(
             PoolingType.MEAN, spatial_pooling=False
         )
