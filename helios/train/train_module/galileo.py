@@ -292,10 +292,10 @@ class GalileoTrainModule(HeliosTrainModule):
                     logger.warning(
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
                     )
-                    del latent_a, latent_b
+                    del latent_a, latent_b, pooled_a, pooled_b
                     break
 
-                del latent_a, latent_b
+                del latent_a, latent_b, pooled_a, pooled_b
                 loss.backward()
 
         if dry_run:
