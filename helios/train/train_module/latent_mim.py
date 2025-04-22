@@ -53,6 +53,7 @@ class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     warmup_duration: Duration = field(default_factory=lambda: Duration.epochs(2))
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
+    contrastive_config: LossConfig | None = None
 
     def build(
         self,
@@ -122,6 +123,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
+        contrastive_config: LossConfig | None = None,
     ):
         """Initialize the training module.
 
@@ -147,6 +149,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
             token_exit_cfg: The token exit configuration for the model.
             warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
+            contrastive_config: An optional contrastive configration for the model.
         """
         super().__init__(
             model=model,
@@ -176,6 +179,9 @@ class LatentMIMTrainModule(HeliosTrainModule):
         self.total_loss_name = self.base_loss.name
         if self.regularizer is not None:
             self.total_loss_name = f"{self.base_loss.name}+{self.regularizer.name}"
+        self.contrastive_loss = (
+            contrastive_config.build() if contrastive_config is not None else None
+        )
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -201,6 +207,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
+        total_batch_con = torch.zeros([], device=self.device)
         patch_size, batch_data = batch
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
@@ -210,21 +217,43 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
-                microbatch = self.transform.apply(microbatch).to_device(self.device)
-                masked_batch = self.masking_strategy.apply_mask(
-                    microbatch, patch_size=patch_size
+                masked_batch_a = self.masking_strategy.apply_mask(
+                    self.transform.apply(microbatch).to_device(self.device),
+                    patch_size=patch_size,
                 )
                 # Run Encoder and decoder on the augmented input
-                loss, latent, decoded, target_output = self.model_forward(
-                    masked_batch, patch_size, self.token_exit_cfg
+                loss_a, latent_a, pooled_a = self.model_forward(
+                    masked_batch_a, patch_size, self.token_exit_cfg
                 )
-                reg_term = self.compute_regularization(latent)
-                if reg_term is not None:
-                    loss = loss + reg_term
-                    total_batch_reg += get_local_tensor(reg_term) / num_microbatches
-                # Scale loss by number of microbatches
-                loss = loss / num_microbatches
+                masked_batch_b = self.masking_strategy.apply_mask(
+                    self.transform.apply(microbatch).to_device(self.device),
+                    patch_size=patch_size,
+                )
+                # Run Encoder and decoder on the augmented input
+                loss_b, latent_b, pooled_b = self.model_forward(
+                    masked_batch_b, patch_size, self.token_exit_cfg
+                )
 
+                loss = (loss_a + loss_b) / 2
+
+                reg_term_a = self.compute_regularization(latent_a)
+                reg_term_b = self.compute_regularization(latent_b)
+                if reg_term_a is not None:
+                    assert reg_term_b is not None
+                    loss = loss + (reg_term_a + reg_term_b) / 2
+                    total_batch_reg += (
+                        get_local_tensor((reg_term_a + reg_term_b) / 2)
+                        / num_microbatches
+                    )
+
+                if self.contrastive_loss is not None:
+                    contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
+                    loss += contrastive_loss
+                    total_batch_con += (
+                        get_local_tensor(contrastive_loss) / num_microbatches
+                    )
+
+                loss = loss / num_microbatches
                 loss_val = get_local_tensor(loss)
                 total_batch_loss += loss_val
 
@@ -233,11 +262,14 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     logger.warning(
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
                     )
-                    del latent, decoded, target_output
+                    del latent_a, latent_b, pooled_a, pooled_b
                     break
 
-                del latent, decoded, target_output
+                del latent_a, latent_b, pooled_a, pooled_b
                 loss.backward()
+
+        if dry_run:
+            return
 
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
@@ -245,19 +277,20 @@ class LatentMIMTrainModule(HeliosTrainModule):
             ReduceType.mean,
         )
         self.log_regularization(total_batch_reg)
-
-        if dry_run:
-            return
-
-        del batch, batch_data  # In case this helps with memory utilization.
-        del masked_batch
+        if self.contrastive_loss is not None:
+            self.trainer.record_metric(
+                f"train/{self.contrastive_loss.name}",
+                total_batch_con,
+                ReduceType.mean,
+            )
+        del batch, microbatch, batch_data
 
     def model_forward(
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
-    ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
+    ) -> tuple[torch.Tensor, TokensAndMasks, torch.Tensor]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded = self.model.forward(batch, patch_size)
+            latent, decoded, pooled = self.model.forward(batch, patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 target_output = self.model.target_encoder.forward(
@@ -266,4 +299,4 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
             loss = self.loss_fn(decoded, target_output)
-            return loss, latent, decoded, target_output
+            return loss, latent, pooled
