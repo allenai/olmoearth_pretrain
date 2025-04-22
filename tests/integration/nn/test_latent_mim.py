@@ -60,8 +60,8 @@ def test_latentmim_with_loss(
     MAX_SEQ_LENGTH = 12
     DEPTH = 1
     DROP_PATH = 0.1
-    ENCODER_EMBEDDING_SIZE = 8
-    DECODER_EMBEDDING_SIZE = 8
+    ENCODER_EMBEDDING_SIZE = 16
+    DECODER_EMBEDDING_SIZE = 16
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=ENCODER_EMBEDDING_SIZE,
