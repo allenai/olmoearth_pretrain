@@ -76,12 +76,12 @@ def build_launch_config(
                     "Jobs targeting Augusta should not target other clusters since Weka will not be mounted"
                 )
             weka_buckets = []
-        if "titan" in c:
-            if len(clusters) > 1:
-                raise ValueError(
-                    "Jobs targeting Titan should not target other clusters since Titan uses pytorch 2.7"
-                )
-            pytorch_upgrade = "pip install --upgrade --no-cache-dir torch==2.7.0 torchvision --index-url https://download.pytorch.org/whl/test/cu128"
+        # if "titan" in c:
+        #     if len(clusters) > 1:
+        #         raise ValueError(
+        #             "Jobs targeting Titan should not target other clusters since Titan uses pytorch 2.7"
+        #         )
+        #     pytorch_upgrade = "pip install --upgrade --no-cache-dir torch==2.7.0 torchvision --index-url https://download.pytorch.org/whl/test/cu128"
 
     beaker_user = get_beaker_username()
     return BeakerLaunchConfig(
@@ -92,7 +92,7 @@ def build_launch_config(
         workspace=workspace,
         clusters=clusters,
         weka_buckets=weka_buckets,
-        beaker_image=f"henryh/{OLMoCoreBeakerImage.stable}",  # we can all use the same image for now
+        beaker_image=f"petew/{OLMoCoreBeakerImage.stable_cu128}",  # we can all use the same image for now trying petes to see if it works or we need a copy in our workspace
         num_nodes=1,
         num_gpus=1,
         shared_memory="256GiB",

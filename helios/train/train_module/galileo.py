@@ -272,7 +272,9 @@ class GalileoTrainModule(HeliosTrainModule):
                     assert reg_term_b is not None
                     loss = loss + (reg_term_a + reg_term_b) / 2
                     total_batch_reg += (
-                        get_local_tensor((reg_term_a + reg_term_b) / 2)
+                        get_local_tensor(
+                            (reg_term_a.detach() + reg_term_b.detach()) / 2
+                        )
                         / num_microbatches
                     )
 
@@ -280,11 +282,11 @@ class GalileoTrainModule(HeliosTrainModule):
                     contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
                     loss += contrastive_loss
                     total_batch_con += (
-                        get_local_tensor(contrastive_loss) / num_microbatches
+                        get_local_tensor(contrastive_loss.detach()) / num_microbatches
                     )
 
                 loss = loss / num_microbatches
-                loss_val = get_local_tensor(loss)
+                loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
 
                 # Skip bad batches
@@ -300,7 +302,7 @@ class GalileoTrainModule(HeliosTrainModule):
 
         if dry_run:
             return
-
+        # Remember to detach the loss before recording
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
             total_batch_loss,

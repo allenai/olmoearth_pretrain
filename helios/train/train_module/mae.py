@@ -229,10 +229,12 @@ class MAETrainModule(HeliosTrainModule):
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
                     loss = loss + reg_term
-                    total_batch_reg += get_local_tensor(reg_term) / num_microbatches
+                    total_batch_reg += (
+                        get_local_tensor(reg_term.detach()) / num_microbatches
+                    )
                 # Scale loss by number of microbatches
                 loss = loss / num_microbatches
-                loss_val = get_local_tensor(loss)
+                loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
 
                 # Skip bad batches

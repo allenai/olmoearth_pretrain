@@ -1,4 +1,4 @@
-ai2-olmo-core @ git+https://github.com/allenai/olmo-core.git@8919dff
+ai2-olmo-core==2.1.0
 beaker-py>=1.32.0
 cartopy
 class-registry
@@ -15,7 +15,7 @@ pre-commit
 pytest
 rasterio
 rioxarray
-torch>=2.5
+torch>=2.6 # We use 2.7 for training on everything now
 torchvision>=0.20
 universal_pathlib>=0.2.5
 wandb>=0.19.0

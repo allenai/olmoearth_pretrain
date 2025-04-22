@@ -10,8 +10,6 @@ import numpy as np
 from olmo_core.config import Config
 from torch.utils.data import ConcatDataset, Dataset
 
-from helios.data.constants import ModalitySpec
-
 from .dataset import GetItemArgs
 
 logger = logging.getLogger(__name__)
@@ -88,17 +86,13 @@ class HeliosConcatDataset(ConcatDataset):
             dataset_latlons.append(dataset.latlon_distribution)
         self.latlon_distribution = np.concatenate(dataset_latlons, axis=0)
 
-    @property
-    def supported_modalities(self) -> list[ModalitySpec]:
-        """Return the supported modalities."""
-        # We make sure supported modalities is same for all sub datasets.
-        supported_modalities = self.datasets[0].supported_modalities
+        # Set training modalities attribute (accessed by data loader).
+        self.training_modalities = self.datasets[0].training_modalities
         for dataset in self.datasets:
-            if dataset.supported_modalities != supported_modalities:
+            if self.training_modalities != dataset.training_modalities:
                 raise ValueError(
-                    "expected all sub datasets to have the same supported modalities"
+                    "expected all sub datasets to have same training modalities"
                 )
-        return supported_modalities
 
 
 @dataclass
