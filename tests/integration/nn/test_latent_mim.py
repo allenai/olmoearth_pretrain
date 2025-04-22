@@ -56,12 +56,12 @@ def test_latentmim_with_loss(
     # Shared constants for encoder and predictor
     MAX_PATCH_SIZE = 8
     NUM_HEADS = 2
-    MLP_RATIO = 4.0
+    MLP_RATIO = 1.0
     MAX_SEQ_LENGTH = 12
-    DEPTH = 2
+    DEPTH = 1
     DROP_PATH = 0.1
-    ENCODER_EMBEDDING_SIZE = 16
-    DECODER_EMBEDDING_SIZE = 16
+    ENCODER_EMBEDDING_SIZE = 8
+    DECODER_EMBEDDING_SIZE = 8
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=ENCODER_EMBEDDING_SIZE,
