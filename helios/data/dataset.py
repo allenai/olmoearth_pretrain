@@ -20,7 +20,7 @@ from torch.distributed.tensor import distribute_tensor
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from upath import UPath
-
+import time
 from helios.data.constants import (
     IMAGE_TILE_SIZE,
     MISSING_VALUE,
@@ -826,17 +826,20 @@ class HeliosDataset(Dataset):
             args.token_budget,
             args.sampled_hw_p,
         )
+        read_time = time.perf_counter()
         with h5_file_path.open("rb") as f:
             # We will not see a sample again before the total amount of ram is eclipsed so we can disable the rdcc
             with h5py.File(
                 f, "r", rdcc_nbytes=0, rdcc_nslots=1, rdcc_w0=1.0
             ) as h5file:
+                # log number of chunks in the file using chunks
                 # with h5py.File(f, "r") as h5file:
                 logger.debug(
                     f"Reading h5 file {h5_file_path} with keys {h5file.keys()}"
                 )
                 # Not sure lat lon should be here
                 sample_dict = {}
+
                 for attribute, modality in h5file.items():
                     if (
                         attribute not in self.training_modalities
@@ -845,12 +848,18 @@ class HeliosDataset(Dataset):
                     ):
                         continue
                     assert modality is not None
+
+                    start_time = time.perf_counter()
+
                     if attribute == "timestamps":
                         sample_dict[attribute] = modality[
                             dimensions["start_t"] : dimensions["start_t"]
                             + dimensions["max_t"]
                         ]
+                        end_time = time.perf_counter()
+                        logger.debug(f"Loading {attribute} took {end_time - start_time:.4f}s")
                         continue
+
                     modality_spec = Modality.get(attribute)
                     if modality_spec.is_spacetime_varying:
                         # for now, lets assume fixed resolution
@@ -872,6 +881,10 @@ class HeliosDataset(Dataset):
                     elif modality_spec.is_static_in_space_and_time:
                         sample_dict[attribute] = modality[()]
 
+                    end_time = time.perf_counter()
+                    logger.debug(f"Loading {attribute} took {end_time - start_time:.4f}s")
+        total_time = time.perf_counter() - read_time
+        logger.debug(f"Total time to read {len(self.training_modalities)} modalities: {total_time:.4f}s")
             # end_time = time.time()
             # logger.info(f"Data loading time: {end_time - start_time:.4f}s")
 

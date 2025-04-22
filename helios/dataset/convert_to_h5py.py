@@ -295,7 +295,6 @@ class ConvertToH5py:
         """Filter samples to adjust to the HeliosSample format."""
         logger.info(f"Number of samples before filtering: {len(samples)}")
         filtered_samples = []
-        i = 0
         for sample in samples:
             if not all(
                 modality in self.supported_modalities
@@ -322,9 +321,6 @@ class ConvertToH5py:
                     sample.modalities.pop(modality)
 
             filtered_samples.append(sample)
-            i += 1
-            if i > 1000:
-                break
         logger.info(f"Number of samples after filtering: {len(filtered_samples)}")
         logger.info("Distribution of samples after filtering:")
         self._log_modality_distribution(filtered_samples)
