@@ -809,6 +809,6 @@ class HeliosDatasetConfig(Config):
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
         kwargs["h5py_dir"] = self.h5py_dir_upath
-        kwargs["cache_dir"] = self.cache_dir_upath
+        kwargs["cache_dir"] = self.cache_dir_upath if self.cache_dir else None
         logger.info(f"HeliosDataset kwargs: {kwargs}")
         return HeliosDataset(**kwargs)
