@@ -237,7 +237,7 @@ def masked_sample_dict(
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
     B, H, W, T, C = (
-        4,
+        2,
         4,
         4,
         2,
