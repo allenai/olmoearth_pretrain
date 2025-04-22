@@ -24,14 +24,12 @@ from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
 from helios.internal.utils import MODEL_SIZE_ARGS
-from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
+from helios.nn.flexihelios import EncoderConfig, PredictorConfig
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.callbacks import (
-    DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
     HeliosWandBCallback,
 )
-from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
@@ -180,52 +178,52 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     )
     # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
-    EVAL_TASKS = {
-        "m-eurosat": DownstreamTaskConfig(
-            dataset="m-eurosat",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(5),
-        ),
-        "mados": DownstreamTaskConfig(
-            dataset="mados",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-        ),
-        "sen1floods11": DownstreamTaskConfig(
-            dataset="sen1floods11",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-        ),
-        "pastis": DownstreamTaskConfig(
-            dataset="pastis",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-        ),
-        "pastis-r": DownstreamTaskConfig(
-            dataset="pastis-r",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-        ),
-    }
+    # EVAL_TASKS = {
+    #     "m-eurosat": DownstreamTaskConfig(
+    #         dataset="m-eurosat",
+    #         batch_size=128,
+    #         num_workers=8,
+    #         pooling_type=PoolingType.MEAN,
+    #         norm_stats_from_pretrained=True,
+    #         eval_interval=Duration.epochs(5),
+    #     ),
+    #     "mados": DownstreamTaskConfig(
+    #         dataset="mados",
+    #         batch_size=128,
+    #         num_workers=8,
+    #         pooling_type=PoolingType.MEAN,
+    #         norm_stats_from_pretrained=False,
+    #         probe_lr=0.1,
+    #         eval_interval=Duration.epochs(20),
+    #     ),
+    #     "sen1floods11": DownstreamTaskConfig(
+    #         dataset="sen1floods11",
+    #         batch_size=128,
+    #         num_workers=8,
+    #         pooling_type=PoolingType.MEAN,
+    #         norm_stats_from_pretrained=True,
+    #         probe_lr=0.1,
+    #         eval_interval=Duration.epochs(20),
+    #     ),
+    #     "pastis": DownstreamTaskConfig(
+    #         dataset="pastis",
+    #         batch_size=8,
+    #         num_workers=2,
+    #         pooling_type=PoolingType.MEAN,
+    #         norm_stats_from_pretrained=True,
+    #         probe_lr=0.1,
+    #         eval_interval=Duration.epochs(20),
+    #     ),
+    #     "pastis-r": DownstreamTaskConfig(
+    #         dataset="pastis-r",
+    #         batch_size=8,
+    #         num_workers=2,
+    #         pooling_type=PoolingType.MEAN,
+    #         norm_stats_from_pretrained=True,
+    #         probe_lr=0.1,
+    #         eval_interval=Duration.epochs(20),
+    #     ),
+    # }
     trainer_config = (
         TrainerConfig(
             work_dir=common.save_folder,
@@ -240,13 +238,13 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
         .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
-        .with_callback(
-            "downstream_evaluator",
-            DownstreamEvaluatorCallbackConfig(
-                tasks=EVAL_TASKS,
-            ),
-        )
         .with_callback("garbage_collector", garbage_collector_callback)
+        # .with_callback(
+        #     "downstream_evaluator",
+        #     DownstreamEvaluatorCallbackConfig(
+        #         tasks=EVAL_TASKS,
+        #     ),
+        # )
     )
     return trainer_config
 
