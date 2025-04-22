@@ -10,6 +10,7 @@ from olmo_core.distributed.parallel.data_parallel import (
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
+    BeakerCallback,
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
@@ -243,6 +244,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
+        .with_callback("beaker", BeakerCallback())
     )
     return trainer_config
 
