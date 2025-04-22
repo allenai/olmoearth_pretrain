@@ -154,6 +154,11 @@ class STBase(nn.Module):
         This combines the batch/height/width dimensions so that attention is applied
         temporally but not spatially.
         """
+        available_modalities = return_modalities_from_dict(x)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+
         # First determine the height and width.
         # We require all modalities that are not static in space to have the same
         # spatial dimensions.
@@ -161,7 +166,7 @@ class STBase(nn.Module):
         # space.
         h: int | None = None
         w: int | None = None
-        for modality in self.supported_modality_names:
+        for modality in modalities_to_process:
             x_modality = x[modality]
             if len(x_modality.shape) not in [5, 6]:
                 continue
@@ -179,7 +184,7 @@ class STBase(nn.Module):
             raise ValueError("expected at least one spatial modality")
 
         tokens, masks = [], []
-        for modality in self.supported_modality_names:
+        for modality in modalities_to_process:
             masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
@@ -227,6 +232,11 @@ class STBase(nn.Module):
         This combines the batch/time dimensions so that attention is applied spatially
         but not temporally.
         """
+        available_modalities = return_modalities_from_dict(x)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+
         # First determine the height and width.
         # We require all modalities that are not static in space to have the same
         # spatial dimensions.
@@ -234,7 +244,7 @@ class STBase(nn.Module):
         # space.
         h: int | None = None
         w: int | None = None
-        for modality in self.supported_modality_names:
+        for modality in modalities_to_process:
             x_modality = x[modality]
             if len(x_modality.shape) not in [5, 6]:
                 continue
@@ -252,7 +262,7 @@ class STBase(nn.Module):
             raise ValueError("expected at least one spatial modality")
 
         tokens, masks = [], []
-        for modality in self.supported_modality_names:
+        for modality in modalities_to_process:
             masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
