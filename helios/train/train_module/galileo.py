@@ -242,11 +242,9 @@ class GalileoTrainModule(HeliosTrainModule):
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
 
-                microbatch = self.transform.apply(microbatch).to_device(self.device)
-
                 loss_a, latent_a, pooled_a = (
                     self.apply_masks_and_compute_losses_and_latents(
-                        microbatch,
+                        self.transform.apply(microbatch).to_device(self.device),
                         self.masking_strategy_a.apply_mask,
                         self.model_forward_a,
                         patch_size,
@@ -255,7 +253,7 @@ class GalileoTrainModule(HeliosTrainModule):
                 )
                 loss_b, latent_b, pooled_b = (
                     self.apply_masks_and_compute_losses_and_latents(
-                        microbatch,
+                        self.transform.apply(microbatch).to_device(self.device),
                         self.masking_strategy_b.apply_mask,
                         self.model_forward_b,
                         patch_size,
