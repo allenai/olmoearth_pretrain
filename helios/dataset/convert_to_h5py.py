@@ -94,12 +94,12 @@ class ConvertToH5py:
         self.h5py_dir: UPath | None = None
 
     @property
-    def compression_settings_str(self) -> str:
+    def compression_settings_suffix(self) -> str:
         """String representation of the compression settings.
 
         Use for folder naming.
         """
-        compression_str = ""
+        compression_str = "_"
         if self.compression is not None:
             compression_str = self.compression
         if self.compression_opts is not None:
@@ -282,24 +282,14 @@ class ConvertToH5py:
             logger.warning("h5py_dir is already set, ignoring new value")
             return
 
-        if self.compression_settings_str:
-            h5py_dir = (
-                self.tile_path
-                / f"{self.h5py_folder}_{self.compression_settings_str}"
-                / "_".join(
-                    sorted([modality.name for modality in self.supported_modalities])
-                )
-                / str(num_samples)
+        h5py_dir = (
+            self.tile_path
+            / f"{self.h5py_folder}{self.compression_settings_suffix}"
+            / "_".join(
+                sorted([modality.name for modality in self.supported_modalities])
             )
-        else:
-            h5py_dir = (
-                self.tile_path
-                / self.h5py_folder
-                / "_".join(
-                    sorted([modality.name for modality in self.supported_modalities])
-                )
-                / str(num_samples)
-            )
+            / str(num_samples)
+        )
         self.h5py_dir = h5py_dir
         logger.info(f"Setting h5py_dir to {self.h5py_dir}")
         os.makedirs(self.h5py_dir, exist_ok=True)
@@ -369,12 +359,14 @@ class ConvertToH5py:
             raise ValueError("h5py_dir is not set")
 
         settings = {
-            "compression": str(self.compression)
-            if self.compression is not None
-            else None,
-            "compression_opts": int(self.compression_opts)
-            if self.compression_opts is not None
-            else None,
+            "compression": (
+                str(self.compression) if self.compression is not None else None
+            ),
+            "compression_opts": (
+                int(self.compression_opts)
+                if self.compression_opts is not None
+                else None
+            ),
             "shuffle": bool(self.shuffle) if self.shuffle is not None else None,
         }
 
