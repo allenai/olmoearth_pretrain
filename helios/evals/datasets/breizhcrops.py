@@ -48,7 +48,7 @@ BAND_STATS = {
     "12 - SWIR": {"mean": 1697.6628, "std": 1239.9095},
 }
 
-BREIZHCROPS_DIR = UPath("/weka/dfive-default/presto_eval_sets/breizhcrops")
+BREIZHCROPS_DIR = UPath("/weka/dfive-default/skylight/presto_eval_sets/breizhcrops")
 
 
 class BreizhCropsDataset(Dataset):
