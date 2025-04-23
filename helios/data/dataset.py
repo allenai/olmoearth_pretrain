@@ -786,7 +786,7 @@ class HeliosDatasetConfig(Config):
 
     h5py_dir: str
     training_modalities: list[str]
-    dtype: str = "float32"  # acceptable values: "float16", "float32"
+    dtype: str = "float32"
     normalize: bool = True
     use_samples_with_missing_supported_modalities: bool = False
     cache_dir: str | None = None
