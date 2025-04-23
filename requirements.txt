@@ -1,11 +1,11 @@
 ai2-olmo-core @ git+https://github.com/allenai/olmo-core.git@8919dff
 beaker-py>=1.32.0
+breizhcrops
 cartopy
 class-registry
 einops>=0.7.0
 gcsfs
 geobench
-breizhcrops
 GitPython>=3.0,<4.0
 interrogate
 matplotlib
