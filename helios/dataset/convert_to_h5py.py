@@ -296,7 +296,7 @@ class ConvertToH5py:
 
     @classmethod
     def load_sample(
-        self, sample_modality: ModalityTile, sample: SampleInformation
+        cls, sample_modality: ModalityTile, sample: SampleInformation
     ) -> np.ndarray:
         """Load the sample."""
         image = load_image_for_sample(sample_modality, sample)
