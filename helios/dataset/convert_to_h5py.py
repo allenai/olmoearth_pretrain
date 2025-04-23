@@ -93,6 +93,21 @@ class ConvertToH5py:
         self.shuffle = shuffle
         self.h5py_dir: UPath | None = None
 
+    @property
+    def compression_settings_str(self) -> str:
+        """String representation of the compression settings.
+
+        Use for folder naming.
+        """
+        compression_str = ""
+        if self.compression is not None:
+            compression_str = self.compression
+        if self.compression_opts is not None:
+            compression_str += f"_{self.compression_opts}"
+        if self.shuffle is not None:
+            compression_str += "_shuffle"
+        return compression_str
+
     def _get_samples(self) -> list[SampleInformation]:
         """Get the samples from the raw dataset (image tile directory)."""
         tiles = parse_helios_dataset(self.tile_path, self.supported_modalities)
@@ -267,14 +282,25 @@ class ConvertToH5py:
             logger.warning("h5py_dir is already set, ignoring new value")
             return
 
-        self.h5py_dir = (
-            self.tile_path
-            / self.h5py_folder
-            / "_".join(
-                sorted([modality.name for modality in self.supported_modalities])
+        if self.compression_settings_str:
+            h5py_dir = (
+                self.tile_path
+                / f"{self.h5py_folder}_{self.compression_settings_str}"
+                / "_".join(
+                    sorted([modality.name for modality in self.supported_modalities])
+                )
+                / str(num_samples)
             )
-            / str(num_samples)
-        )
+        else:
+            h5py_dir = (
+                self.tile_path
+                / self.h5py_folder
+                / "_".join(
+                    sorted([modality.name for modality in self.supported_modalities])
+                )
+                / str(num_samples)
+            )
+        self.h5py_dir = h5py_dir
         logger.info(f"Setting h5py_dir to {self.h5py_dir}")
         os.makedirs(self.h5py_dir, exist_ok=True)
 
