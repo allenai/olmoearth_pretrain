@@ -1,6 +1,5 @@
 """Breizhcrops eval dataset."""
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -102,11 +101,7 @@ class BreizhCropsDataset(Dataset):
             self.ds = BreizhCrops(region="belle-ile", **kwargs)
         self.monthly_average = monthly_average
 
-        with (
-            Path(__file__).parents[0] / Path("configs_v2") / Path("breizhcrops.json")
-        ).open("r") as f:
-            config = json.load(f)
-        self.band_info = config["band_info"]
+        self.means, self.stds = self._get_norm_stats(BAND_STATS)
         if partition != "default":
             raise NotImplementedError(f"partition {partition} not implemented yet")
 
@@ -117,6 +112,18 @@ class BreizhCropsDataset(Dataset):
             from helios.data.normalize import Normalizer, Strategy
 
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+
+    @staticmethod
+    def _get_norm_stats(
+        imputed_band_info: dict[str, dict[str, float]],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        means = []
+        stds = []
+        for band_name in EVAL_S2_BAND_NAMES:
+            assert band_name in imputed_band_info, f"{band_name} not found in band_info"
+            means.append(imputed_band_info[band_name]["mean"])  # type: ignore
+            stds.append(imputed_band_info[band_name]["std"])  # type: ignore
+        return np.array(means), np.array(stds)
 
     def __len__(self) -> int:
         """Length of the dataset."""
