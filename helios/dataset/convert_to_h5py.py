@@ -1,5 +1,6 @@
 """Module for converting a dataset of GeoTiffs into a training dataset set up of h5py files."""
 
+import json
 import logging
 import multiprocessing as mp
 import os
@@ -30,13 +31,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ConvertToH5pyConfig(Config):
-    """Configuration for converting GeoTiffs to H5py files."""
+    """Configuration for converting GeoTiffs to H5py files.
+
+    See https://docs.h5py.org/en/stable/high/dataset.html for more information on compression settings.
+    """
 
     tile_path: str
-    supported_modality_names: list[
-        str
-    ]  # List of modality names (e.g., ["SENTINEL2_L2A", "SENTINEL1"])
+    supported_modality_names: list[str]  # List of modality names
     multiprocessed_h5_creation: bool = True
+    compression: str | None = None  # Compression algorithm
+    compression_opts: int | None = None  # Compression level (0-9 for gzip)
+    shuffle: bool | None = None  # Enable shuffle filter (only used with compression)
 
     def build(self) -> "ConvertToH5py":
         """Build the ConvertToH5py object."""
@@ -46,6 +51,9 @@ class ConvertToH5pyConfig(Config):
                 self.supported_modality_names
             ),
             multiprocessed_h5_creation=self.multiprocessed_h5_creation,
+            compression=self.compression,
+            compression_opts=self.compression_opts,
+            shuffle=self.shuffle,
         )
 
 
@@ -56,12 +64,16 @@ class ConvertToH5py:
     latlon_distribution_fname: str = "latlon_distribution.npy"
     sample_metadata_fname: str = "sample_metadata.csv"
     sample_file_pattern: str = "sample_{index}.h5"
+    compression_settings_fname: str = "compression_settings.json"
 
     def __init__(
         self,
         tile_path: UPath,
         supported_modalities: list[ModalitySpec],
         multiprocessed_h5_creation: bool = True,
+        compression: str | None = None,
+        compression_opts: int | None = None,
+        shuffle: bool | None = None,
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -69,10 +81,16 @@ class ConvertToH5py:
             tile_path: The path to the tile directory, containing csvs for each modality and tiles
             supported_modalities: The list of modalities to convert to h5py that will be available in this dataset
             multiprocessed_h5_creation: Whether to create the h5py files in parallel
+            compression: Compression algorithm to use (None, "gzip", "lzf", "szip")
+            compression_opts: Compression level (0-9 for gzip), only used with gzip compression
+            shuffle: Enable shuffle filter, only used with compression
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
         self.multiprocessed_h5_creation = multiprocessed_h5_creation
+        self.compression = compression
+        self.compression_opts = compression_opts
+        self.shuffle = shuffle
         self.h5py_dir: UPath | None = None
 
     def _get_samples(self) -> list[SampleInformation]:
@@ -178,14 +196,29 @@ class ConvertToH5py:
             if modality == Modality.SENTINEL1:
                 image = convert_to_db(image)
             sample_dict[modality.name] = image
-        # Save h5 file on WEKA
-        with h5_file_path.open("wb") as f:
+        # w+b as sometimes metadata needs to be read as well for different chunking/compression settings
+        with h5_file_path.open("w+b") as f:
             with h5py.File(f, "w") as h5file:
                 for modality_name, image in sample_dict.items():
                     logger.info(
                         f"Writing modality {modality_name} to h5 file path {h5_file_path}"
                     )
-                    h5file.create_dataset(modality_name, data=image)
+                    # Create dataset with optional compression
+                    create_kwargs: dict[str, Any] = {}
+
+                    if self.compression is not None:
+                        create_kwargs["compression"] = self.compression
+                        # Only use compression_opts with gzip
+                        if (
+                            self.compression == "gzip"
+                            and self.compression_opts is not None
+                        ):
+                            create_kwargs["compression_opts"] = self.compression_opts
+                        # Only use shuffle with compression
+                        if self.shuffle is not None:
+                            create_kwargs["shuffle"] = self.shuffle
+
+                    h5file.create_dataset(modality_name, data=image, **create_kwargs)
         return sample_dict
 
     def _log_modality_distribution(self, samples: list[SampleInformation]) -> None:
@@ -304,9 +337,30 @@ class ConvertToH5py:
         samples = self._filter_samples(samples)
         return samples
 
+    def save_compression_settings(self) -> None:
+        """Save compression settings to a JSON file."""
+        if self.h5py_dir is None:
+            raise ValueError("h5py_dir is not set")
+
+        settings = {
+            "compression": str(self.compression)
+            if self.compression is not None
+            else None,
+            "compression_opts": int(self.compression_opts)
+            if self.compression_opts is not None
+            else None,
+            "shuffle": bool(self.shuffle) if self.shuffle is not None else None,
+        }
+
+        settings_path = self.h5py_dir / self.compression_settings_fname
+        logger.info(f"Saving compression settings to {settings_path}")
+        with settings_path.open("w") as f:
+            json.dump(settings, f, indent=2)
+
     def prepare_h5_dataset(self, samples: list[SampleInformation]) -> None:
         """Prepare the h5 dataset."""
         self.set_h5py_dir(len(samples))
+        self.save_compression_settings()  # Save settings before creating data
         self.save_sample_metadata(samples)
         self.save_latlon_distribution(samples)
         logger.info("Attempting to create H5 files may take some time...")
