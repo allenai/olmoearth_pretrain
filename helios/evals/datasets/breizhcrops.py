@@ -141,7 +141,7 @@ class BreizhCropsDataset(Dataset):
         # from the Breizhcrops paper: The dataset is composed of Sentinel-2 image time series
         # extracted from January 1, 2017 to December 31, 2017
         years = torch.ones_like(months) * 2017
-        timestamp = torch.concat([days, months, years], dim=-1)  # t, c=3
+        timestamp = torch.stack([days, months, years], dim=-1)  # t, c=3
         if not self.norm_stats_from_pretrained:
             x = normalize_bands(x, self.means, self.stds, self.norm_method)
         image = repeat(x, "t c -> h w t c", w=1, h=1)[
