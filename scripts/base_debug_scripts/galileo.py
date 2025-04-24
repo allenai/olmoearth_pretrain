@@ -27,7 +27,12 @@ from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
-from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
+from helios.nn.flexihelios import (
+    EncoderConfig,
+    PoolingType,
+    PredictorConfig,
+    ReconstructorConfig,
+)
 from helios.nn.galileo import GalileoConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -76,9 +81,15 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
         supported_modality_names=common.training_modalities,
         learnable_channel_embeddings=True,
     )
+    reconstructor_config = ReconstructorConfig(
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        decoder_config=decoder_config,
+    )
     model_config = GalileoConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
+        reconstructor_config=reconstructor_config,
     )
     return model_config
 
@@ -117,6 +128,14 @@ def build_train_module_config(
             "type": "patch_discrimination_new",
         }
     )
+    mae_loss_config = LossConfig(
+        loss_config={
+            "type": "mae",
+            "loss_function": "SmoothL1Loss",
+            "beta": 0.1,
+            "weight": 1,
+        }
+    )
     token_exit_cfg_a = {
         Modality.SENTINEL2_L2A.name: 4,
         Modality.LATLON.name: 4,
@@ -151,6 +170,7 @@ def build_train_module_config(
         max_grad_norm=1.0,
         dp_config=dp_config,
         scheduler=scheduler,
+        mae_loss_config=mae_loss_config,
     )
     return train_module_config
 
