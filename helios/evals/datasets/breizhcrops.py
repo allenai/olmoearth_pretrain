@@ -86,6 +86,7 @@ class BreizhCropsDataset(Dataset):
             "preload_ram": False,
             "level": LEVEL,
             "transform": raw_transform,
+            "target_transform": default_target_transform,
         }
         # belle-ille is small, so its useful for testing
         assert split in ["train", "valid", "test", "belle-ile"]
@@ -176,3 +177,8 @@ class BreizhCropsDataset(Dataset):
 def raw_transform(input_timeseries: np.ndarray) -> np.ndarray:
     """A raw transform, for the Breizhcrops transforms."""
     return input_timeseries
+
+
+def default_target_transform(y: np.ndarray) -> torch.Tensor:
+    """The default label transform, for the Breizhcrops labels."""
+    return torch.tensor(y, dtype=torch.long)
