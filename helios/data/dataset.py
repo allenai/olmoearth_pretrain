@@ -736,7 +736,7 @@ class HeliosDataset(Dataset):
         else:
             index = args.idx
         h5_file_path = self._get_h5_file_path(index)
-
+        logger.info(f"H5 file path: {h5_file_path}")
         if not h5_file_path.exists():
             raise FileNotFoundError(
                 f"H5 file {h5_file_path} does not exist, Be Sure to run prepare before starting Training"
