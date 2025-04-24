@@ -297,6 +297,11 @@ class HeliosTrainModule(TrainModule):
         )
 
     @property
+    def local_rank(self) -> int:
+        """Get the local rank."""
+        return self.trainer.data_loader.dp_rank
+
+    @property
     def logits_dtype(self) -> torch.dtype:
         """Get the logits dtype."""
         if self.autocast_precision is not None:

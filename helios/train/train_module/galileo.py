@@ -288,21 +288,35 @@ class GalileoTrainModule(HeliosTrainModule):
                 loss = loss / num_microbatches
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
-
                 # Skip bad batches
                 if torch.isnan(loss).any() or torch.isinf(loss).any():
                     logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}. "
+                        f"Skipping batch on rank {self.local_rank}, "
+                        f"step {self.trainer.global_step}, epoch {self.trainer.epoch}"
+                    )
+                    self.trainer.record_metric(
+                        "step_skipped", 1, ReduceType.sum, namespace="optim"
                     )
                     del latent_a, latent_b
-                    break
+                    # Temporary hack to skip bad batches by zeroing out the loss
+                    # Eventually may want to switch to skip step optimizer
+                    # This may be modality related
+                    loss = torch.zeros_like(loss)
 
                 del latent_a, latent_b
                 loss.backward()
 
+        # what happens if both batches are bad?
         if dry_run:
             return
         # Remember to detach the loss before recording
+
+        # check if each metric is nan or inf and if so turn to float('inf') tensor
+        total_batch_loss = torch.nan_to_num(total_batch_loss, nan=float("inf"))
+        total_batch_reg = torch.nan_to_num(total_batch_reg, nan=float("inf"))
+        total_batch_con = torch.nan_to_num(total_batch_con, nan=float("inf"))
+
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
             total_batch_loss,
@@ -310,6 +324,7 @@ class GalileoTrainModule(HeliosTrainModule):
         )
         self.trainer.record_metric("train/epoch", self.trainer.epoch)
         self.log_regularization(total_batch_reg)
+
         if self.contrastive_loss is not None:
             self.trainer.record_metric(
                 f"train/{self.contrastive_loss.name}",
