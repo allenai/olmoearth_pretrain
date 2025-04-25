@@ -1,5 +1,6 @@
 ai2-olmo-core==2.1.0
 beaker-py>=1.32.0
+breizhcrops
 cartopy
 class-registry
 einops>=0.7.0

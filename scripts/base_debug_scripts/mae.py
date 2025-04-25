@@ -201,6 +201,15 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
+        "breizhcrops": DownstreamTaskConfig(
+            dataset="breizhcrops",
+            batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(20),
+            patch_size=1,
+        ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
             batch_size=128,
