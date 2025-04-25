@@ -26,7 +26,7 @@ OLD_MODALITIES_OPENSTREETMAP = OLD_MODALITIES + [Modality.OPENSTREETMAP_RASTER]
 # Combine all the combinations we want to test
 MODALITY_COMBINATIONS = (
     # OLD_MODALITIES_SRTM,
-    OLD_MODALITIES_SRTM_LANDSAT,
+    # OLD_MODALITIES_SRTM_LANDSAT,
     OLD_MODALITIES_SRTM_LANDSAT_OPENSTREETMAP,
     OLD_MODALITIES_LANDSAT,
     # OLD_MODALITIES_OPENSTREETMAP,
@@ -53,7 +53,7 @@ def main() -> None:
     """Main function to run the script."""
     base_command = (
         "python3 scripts/2025_04_23_benchmarking_ladder/base_galileo_max.py "
-        "launch {run_name} ai2/titan-cirrascale "
+        "launch {run_name} ai2/jupiter-cirrascale-2 "
         "--train_module.contrastive_config.loss_config.type=InfoNCE "
         "--train_module.contrastive_config.loss_config.weight={contrastive_weight} "
         "--launch.priority=urgent "
