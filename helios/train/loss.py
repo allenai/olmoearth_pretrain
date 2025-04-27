@@ -555,20 +555,22 @@ class InfoNCELoss(Loss):
         Returns:
             The computed loss value.
         """
-        # online_encodings_a = predictions.pool_unmasked_tokens(
-        #     PoolingType.MEAN, spatial_pooling=False
-        # )
-        # online_encodings_b = predictions.pool_unmasked_tokens(
-        #     PoolingType.MEAN, spatial_pooling=False
-        # )
         predictions = F.normalize(predictions, p=2, dim=-1)
         targets = F.normalize(targets, p=2, dim=-1)
-        logits = predictions @ targets.transpose(-2, -1)
 
-        # Positive keys are the entries on the diagonal
+        # predictions -> targets
+        logits_pred_to_target = predictions @ targets.transpose(-2, -1)
         labels = torch.arange(len(predictions), device=predictions.device)
+        loss_pred_to_target = F.cross_entropy(logits_pred_to_target / self.tau, labels)
 
-        return self.weight * F.cross_entropy(logits / self.tau, labels)
+        # targets -> predictions
+        logits_target_to_pred = targets @ predictions.transpose(-2, -1)
+        labels = torch.arange(len(targets), device=targets.device)
+        loss_target_to_pred = F.cross_entropy(logits_target_to_pred / self.tau, labels)
+
+        loss = 0.5 * (loss_pred_to_target + loss_target_to_pred)
+
+        return self.weight * loss
 
 
 @LOSS_REGISTRY.register("KoLeo")
