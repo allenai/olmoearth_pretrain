@@ -209,11 +209,12 @@ class Modality:
             # # 60 m/pixel bands that we store at 40 m/pixel.
             # BandSet(["B01", "B09"], 64),
             # 10 m/pixel bands.
-            BandSet(["B01", "B02", "B03", "B04"], 16),
+            BandSet(["B01", "B02", "B03", "B04"], 16),  # RGB
             # 20 m/pixel bands.
-            BandSet(["B05", "B06", "B07", "B08", "B8A"], 32),
+            BandSet(["B05", "B06", "B07"], 32),  # Red Edge
+            BandSet(["B08", "B8A"], 32),  # NIR
             # 60 m/pixel bands that we store at 40 m/pixel.
-            BandSet(["B09", "B11", "B12"], 64),
+            BandSet(["B09", "B11", "B12"], 64),  # SWIR
         ],
         is_multitemporal=True,
         ignore_when_parsing=False,
