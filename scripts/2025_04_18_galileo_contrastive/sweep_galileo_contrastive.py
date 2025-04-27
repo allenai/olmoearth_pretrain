@@ -7,7 +7,7 @@
 
 import subprocess  # nosec
 
-DECODER_DEPTHS = [2, 4]
+DECODER_DEPTHS = [2]
 LEARNING_RATES = [0.0001]
 CONTRASTIVE_WEIGHTS = [0.05, 0.1, 0.2]
 
