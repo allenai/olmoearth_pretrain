@@ -92,7 +92,7 @@ def build_launch_config(
         workspace=workspace,
         clusters=clusters,
         weka_buckets=weka_buckets,
-        beaker_image=f"petew/{OLMoCoreBeakerImage.stable_cu128}",  # we can all use the same image for now trying petes to see if it works or we need a copy in our workspace
+        beaker_image=f"petew/{OLMoCoreBeakerImage.stable_cu126}",  # we can all use the same image for now trying petes to see if it works or we need a copy in our workspace
         num_nodes=1,
         num_gpus=1,
         shared_memory="256GiB",
