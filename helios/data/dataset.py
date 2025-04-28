@@ -786,7 +786,6 @@ class HeliosDataset(Dataset):
 
         # Fill any training modalities that are not present in the h5 file with missing values
         sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
-        logger.info(f"Missing modalities: {missing_modalities}")
 
         subset_sample = self.apply_subset(sample, args)
         sample_dict = subset_sample.as_dict(ignore_nones=True)
@@ -806,24 +805,11 @@ class HeliosDataset(Dataset):
                 logger.info(f"Normalizing {modality.name}")
                 modality_data = sample_dict[modality.name]
                 missing_mask = modality_data == MISSING_VALUE
-                # count number of missing values before and after normalization
-                missing_values_before = (
-                    modality_data == MISSING_VALUE
-                ).sum()
                 normalized_data = self.normalize_image(
                     modality, modality_data
                 )
+                # Sentinel Values must be reset after normalization so they can be recognized by missing mask
                 sample_dict[modality.name] = np.where(missing_mask, modality_data, normalized_data)
-                missing_values_after = (
-                    sample_dict[modality.name] == MISSING_VALUE
-                ).sum()
-                logger.info(
-                    f"Missing values before: {missing_values_before}, after: {missing_values_after}"
-                )
-        for modality in sample_modalities:
-            # check which modalities are completely missing at this point
-            if (sample_dict[modality.name] == MISSING_VALUE).all():
-                logger.info(f"Modality {modality.name} is completely missing after normalization")
         return args.patch_size, HeliosSample(**sample_dict)
 
 

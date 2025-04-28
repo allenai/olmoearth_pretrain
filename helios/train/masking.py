@@ -208,25 +208,13 @@ class MaskingStrategy:
         self, instance: torch.Tensor, modality: ModalitySpec, mask: torch.Tensor
     ) -> torch.Tensor:
         """Get the missing mask for the input data."""
-        # For some reason we need torch bool
         missing_mask = mask.new_zeros(mask.shape, dtype=torch.bool)
-        logger.info(f"Missing mask shape: {mask.shape}")
-        # expected shape
         for i, band_set_indices in enumerate(modality.bandsets_as_indices()):
-            logger.info(f"Band set indices: {band_set_indices}")
-            logger.info(f"modality: {modality.name}")
             instance_band_set = instance[..., band_set_indices]
             missing_mask_band_set = instance_band_set == MISSING_VALUE
             missing_mask_band_set_any = missing_mask_band_set.any(dim=-1)
-            if missing_mask_band_set_any.all():
-                logger.warning(f"All tokens are missing for modality {modality.name} and band set {i}")
-            elif missing_mask_band_set_any.any():
-                logger.warning(f"{missing_mask_band_set_any.sum()} tokens are missing for modality {modality.name} and band set {i}")
-                # how many are not missing?
-                logger.warning(f"{(~missing_mask_band_set_any).sum()} tokens are not missing for modality {modality.name} and band set {i}")
             # If any band in the band set is missing, set the whole band set to missing
             missing_mask[..., i] = missing_mask_band_set_any
-        logger.warning(f"missing mask dtype: {missing_mask.dtype}")
         return missing_mask
 
     def fill_mask_with_missing_values(
