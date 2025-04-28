@@ -59,6 +59,12 @@ NAIP is also from Planetary Computer, but it only applies to the 0.625 m/pixel w
     rslearn dataset prepare --root $DATASET_PATH --group res_0.625 --workers 64 --no-use-initial-job --retry-max-attempts 8 --retry-backoff-seconds 60 --jobs-per-process 16
     rslearn dataset materialize --root $DATASET_PATH --group res_0.625 --workers 64 --no-use-initial-job --retry-max-attempts 8 --retry-backoff-seconds 60
 
+For 10 m/pixel window/tiling NAIP data:
+
+    cp data/rslearn_dataset_configs/config_naip_10.json $DATASET_PATH/config.json
+    rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job --retry-max-attempts 8 --retry-backoff-seconds 60 --jobs-per-process 16
+    rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job --retry-max-attempts 8 --retry-backoff-seconds 60
+
 OpenStreetMap can be processed on one machine. We use 16 workers for preparing and
 ingesting since processing the PBF can use a lot of memory:
 
@@ -104,6 +110,7 @@ Now we convert the data to Helios format.
 
     export HELIOS_PATH=/weka/dfive-default/helios/dataset/X/
     python -m helios.dataset_creation.rslearn_to_helios.naip --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
+    python -m helios.dataset_creation.rslearn_to_helios.naip_10 --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.openstreetmap --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.sentinel1 --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.sentinel2_l2a --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
@@ -127,7 +134,7 @@ Then materialize the data on the AWS machine:
     export DATASET_PATH=/mnt/rslearn_dataset
     cp data/rslearn_dataset_configs/config_landsat.json $DATASET_PATH/config.json
     rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
-    rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
+    rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job --ignore-errors --retry-max-attempts 4 --retry-backoff-seconds 1
 
 Convert the data:
 
@@ -179,6 +186,7 @@ into the per-modality CSVs:
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality landsat --time_span two_week
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality landsat --time_span year
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality naip
+    python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality naip_10
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality openstreetmap
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality sentinel1 --time_span two_week
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality sentinel1 --time_span year

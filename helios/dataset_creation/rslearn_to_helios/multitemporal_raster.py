@@ -47,18 +47,32 @@ def get_adjusted_projection_and_bounds(
     Returns:
         updated bounds at the resolution of the BandSet.
     """
-    factor = band_set.resolution_factor // modality.tile_resolution_factor
-    adjusted_projection = Projection(
-        projection.crs,
-        projection.x_resolution * factor,
-        projection.y_resolution * factor,
-    )
-    adjusted_bounds = (
-        window_bounds[0] // factor,
-        window_bounds[1] // factor,
-        window_bounds[2] // factor,
-        window_bounds[3] // factor,
-    )
+    if band_set.resolution_factor >= modality.tile_resolution_factor:
+        factor = band_set.resolution_factor // modality.tile_resolution_factor
+        adjusted_projection = Projection(
+            projection.crs,
+            projection.x_resolution * factor,
+            projection.y_resolution * factor,
+        )
+        adjusted_bounds = (
+            window_bounds[0] // factor,
+            window_bounds[1] // factor,
+            window_bounds[2] // factor,
+            window_bounds[3] // factor,
+        )
+    else:
+        factor = modality.tile_resolution_factor // band_set.resolution_factor
+        adjusted_projection = Projection(
+            projection.crs,
+            projection.x_resolution / factor,
+            projection.y_resolution / factor,
+        )
+        adjusted_bounds = (
+            window_bounds[0] * factor,
+            window_bounds[1] * factor,
+            window_bounds[2] * factor,
+            window_bounds[3] * factor,
+        )
     return adjusted_projection, adjusted_bounds
 
 
