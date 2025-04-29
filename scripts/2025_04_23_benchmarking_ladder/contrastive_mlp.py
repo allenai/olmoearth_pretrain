@@ -10,7 +10,7 @@ LEARNING_RATE = 1e-4
 
 # Sweep parameters
 CLUSTER = "ai2/jupiter-cirrascale-2"
-CONTRASTIVE_WEIGHTS = [0.05]  # [0.05, 0.1, 0.2, 0.5]
+CONTRASTIVE_WEIGHTS = [ 0.1, 0.2, 0.5]
 
 # Base command template
 BASE_COMMAND = (
