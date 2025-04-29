@@ -213,8 +213,8 @@ def build_dataset_config(common: CommonComponents) -> Config:
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
     MAX_DURATION = Duration.epochs(400)
-    METRICS_COLLECT_INTERVAL = 10  # SHould be turned off for final run
-    CANCEL_CHECK_INTERVAL = 25  # should be turned off for final run
+    METRICS_COLLECT_INTERVAL = 1  # SHould be turned off for final run
+    CANCEL_CHECK_INTERVAL = 1 # should be turned off for final run
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "2025-04-23-galileo-contrastive-ladder"
@@ -225,6 +225,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         entity=WANDB_USERNAME,
         enabled=True,  # set to False to avoid wandb errors
     )
+    PERMANENT_SAVE_INTERVAL = 5000
+    EPHERMERAL_SAVE_INTERVAL = 250
     # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     logger.warning("WANDB Distribution Uploads are disabled for Debugging")
@@ -297,7 +299,15 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         )
         .with_callback("garbage_collector", garbage_collector_callback)
         .with_callback("beaker", BeakerCallback())
-        # .with_callback("profiler", ProfilerCallback())
+        .with_callback(
+            "checkpointer",
+            CheckpointerCallback(
+                save_interval=PERMANENT_SAVE_INTERVAL,
+                ephemeral_save_interval=EPHERMERAL_SAVE_INTERVAL,
+            ),
+        )
+        .with_callback("profiler", ProfilerCallback())
+
     )
     return trainer_config
 
@@ -305,14 +315,14 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
 def build_common_components_limited_modalities(*args: Any) -> CommonComponents:
     """Build the common components for an experiment."""
     config = build_common_components(*args)
-    # config.training_modalities = [
-    #     Modality.SENTINEL1.name,
-    #     Modality.SENTINEL2_L2A.name,
-    #     Modality.WORLDCOVER.name,
+    config.training_modalities = [
+        Modality.SENTINEL1.name,
+        Modality.SENTINEL2_L2A.name,
+        Modality.WORLDCOVER.name,
     #     Modality.LANDSAT.name,
     #     Modality.OPENSTREETMAP_RASTER.name,
     #     Modality.SRTM.name,
-    # ]
+    ]
     return config
 
 
