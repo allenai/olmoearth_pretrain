@@ -54,6 +54,7 @@ class Galileo(nn.Module, DistributedMixins):
         self.linear_proj = nn.Linear(
             self.encoder.embedding_size, self.encoder.embedding_size
         )
+        self.activation = nn.ReLU()
 
     def forward_a(
         self, x: MaskedHeliosSample, patch_size: int
@@ -65,7 +66,11 @@ class Galileo(nn.Module, DistributedMixins):
         pooled_for_contrastive = latent.pool_unmasked_tokens(
             PoolingType.MEAN, spatial_pooling=False
         )
-        return latent, decoded, self.linear_proj(pooled_for_contrastive)
+        return (
+            latent,
+            decoded,
+            self.activation(self.linear_proj(pooled_for_contrastive)),
+        )
 
     def forward_b(
         self, x: MaskedHeliosSample, patch_size: int
@@ -77,7 +82,11 @@ class Galileo(nn.Module, DistributedMixins):
         pooled_for_contrastive = latent.pool_unmasked_tokens(
             PoolingType.MEAN, spatial_pooling=False
         )
-        return latent, decoded, self.linear_proj(pooled_for_contrastive)
+        return (
+            latent,
+            decoded,
+            self.activation(self.linear_proj(pooled_for_contrastive)),
+        )
 
     def apply_fsdp(
         self,
