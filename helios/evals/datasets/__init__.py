@@ -4,6 +4,7 @@ import logging
 
 from torch.utils.data import Dataset
 
+from .breizhcrops import BREIZHCROPS_DIR, BreizhCropsDataset
 from .configs import ALL_DATASETS
 from .floods_dataset import FLOODS_DIR, Sen1Floods11Dataset
 from .geobench_dataset import GEOBENCH_DIR, GeobenchDataset
@@ -66,6 +67,13 @@ def get_eval_dataset(
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             is_multimodal=True,
+        )
+    elif eval_dataset == "breizhcrops":
+        return BreizhCropsDataset(
+            path_to_splits=BREIZHCROPS_DIR,
+            split=split,
+            partition=partition,
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
         )
     else:
         raise ValueError(f"Unrecognized eval_dataset {eval_dataset}")
