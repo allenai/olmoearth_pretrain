@@ -42,18 +42,19 @@ BEAKER_WORKSPACE = "ai2/earth-systems"
 
 def launch_job(
     image: str,
-    clusters: list[str],
     ds_path: str,
     modality: str,
+    clusters: list[str] | None = None,
     hostname: str | None = None,
 ) -> None:
     """Launch a Beaker job that materializes the specified modality.
 
     Args:
         image: the name of the Beaker image to use.
-        clusters: list of Beaker clusters to target.
         ds_path: the dataset path.
         modality: the modality to materialize.
+        clusters: optional list of Beaker clusters to target. One of hostname or
+            clusters must be set.
         hostname: optional Beaker host to constrain to.
     """
     beaker = Beaker.from_env(default_workspace=BEAKER_WORKSPACE)
@@ -124,33 +125,34 @@ if __name__ == "__main__":
         "--clusters",
         type=str,
         help="Comma-separated list of clusters to target",
-        required=True,
+        default=None,
     )
     parser.add_argument(
         "--num_jobs",
         type=int,
-        help="Number of Beaker jobs to start (one of num_jobs and hosts must be set)",
+        help="Number of Beaker jobs to start (one of clusters+num_jobs or hosts must be set)",
         default=None,
     )
     parser.add_argument(
         "--hosts",
         type=str,
-        help="Comma-separated list of hosts to start jobs on, one job per host (one of num_jobs and hosts must be set)",
+        help="Comma-separated list of hosts to start jobs on, one job per host (one of clusters+num_jobs or hosts must be set)",
         default=None,
     )
     args = parser.parse_args()
-    clusters = args.clusters.split(",")
 
     if args.num_jobs is not None:
         for i in tqdm.tqdm(list(range(args.num_jobs)), desc="Launching jobs"):
             launch_job(
-                args.image_name, args.clusters.split(","), args.ds_path, args.modality
+                args.image_name,
+                args.ds_path,
+                args.modality,
+                clusters=args.clusters.split(","),
             )
     elif args.hosts is not None:
         for host in args.hosts.split(","):
             launch_job(
                 args.image_name,
-                args.clusters.split(","),
                 args.ds_path,
                 args.modality,
                 hostname=host,

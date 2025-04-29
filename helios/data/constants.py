@@ -175,6 +175,14 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    NAIP_10 = ModalitySpec(
+        name="naip_10",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["R", "G", "B", "IR"], 1)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     SENTINEL1 = ModalitySpec(
         name="sentinel1",
         tile_resolution_factor=16,
