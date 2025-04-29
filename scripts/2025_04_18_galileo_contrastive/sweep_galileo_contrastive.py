@@ -7,7 +7,7 @@
 
 import subprocess  # nosec
 
-DECODER_DEPTHS = [2, 4]
+DECODER_DEPTHS = [2]
 LEARNING_RATES = [0.0001]
 CONTRASTIVE_WEIGHTS = [0.05]
 
@@ -26,7 +26,7 @@ BASE_COMMAND = (
 for decoder_depth in DECODER_DEPTHS:
     for lr in LEARNING_RATES:
         for contrastive_weight in CONTRASTIVE_WEIGHTS:
-            run_name = f"5_galileo_contrastive_base_decoder_{decoder_depth}_lr_{lr}_weight_{contrastive_weight}"
+            run_name = f"5_galileo_contrastive_base_decoder_{decoder_depth}_lr_{lr}_weight_{contrastive_weight}_jupiter"
             command = BASE_COMMAND.format(
                 run_name=run_name,
                 decoder_depth=decoder_depth,
