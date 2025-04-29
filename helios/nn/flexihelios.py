@@ -10,7 +10,7 @@ import torch
 from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor, nn
-from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
+from torch.distributed.fsdp import fully_shard
 
 from helios.data.constants import Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
@@ -158,6 +158,11 @@ class TokensAndMasks(NamedTuple):
         x = torch.cat(flattened_x, dim=1)
         masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
         return x, masks
+
+    # def concat_unmasked_tokens(self) -> Tensor:
+    #     x, mask = self.flatten_tokens_and_masks()
+    #     online_encoder_mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
+    #     return x[online_encoder_mask.unsqueeze(-1) == 1]
 
     def pool_unmasked_tokens(
         self, pooling_type: PoolingType = PoolingType.MAX, spatial_pooling: bool = False

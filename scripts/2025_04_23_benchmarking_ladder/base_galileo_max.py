@@ -16,7 +16,6 @@ from olmo_core.train.callbacks import (
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
-    ProfilerCallback,
 )
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
@@ -215,11 +214,11 @@ def build_dataset_config(common: CommonComponents) -> Config:
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
     MAX_DURATION = Duration.epochs(400)
-    METRICS_COLLECT_INTERVAL = 1  # SHould be turned off for final run
-    CANCEL_CHECK_INTERVAL = 1  # should be turned off for final run
+    METRICS_COLLECT_INTERVAL = 10  # SHould be turned off for final run
+    CANCEL_CHECK_INTERVAL = 25  # should be turned off for final run
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2025-04-23-galileo-contrastive-ladder"
+    WANDB_PROJECT = ""
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = HeliosWandBCallback(
         name=common.run_name,
@@ -247,7 +246,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
-            probe_lr=0.1,
+            probe_lr=0.01,
             eval_interval=Duration.epochs(20),
         ),
         "sen1floods11": DownstreamTaskConfig(
@@ -308,7 +307,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                 ephemeral_save_interval=EPHERMERAL_SAVE_INTERVAL,
             ),
         )
-        .with_callback("profiler", ProfilerCallback())
+        # .with_callback("profiler", ProfilerCallback())
     )
     return trainer_config
 

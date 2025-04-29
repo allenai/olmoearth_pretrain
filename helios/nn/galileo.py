@@ -50,6 +50,10 @@ class Galileo(nn.Module, DistributedMixins):
         for p in self.target_encoder.parameters():
             p.requires_grad = False
 
+        # THings to try:
+        # activation
+        # pooling after final projection
+        # seperate linear layers for each decoder? this may be degenerate as they are being compared
         # optionally used for the contrastive head
         self.linear_proj = nn.Linear(
             self.encoder.embedding_size, self.encoder.embedding_size
