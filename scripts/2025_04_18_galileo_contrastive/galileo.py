@@ -197,15 +197,15 @@ def build_dataset_config(common: CommonComponents) -> Config:
     """Build the dataset config for an experiment."""
     dataset_configs = [
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data/sentinel1_sentinel2_l2a_worldcover/116711/",
+            h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_gzip_3_shuffle/naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/899767/",
             training_modalities=common.training_modalities,
             use_samples_with_missing_supported_modalities=True,  # Check if we want to set this to True
             dtype=DType.float32,
-            cache_dir="/helios_cache/presto",
+            cache_dir="/helios_cache/presto_neighbors",
             samples_per_sec=4 / NUM_DATA_LOADER_WORKERS,  # 2/ GBS
         ),
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_rerun/sentinel1_sentinel2_l2a_worldcover/283204/",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324192/",
             training_modalities=common.training_modalities,
             use_samples_with_missing_supported_modalities=True,
             dtype=DType.float32,
@@ -223,7 +223,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2025_04_18_galileo_contrastive"
+    WANDB_PROJECT = "2025_04_28_larger_dataset_exp"
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = HeliosWandBCallback(
         name=common.run_name,
