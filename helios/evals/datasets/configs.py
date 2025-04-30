@@ -30,6 +30,28 @@ DATASET_TO_CONFIG = {
         num_classes=10,
         is_multilabel=False,
     ),
+    "m-bigearthnet": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[("11 - SWIR", "10 - SWIR - Cirrus")],
+        num_classes=43,
+        is_multilabel=True,
+    ),
+    "m-so2sat": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[
+            ("02 - Blue", "01 - Coastal aerosol"),
+            ("08A - Vegetation Red Edge", "09 - Water vapour"),
+            ("11 - SWIR", "10 - SWIR - Cirrus"),
+        ],
+        num_classes=17,
+        is_multilabel=False,
+    ),
+    "m-brick-kiln": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=2,
+        is_multilabel=False,
+    ),
     "mados": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[
