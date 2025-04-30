@@ -518,7 +518,7 @@ class HeliosDataset(Dataset):
         )
         # Randomly sample x% of the remaining sample indices with fixed random state
         rng = np.random.default_rng(seed=42)
-        num_sampled = int(len(self.sample_indices) * 0.50)
+        num_sampled = int(len(self.sample_indices) * 0.75)
         self.sample_indices = rng.choice(
             self.sample_indices, size=num_sampled, replace=False
         )
