@@ -516,6 +516,15 @@ class HeliosDataset(Dataset):
         logger.info(
             f"Filtered {len(self.naip_indices) + len(no_multitemporal_indices)} samples to {self.sample_indices.shape} samples"
         )
+        # Randomly sample x% of the remaining sample indices with fixed random state
+        rng = np.random.default_rng(seed=42)
+        num_sampled = int(len(self.sample_indices) * 0.25)
+        self.sample_indices = rng.choice(
+            self.sample_indices, size=num_sampled, replace=False
+        )
+        logger.info(
+            f"Randomly sampled {num_sampled} samples out of {len(self.sample_indices)}"
+        )
 
     def prepare(self) -> None:
         """Prepare the dataset.
