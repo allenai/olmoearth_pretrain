@@ -273,7 +273,7 @@ class HeliosTrainModule(TrainModule):
             flatten_optimizer_state_dict=True, cpu_offload=True
         )
         self.state_dict_load_opts = state_dict_load_opts or dist_cp_sd.StateDictOptions(
-            flatten_optimizer_state_dict=True, strict=True
+            flatten_optimizer_state_dict=True, strict=False
         )
 
     @property
