@@ -229,11 +229,12 @@ class ProjectAndAggregate(nn.Module):
         aggregate_then_project: If True, then we will average the tokens before applying
             the projection. If False, we will apply the projection first.
         """
+        super().__init__()
         projections = [nn.Linear(embedding_size, embedding_size)]
-        for i in range(1, num_layers):
+        for _ in range(1, num_layers):
             projections.append(nn.ReLU())
             projections.append(nn.Linear(embedding_size, embedding_size))
-        self.projection = nn.ModuleList(projections)
+        self.projection = nn.Sequential(*projections)
         self.aggregate_then_project = aggregate_then_project
 
     def forward(self, x: TokensAndMasks) -> torch.Tensor:

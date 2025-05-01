@@ -15,6 +15,7 @@ from helios.nn.flexihelios import (
     PoolingType,
     Predictor,
     PredictorConfig,
+    ProjectAndAggregate,
     TokensAndMasks,
 )
 from helios.train.masking import MaskValue
@@ -742,6 +743,29 @@ class TestTokensAndMasks:
         )
         assert pooled_max.shape == (b, h, w, d)
         assert (pooled_max == 2).all()  # check the 3 tokens have been ignored
+
+
+class TestProjectionAndAggregation:
+    """Test ProjectAndAggregate."""
+
+    def test_layer_in_all_configs(self) -> None:
+        """Test ProjectAndAggregate."""
+        b, h, w, t, d = 2, 4, 4, 3, 128
+        sentinel_2 = torch.ones((b, h, w, t, d))
+        sentinel_2[0, 0, 0, 0, :] = 0  # set one "token" to 0s
+        sentinel_2_mask = torch.zeros((b, h, w, t)).long()
+        sentinel_2_mask[0, 0, 0, 0] = 1  # set the same token's mask to 1
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
+        )
+
+        for i in [1, 2, 3]:
+            for pre_aggregate in [True, False]:
+                layer = ProjectAndAggregate(
+                    embedding_size=d, num_layers=i, aggregate_then_project=pre_aggregate
+                )
+                # for now, lets just check it all runs properly
+                _ = layer(t_and_m)
 
 
 # TODO: write a unit test for the FlexiPatchEmbeddings
