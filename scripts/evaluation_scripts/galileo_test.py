@@ -4,7 +4,6 @@ These Settings are meant to help you get quick results on a single GPU in minima
 """
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from olmo_core.config import Config, DType
@@ -22,6 +21,7 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
+from upath import UPath
 
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
@@ -318,7 +318,7 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
     """Build the visualize config for an experiment."""
     return HeliosVisualizeConfig(
         num_samples=50,
-        output_dir=str(Path(common.save_folder) / "visualizations"),
+        output_dir=str(UPath(common.save_folder) / "visualizations"),
         std_multiplier=2.0,
     )
 
