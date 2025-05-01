@@ -4,6 +4,7 @@ import gc
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
@@ -160,7 +161,7 @@ class DownstreamEvaluatorCallback(Callback):
 
     evaluators: list[DownstreamEvaluator] = field(default_factory=list)
 
-    def pre_step(self) -> None:
+    def pre_step(self, batch: dict[str, Any]) -> None:
         """Run the evaluators."""
         for evaluator in self.evaluators:
             eval_interval_steps = self.trainer.convert_duration_to_steps(

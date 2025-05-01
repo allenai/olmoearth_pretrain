@@ -287,6 +287,15 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             eval_interval=Duration.epochs(0),
         ),
+        "breizhcrops": DownstreamTaskConfig(
+            dataset="breizhcrops",
+            batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(0),
+            patch_size=1,
+        ),
     }
     # Let us not use garbage collector fallback
     trainer_config = (
