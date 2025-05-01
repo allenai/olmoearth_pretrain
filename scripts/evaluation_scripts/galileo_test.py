@@ -152,7 +152,7 @@ def build_train_module_config(
     )
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
-    scheduler = CosWithWarmup(warmup=1)
+    scheduler = CosWithWarmup()
     train_module_config = GalileoTrainModuleConfig(
         # TODO: change name to optim config
         optim_config=optim_config,
