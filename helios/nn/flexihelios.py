@@ -212,6 +212,57 @@ class TokensAndMasks(NamedTuple):
                 return spatial_average_t.max(dim=-1).values
 
 
+class ProjectAndAggregate(nn.Module):
+    """Module that applies a linear projection to tokens and masks."""
+
+    def __init__(
+        self,
+        embedding_size: int,
+        num_layers: int,
+        aggregate_then_project: bool = True,
+    ):
+        """Initialize the linear module.
+
+        embedding_size: The embedding size of the input TokensAndMasks
+        num_layers: The number of layers to use in the projection. If >1, then
+            a ReLU activation will be applied between layers
+        aggregate_then_project: If True, then we will average the tokens before applying
+            the projection. If False, we will apply the projection first.
+        """
+        projections = [nn.Linear(embedding_size, embedding_size)]
+        for i in range(1, num_layers):
+            projections.append(nn.ReLU())
+            projections.append(nn.Linear(embedding_size, embedding_size))
+        self.projection = nn.ModuleList(projections)
+        self.aggregate_then_project = aggregate_then_project
+
+    def forward(self, x: TokensAndMasks) -> torch.Tensor:
+        """Apply a (non)linear projection to an input TokensAndMasks.
+
+        This can be applied either before or after pooling the tokens.
+        """
+        if self.aggregate_then_project:
+            pooled_for_contrastive = x.pool_unmasked_tokens(
+                PoolingType.MEAN, spatial_pooling=False
+            )
+            return self.projection(pooled_for_contrastive)
+        else:
+            decoder_emedded_dict = x._asdict()
+            for modality in x.modalities:
+                x_modality = getattr(x, modality)
+                # Are these normalizations masked correctly?
+                x_modality = self.projection(x_modality)
+                masked_modality_name = x.get_masked_modality_name(modality)
+                decoder_emedded_dict[modality] = x_modality
+                decoder_emedded_dict[masked_modality_name] = getattr(
+                    x, masked_modality_name
+                )
+                x_projected = TokensAndMasks(**decoder_emedded_dict)
+                return x_projected.pool_unmasked_tokens(
+                    PoolingType.MEAN, spatial_pooling=False
+                )
+
+
 class FlexiHeliosPatchEmbeddings(nn.Module):
     """Module that patchifies and encodes the input data."""
 
@@ -906,6 +957,8 @@ class Encoder(FlexiHeliosBase):
         max_sequence_length: int,
         use_channel_embs: bool = True,
         random_channel_embs: bool = False,
+        num_projection_layers: int = 1,
+        aggregate_then_project: bool = True,
     ):
         """Initialize the encoder.
 
@@ -921,6 +974,10 @@ class Encoder(FlexiHeliosBase):
             max_sequence_length: Maximum sequence length
             use_channel_embs: Whether to use learnable channel embeddings
             random_channel_embs: Initialize channel embeddings randomly (zeros if False)
+            num_projection_layers: The number of layers to use in the projection. If >1, then
+                a ReLU activation will be applied between layers
+            aggregate_then_project: If True, then we will average the tokens before applying
+                the projection. If False, we will apply the projection first.
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -940,6 +997,11 @@ class Encoder(FlexiHeliosBase):
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
+        )
+        self.project_and_aggregate = ProjectAndAggregate(
+            embedding_size=self.embedding_size,
+            num_layers=num_projection_layers,
+            aggregate_then_project=aggregate_then_project,
         )
         self.norm = nn.LayerNorm(self.embedding_size)
         self.apply(self._init_weights)
@@ -1146,7 +1208,7 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
-    ) -> TokensAndMasks:
+    ) -> tuple[TokensAndMasks, torch.Tensor]:
         """Process masked input samples into token representations.
 
         Args:
@@ -1170,13 +1232,16 @@ class Encoder(FlexiHeliosBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
             )
-        return TokensAndMasks(**patchified_tokens_and_masks)
+        output = TokensAndMasks(**patchified_tokens_and_masks)
+        return output, self.project_and_aggregate(output)
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         super().apply_fsdp(**fsdp_kwargs)
         fully_shard(self.patch_embeddings, **fsdp_kwargs)
         register_fsdp_forward_method(self.patch_embeddings, "forward")
+        fully_shard(self.project_and_aggregate, **fsdp_kwargs)
+        register_fsdp_forward_method(self.project_and_aggregate, "forward")
         fully_shard(self, **fsdp_kwargs)
 
 
