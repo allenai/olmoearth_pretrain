@@ -30,10 +30,10 @@ BASE_COMMAND = (
     "--model.decoder_config.num_heads={decoder_num_heads} "
     "--model.decoder_config.mlp_ratio={mlp_ratio} "
     "--trainer.load_path={load_path} "
-    "--trainer.callback.downstream_evaluator.tasks.mados.probe_lr={lr} "
-    "--trainer.callback.downstream_evaluator.tasks.sen1floods11.probe_lr={lr} "
-    "--trainer.callback.downstream_evaluator.tasks.pastis.probe_lr={lr} "
-    "--trainer.callback.downstream_evaluator.tasks.pastis-r.probe_lr={lr} "
+    "--trainer.callbacks.downstream_evaluator.tasks.mados.probe_lr={lr} "
+    "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.probe_lr={lr} "
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis.probe_lr={lr} "
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis-r.probe_lr={lr} "
     "--launch.priority=urgent "
 )
 
