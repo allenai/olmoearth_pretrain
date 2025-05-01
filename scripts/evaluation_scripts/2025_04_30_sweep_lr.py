@@ -7,7 +7,7 @@ from helios.internal.utils import MODEL_SIZE_ARGS
 # Model size configurations
 MODEL_SIZES = {
     "base": MODEL_SIZE_ARGS["base_shallow_decoder"],
-    "large": MODEL_SIZE_ARGS["large_very_shallow_decoder"],
+    "large": MODEL_SIZE_ARGS["large_super_shallow_decoder"],
     "giga": MODEL_SIZE_ARGS["giga_shallow_decoder"],
 }
 
