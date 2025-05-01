@@ -48,14 +48,16 @@ MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 MIN_PATCH_SIZE = 1
 NUM_DATA_LOADER_WORKERS = 4
 
+NUM_WORKERS = 8
+
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
-    base_model_args = MODEL_SIZE_ARGS["base"]
+    base_model_args = MODEL_SIZE_ARGS["giga_shallow_decoder"]
     ENCODER_EMBEDDING_SIZE = int(base_model_args["encoder_embedding_size"])
     DECODER_EMBEDDING_SIZE = int(base_model_args["decoder_embedding_size"])
     ENCODER_DEPTH = int(base_model_args["encoder_depth"])
-    DECODER_DEPTH = 4
+    DECODER_DEPTH = int(base_model_args["decoder_depth"])
     ENCODER_NUM_HEADS = int(base_model_args["encoder_num_heads"])
     DECODER_NUM_HEADS = int(base_model_args["decoder_num_heads"])
     MLP_RATIO = float(base_model_args["mlp_ratio"])
@@ -205,20 +207,20 @@ def build_dataset_config(common: CommonComponents) -> Config:
     """Build the dataset config for an experiment."""
     dataset_configs = [
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data/sentinel1_sentinel2_l2a_worldcover/116711/",
+            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_gzip_3_shuffle/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861",
             training_modalities=common.training_modalities,
             use_samples_with_missing_supported_modalities=True,  # Check if we want to set this to True
             dtype=DType.float32,
             cache_dir="/helios_cache/presto",
-            samples_per_sec=4 / NUM_DATA_LOADER_WORKERS,  # 2/ GBS
+            samples_per_sec=4 / NUM_WORKERS,  # 2/ GBS
         ),
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_rerun/sentinel1_sentinel2_l2a_worldcover/283204/",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_gzip_3_shuffle/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324192",
             training_modalities=common.training_modalities,
             use_samples_with_missing_supported_modalities=True,
             dtype=DType.float32,
             cache_dir="/helios_cache/osm_sampling",
-            samples_per_sec=4 / NUM_DATA_LOADER_WORKERS,  # 2/ GBS
+            samples_per_sec=4 / NUM_WORKERS,  # 2/ GBS
         ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
@@ -303,7 +305,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             work_dir=common.save_folder,
             load_strategy=LOAD_STRATEGY,
             save_folder=common.save_folder,
-            load_path="/weka/dfive-default/helios/checkpoints/henryh/3_galileo_contrastive_base_decoder_4_lr_0.0001_weight_0.05/step312250",
+            load_path="/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_giga_dec4_lr0.0001_jupiter/step140500",
             cancel_check_interval=CANCEL_CHECK_INTERVAL,
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
