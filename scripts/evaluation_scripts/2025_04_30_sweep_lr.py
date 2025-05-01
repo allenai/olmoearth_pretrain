@@ -42,21 +42,22 @@ LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 
 for lr in LP_LRs:
     for size_name, size_config in MODEL_SIZES.items():
-        for load_path in CHECKPOINT_PATHS.values():
-            run_name = f"galileo_all_evals_{size_name}_linear_probe_lr_{lr}"
-            command = BASE_COMMAND.format(
-                run_name=run_name,
-                load_path=load_path,
-                encoder_embedding_size=size_config["encoder_embedding_size"],
-                encoder_depth=size_config["encoder_depth"],
-                encoder_num_heads=size_config["encoder_num_heads"],
-                mlp_ratio=size_config["mlp_ratio"],
-                decoder_embedding_size=size_config["decoder_embedding_size"],
-                decoder_depth=size_config["decoder_depth"],
-                decoder_num_heads=size_config["decoder_num_heads"],
-            )
+        load_path = CHECKPOINT_PATHS[size_name]
+        run_name = f"galileo_all_evals_{size_name}_linear_probe_lr_{lr}"
+        command = BASE_COMMAND.format(
+            run_name=run_name,
+            load_path=load_path,
+            encoder_embedding_size=size_config["encoder_embedding_size"],
+            encoder_depth=size_config["encoder_depth"],
+            encoder_num_heads=size_config["encoder_num_heads"],
+            mlp_ratio=size_config["mlp_ratio"],
+            decoder_embedding_size=size_config["decoder_embedding_size"],
+            decoder_depth=size_config["decoder_depth"],
+            decoder_num_heads=size_config["decoder_num_heads"],
+            lr=lr,
+        )
 
-            print(f"Launching: {command}")
+        print(f"Launching: {command}")
 
-            # Execute the command
-            subprocess.run(command, shell=True, check=True)  # nosec
+        # Execute the command
+        subprocess.run(command, shell=True, check=True)  # nosec
