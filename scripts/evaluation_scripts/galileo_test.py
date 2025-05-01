@@ -169,6 +169,7 @@ def build_train_module_config(
         dp_config=dp_config,
         scheduler=scheduler,
         contrastive_config=contrastive_config,
+        state_dict_load_opts={"strict": False},
     )
     return train_module_config
 
