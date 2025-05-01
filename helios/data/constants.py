@@ -227,7 +227,7 @@ class Modality:
             #     16,
             # ),
             BandSet(["B02", "B03", "B04"], 16),
-            BandSet(["B05", "B06", "B07", "B8A", "B11", "B12"], 32),
+            BandSet(["B05", "B06", "B07", "B08", "B8A", "B11", "B12"], 32),
             BandSet(["B01", "B09"], 64),
         ],
         is_multitemporal=True,
