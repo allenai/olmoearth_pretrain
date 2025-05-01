@@ -469,9 +469,9 @@ class HeliosTrainModule(TrainModule):
     ) -> dict[str, Any]:
         return {
             "model": dist_cp_sd.get_model_state_dict(self.model, options=sd_options),
-            "optim": dist_cp_sd.get_optimizer_state_dict(
-                self.model, self.optimizer, options=sd_options
-            ),
+            # "optim": dist_cp_sd.get_optimizer_state_dict(
+            #     self.model, self.optimizer, options=sd_options
+            # ),
         }
 
     def _clip_grad_norm(
