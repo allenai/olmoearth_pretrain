@@ -1,0 +1,23 @@
+Collecting beaker-py
+  Using cached beaker_py-2.0.1-py3-none-any.whl.metadata (5.0 kB)
+Requirement already satisfied: requests in /weka/dfive-default/yawenz/.venv-helios-py312/lib/python3.12/site-packages (from beaker-py) (2.32.3)
+Requirement already satisfied: packaging in /weka/dfive-default/yawenz/.venv-helios-py312/lib/python3.12/site-packages (from beaker-py) (25.0)
+Requirement already satisfied: PyYAML in /weka/dfive-default/yawenz/.venv-helios-py312/lib/python3.12/site-packages (from beaker-py) (6.0.2)
+Collecting grpcio>=1.70.0 (from beaker-py)
+  Using cached grpcio-1.71.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (3.8 kB)
+Collecting protobuf<6.0,>=5.0 (from beaker-py)
+  Using cached protobuf-5.29.4-cp38-abi3-manylinux2014_x86_64.whl.metadata (592 bytes)
+Requirement already satisfied: google-crc32c in /weka/dfive-default/yawenz/.venv-helios-py312/lib/python3.12/site-packages (from beaker-py) (1.7.1)
+Requirement already satisfied: charset-normalizer<4,>=2 in /weka/dfive-default/yawenz/.venv-helios-py312/lib/python3.12/site-packages (from requests->beaker-py) (3.4.1)
+Requirement already satisfied: idna<4,>=2.5 in /weka/dfive-default/yawenz/.venv-helios-py312/lib/python3.12/site-packages (from requests->beaker-py) (3.10)
+Requirement already satisfied: urllib3<3,>=1.21.1 in /weka/dfive-default/yawenz/.venv-helios-py312/lib/python3.12/site-packages (from requests->beaker-py) (2.4.0)
+Requirement already satisfied: certifi>=2017.4.17 in /weka/dfive-default/yawenz/.venv-helios-py312/lib/python3.12/site-packages (from requests->beaker-py) (2025.4.26)
+Using cached beaker_py-2.0.1-py3-none-any.whl (79 kB)
+Using cached grpcio-1.71.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (5.9 MB)
+Using cached protobuf-5.29.4-cp38-abi3-manylinux2014_x86_64.whl (319 kB)
+Installing collected packages: protobuf, grpcio, beaker-py
+  Attempting uninstall: protobuf
+    Found existing installation: protobuf 6.30.2
+    Uninstalling protobuf-6.30.2:
+      Successfully uninstalled protobuf-6.30.2
+Successfully installed beaker-py-2.0.1 grpcio-1.71.0 protobuf-5.29.4
