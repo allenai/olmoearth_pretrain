@@ -198,7 +198,7 @@ class DownstreamTaskConfig:
     # ViT-base = 0.01
     probe_lr: float | None = None
     patch_size: int = 4
-    eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
+    eval_interval: Duration = field(default_factory=lambda: Duration.epochs(0))
 
 
 @dataclass
