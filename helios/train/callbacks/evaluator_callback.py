@@ -160,7 +160,7 @@ class DownstreamEvaluatorCallback(Callback):
 
     evaluators: list[DownstreamEvaluator] = field(default_factory=list)
 
-    def post_step(self) -> None:
+    def pre_step(self) -> None:
         """Run the evaluators."""
         for evaluator in self.evaluators:
             eval_interval_steps = self.trainer.convert_duration_to_steps(
