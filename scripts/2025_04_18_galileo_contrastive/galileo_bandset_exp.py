@@ -21,7 +21,7 @@ BASE_COMMAND = (
 for decoder_depth in DECODER_DEPTHS:
     for lr in LEARNING_RATES:
         for contrastive_weight in CONTRASTIVE_WEIGHTS:
-            run_name = "20250501_galileo_contrastive_base_one_bandset"
+            run_name = "20250501_galileo_contrastive_base_semantic_bandsets"
             command = BASE_COMMAND.format(
                 run_name=run_name,
                 decoder_depth=decoder_depth,
