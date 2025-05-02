@@ -306,7 +306,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             load_strategy=LOAD_STRATEGY,
             save_folder=common.save_folder,
             # load_path="/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec2_lr0.0001_titan/step109250",
-            load_path="/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step179750",
+            load_path="/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step179500",
             cancel_check_interval=CANCEL_CHECK_INTERVAL,
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
