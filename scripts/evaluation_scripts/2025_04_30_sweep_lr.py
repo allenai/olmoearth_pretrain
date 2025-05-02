@@ -19,7 +19,7 @@ import subprocess  # nosec
 # /weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step179750
 
 CHECKPOINT_PATHS = {
-    "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step179500",
+    "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step179750",
 }
 
 scripts = [
@@ -53,7 +53,7 @@ LP_LRs = [5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 
 for lr in LP_LRs:
     for script in scripts:
-        run_name = f"20250502_galileo_all_evals_{script.split('_')[1]}_linear_probe_lr_{lr}_step179500"
+        run_name = f"20250502_galileo_all_evals_{script.split('_')[1]}_linear_probe_lr_{lr}_step179750"
         command = BASE_COMMAND.format(
             run_name=run_name,
             script=script,
