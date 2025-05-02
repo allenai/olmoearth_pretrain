@@ -53,7 +53,7 @@ LP_LRs = [5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 
 for lr in LP_LRs:
     for script in scripts:
-        run_name = f"20250502_galileo_all_evals_{script.split('_')[1]}_linear_probe_lr_{lr}_step179750"
+        run_name = f"20250502_galileo_all_evals_{script.split('_')[1]}_linear_probe_lr_{lr}_step179550"
         command = BASE_COMMAND.format(
             run_name=run_name,
             script=script,
