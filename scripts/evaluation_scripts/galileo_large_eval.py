@@ -53,7 +53,7 @@ NUM_WORKERS = 8
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
-    base_model_args = MODEL_SIZE_ARGS["large_super_shallow_decoder"]
+    base_model_args = MODEL_SIZE_ARGS["large_shallow_decoder"]
     ENCODER_EMBEDDING_SIZE = int(base_model_args["encoder_embedding_size"])
     DECODER_EMBEDDING_SIZE = int(base_model_args["decoder_embedding_size"])
     ENCODER_DEPTH = int(base_model_args["encoder_depth"])
