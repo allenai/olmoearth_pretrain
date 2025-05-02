@@ -15,10 +15,17 @@ import subprocess  # nosec
 #     "giga": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_giga_dec4_lr0.0001_jupiter/step140500",
 # }
 
+# /weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step179500
+# /weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step179750
+
+CHECKPOINT_PATHS = {
+    "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step179500",
+}
+
 scripts = [
-    "galileo_base_eval.py",
+    # "galileo_base_eval.py",
     "galileo_large_eval.py",
-    "galileo_giga_eval.py",
+    # "galileo_giga_eval.py",
 ]
 
 # Base command template
@@ -45,7 +52,7 @@ LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 
 for lr in LP_LRs:
     for script in scripts:
-        run_name = f"galileo_all_evals_{script.split('_')[1]}_linear_probe_lr_{lr}"
+        run_name = f"20250502_galileo_all_evals_{script.split('_')[1]}_linear_probe_lr_{lr}_step179500"
         command = BASE_COMMAND.format(
             run_name=run_name,
             script=script,
