@@ -100,7 +100,7 @@ def build_train_module_config(
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config_a = MaskingConfig(
         strategy_config={
-            "type": "space_time",
+            "type": "random",
             "encode_ratio": ENCODE_RATIO,
             "decode_ratio": DECODE_RATIO,
         }
