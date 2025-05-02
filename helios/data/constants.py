@@ -202,12 +202,12 @@ class Modality:
         name="sentinel2_l2a",
         tile_resolution_factor=16,
         band_sets=[
-            # 10 m/pixel bands.
-            BandSet(["B02", "B03", "B04", "B08"], 16),
-            # 20 m/pixel bands.
-            BandSet(["B05", "B06", "B07", "B8A", "B11", "B12"], 32),
-            # 60 m/pixel bands that we store at 40 m/pixel.
-            BandSet(["B01", "B09"], 64),
+            # # 10 m/pixel bands.
+            # BandSet(["B02", "B03", "B04", "B08"], 16),
+            # # 20 m/pixel bands.
+            # BandSet(["B05", "B06", "B07", "B8A", "B11", "B12"], 32),
+            # # 60 m/pixel bands that we store at 40 m/pixel.
+            # BandSet(["B01", "B09"], 64),
             # # Combine all bands into one band set
             # BandSet(
             #     [
@@ -226,9 +226,9 @@ class Modality:
             #     ],
             #     16,
             # ),
-            # BandSet(["B02", "B03", "B04"], 16),
-            # BandSet(["B05", "B06", "B07", "B08", "B8A", "B11", "B12"], 32),
-            # BandSet(["B01", "B09"], 64),
+            BandSet(["B02", "B03", "B04"], 16),
+            BandSet(["B05", "B06", "B07", "B08", "B8A", "B11", "B12"], 32),
+            BandSet(["B01", "B09"], 64),
         ],
         is_multitemporal=True,
         ignore_when_parsing=False,
