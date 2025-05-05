@@ -12,7 +12,17 @@ CONTRASTIVE_WEIGHTS = [0.05, 0.0]
 SEEDS = [3622, 42, 114514, 4289, 97]
 CLUSTERS = ["ai2/titan-cirrascale", "ai2/jupiter-cirrascale-2"]
 
-BASE_COMMAND = (
+# Define base command without contrastive config
+BASE_COMMAND_NO_CONTRASTIVE = (
+    "python3 scripts/2025_05_02_randomness/galileo_random_base.py launch {run_name} {cluster} "
+    "--model.decoder_config.depth={decoder_depth} "
+    "--launch.num_gpus=8 "
+    "--data_loader.seed={seed} "
+    "--launch.priority=urgent"
+)
+
+# Define base command with contrastive config
+BASE_COMMAND_WITH_CONTRASTIVE = (
     "python3 scripts/2025_05_02_randomness/galileo_random_base.py launch {run_name} {cluster} "
     "--model.decoder_config.depth={decoder_depth} "
     "--train_module.contrastive_config.loss_config.type=InfoNCE "
@@ -32,13 +42,24 @@ for decoder_depth in DECODER_DEPTHS:
                 cluster = CLUSTERS[0]
             else:
                 cluster = CLUSTERS[1]
-            command = BASE_COMMAND.format(
-                run_name=run_name,
-                cluster=cluster,
-                decoder_depth=decoder_depth,
-                contrastive_weight=contrastive_weight,
-                seed=seed,
-            )
+
+            # Choose the appropriate command based on contrastive weight
+            if contrastive_weight == 0.0:
+                command = BASE_COMMAND_NO_CONTRASTIVE.format(
+                    run_name=run_name,
+                    cluster=cluster,
+                    decoder_depth=decoder_depth,
+                    seed=seed,
+                )
+            else:
+                command = BASE_COMMAND_WITH_CONTRASTIVE.format(
+                    run_name=run_name,
+                    cluster=cluster,
+                    decoder_depth=decoder_depth,
+                    contrastive_weight=contrastive_weight,
+                    seed=seed,
+                )
+
             print(command)
             # Execute the command
             subprocess.run(command, shell=True, check=True)  # nosec
