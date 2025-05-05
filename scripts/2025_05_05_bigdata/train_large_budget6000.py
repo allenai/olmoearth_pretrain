@@ -13,6 +13,7 @@ from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, main
 from helios.nn.latent_mim import LatentMIMConfig
+from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 
 def my_build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -30,6 +31,15 @@ def my_build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConf
     dataloader_config = build_dataloader_config(common)
     dataloader_config.token_budget = 6000
     return dataloader_config
+
+
+def my_build_train_module_config(
+    common: CommonComponents,
+) -> LatentMIMTrainModuleConfig:
+    """Build the train module config for an experiment."""
+    train_module_config = build_train_module_config(common)
+    train_module_config.rank_microbatch_size = 8
+    return train_module_config
 
 
 if __name__ == "__main__":

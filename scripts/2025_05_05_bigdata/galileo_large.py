@@ -15,6 +15,7 @@ from galileo_shared import (
 
 from helios.internal.experiment import CommonComponents, main
 from helios.nn.galileo import GalileoConfig
+from helios.train.train_module.galileo import GalileoTrainModuleConfig
 
 
 def my_build_model_config(common: CommonComponents) -> GalileoConfig:
@@ -25,6 +26,15 @@ def my_build_model_config(common: CommonComponents) -> GalileoConfig:
     model_config.encoder_config.num_heads = 16
     model_config.decoder_config.encoder_embedding_size = 1024
     return model_config
+
+
+def my_build_train_module_config(
+    common: CommonComponents,
+) -> GalileoTrainModuleConfig:
+    """Build the train module config for an experiment."""
+    train_module_config = build_train_module_config(common)
+    train_module_config.rank_microbatch_size = 16
+    return train_module_config
 
 
 if __name__ == "__main__":
