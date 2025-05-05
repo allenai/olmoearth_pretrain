@@ -37,7 +37,7 @@ experiment_counter = 0
 for decoder_depth in DECODER_DEPTHS:
     for contrastive_weight in CONTRASTIVE_WEIGHTS:
         for seed in SEEDS:
-            run_name = f"random_variation_galileo_vs_contrastive_base_decoder_{decoder_depth}_seed_{seed}_weight_{contrastive_weight}"
+            run_name = f"1_random_variation_galileo_vs_contrastive_base_decoder_{decoder_depth}_seed_{seed}_weight_{contrastive_weight}"
             if experiment_counter < 7:
                 cluster = CLUSTERS[0]
             else:
