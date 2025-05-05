@@ -71,6 +71,7 @@ def remove_duplicate_lonlats(
         print("...", ds_path)
         for tile in get_existing_tiles(ds_path):
             existing_tiles.add(tile)
+    print(f"got {len(existing_tiles)} existing tiles")
 
     print("pruning")
     pruned_lonlats = []
