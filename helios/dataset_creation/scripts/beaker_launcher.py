@@ -29,11 +29,27 @@ PLANETARY_COMPUTER_COMMAND = [
     "--ignore-errors",
 ]
 
+OPENSTREETMAP_COMMAND = [
+    "rslearn",
+    "dataset",
+    "ingest",
+    "--root",
+    "{ds_path}",
+    "--group",
+    "res_10",
+    "--workers",
+    "1",
+    "--load-workers",
+    "128",
+    "--no-use-initial-job",
+]
+
 # Map from modality to the commands to run.
 MODALITY_COMMANDS = {
     "sentinel2_l2a": PLANETARY_COMPUTER_COMMAND + ["--group", "res_10"],
     "sentinel1": PLANETARY_COMPUTER_COMMAND + ["--group", "res_10"],
     "naip": PLANETARY_COMPUTER_COMMAND + ["--group", "res_0.625"],
+    "openstreetmap": OPENSTREETMAP_COMMAND,
 }
 
 BEAKER_BUDGET = "ai2/d5"
@@ -75,7 +91,10 @@ def launch_job(
         resources: dict | None
         constraints: Constraints
         if hostname is None:
-            resources = {"gpuCount": 1}
+            if modality == "openstreetmap":
+                resources = {"gpuCount": 8}
+            else:
+                resources = {"gpuCount": 1}
             constraints = Constraints(
                 cluster=clusters,
             )
