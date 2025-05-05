@@ -1,5 +1,6 @@
 """Downstream evaluator callback."""
 
+import gc
 import logging
 import time
 from dataclasses import dataclass, field
@@ -125,6 +126,11 @@ class DownstreamEvaluator:
         else:
             raise ValueError(f"Unrecognized task type: {self.config.task_type}")
         logger.info(f"Downstream evaluator {self.dataset} score: {val_result}")
+        # free memory
+        del train_embeddings, train_labels, test_embeddings, test_labels
+        torch.cuda.empty_cache()
+        gc.collect()
+
         return val_result
 
 

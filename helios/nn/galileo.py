@@ -15,11 +15,7 @@ from torch.distributed.fsdp import (
 )
 
 from helios.nn.flexihelios import (
-    Encoder,
-    EncoderConfig,
     PoolingType,
-    Predictor,
-    PredictorConfig,
     TokensAndMasks,
 )
 from helios.nn.utils import DistributedMixins
@@ -33,8 +29,8 @@ class Galileo(nn.Module, DistributedMixins):
 
     def __init__(
         self,
-        encoder: Encoder,
-        decoder: Predictor,
+        encoder: torch.nn.Module,
+        decoder: torch.nn.Module,
     ):
         """Initialize the Galileo Style.
 
@@ -114,8 +110,8 @@ class Galileo(nn.Module, DistributedMixins):
 class GalileoConfig(Config):
     """Configuration for the Galileo model."""
 
-    encoder_config: "EncoderConfig"
-    decoder_config: "PredictorConfig"
+    encoder_config: Config
+    decoder_config: Config
 
     def validate(self) -> None:
         """Validate the configuration."""

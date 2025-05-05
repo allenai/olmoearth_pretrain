@@ -4,8 +4,9 @@ These Settings are meant to help you get quick results on a single GPU in minima
 """
 
 import logging
+from typing import Any
 
-from olmo_core.config import DType
+from olmo_core.config import Config, DType
 from olmo_core.distributed.parallel.data_parallel import (
     DataParallelConfig,
     DataParallelType,
@@ -22,13 +23,16 @@ from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
+from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
-from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
+from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig
+from helios.internal.utils import MODEL_SIZE_ARGS
+from helios.nn.flexihelios import PoolingType
 from helios.nn.galileo import GalileoConfig
+from helios.nn.st_model import STEncoderConfig, STPredictorConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -43,19 +47,21 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 MIN_PATCH_SIZE = 1
+NUM_DATA_LOADER_WORKERS = 4
 
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
-    ENCODER_EMBEDDING_SIZE = 192
-    DECODER_EMBEDDING_SIZE = 192
-    ENCODER_DEPTH = 12
-    DECODER_DEPTH = 12
-    ENCODER_NUM_HEADS = 3
-    DECODER_NUM_HEADS = 3
-    MLP_RATIO = 4.0
+    base_model_args = MODEL_SIZE_ARGS["base"]
+    ENCODER_EMBEDDING_SIZE = int(base_model_args["encoder_embedding_size"])
+    DECODER_EMBEDDING_SIZE = int(base_model_args["decoder_embedding_size"])
+    ENCODER_DEPTH = int(base_model_args["encoder_depth"])
+    DECODER_DEPTH = 4
+    ENCODER_NUM_HEADS = int(base_model_args["encoder_num_heads"])
+    DECODER_NUM_HEADS = int(base_model_args["decoder_num_heads"])
+    MLP_RATIO = float(base_model_args["mlp_ratio"])
 
-    encoder_config = EncoderConfig(
+    encoder_config = STEncoderConfig(
         supported_modality_names=common.training_modalities,
         embedding_size=ENCODER_EMBEDDING_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
@@ -66,7 +72,7 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
         max_sequence_length=12,
         use_channel_embs=True,
     )
-    decoder_config = PredictorConfig(
+    decoder_config = STPredictorConfig(
         encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
         decoder_embedding_size=DECODER_EMBEDDING_SIZE,
         depth=DECODER_DEPTH,
@@ -87,8 +93,8 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> GalileoTrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 0.002
-    RANK_MICROBATCH_SIZE = 64
+    LR = 0.0001
+    RANK_MICROBATCH_SIZE = 32
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
     WD = 0.02
@@ -102,9 +108,12 @@ def build_train_module_config(
     )
     masking_config_b = MaskingConfig(
         strategy_config={
-            "type": "random",
-            "encode_ratio": ENCODE_RATIO,
-            "decode_ratio": DECODE_RATIO,
+            "type": "random_increasing",
+            "initial_encode_ratio": 0.6,
+            "initial_decode_ratio": 0.35,
+            "final_encode_ratio": 0.1,
+            "final_decode_ratio": 0.75,
+            "steps": 1000,
         }
     )
     loss_config_a = LossConfig(
@@ -117,22 +126,34 @@ def build_train_module_config(
             "type": "patch_discrimination_new",
         }
     )
+    contrastive_config = LossConfig(
+        loss_config={
+            "type": "InfoNCE",
+            "weight": 0.05,
+        }
+    )
+    # Maybe we want to increase token exit for base model?
+    base_model_args = MODEL_SIZE_ARGS["base"]
     token_exit_cfg_a = {
-        Modality.SENTINEL2_L2A.name: 4,
-        Modality.LATLON.name: 4,
-        Modality.SENTINEL1.name: 4,
+        Modality.SENTINEL2_L2A.name: int(base_model_args["encoder_depth"]),
+        Modality.LATLON.name: int(base_model_args["encoder_depth"]),
+        Modality.SENTINEL1.name: int(base_model_args["encoder_depth"]),
         Modality.WORLDCOVER.name: 0,
-        Modality.SRTM.name: 2,
+        Modality.SRTM.name: int(base_model_args["encoder_depth"]),
         Modality.OPENSTREETMAP_RASTER.name: 0,
-        Modality.LANDSAT.name: 4,
+        Modality.LANDSAT.name: int(base_model_args["encoder_depth"]),
     }
     if any(modality not in token_exit_cfg_a for modality in common.training_modalities):
         raise ValueError(
             f"All modalities must be in token_exit_cfg_a: {common.training_modalities}"
         )
     token_exit_cfg_b = {modality: 0 for modality in common.training_modalities}
-    WARMUP_EPOCHS = 10
-    dp_config = DataParallelConfig(name=DataParallelType.ddp)
+    WARMUP_EPOCHS = 20
+    dp_config = DataParallelConfig(
+        name=DataParallelType.fsdp,
+        param_dtype=DType.bfloat16,
+        reduce_dtype=DType.float32,
+    )
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
@@ -144,6 +165,7 @@ def build_train_module_config(
         masking_config_b=masking_config_b,
         loss_config_a=loss_config_a,
         loss_config_b=loss_config_b,
+        contrastive_config=contrastive_config,
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         token_exit_cfg_a=token_exit_cfg_a,
         token_exit_cfg_b=token_exit_cfg_b,
@@ -161,7 +183,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # TODO: Include collate function here
 
     NUM_WORKERS = 8
-    GLOBAL_BATCH_SIZE = 128
+    GLOBAL_BATCH_SIZE = 512
     PREFETCH_FACTOR = 4
     TOKEN_BUDGET = 1500
     SAMPLE_HW_P_LIST = list(range(5, 13))
@@ -182,25 +204,35 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     return dataloader_config
 
 
-def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
+def build_dataset_config(common: CommonComponents) -> Config:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
-    return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
-        training_modalities=common.training_modalities,
-        use_samples_with_missing_supported_modalities=True,
-        dtype=DType.float32,
-    )
+    dataset_configs = [
+        HeliosDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data/sentinel1_sentinel2_l2a_worldcover/116711/",
+            training_modalities=common.training_modalities,
+            use_samples_with_missing_supported_modalities=True,
+            dtype=DType.float32,
+            cache_dir="/helios_cache/presto",
+        ),
+        HeliosDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_rerun/sentinel1_sentinel2_l2a_worldcover/283204/",
+            training_modalities=common.training_modalities,
+            use_samples_with_missing_supported_modalities=True,
+            dtype=DType.float32,
+            cache_dir="/helios_cache/osm_sampling",
+        ),
+    ]
+    return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(300)
-    METRICS_COLLECT_INTERVAL = 1
-    CANCEL_CHECK_INTERVAL = 1
+    MAX_DURATION = Duration.epochs(400)
+    METRICS_COLLECT_INTERVAL = 10
+    CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "helios-debug"
+    WANDB_PROJECT = "2025_05_02_st_model"
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = HeliosWandBCallback(
         name=common.run_name,
@@ -220,46 +252,13 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
-        "m-bigearthnet": DownstreamTaskConfig(
-            dataset="m-bigearthnet",
-            batch_size=64,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(20),
-        ),
-        "m-brick-kiln": DownstreamTaskConfig(
-            dataset="m-brick-kiln",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(20),
-        ),
-        "m-so2sat": DownstreamTaskConfig(
-            dataset="m-so2sat",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(20),
-        ),
-        "breizhcrops": DownstreamTaskConfig(
-            dataset="breizhcrops",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(20),
-            patch_size=1,
-        ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
             batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
-            probe_lr=0.1,
+            probe_lr=0.01,
             eval_interval=Duration.epochs(20),
         ),
         "sen1floods11": DownstreamTaskConfig(
@@ -268,7 +267,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            probe_lr=0.1,
+            probe_lr=0.01,
             eval_interval=Duration.epochs(20),
         ),
         "pastis": DownstreamTaskConfig(
@@ -277,7 +276,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            probe_lr=0.1,
+            probe_lr=0.01,
             eval_interval=Duration.epochs(20),
         ),
         "pastis-r": DownstreamTaskConfig(
@@ -286,7 +285,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            probe_lr=0.1,
+            probe_lr=0.01,
             eval_interval=Duration.epochs(20),
         ),
     }
@@ -325,13 +324,12 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
     )
 
 
-if __name__ == "__main__":
-    main(
-        common_components_builder=build_common_components,
-        model_config_builder=build_model_config,
-        train_module_config_builder=build_train_module_config,
-        dataset_config_builder=build_dataset_config,
-        dataloader_config_builder=build_dataloader_config,
-        trainer_config_builder=build_trainer_config,
-        visualize_config_builder=build_visualize_config,
-    )
+def build_common_components_limited_modalities(*args: Any) -> CommonComponents:
+    """Build the common components for an experiment."""
+    config = build_common_components(*args)
+    config.training_modalities = [
+        Modality.SENTINEL1.name,
+        Modality.SENTINEL2_L2A.name,
+        Modality.WORLDCOVER.name,
+    ]
+    return config
