@@ -46,7 +46,7 @@ if __name__ == "__main__":
     main(
         common_components_builder=build_common_components,
         model_config_builder=my_build_model_config,
-        train_module_config_builder=build_train_module_config,
+        train_module_config_builder=my_build_train_module_config,
         dataset_config_builder=build_dataset_config,
         dataloader_config_builder=my_build_dataloader_config,
         trainer_config_builder=build_trainer_config,
