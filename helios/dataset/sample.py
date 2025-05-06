@@ -249,7 +249,8 @@ def load_image_for_sample(
                 # The difference in resolution should always be a power of 2.
                 # If the factor is less than 1 we want the desired size to be multiplied by the thing
                 # If the tile size is greater we want to keep that extent
-                desired_subtile_size = IMAGE_TILE_SIZE * image_tile.grid_tile.image_tile_size_factor // factor # if factor >= 1 else subtile_size
+                desired_subtile_size = int(IMAGE_TILE_SIZE * image_tile.grid_tile.image_tile_size_factor // factor) # if factor >= 1 else subtile_size
+                logger.info(f"desired_subtile_size={desired_subtile_size}")
                 if desired_subtile_size < subtile_size:
                     # In this case we need to downscale.
                     # This should not be common, since usually bands would be stored at
