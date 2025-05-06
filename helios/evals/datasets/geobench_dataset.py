@@ -1,5 +1,6 @@
 """GeoBench datasets, returning data in the Helios format."""
 
+import logging
 import os
 from pathlib import Path
 from types import MethodType
@@ -23,6 +24,7 @@ from .normalize import impute_normalization_stats, normalize_bands
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
+logger = logging.getLogger(__name__)
 
 GEOBENCH_DIR = UPath("/weka/dfive-default/presto-geobench/dataset/geobench")
 
@@ -83,9 +85,7 @@ class GeobenchDataset(Dataset):
 
         # hack: https://github.com/ServiceNow/geo-bench/issues/22
         task.get_dataset_dir = MethodType(
-            lambda self: geobench_dir
-            / f"{config.task_type.value}_v1.0"
-            / self.dataset_name,
+            lambda self: geobench_dir / f"{config.task_type.value}_v1.0" / dataset,
             task,
         )
 
@@ -103,6 +103,11 @@ class GeobenchDataset(Dataset):
         self.active_indices = range(int(len(self.dataset)))
         self.norm_method = norm_method
         self.visualize_samples = visualize_samples
+
+        self.multiply_by_10_000 = False
+        if dataset == "m-so2sat":
+            logging.info(f"self.multiply_by_10_000 set to True for {dataset}")
+            self.multiply_by_10_000 = True
 
     @staticmethod
     def _get_norm_stats(
@@ -160,7 +165,7 @@ class GeobenchDataset(Dataset):
         assert (
             x.shape[-1] == 13
         ), f"All datasets must have 13 channels, not {x.shape[-1]}"
-        if self.dataset == "m-so2sat":
+        if self.multiply_by_10_000:
             x = x * 10_000
 
         # Normalize using the downstream task's normalization stats
