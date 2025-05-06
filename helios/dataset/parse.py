@@ -53,6 +53,9 @@ class GridTile:
     col: int
     row: int
 
+    # The factor of how much bigger the dimensions of the image tile are compared with the base tile size.
+    image_tile_size_factor: int = 1
+
 
 @dataclass
 class ModalityTile:
