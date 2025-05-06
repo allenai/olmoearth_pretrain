@@ -124,7 +124,7 @@ def image_tiles_to_samples(
         if time_span == TimeSpan.STATIC:
             # Now that we have NAIP_10, we want to include it in both datasets always
             if grid_tile.resolution_factor > 1 and modality.name != Modality.NAIP_10.name:
-                logger.info(f"ignoring static tile {grid_tile.resolution_factor} because it is coarser than the base resolution for modality {_}")
+                logger.info(f"ignoring static tile {grid_tile.resolution_factor} because it is coarser than the base resolution for modality {modality.name}")
                 continue
             else:
                 unique_image_tiles.add((grid_tile, TimeSpan.TWO_WEEK))  # type: ignore
