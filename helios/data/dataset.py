@@ -274,7 +274,11 @@ class HeliosSample(NamedTuple):
         return min(floor(max_t_within_budget), self.time)
 
     def subset(
-        self, patch_size: int, max_tokens_per_instance: int, sampled_hw_p: int, missing_timesteps_dict: dict[str, list[int]]
+        self,
+        patch_size: int,
+        max_tokens_per_instance: int,
+        sampled_hw_p: int,
+        missing_timesteps_dict: dict[str, list[int]],
     ) -> "HeliosSample":
         """Subset a HelioSample that is unbatched ie no batch dimension.
 
@@ -333,6 +337,7 @@ class HeliosSample(NamedTuple):
 #     """Find the timesteps with at least one modality present."""
 #     # what we actually want is different start_t and max_t combinations that are eligible for subsetting
 #     pass
+
 
 def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSample]:
     """Collate function that automatically handles any modalities present in the samples."""
@@ -551,7 +556,6 @@ class HeliosDataset(Dataset):
         self.sample_indices = np.arange(num_samples)
         self._filter_sample_indices_for_training()
 
-
     def save_latlon_distribution(self, latlons: np.ndarray) -> None:
         """Save the latlon distribution to a file."""
         logger.info(f"Saving latlon distribution to {self.latlon_distribution_path}")
@@ -712,14 +716,19 @@ class HeliosDataset(Dataset):
             missing_timesteps_dict[modality] = missing_timesteps
         return HeliosSample(**sample_dict), missing_modalities, missing_timesteps_dict
 
-    def apply_subset(self, sample: HeliosSample, args: GetItemArgs, missing_timesteps_dict: dict[str, list[int]]) -> HeliosSample:
+    def apply_subset(
+        self,
+        sample: HeliosSample,
+        args: GetItemArgs,
+        missing_timesteps_dict: dict[str, list[int]],
+    ) -> HeliosSample:
         """Apply the subset to the sample."""
         if args.token_budget is not None:
             sample_subset = sample.subset(
                 patch_size=args.patch_size,
                 max_tokens_per_instance=args.token_budget,
                 sampled_hw_p=args.sampled_hw_p,
-                missing_timesteps_dict=missing_timesteps_dict
+                missing_timesteps_dict=missing_timesteps_dict,
             )
         else:
             sample_subset = sample
@@ -792,7 +801,9 @@ class HeliosDataset(Dataset):
 
         sample_dict = self.read_h5_file(h5_file_path)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
-        sample, missing_modalities, missing_timesteps_dict = self.fill_sample_with_missing_values(sample_dict)
+        sample, missing_modalities, missing_timesteps_dict = (
+            self.fill_sample_with_missing_values(sample_dict)
+        )
         subset_sample = self.apply_subset(sample, args, missing_timesteps_dict)
 
         sample_dict = subset_sample.as_dict(ignore_nones=True)
