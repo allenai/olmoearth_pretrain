@@ -210,8 +210,7 @@ def load_image_for_sample(
     logger.info(f"image_tile.grid_tile.resolution_factor={image_tile.grid_tile.resolution_factor}")
     logger.info(f"sample.grid_tile.resolution_factor={sample.grid_tile.resolution_factor}")
     factor = (
-        image_tile.grid_tile.resolution_factor / max(16, sample.grid_tile.resolution_factor)
-    )
+        image_tile.grid_tile.resolution_factor / sample.grid_tile.resolution_factor)
     # Read the modality image one band set at a time.
     # For now we resample all bands to the grid resolution of the modality.
     band_set_images = []
@@ -226,13 +225,12 @@ def load_image_for_sample(
                         f"expected tile to be square but width={raster.width} != height={raster.height}"
                     )
                 # Assuming all tiles cover the same area as the resolution factor 16 tile
-                subtile_size = raster.width  # // factor
+                subtile_size = raster.width // factor
                 logger.info(f"subtile_size={subtile_size}")
                 logger.info(f"sample.grid_tile.col={sample.grid_tile.col}")
                 logger.info(f"sample.grid_tile.row={sample.grid_tile.row}")
-                subsample_factor = factor if factor >= 1 else 1
-                col_offset = subtile_size * (sample.grid_tile.col % subsample_factor)
-                row_offset = subtile_size * (sample.grid_tile.row % subsample_factor)
+                col_offset = subtile_size * (sample.grid_tile.col % factor)
+                row_offset = subtile_size * (sample.grid_tile.row % factor)
                 logger.info(f"col_offset={col_offset}, row_offset={row_offset}")
 
                 # Now we can perform a windowed read.
@@ -249,7 +247,8 @@ def load_image_for_sample(
                 # And then for now resample it to the grid resolution.
                 # The difference in resolution should always be a power of 2.
                 # If the factor is less than 1 we want the desired size to be multiplied by the thing
-                desired_subtile_size = int(IMAGE_TILE_SIZE / factor) # if factor >= 1 else subtile_size
+                # If the tile size is greater we want to keep that extent
+                desired_subtile_size = int(max(subtile_size, IMAGE_TILE_SIZE ) / factor) # if factor >= 1 else subtile_size
                 if desired_subtile_size < subtile_size:
                     # In this case we need to downscale.
                     # This should not be common, since usually bands would be stored at

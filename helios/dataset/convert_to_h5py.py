@@ -362,7 +362,7 @@ class ConvertToH5py:
         """
         samples = self._get_samples()
         samples = self._filter_samples(samples)
-        return samples
+        return samples[:50000]
 
     def save_compression_settings(self) -> None:
         """Save compression settings to a JSON file."""
