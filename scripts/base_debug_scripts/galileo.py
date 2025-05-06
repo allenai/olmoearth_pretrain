@@ -120,6 +120,7 @@ def build_train_module_config(
     token_exit_cfg_a = {
         Modality.SENTINEL2_L2A.name: 4,
         Modality.LATLON.name: 4,
+        Modality.NAIP.name: 4,
         Modality.SENTINEL1.name: 4,
         Modality.WORLDCOVER.name: 0,
         Modality.SRTM.name: 2,
@@ -184,7 +185,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
+    h5py_dir = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_gzip_3/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/323681"
     return HeliosDatasetConfig(
         h5py_dir=h5py_dir,
         training_modalities=common.training_modalities,
