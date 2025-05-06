@@ -44,12 +44,12 @@ class LatentMIM(nn.Module, DistributedMixins):
 
     def forward(
         self, x: MaskedHeliosSample, patch_size: int
-    ) -> tuple[TokensAndMasks, TokensAndMasks]:
+    ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor]:
         """Forward pass for the Latent MIM Style."""
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent, _ = self.encoder(x, patch_size=patch_size)
+        latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
         decoded = self.decoder(latent, timestamps=x.timestamps, patch_size=patch_size)
-        return latent, decoded
+        return latent, decoded, latent_projected_and_pooled
 
     def apply_fsdp(
         self,
