@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from typing import Any
 
 import albumentations as A
+import cv2
 import numpy as np
 import pandas as pd
 import rasterio
@@ -38,7 +39,23 @@ S2_BANDS = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B9", "B11", 
 S1_BANDS = ["VV", "VH"]
 L8_BANDS = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7", "ST_B10"]
 # Landsat 8 bands after imputing missing bands
-L8_BANDS_IMPUTED = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B9", "B10"]
+L8_BANDS_IMPUTED = [
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6",
+    "B7",
+    "B8",
+    "B8A",
+    "B9",
+    "B10",
+    "B11",
+]
+
+# Minimum number of months of data required for each modality
+MIN_MONTHS = 5
 
 
 class SICKLEProcessor:
@@ -57,7 +74,8 @@ class SICKLEProcessor:
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
         # We resize images and masks to 32*32
-        self.resize = A.Resize(height=32, width=32)
+        # Here we avoid using Bilinear as it will averaging the neighbors, which is not what we want for masks
+        self.resize = A.Resize(height=32, width=32, interpolation=cv2.INTER_NEAREST)
 
     def impute_l8_bands(self, img: torch.Tensor) -> torch.Tensor:
         """Impute missing bands in L8 images."""
@@ -90,7 +108,7 @@ class SICKLEProcessor:
         # Convert crop type mask into binary (Paddy: 0, Non-Paddy: 1)
         # Reference: https://github.com/Depanshu-Sani/SICKLE/blob/main/utils/dataset.py
         mask[1] -= 1
-        mask[1][mask[1] >= 1] = 1
+        mask[1][mask[1] > 1] = 1
         # Convert to -1 to ignore
         mask[mask < 0] = -1
         return mask
@@ -239,17 +257,21 @@ class SICKLEProcessor:
         mask = self._read_mask(mask_path)
         plot_mask, crop_type_mask = mask[0], mask[1]
 
-        # Remove plots that are not in this split
+        # Remove plots that are not in this split, only predict for plots in this split
         unmatched_plot_ids = set(np.unique(plot_mask)) - set(self.split_plot_ids[split])
         for unmatched_plot_id in unmatched_plot_ids:
             crop_type_mask[plot_mask == unmatched_plot_id] = -1
 
         # Resize the mask to 32*32
-        crop_type_mask = crop_type_mask.transpose(1, 2, 0)
-        crop_type_mask = self.resize(image=crop_type_mask)["image"].transpose(2, 0, 1)
+        crop_type_mask = self.resize(image=crop_type_mask)["image"]
         targets = torch.tensor(crop_type_mask, dtype=torch.long)
-
-        if len(s2_months) == len(s1_months) == len(l8_months):
+        # Here we require at least 5 months of data for each modality
+        # Also make sure the first month is the same for all modalities
+        if (
+            min(len(s2_months), len(s1_months), len(l8_months)) >= MIN_MONTHS
+            and s2_months[0] == s1_months[0] == l8_months[0]
+        ):
+            # Given the temporal resolution, S2 has the most data
             months = s2_months
             return {
                 "split": split,
@@ -261,7 +283,7 @@ class SICKLEProcessor:
             }
         else:
             warnings.warn(
-                f"Number of images for S2, S1, and L8 are not the same for {uid}"
+                f"Number of images for S2, S1, and L8 are not the sufficient for {uid}"
             )
             return None
 
@@ -269,6 +291,8 @@ class SICKLEProcessor:
         """Process the SICKLE dataset."""
         all_samples = []
         df = pd.read_csv(self.csv_path)
+        # Remove test split as there're not ground truth labels for it
+        df = df[df["SPLIT"] != "test"]
         for _, row in df.iterrows():
             sample = {
                 "uid": row["UNIQUE_ID"],
@@ -280,7 +304,7 @@ class SICKLEProcessor:
 
         # Get the unique plot_ids per split
         self.split_plot_ids = defaultdict(list)
-        for split in ["train", "val", "test"]:
+        for split in ["train", "val"]:
             plot_ids = df[df["SPLIT"] == split]["PLOT_ID"].unique()
             self.split_plot_ids[split] = plot_ids
 
@@ -297,33 +321,31 @@ class SICKLEProcessor:
                 "months": [],
                 "targets": [],
             }
-            for i in ["train", "val", "test"]
+            for i in ["train", "val"]
         }
         for res in results:
             if res:
-                # Samples usually have 5-6 months of data, if more than 5, cut it
-                if len(res["months"]) < 5:
-                    doesnt_have_five += 1
-                else:
-                    res["s2_images"] = res["s2_images"][:5, ...]
-                    res["s1_images"] = res["s1_images"][:5, ...]
-                    res["l8_images"] = res["l8_images"][:5, ...]
-                    res["months"] = res["months"][:5]
-                    res["targets"] = res["targets"][:5, ...]
+                res["s2_images"] = res["s2_images"][:MIN_MONTHS, ...]
+                res["s1_images"] = res["s1_images"][:MIN_MONTHS, ...]
+                res["l8_images"] = res["l8_images"][:MIN_MONTHS, ...]
+                res["months"] = res["months"][:MIN_MONTHS]
+                res["targets"] = res["targets"][:MIN_MONTHS, ...]
 
-                    for key in [
-                        "s2_images",
-                        "s1_images",
-                        "l8_images",
-                        "months",
-                        "targets",
-                    ]:
-                        all_data[res["split"]][key].append(res[key])
+                for key in [
+                    "s2_images",
+                    "s1_images",
+                    "l8_images",
+                    "months",
+                    "targets",
+                ]:
+                    all_data[res["split"]][key].append(res[key])
+            else:
+                doesnt_have_five += 1
 
         print(f"doesnt_have_five: {doesnt_have_five}")
 
         all_data_cat: dict[str, dict[str, torch.Tensor]] = {}
-        for split in ["train", "val", "test"]:
+        for split in ["train", "val"]:
             for key in ["s2_images", "s1_images", "l8_images", "months", "targets"]:
                 all_data_cat[split][key] = torch.cat(all_data[split][key], dim=0)
 
@@ -334,10 +356,6 @@ class SICKLEProcessor:
             },
             "val": {
                 key: all_data_cat["val"][key]
-                for key in ["s2_images", "s1_images", "l8_images", "months", "targets"]
-            },
-            "test": {
-                key: all_data_cat["test"][key]
                 for key in ["s2_images", "s1_images", "l8_images", "months", "targets"]
             },
         }
@@ -374,7 +392,7 @@ class SICKLEProcessor:
                     data["l8_images"][idx].clone(), os.path.join(l8_dir, f"{idx}.pt")
                 )
 
-        for split in ["train", "val", "test"]:
+        for split in ["train", "val"]:
             for key in ["s2_images", "s1_images", "l8_images", "months", "targets"]:
                 print(f"{split} {key}: {all_data_splits[split][key].shape}")
 
@@ -414,3 +432,6 @@ def process_sickle(
         output_dir=output_dir,
     )
     processor.process()
+
+
+process_sickle()
