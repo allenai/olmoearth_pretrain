@@ -98,7 +98,7 @@ class ModalitySpec:
 
     Args:
         name: the name of the modality.
-        tile_resolution_factor: the factor of how much more ground area is covered by the tile compared with a tile
+        tile_resolution_factor: the factor of how many more pixels are in the tile for the same ground area compared with a tile
                         of IMAGE_TILE_SIZE x IMAGE_TILE_SIZE pixels at the base resolution.
         band_sets: the band sets of the modality, ie the units of tokenization.
         is_multitemporal: whether the modality is multitemporal.
@@ -128,6 +128,16 @@ class ModalitySpec:
             indices.append(list(range(offset, offset + num_bands)))
             offset += num_bands
         return indices
+
+    @property
+    def image_tile_size_factor(self) -> int:
+        """Get the image tile size factor."""
+        min_bandset_resolution = min(
+            [band_set.resolution_factor for band_set in self.band_sets]
+        )
+        if min_bandset_resolution == 0:
+            raise ValueError(f"min_bandset_resolution is 0 for modality {self.name}")
+        return int(self.tile_resolution_factor / min_bandset_resolution)
 
     @property
     def band_order(self) -> list[str]:
