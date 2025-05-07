@@ -30,6 +30,8 @@ def my_build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConf
     """Build the dataloader config for an experiment."""
     dataloader_config = build_dataloader_config(common)
     dataloader_config.token_budget = 6000
+    # Got NaN with the default seed, try a different one.
+    dataloader_config.seed = 12345
     return dataloader_config
 
 
