@@ -298,6 +298,7 @@ class HeliosDataLoader(DataLoaderBase):
         patch_size_array = np.array(patch_size_list)
         hw_p_to_sample_array = np.array(hw_p_to_sample)
         instances_processed = 0
+        # How can this code be simplified?
         for idx in indices:
             if instances_processed % rank_batch_size == 0:
                 # Try with and without self.dp_rank
@@ -316,7 +317,7 @@ class HeliosDataLoader(DataLoaderBase):
                     filtered_hw_p_to_sample_array > 0
                 ]
                 sampled_hw_p = hw_p_rng.choice(filtered_hw_p_to_sample_array)
-                self.batches_processed += 1
+                logger.info(f"sampled_hw_p: {sampled_hw_p} patch_size: {patch_size}")
             yield idx, int(patch_size), int(sampled_hw_p)
             instances_processed += 1
 

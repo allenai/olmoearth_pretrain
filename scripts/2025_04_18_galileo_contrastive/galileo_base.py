@@ -201,16 +201,16 @@ def build_dataset_config(common: CommonComponents) -> Config:
             training_modalities=common.training_modalities,
             use_samples_with_missing_supported_modalities=True,  # Check if we want to set this to True
             dtype=DType.float32,
-            cache_dir="/helios_cache/presto",
-            samples_per_sec=4 / NUM_DATA_LOADER_WORKERS,  # 2/ GBS
+            # cache_dir="/helios_cache/presto",
+            # samples_per_sec=4 / NUM_DATA_LOADER_WORKERS,  # 2/ GBS
         ),
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_rerun/sentinel1_sentinel2_l2a_worldcover/283204/",
             training_modalities=common.training_modalities,
             use_samples_with_missing_supported_modalities=True,
             dtype=DType.float32,
-            cache_dir="/helios_cache/osm_sampling",
-            samples_per_sec=4 / NUM_DATA_LOADER_WORKERS,  # 2/ GBS
+            # cache_dir="/helios_cache/osm_sampling",
+            # samples_per_sec=4 / NUM_DATA_LOADER_WORKERS,  # 2/ GBS
         ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
@@ -219,8 +219,8 @@ def build_dataset_config(common: CommonComponents) -> Config:
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
     MAX_DURATION = Duration.epochs(400)
-    METRICS_COLLECT_INTERVAL = 10
-    CANCEL_CHECK_INTERVAL = 25
+    METRICS_COLLECT_INTERVAL = 1
+    CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "2025_04_18_galileo_contrastive"

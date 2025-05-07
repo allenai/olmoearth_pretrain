@@ -749,7 +749,7 @@ class HeliosDataset(Dataset):
         sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
         subset_sample = self.apply_subset(sample, args)
         sample_dict = subset_sample.as_dict(ignore_nones=True)
-        logger.info(f"Sample dict keys {sample_dict.keys()}")
+        logger.debug(f"Sample dict keys {sample_dict.keys()}")
         # Sample modalities should be written into the metadata of the h5 dataset
         sample_modalities = list(
             [Modality.get(key) for key in sample_dict.keys() if key != "timestamps"]
