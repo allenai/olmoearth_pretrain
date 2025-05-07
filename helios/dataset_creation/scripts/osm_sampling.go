@@ -281,6 +281,9 @@ func getCategories(tags map[string]string) []string {
 	if tags["aeroway"] == "helipad" {
 		categories = append(categories, "helipad")
 	}
+	if tags["aeroway"] == "launchpad" {
+		categories = append(categories, "launchpad")
+	}
 	if tags["man_made"] == "water_tower" {
 		categories = append(categories, "water_tower")
 	}
@@ -307,6 +310,51 @@ func getCategories(tags map[string]string) []string {
 	}
 	if tags["amenity"] == "place_of_worship" {
 		categories = append(categories, "place_of_worship")
+	}
+	if tags["natural"] == "peak" {
+		categories = append(categories, "natural_peak")
+	}
+	if tags["man_made"] == "offshore_platform" {
+		categories = append(categories, "offshore_platform")
+	}
+	if tags["man_made"] == "beacon" {
+		categories = append(categories, "beacon")
+	}
+	if tags["man_made"] == "bridge" {
+		categories = append(categories, "man_made_bridge")
+	}
+	if tags["man_made"] == "flare" {
+		categories = append(categories, "flare")
+	}
+	if tags["man_made"] == "oil_gas_separator" {
+		categories = append(categories, "oil_gas_separator")
+	}
+	if tags["man_made"] == "pumping_station" {
+		categories = append(categories, "pumping_station")
+	}
+	if tags["highway"] == "trailhead" {
+		categories = append(categories, "trailhead")
+	}
+	if tags["natural"] == "cape" {
+		categories = append(categories, "natural_cape")
+	}
+	if tags["natural"] == "geyser" {
+		categories = append(categories, "natural_geyser")
+	}
+	if tags["natural"] == "hot_spring" {
+		categories = append(categories, "natural_hot_spring")
+	}
+	if tags["natural"] == "arch" {
+		categories = append(categories, "natural_arch")
+	}
+	if tags["natural"] == "cave_entrance" {
+		categories = append(categories, "natural_cave_entrance")
+	}
+	if tags["natural"] == "hill" {
+		categories = append(categories, "natural_hill")
+	}
+	if tags["natural"] == "volcano" {
+		categories = append(categories, "natural_volcano")
 	}
 	return categories
 }

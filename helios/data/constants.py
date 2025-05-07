@@ -94,7 +94,16 @@ class TimeSpan(str, Enum):
 
 @dataclass(frozen=True)
 class ModalitySpec:
-    """Modality specification."""
+    """Modality specification.
+
+    Args:
+        name: the name of the modality.
+        tile_resolution_factor: the factor of how much more ground area is covered by the tile compared with a tile
+                        of IMAGE_TILE_SIZE x IMAGE_TILE_SIZE pixels at the base resolution.
+        band_sets: the band sets of the modality, ie the units of tokenization.
+        is_multitemporal: whether the modality is multitemporal.
+        ignore_when_parsing: whether to ignore the modality when parsing the data form the csv file.
+    """
 
     name: str
     tile_resolution_factor: int
@@ -170,6 +179,16 @@ class Modality:
     NAIP = ModalitySpec(
         name="naip",
         tile_resolution_factor=1,
+        band_sets=[BandSet(["R", "G", "B", "IR"], 1)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    # NAIP_10 is the NAIP data that covers the same extent as a IMAGE_TILE_SIZE x IMAGE_TILE_SIZE tile
+    # at 10 m/pixel resolution but is still stored at NAIP resolution.
+    NAIP_10 = ModalitySpec(
+        name="naip_10",
+        tile_resolution_factor=16,
         band_sets=[BandSet(["R", "G", "B", "IR"], 1)],
         is_multitemporal=False,
         ignore_when_parsing=False,

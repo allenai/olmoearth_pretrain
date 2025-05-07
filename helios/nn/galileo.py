@@ -17,7 +17,6 @@ from torch.distributed.fsdp import (
 from helios.nn.flexihelios import (
     Encoder,
     EncoderConfig,
-    PoolingType,
     Predictor,
     PredictorConfig,
     TokensAndMasks,
@@ -50,34 +49,23 @@ class Galileo(nn.Module, DistributedMixins):
         for p in self.target_encoder.parameters():
             p.requires_grad = False
 
-        # optionally used for the contrastive head
-        self.linear_proj = nn.Linear(
-            self.encoder.embedding_size, self.encoder.embedding_size
-        )
-
     def forward_a(
         self, x: MaskedHeliosSample, patch_size: int
     ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor]:
         """Forward pass for the Latent MIM Style."""
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent = self.encoder(x, patch_size=patch_size)
+        latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
         decoded = self.decoder_a(latent, timestamps=x.timestamps, patch_size=patch_size)
-        pooled_for_contrastive = latent.pool_unmasked_tokens(
-            PoolingType.MEAN, spatial_pooling=False
-        )
-        return latent, decoded, self.linear_proj(pooled_for_contrastive)
+        return latent, decoded, latent_projected_and_pooled
 
     def forward_b(
         self, x: MaskedHeliosSample, patch_size: int
     ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor]:
         """Forward pass for the Latent MIM Style."""
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent = self.encoder(x, patch_size=patch_size)
+        latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
         decoded = self.decoder_b(latent, timestamps=x.timestamps, patch_size=patch_size)
-        pooled_for_contrastive = latent.pool_unmasked_tokens(
-            PoolingType.MEAN, spatial_pooling=False
-        )
-        return latent, decoded, self.linear_proj(pooled_for_contrastive)
+        return latent, decoded, latent_projected_and_pooled
 
     def apply_fsdp(
         self,

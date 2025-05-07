@@ -47,7 +47,7 @@ class LatentMIM(nn.Module, DistributedMixins):
     ) -> tuple[TokensAndMasks, TokensAndMasks]:
         """Forward pass for the Latent MIM Style."""
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent = self.encoder(x, patch_size=patch_size)
+        latent, _ = self.encoder(x, patch_size=patch_size)
         decoded = self.decoder(latent, timestamps=x.timestamps, patch_size=patch_size)
         return latent, decoded
 
