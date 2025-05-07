@@ -302,9 +302,11 @@ class HeliosDataLoader(DataLoaderBase):
             if instances_processed % rank_batch_size == 0:
                 # Try with and without self.dp_rank
                 patch_size_rng = get_rng(
-                    self.seed + self.epoch + self.batches_processed
+                    self.seed + self.epoch + self.batches_processed + self.dp_rank
                 )
-                hw_p_rng = get_rng(self.seed + self.epoch + self.batches_processed)
+                hw_p_rng = get_rng(
+                    self.seed + self.epoch + self.batches_processed + self.dp_rank
+                )
                 patch_size = patch_size_rng.choice(patch_size_array)
                 max_height_width_tokens = int(IMAGE_TILE_SIZE / patch_size)
                 filtered_hw_p_to_sample_array = hw_p_to_sample_array[
