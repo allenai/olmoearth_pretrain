@@ -98,7 +98,7 @@ class ModalitySpec:
 
     Args:
         name: the name of the modality.
-        tile_resolution_factor: the factor of how much more ground area is covered by the tile compared with a tile
+        tile_resolution_factor: the factor of how many more pixels are in the tile for the same ground area compared with a tile
                         of IMAGE_TILE_SIZE x IMAGE_TILE_SIZE pixels at the base resolution.
         band_sets: the band sets of the modality, ie the units of tokenization.
         is_multitemporal: whether the modality is multitemporal.
