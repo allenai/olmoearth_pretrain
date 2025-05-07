@@ -165,7 +165,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
             dtype=DType.float32,
         ),
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data/sentinel1_sentinel2_l2a_worldcover/871285",
+            h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data/sentinel1_sentinel2_l2a_worldcover/853624",
             training_modalities=common.training_modalities,
             use_samples_with_missing_supported_modalities=False,
             dtype=DType.float32,
