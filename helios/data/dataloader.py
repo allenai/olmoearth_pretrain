@@ -88,6 +88,7 @@ class HeliosDataLoader(DataLoaderBase):
         self._global_indices: np.ndarray | None = None
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = multiprocessing_context
+        self.batches_processed = 0
         if self.num_workers > 0 and self.multiprocessing_context == "forkserver":
             # Overhead of loading modules on import by preloading them
             mp.set_forkserver_preload(["torch", "rasterio"])
@@ -216,6 +217,7 @@ class HeliosDataLoader(DataLoaderBase):
 
         # Offset by the number of batches already processed.
         if self.batches_processed > 0:  # type: ignore
+            logger.info(f"Offsetting by {self.batches_processed} batches")
             indices = indices[self.batches_processed :]  # type: ignore
 
         # Slice batches by data loader worker rank to avoid duplicates.
@@ -282,6 +284,40 @@ class HeliosDataLoader(DataLoaderBase):
                 parts.append(f"{key}{value}")
         return "_".join(parts)
 
+    def _get_batch_item_params_iterator(
+        self,
+        indices: np.ndarray,
+        patch_size_list: list[int],
+        hw_p_to_sample: list[int],
+        rank_batch_size: int,
+    ) -> Iterator[tuple[int, int, int]]:
+        """Get a generator that yields a tuple of (idx, patch_size, sampled_hw_p).
+
+        Changes patch_size and sampled_hw_p every rank_batch_size.
+        """
+        patch_size_array = np.array(patch_size_list)
+        hw_p_to_sample_array = np.array(hw_p_to_sample)
+        instances_processed = 0
+        for idx in indices:
+            if instances_processed % rank_batch_size == 0:
+                # Try with and without self.dp_rank
+                patch_size_rng = get_rng(
+                    self.seed + self.epoch + self.batches_processed
+                )
+                hw_p_rng = get_rng(self.seed + self.epoch + self.batches_processed)
+                patch_size = patch_size_rng.choice(patch_size_array)
+                max_height_width_tokens = int(IMAGE_TILE_SIZE / patch_size)
+                filtered_hw_p_to_sample_array = hw_p_to_sample_array[
+                    hw_p_to_sample_array <= max_height_width_tokens
+                ]
+                filtered_hw_p_to_sample_array = filtered_hw_p_to_sample_array[
+                    filtered_hw_p_to_sample_array > 0
+                ]
+                sampled_hw_p = hw_p_rng.choice(filtered_hw_p_to_sample_array)
+                self.batches_processed += 1
+            yield idx, int(patch_size), int(sampled_hw_p)
+            instances_processed += 1
+
     def get_mock_batch(self) -> HeliosSample:
         """Get a mock batch, for dry-run of forward and backward pass."""
         logger.info("Getting mock batch NOT FROM DATASET")
@@ -341,6 +377,7 @@ class HeliosDataLoader(DataLoaderBase):
         if get_world_size() > 1:
             raise NotImplementedError("Fast forward is not supported in DDP")
         # If the model was trained with multiple GPUS, this logic must be updated so that we grab from where all the ranks started
+        # TODO: THIS DOES NOT REALLY MAKE SENSE
         self.batches_processed = global_step
         epoch = math.ceil(global_step / self.total_batches)
         step_in_epoch = global_step % self.total_batches
@@ -384,36 +421,6 @@ def iter_batched(
         yield tuple(batch)
 
 
-def _get_batch_item_params_iterator(
-    indices: np.ndarray,
-    patch_size_list: list[int],
-    hw_p_to_sample: list[int],
-    rank_batch_size: int,
-) -> Iterator[tuple[int, int, int]]:
-    """Get a generator that yields a tuple of (idx, patch_size, sampled_hw_p).
-
-    Changes patch_size and sampled_hw_p every rank_batch_size.
-    """
-    patch_size_array = np.array(patch_size_list)
-    hw_p_to_sample_array = np.array(hw_p_to_sample)
-    instances_processed = 0
-    # TODO: We need to maintain state and reproducibility here
-    # DO we want this to differ by rank?
-    for idx in indices:
-        if instances_processed % rank_batch_size == 0:
-            patch_size = np.random.choice(patch_size_array)
-            max_height_width_tokens = int(IMAGE_TILE_SIZE / patch_size)
-            filtered_hw_p_to_sample_array = hw_p_to_sample_array[
-                hw_p_to_sample_array <= max_height_width_tokens
-            ]
-            filtered_hw_p_to_sample_array = filtered_hw_p_to_sample_array[
-                filtered_hw_p_to_sample_array > 0
-            ]
-            sampled_hw_p = np.random.choice(filtered_hw_p_to_sample_array)
-        yield idx, int(patch_size), int(sampled_hw_p)
-        instances_processed += 1
-
-
 class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
     """Iterable dataset wrapper.
 
@@ -440,7 +447,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
         indices = self.data_loader._get_local_instance_indices(global_indices)
         instance_iterator = (
             self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
-            for idx, patch_size, sampled_hw_p in _get_batch_item_params_iterator(
+            for idx, patch_size, sampled_hw_p in self.data_loader._get_batch_item_params_iterator(
                 indices,
                 self.data_loader.patch_sizes,
                 self.data_loader.sampled_hw_p_list,
