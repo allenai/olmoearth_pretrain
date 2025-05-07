@@ -10,7 +10,7 @@ import torch
 from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor, nn
-from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
+from torch.distributed.fsdp import fully_shard
 
 from helios.data.constants import Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
@@ -1175,8 +1175,6 @@ class Encoder(FlexiHeliosBase):
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         super().apply_fsdp(**fsdp_kwargs)
-        # fully_shard(self.patch_embeddings, **fsdp_kwargs)
-        # register_fsdp_forward_method(self.patch_embeddings, "forward")
         fully_shard(self, **fsdp_kwargs)
 
 
