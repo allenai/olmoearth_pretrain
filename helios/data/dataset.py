@@ -52,6 +52,7 @@ class HeliosSample(NamedTuple):
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
     # Unsure what the shapes should be for this one
+    # TODO: Should this be called naip_10??
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
 
     # TODO: Add unit tests for this

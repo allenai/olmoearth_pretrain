@@ -150,7 +150,8 @@ def build_common_components(
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
         # Modality.SRTM.name,
-        Modality.NAIP.name,
+        # Modality.NAIP.name,
+        Modality.NAIP_10.name,
         # Modality.LANDSAT.name,
         # Modality.OPENSTREETMAP_RASTER.name,
     ]
