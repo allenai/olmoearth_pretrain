@@ -120,7 +120,7 @@ def build_train_module_config(
     token_exit_cfg_a = {
         Modality.SENTINEL2_L2A.name: 4,
         Modality.LATLON.name: 4,
-        Modality.NAIP.name: 4,
+        Modality.NAIP_10.name: 4,
         Modality.SENTINEL1.name: 4,
         Modality.WORLDCOVER.name: 0,
         Modality.SRTM.name: 2,
