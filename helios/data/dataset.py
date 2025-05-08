@@ -683,7 +683,7 @@ class HeliosDataset(Dataset):
                 patch_size=args.patch_size,
                 max_tokens_per_instance=args.token_budget,
                 sampled_hw_p=args.sampled_hw_p,
-                rank_batch_seed=args.rank_batch_seed + args.idx,
+                rank_batch_seed=args.rank_batch_seed,
             )
         else:
             sample_subset = sample
