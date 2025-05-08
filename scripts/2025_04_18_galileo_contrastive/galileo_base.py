@@ -51,7 +51,7 @@ NUM_DATA_LOADER_WORKERS = 4
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
-    base_model_args = MODEL_SIZE_ARGS["base"]
+    base_model_args = MODEL_SIZE_ARGS["base_super_shallow_decoder"]
     ENCODER_EMBEDDING_SIZE = int(base_model_args["encoder_embedding_size"])
     DECODER_EMBEDDING_SIZE = int(base_model_args["decoder_embedding_size"])
     ENCODER_DEPTH = int(base_model_args["encoder_depth"])
@@ -92,7 +92,7 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> GalileoTrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 0.002
+    LR = 0.0001
     RANK_MICROBATCH_SIZE = 32
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
