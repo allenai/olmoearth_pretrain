@@ -699,7 +699,6 @@ class HeliosDataset(Dataset):
                 logger.info(
                     f"Filling {modality} timesteps {missing_timesteps} with missing values"
                 )
-                raise ValueError("missing timestamps found")
                 # Fill all missing timesteps at once
                 modality_data[..., missing_timesteps, :] = MISSING_VALUE
 
