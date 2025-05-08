@@ -15,10 +15,10 @@ import numpy as np
 import pandas as pd
 import torch
 from olmo_core.config import Config, DType
+from olmo_core.data.utils import get_rng
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
 from torch.utils.data import Dataset
-from olmo_core.data.utils import get_rng
 from tqdm import tqdm
 from upath import UPath
 
@@ -267,7 +267,11 @@ class HeliosSample(NamedTuple):
         return min(floor(max_t_within_budget), self.time)
 
     def subset(
-        self, patch_size: int, max_tokens_per_instance: int, sampled_hw_p: int, rank_batch_seed: int
+        self,
+        patch_size: int,
+        max_tokens_per_instance: int,
+        sampled_hw_p: int,
+        rank_batch_seed: int,
     ) -> "HeliosSample":
         """Subset a HelioSample that is unbatched ie no batch dimension.
 
@@ -352,7 +356,7 @@ class GetItemArgs(NamedTuple):
     patch_size: int
     sampled_hw_p: int
     token_budget: int | None = None
-    rank_batch_seed : int = 0 # should this be required to avoid tricky bugs?
+    rank_batch_seed: int = 0  # should this be required to avoid tricky bugs?
 
 
 # TODO should training modalities be str or modality_spec
@@ -679,7 +683,7 @@ class HeliosDataset(Dataset):
                 patch_size=args.patch_size,
                 max_tokens_per_instance=args.token_budget,
                 sampled_hw_p=args.sampled_hw_p,
-                rank_batch_seed=args.rank_batch_seed,
+                rank_batch_seed=args.rank_batch_seed + args.idx,
             )
         else:
             sample_subset = sample
@@ -722,7 +726,9 @@ class HeliosDataset(Dataset):
         sample_dict = {}
         with h5_file_path.open("rb") as f:
             with h5py.File(f, "r") as h5file:
-                logger.debug(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
+                logger.debug(
+                    f"Reading h5 file {h5_file_path} with keys {h5file.keys()}"
+                )
                 sample_dict = {
                     k: v[()]
                     for k, v in h5file.items()
