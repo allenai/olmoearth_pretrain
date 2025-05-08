@@ -122,7 +122,7 @@ class HeliosDataLoader(DataLoaderBase):
         """Rank batch seed."""
         # during dry runs the epoch is not set so we want to produce a consistent seed
         try:
-            return self.seed + self.epoch + self.batches_processed + self.dp_rank
+            return self.seed + self.epoch + self.batches_processed # + self.dp_rank
         except RuntimeError as e:
             logger.warning("Failed to get rank_batch_seed: %s. This is okay if running a dry run.", str(e))
             return 0
