@@ -774,6 +774,17 @@ class HeliosDataset(Dataset):
         # THis io is the current bottleneck of the getitem operation
         sample_dict = self.read_h5_file(h5_file_path)
 
+        keys_to_replace = []
+        for key in sample_dict.keys():
+            if key.endswith("_10"):
+                keys_to_replace.append(key)
+        for key in keys_to_replace:
+            val = sample_dict[key]
+            # add the key, without the "_10"
+            sample_dict[key[:-3]] = val
+            # remove the "_10"
+            del sample_dict[key]
+
         # Fill any training modalities that are not present in the h5 file with missing values
         sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
         subset_sample = self.apply_subset(sample, args)
