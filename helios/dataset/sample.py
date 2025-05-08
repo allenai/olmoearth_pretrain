@@ -112,7 +112,7 @@ def image_tiles_to_samples(
 
     # Enumerate all the (grid_tile, time_span) tuples present in the dataset.
     # Each of these identifies a training example.
-    # We ignore static time span here, unless it is at the base resolution or if it is NAIP_10, in which
+    # We ignore static time span here, unless it is at the base resolution, in which
     # case we add it as both year and two-week, since currently all data at the base
     # resolution is static. (The intention here is to avoid adding a two-week tile
     # based on WorldCover being available if Sentinel-2 and others are only available
@@ -120,13 +120,10 @@ def image_tiles_to_samples(
     unique_image_tiles: set[tuple[GridTile, TimeSpan]] = set()
     for modality, grid_tile, time_span in image_tile_index.keys():
         if time_span == TimeSpan.STATIC:
-            # Now that we have NAIP_10, we want to include it in both datasets always
-            if (
-                grid_tile.resolution_factor > 1
-                and modality.name != Modality.NAIP_10.name
-            ):
-                logger.info(
-                    f"ignoring static tile {grid_tile.resolution_factor} because it is coarser than the base resolution for modality {modality.name}"
+            if grid_tile.resolution_factor > 1:
+                logger.debug(
+                    f"ignoring static tile {grid_tile.resolution_factor} "
+                    f"because it is coarser than the base resolution for modality {modality.name}"
                 )
                 continue
             else:
@@ -154,12 +151,13 @@ def image_tiles_to_samples(
                 continue
             # We only use modalities that are at an equal or coarser resolution.
             if modality.tile_resolution_factor < sample.grid_tile.resolution_factor:
-                logger.info(
-                    f"ignoring modality {modality.name} with resolution factor {modality.tile_resolution_factor} because it is coarser than the sample grid tile resolution factor {sample.grid_tile.resolution_factor}"
+                logger.debug(
+                    f"ignoring modality {modality.name} with resolution factor "
+                    f"{modality.tile_resolution_factor} because it is coarser than "
+                    f"the sample grid tile resolution factor {sample.grid_tile.resolution_factor}"
                 )
                 continue
 
-            # Why are we downscaling here?
             downscale_factor = (
                 modality.tile_resolution_factor // sample.grid_tile.resolution_factor
             )
@@ -180,7 +178,6 @@ def image_tiles_to_samples(
                 resolution_factor=modality.tile_resolution_factor,
                 col=grid_tile.col // downscale_factor,
                 row=grid_tile.row // downscale_factor,
-                image_tile_size_factor=modality.image_tile_size_factor,
             )
 
             index_key = (modality, modality_grid_tile, lookup_time_span)
@@ -261,7 +258,7 @@ def load_image_for_sample(
                 # If the tile size is greater we want to keep that extent
                 desired_subtile_size = int(
                     IMAGE_TILE_SIZE
-                    * image_tile.grid_tile.image_tile_size_factor
+                    * image_tile.modality.image_tile_size_factor
                     // factor
                 )
                 if desired_subtile_size < subtile_size:

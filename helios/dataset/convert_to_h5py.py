@@ -362,9 +362,7 @@ class ConvertToH5py:
         This parses csvs, loads images, and filters samples to adjust to the HeliosSample format.
         """
         samples = self._get_samples()
-        filtered_samples = self._filter_samples(samples)
-        self._log_modality_distribution(filtered_samples)
-        return filtered_samples
+        return self._filter_samples(samples)
 
     def save_compression_settings(self) -> None:
         """Save compression settings to a JSON file."""

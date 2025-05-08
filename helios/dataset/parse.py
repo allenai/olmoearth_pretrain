@@ -53,9 +53,6 @@ class GridTile:
     col: int
     row: int
 
-    # The factor of how much bigger the dimensions of the image tile are compared with the base tile size.
-    image_tile_size_factor: int = 1
-
 
 @dataclass
 class ModalityTile:
@@ -69,6 +66,8 @@ class ModalityTile:
 
     # The band sets along with the file containing them.
     band_sets: dict[BandSet, UPath]
+
+    modality: ModalitySpec
 
     def get_flat_bands(self) -> list[str]:
         """Get the names of the bands as a flat list.
@@ -107,7 +106,6 @@ def parse_modality_csv(
                 resolution_factor=modality.tile_resolution_factor,
                 col=int(csv_row["col"]),
                 row=int(csv_row["row"]),
-                image_tile_size_factor=modality.image_tile_size_factor,
             )
             image = ModalityImage(
                 start_time=datetime.fromisoformat(csv_row["start_time"]),
@@ -120,6 +118,7 @@ def parse_modality_csv(
                     images=[],
                     center_time=datetime.fromisoformat(csv_row["tile_time"]),
                     band_sets={},
+                    modality=modality,
                 )
 
             # This image should appear at the index above. But the indexes should be in

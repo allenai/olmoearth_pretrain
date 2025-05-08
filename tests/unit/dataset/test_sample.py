@@ -56,6 +56,7 @@ def create_image_tiles(tmp_path: Path) -> Callable:
                         ): data_path / "s2_20m.tif",
                         BandSet(["B01", "B09", "B10"], 64): data_path / "s2_40m.tif",
                     },
+                    modality=Modality.SENTINEL2,
                 ),
             ]
         }
@@ -70,6 +71,7 @@ def create_image_tiles(tmp_path: Path) -> Callable:
                     band_sets={
                         BandSet(["VV", "VH"], 16): data_path / "s1_10m.tif",
                     },
+                    modality=Modality.SENTINEL1,
                 ),
             ]
         }
