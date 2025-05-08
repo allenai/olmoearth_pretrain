@@ -117,6 +117,10 @@ class HeliosDataLoader(DataLoaderBase):
             / f"dataset-{self.dataset.fingerprint}"
             / f"{global_indices_fname}.npy"
         )
+    @property
+    def rank_batch_seed(self) -> int:
+        """Rank batch seed."""
+        return self.seed + self.epoch + self.batches_processed + self.dp_rank
 
     def _build_global_indices(self) -> np.ndarray:
         """Build global indices."""
@@ -302,12 +306,8 @@ class HeliosDataLoader(DataLoaderBase):
         for idx in indices:
             if instances_processed % rank_batch_size == 0:
                 # Try with and without self.dp_rank
-                patch_size_rng = get_rng(
-                    self.seed + self.epoch + self.batches_processed + self.dp_rank
-                )
-                hw_p_rng = get_rng(
-                    self.seed + self.epoch + self.batches_processed + self.dp_rank
-                )
+                patch_size_rng = get_rng(self.rank_batch_seed)
+                hw_p_rng = get_rng(self.rank_batch_seed)
                 patch_size = patch_size_rng.choice(patch_size_array)
                 max_height_width_tokens = int(IMAGE_TILE_SIZE / patch_size)
                 filtered_hw_p_to_sample_array = hw_p_to_sample_array[

@@ -193,7 +193,7 @@ class MaskingStrategy:
     """
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+        self, batch: HeliosSample, rank_batch_seed: int, patch_size: int | None = None, **kwargs: Any
     ) -> MaskedHeliosSample:
         """Apply masking to the input data.
 
