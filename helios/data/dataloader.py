@@ -120,7 +120,12 @@ class HeliosDataLoader(DataLoaderBase):
     @property
     def rank_batch_seed(self) -> int:
         """Rank batch seed."""
-        return self.seed + self.epoch + self.batches_processed + self.dp_rank
+        # during dry runs the epoch is not set so we want to produce a consistent seed
+        try:
+            return self.seed + self.epoch + self.batches_processed + self.dp_rank
+        except RuntimeError as e:
+            logger.warning("Failed to get rank_batch_seed: %s. This is okay if running a dry run.", str(e))
+            return 0
 
     def _build_global_indices(self) -> np.ndarray:
         """Build global indices."""
