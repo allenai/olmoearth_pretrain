@@ -291,6 +291,7 @@ class HeliosSample(NamedTuple):
             sampled_hw_p, max_tokens_per_instance
         )
         sampled_hw = sampled_hw_p * patch_size
+        # SHould this be instance specific ie do we want to choose differrent start hw across different instances? Does this matter?
         rng = get_rng(rank_batch_seed)
         start_h = rng.choice(self.height - sampled_hw + 1)
         start_w = rng.choice(self.width - sampled_hw + 1)
@@ -351,7 +352,7 @@ class GetItemArgs(NamedTuple):
     patch_size: int
     sampled_hw_p: int
     token_budget: int | None = None
-    rank_batch_seed = 0 # should this be required to avoid tricky bugs?
+    rank_batch_seed : int = 0 # should this be required to avoid tricky bugs?
 
 
 # TODO should training modalities be str or modality_spec
@@ -721,8 +722,7 @@ class HeliosDataset(Dataset):
         sample_dict = {}
         with h5_file_path.open("rb") as f:
             with h5py.File(f, "r") as h5file:
-                logger.info(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
-                # Not sure lat lon should be here
+                logger.debug(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
                 sample_dict = {
                     k: v[()]
                     for k, v in h5file.items()

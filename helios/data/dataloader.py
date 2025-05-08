@@ -238,7 +238,7 @@ class HeliosDataLoader(DataLoaderBase):
         return indices
 
     def _get_dataset_item(
-        self, idx: int, patch_size: int, sampled_hw_p: int
+        self, idx: int, patch_size: int, sampled_hw_p: int, rank_batch_seed: int
     ) -> tuple[int, HeliosSample]:
         """Get a dataset item."""
         args = GetItemArgs(
@@ -246,6 +246,7 @@ class HeliosDataLoader(DataLoaderBase):
             patch_size=patch_size,
             sampled_hw_p=sampled_hw_p,
             token_budget=self.token_budget,
+            rank_batch_seed=rank_batch_seed
         )
         item = self.dataset[args]
         return item
@@ -370,7 +371,7 @@ class HeliosDataLoader(DataLoaderBase):
                 (
                     patch_size,
                     HeliosSample(**output_dict).subset(
-                        patch_size, max_tokens_per_instance=1500, sampled_hw_p=6
+                        patch_size, max_tokens_per_instance=1500, sampled_hw_p=6, rank_batch_seed=0
                     ),
                 )
             ]
