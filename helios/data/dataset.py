@@ -220,9 +220,19 @@ class HeliosSample(NamedTuple):
         """Get the expected shape of an attribute."""
         modality_spec = Modality.get(attribute)
         if modality_spec.is_spacetime_varying:
-            return (self.height, self.width, self.time, modality_spec.num_bands)
+            return (
+                self.height * modality_spec.image_tile_size_factor,
+                self.width * modality_spec.image_tile_size_factor,
+                self.time,
+                modality_spec.num_bands,
+            )
         elif modality_spec.is_space_only_varying:
-            return (self.height, self.width, 1, modality_spec.num_bands)
+            return (
+                self.height * modality_spec.image_tile_size_factor,
+                self.width * modality_spec.image_tile_size_factor,
+                1,
+                modality_spec.num_bands,
+            )
         elif modality_spec.is_time_only_varying:
             return (1, 1, self.time, modality_spec.num_bands)
         else:
@@ -301,16 +311,27 @@ class HeliosSample(NamedTuple):
                 continue
             modality_spec = Modality.get(attribute)
             if modality_spec.is_spacetime_varying:
-                # for now, lets assume fixed resolution
                 new_data_dict[attribute] = modality[
-                    start_h : start_h + sampled_hw,
-                    start_w : start_w + sampled_hw,
+                    start_h * modality_spec.image_tile_size_factor : (
+                        start_h + sampled_hw
+                    )
+                    * modality_spec.image_tile_size_factor,
+                    start_w * modality_spec.image_tile_size_factor : (
+                        start_w + sampled_hw
+                    )
+                    * modality_spec.image_tile_size_factor,
                     start_t : start_t + max_t,
                 ]
             elif modality_spec.is_space_only_varying:
-                # for now, lets assume fixed resolution
                 new_data_dict[attribute] = modality[
-                    start_h : start_h + sampled_hw, start_w : start_w + sampled_hw
+                    start_h * modality_spec.image_tile_size_factor : (
+                        start_h + sampled_hw
+                    )
+                    * modality_spec.image_tile_size_factor,
+                    start_w * modality_spec.image_tile_size_factor : (
+                        start_w + sampled_hw
+                    )
+                    * modality_spec.image_tile_size_factor,
                 ]
             elif modality_spec.is_time_only_varying:
                 new_data_dict[attribute] = modality[start_t : start_t + max_t]
@@ -482,6 +503,7 @@ class HeliosDataset(Dataset):
         logger.info(f"columns: {metadata_df.columns}")
         # For now we want to filter out any samples that have NAIP DATA or don't have any of the training modalities
         # Get the indices of samples that have NAIP data
+        # TODO: Is this bad??
         if "naip" in metadata_df.columns:
             naip_indices = metadata_df[metadata_df["naip"] == 1].index
             self.naip_indices = naip_indices
