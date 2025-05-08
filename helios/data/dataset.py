@@ -81,20 +81,7 @@ class HeliosSample(NamedTuple):
                 # timestamps is a special case which is not in Modality
                 raise ValueError("Timestamps are not maskable")
         else:
-            attribute_shape = []
-            if Modality.get(attribute).get_tile_resolution() > 0:
-                # Add batch size (if has), height, width
-                attribute_shape += [self.height, self.width]
-            if Modality.get(attribute).is_multitemporal:
-                # Add number of timesteps
-                attribute_shape += [self.time]
-            if not mask:
-                # Add number of bands
-                attribute_shape += [Modality.get(attribute).num_bands]
-            else:
-                # Add number of band sets
-                attribute_shape += [Modality.get(attribute).num_band_sets]
-            return attribute_shape
+            return self.get_expected_shape(attribute, mask)
 
     @staticmethod
     def num_bands(attribute: str) -> int:
@@ -180,7 +167,14 @@ class HeliosSample(NamedTuple):
     @property
     def height(self) -> int:
         """Get the height of the data."""
-        height_width_time_modalities = ["sentinel2_l2a", "sentinel1", "worldcover"]
+        height_width_time_modalities = [
+            "sentinel2_l2a",
+            "sentinel1",
+            "worldcover",
+            "srtm",
+            "openstreetmap",
+            "landsat",
+        ]
         for modality in height_width_time_modalities:
             x = getattr(self, modality)
             if x is not None:
@@ -196,7 +190,14 @@ class HeliosSample(NamedTuple):
     @property
     def width(self) -> int:
         """Get the height of the data."""
-        height_width_time_modalities = ["sentinel2_l2a", "sentinel1", "worldcover"]
+        height_width_time_modalities = [
+            "sentinel2_l2a",
+            "sentinel1",
+            "worldcover",
+            "srtm",
+            "openstreetmap",
+            "landsat",
+        ]
         for modality in height_width_time_modalities:
             x = getattr(self, modality)
             if x is not None:
@@ -216,27 +217,32 @@ class HeliosSample(NamedTuple):
             raise ValueError("Timestamps are not present in the sample")
         return self.timestamps.shape[-2]
 
-    def get_expected_shape(self, attribute: str) -> tuple[int, ...]:
+    def get_expected_shape(self, attribute: str, mask: bool = False) -> tuple[int, ...]:
         """Get the expected shape of an attribute."""
         modality_spec = Modality.get(attribute)
+        if mask:
+            num_bands = modality_spec.num_band_sets
+        else:
+            num_bands = modality_spec.num_bands
+
         if modality_spec.is_spacetime_varying:
             return (
                 self.height * modality_spec.image_tile_size_factor,
                 self.width * modality_spec.image_tile_size_factor,
                 self.time,
-                modality_spec.num_bands,
+                num_bands,
             )
         elif modality_spec.is_space_only_varying:
             return (
                 self.height * modality_spec.image_tile_size_factor,
                 self.width * modality_spec.image_tile_size_factor,
                 1,
-                modality_spec.num_bands,
+                num_bands,
             )
         elif modality_spec.is_time_only_varying:
-            return (1, 1, self.time, modality_spec.num_bands)
+            return (1, 1, self.time, num_bands)
         else:
-            return (1, 1, 1, modality_spec.num_bands)
+            return (1, 1, 1, num_bands)
 
     def _get_max_t_within_token_budget(
         self, h_w_p: int, max_tokens_per_instance: int
