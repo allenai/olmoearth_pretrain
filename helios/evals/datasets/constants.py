@@ -18,20 +18,7 @@ EVAL_S2_BAND_NAMES = [
     "12 - SWIR",
 ]
 
-EVAL_S2_L2A_BAND_NAMES = [
-    "01 - Coastal aerosol",
-    "02 - Blue",
-    "03 - Green",
-    "04 - Red",
-    "05 - Vegetation Red Edge",
-    "06 - Vegetation Red Edge",
-    "07 - Vegetation Red Edge",
-    "08 - NIR",
-    "08A - Vegetation Red Edge",
-    "09 - Water vapour",
-    "11 - SWIR",
-    "12 - SWIR",
-]
+EVAL_S2_L2A_BAND_NAMES = [b for b in EVAL_S2_BAND_NAMES if b != "10 - SWIR - Cirrus"]
 
 EVAL_S1_BAND_NAMES = [
     "vv",
@@ -53,15 +40,11 @@ EVAL_L8_BAND_NAMES = [
 ]
 
 
-def _eval_s2_band_index_from_helios_name(helios_name: str) -> int:
-    for idx, band_name in enumerate(EVAL_S2_BAND_NAMES):
-        if helios_name.endswith(band_name.split(" ")[0][-2:]):
-            return idx
-    raise ValueError(f"Unmatched band name {helios_name}")
-
-
-def _eval_s2_l2a_band_index_from_helios_name(helios_name: str) -> int:
-    for idx, band_name in enumerate(EVAL_S2_L2A_BAND_NAMES):
+# Get the corresponding index from either Sentinel2 L1C or L2A band names
+def _eval_s2_band_index_from_helios_name(
+    helios_name: str, band_names: list[str]
+) -> int:
+    for idx, band_name in enumerate(band_names):
         if helios_name.endswith(band_name.split(" ")[0][-2:]):
             return idx
     raise ValueError(f"Unmatched band name {helios_name}")
@@ -81,13 +64,13 @@ def _eval_l8_band_index_from_helios_name(helios_name: str) -> int:
     raise ValueError(f"Unmatched band name {helios_name}")
 
 
-# For now, with Sentinel2 L2A, we will drop the B10 band in the eval datasets
 EVAL_TO_HELIOS_S2_BANDS = [
-    _eval_s2_band_index_from_helios_name(b) for b in Modality.SENTINEL2_L2A.band_order
+    _eval_s2_band_index_from_helios_name(b, EVAL_S2_BAND_NAMES)
+    for b in Modality.SENTINEL2_L2A.band_order
 ]
 
 EVAL_TO_HELIOS_S2_L2A_BANDS = [
-    _eval_s2_l2a_band_index_from_helios_name(b)
+    _eval_s2_band_index_from_helios_name(b, EVAL_S2_L2A_BAND_NAMES)
     for b in Modality.SENTINEL2_L2A.band_order
 ]
 

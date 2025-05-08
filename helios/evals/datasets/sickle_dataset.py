@@ -511,7 +511,6 @@ class SICKLEDataset(Dataset):
 
         self.is_multimodal = is_multimodal
 
-        # Remove B10 bands from EVAL_S2_BAND_NAMES
         self.s2_means, self.s2_stds = self._get_norm_stats(
             S2_BAND_STATS, EVAL_S2_L2A_BAND_NAMES
         )
