@@ -185,7 +185,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_gzip_3/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/323681"
+    h5py_dir = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_gzip_3/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/334699"
     return HeliosDatasetConfig(
         h5py_dir=h5py_dir,
         training_modalities=common.training_modalities,
