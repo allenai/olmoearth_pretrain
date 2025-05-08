@@ -92,13 +92,13 @@ class FlexiPatchEmbed(nn.Module):
     def forward(
         self,
         x: Tensor,
-        patch_size_at_16: int | tuple[int, int] | None = None,
+        patch_size: int | tuple[int, int] | None = None,
     ) -> Tensor | tuple[Tensor, tuple[int, int]]:
         """Forward pass for the FlexiPatchEmbed module.
 
         Args:
             x: Input tensor with shape [b, h, w, (t), c]
-            patch_size_at_16: Patch size to use for the embedding. If None, the base patch size
+            patch_size: Patch size to use for the embedding. If None, the base patch size
                 will be used, at an image_tile_size_factor of 16
         """
         # x has input shape [b, h, w, (t), c]
@@ -113,11 +113,17 @@ class FlexiPatchEmbed(nn.Module):
         else:
             x = rearrange(x, "b h w c -> b c h w")
 
-        if not patch_size_at_16:
+        if not patch_size:
             # During evaluation use base patch size if not specified
             patch_size = self.patch_size
         else:
-            patch_size = patch_size_at_16 * self.modality_spec.image_tile_size_factor
+            if isinstance(patch_size, tuple):
+                patch_size = (
+                    patch_size[0] * self.modality_spec.image_tile_size_factor,
+                    patch_size[1] * self.modality_spec.image_tile_size_factor,
+                )
+            else:
+                patch_size = patch_size * self.modality_spec.image_tile_size_factor
         patch_size = self.to_2tuple(patch_size)
         assert (
             isinstance(patch_size, tuple) and len(patch_size) == 2
