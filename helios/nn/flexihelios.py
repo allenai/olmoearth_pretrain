@@ -1243,6 +1243,7 @@ class Encoder(FlexiHeliosBase):
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         super().apply_fsdp(**fsdp_kwargs)
+        # Don't Shard the small layers
         # fully_shard(self.patch_embeddings, **fsdp_kwargs)
         # register_fsdp_forward_method(self.patch_embeddings, "forward")
         # fully_shard(self.project_and_aggregate, **fsdp_kwargs)

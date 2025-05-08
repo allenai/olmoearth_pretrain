@@ -108,6 +108,8 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
 
         bps = 1 / step_time
         bps_avg = self._total_steps / total_time
+        # Save BPS average so we can use the beaker callback to estimate time remaining
+        self._bps_avg = bps_avg
         data_pct = 100 * self._batch_load_time / step_time
         tps_encoded = self._total_tokens_encoded / step_time
         tps_encoded_avg = self._total_tokens_encoded / total_time
