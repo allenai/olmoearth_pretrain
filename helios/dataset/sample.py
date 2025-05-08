@@ -154,8 +154,10 @@ def image_tiles_to_samples(
                 continue
             # We only use modalities that are at an equal or coarser resolution.
             if modality.tile_resolution_factor < sample.grid_tile.resolution_factor:
-                logger.info(
-                    f"ignoring modality {modality.name} with resolution factor {modality.tile_resolution_factor} because it is coarser than the sample grid tile resolution factor {sample.grid_tile.resolution_factor}"
+                logger.debug(
+                    f"ignoring modality {modality.name} with resolution factor "
+                    f"{modality.tile_resolution_factor} because it is coarser than "
+                    f"the sample grid tile resolution factor {sample.grid_tile.resolution_factor}"
                 )
                 continue
 
