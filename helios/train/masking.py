@@ -109,31 +109,6 @@ class MaskedHeliosSample(NamedTuple):
             and getattr(self, field) is not None
         ]
 
-    @property
-    def height(self) -> int:
-        """Get the height of the data."""
-        height_width_time_modalities = ["sentinel2_l2a", "sentinel1", "worldcover"]
-        for modality in height_width_time_modalities:
-            x = getattr(self, modality)
-            if x is not None:
-                return x.shape[1]
-        raise ValueError("No modality with height or width present")
-
-    @property
-    def width(self) -> int:
-        """Get the width of the data."""
-        height_width_time_modalities = ["sentinel2_l2a", "sentinel1", "worldcover"]
-        for modality in height_width_time_modalities:
-            x = getattr(self, modality)
-            if x is not None:
-                return x.shape[2]
-        raise ValueError("No modality with height or width present")
-
-    @property
-    def time(self) -> int:
-        """Get the number of time steps in the data."""
-        return self.timestamps.shape[1]
-
     @staticmethod
     def get_masked_modality_name(modality: str) -> str:
         """Get the masked modality name."""
