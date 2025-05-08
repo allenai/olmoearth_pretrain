@@ -193,12 +193,17 @@ class MaskingStrategy:
     """
 
     def apply_mask(
-        self, batch: HeliosSample, rank_batch_seed: int, patch_size: int | None = None, **kwargs: Any
+        self,
+        batch: HeliosSample,
+        rank_batch_seed: int,
+        patch_size: int | None = None,
+        **kwargs: Any,
     ) -> MaskedHeliosSample:
         """Apply masking to the input data.
 
         Args:
             batch: Input data of type HeliosSample
+            rank_batch_seed: Seed for deterministic mask generation based on batch and rank
             patch_size: Optional patch size for spatial masking strategies
             **kwargs: Additional arguments for maskings
         """
@@ -219,11 +224,20 @@ class MaskingStrategy:
             mask[missing_mask] = MaskValue.MISSING.value
         return mask
 
+    def create_and_seed_rng(
+        self, seed: int, device: torch.device | None = None
+    ) -> torch.Generator:
+        """Create and seed a random number generator."""
+        rng = torch.Generator(device=device)
+        rng.manual_seed(seed)
+        return rng
+
     def _create_random_mask(
         self,
         modality: ModalitySpec,
         shape: torch.Size,
         patch_size: int,
+        rand_seed: int,
         device: torch.device | None = None,
     ) -> ArrayTensor:
         mask_shape = list(shape)
@@ -252,16 +266,18 @@ class MaskingStrategy:
                 ),
             ]
         )
-
+        rng_cuda = self.create_and_seed_rng(rand_seed, device)
         if modality.is_spatial or modality.is_multitemporal:
             masks = [
-                flat_mask_tokens[torch.randperm(num_tokens, device=device)]
+                flat_mask_tokens[
+                    torch.randperm(num_tokens, device=device, generator=rng_cuda)
+                ]
                 for i in range(b)
             ]
             flat_mask_tokens = torch.stack(masks)
         else:
             flat_mask_tokens = flat_mask_tokens[
-                torch.randperm(num_tokens, device=device)
+                torch.randperm(num_tokens, device=device, generator=rng_cuda)
             ]
 
         mask = flat_mask_tokens.view(*mask_shape)
@@ -305,6 +321,7 @@ class TimeMaskingStrategy(MaskingStrategy):
     def _create_temporal_mask(
         self,
         shape: torch.Size,
+        rand_seed: int,
         device: torch.device | None = None,
     ) -> ArrayTensor:
         b = shape[0]
@@ -327,13 +344,20 @@ class TimeMaskingStrategy(MaskingStrategy):
             ]
         )
 
-        # numpy to for permuted function
-        masks = [flat_mask[torch.randperm(t, device=device)] for i in range(b)]
+        rng_cuda = self.create_and_seed_rng(rand_seed, device)
+        masks = [
+            flat_mask[torch.randperm(t, device=device, generator=rng_cuda)]
+            for i in range(b)
+        ]
         mask = torch.stack(masks)
         return mask
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+        self,
+        batch: HeliosSample,
+        rank_batch_seed: int,
+        patch_size: int | None = None,
+        **kwargs: Any,
     ) -> MaskedHeliosSample:
         """Apply random masking to the input data.
 
@@ -341,6 +365,7 @@ class TimeMaskingStrategy(MaskingStrategy):
 
         Args:
             batch: Input data of type HeliosSample
+            rank_batch_seed: Seed for deterministic mask generation based on batch and rank
             patch_size: patch size applied to sample
             **kwargs: Additional arguments for maskings
 
@@ -372,10 +397,14 @@ class TimeMaskingStrategy(MaskingStrategy):
                 modality = Modality.get(modality_name)
                 shape = instance.shape
                 if not modality.is_multitemporal:
-                    mask = self._create_random_mask(modality, shape, patch_size, device)
+                    mask = self._create_random_mask(
+                        modality, shape, patch_size, rank_batch_seed, device
+                    )
                 else:
                     if temporal_mask is None:
-                        temporal_mask = self._create_temporal_mask(shape, device)
+                        temporal_mask = self._create_temporal_mask(
+                            shape, rank_batch_seed, device
+                        )
                     b_s = modality.num_band_sets
                     b, h, w = list(shape[:-2]) + [1] * (3 - len(shape[:-2]))
                     mask = repeat(
@@ -408,6 +437,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
         modality: ModalitySpec,
         shape: torch.Size,
         patch_size: int,
+        rand_seed: int,
         device: torch.device | None = None,
     ) -> ArrayTensor:
         if not modality.is_spatial:
@@ -438,7 +468,11 @@ class SpaceMaskingStrategy(MaskingStrategy):
             ]
         )
 
-        masks = [flat_mask[torch.randperm(patches, device=device)] for i in range(b)]
+        rng_cuda = self.create_and_seed_rng(rand_seed, device)
+        masks = [
+            flat_mask[torch.randperm(patches, device=device, generator=rng_cuda)]
+            for i in range(b)
+        ]
         random_batch_mask = torch.stack(masks)
         patch_mask = rearrange(random_batch_mask, "b (h w) -> b h w", h=h_p, w=w_p)
 
@@ -449,7 +483,11 @@ class SpaceMaskingStrategy(MaskingStrategy):
         return mask
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+        self,
+        batch: HeliosSample,
+        rank_batch_seed: int,
+        patch_size: int | None = None,
+        **kwargs: Any,
     ) -> MaskedHeliosSample:
         """Apply random masking to the input data.
 
@@ -457,6 +495,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
 
         Args:
             batch: Input data of type HeliosSample
+            rank_batch_seed: Seed for deterministic mask generation based on batch and rank
             patch_size: patch size applied to sample
             **kwargs: Additional arguments for maskings
 
@@ -488,11 +527,13 @@ class SpaceMaskingStrategy(MaskingStrategy):
                 modality = Modality.get(modality_name)
                 shape = instance.shape
                 if not modality.is_spatial:
-                    mask = self._create_random_mask(modality, shape, patch_size, device)
+                    mask = self._create_random_mask(
+                        modality, shape, patch_size, rank_batch_seed, device
+                    )
                 else:
                     if spatial_mask is None:
                         spatial_mask = self._create_spatial_mask(
-                            modality, shape, patch_size, device
+                            modality, shape, patch_size, rank_batch_seed, device
                         )
                     if len(shape) == 5:
                         t = shape[-2]
@@ -523,7 +564,11 @@ class ModalityMaskingStrategy(MaskingStrategy):
         self._decode_ratio = decode_ratio
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+        self,
+        batch: HeliosSample,
+        rank_batch_seed: int,
+        patch_size: int | None = None,
+        **kwargs: Any,
     ) -> MaskedHeliosSample:
         """Randomly mask out modalities in the input data.
 
@@ -531,6 +576,7 @@ class ModalityMaskingStrategy(MaskingStrategy):
 
         Args:
             batch: Input data of type HeliosSample
+            rank_batch_seed: Seed for deterministic mask generation based on batch and rank
             patch_size: Optional patch size for spatial masking strategies
             **kwargs: Additional arguments for maskings
 
@@ -547,16 +593,36 @@ class ModalityMaskingStrategy(MaskingStrategy):
             num_present_modalities - encode_modalities - decode_modalities
         )
 
-        # TODO get device for this
+        # Get device from first non-None tensor
+        device = None
+        for modality_name in present_modalities:
+            instance = getattr(batch, modality_name)
+            if isinstance(instance, torch.Tensor):
+                device = instance.device
+                break
+
         band_mask_per_instance = torch.cat(
             [
-                torch.full((encode_modalities,), MaskValue.ONLINE_ENCODER.value),
-                torch.full((decode_modalities,), MaskValue.DECODER.value),
-                torch.full((target_modalities,), MaskValue.TARGET_ENCODER_ONLY.value),
+                torch.full(
+                    (encode_modalities,), MaskValue.ONLINE_ENCODER.value, device=device
+                ),
+                torch.full(
+                    (decode_modalities,), MaskValue.DECODER.value, device=device
+                ),
+                torch.full(
+                    (target_modalities,),
+                    MaskValue.TARGET_ENCODER_ONLY.value,
+                    device=device,
+                ),
             ]
         )
+        rng_cuda = self.create_and_seed_rng(rank_batch_seed, device)
         batch_masks = [
-            band_mask_per_instance[torch.randperm(num_present_modalities)]
+            band_mask_per_instance[
+                torch.randperm(
+                    num_present_modalities, device=device, generator=rng_cuda
+                )
+            ]
             for i in range(batch.batch_size)
         ]
         random_batch_mask = torch.stack(batch_masks)
@@ -566,11 +632,13 @@ class ModalityMaskingStrategy(MaskingStrategy):
             modality = Modality.get(modality_name)
 
             if isinstance(instance, torch.Tensor):
-                device: torch.device | None = instance.device
+                instance_device: torch.device | None = instance.device
             else:
-                device = None
+                instance_device = None
 
-            modality_mask = torch.tensor(random_batch_mask[:, idx], device=device)
+            modality_mask = torch.tensor(
+                random_batch_mask[:, idx], device=instance_device
+            )
             shape = instance.shape
             b_s = modality.num_band_sets
             b, h, w, t = list(shape[:-1]) + [1] * (4 - len(shape[:-1]))
@@ -603,16 +671,33 @@ class SpaceTimeMaskingStrategy(MaskingStrategy):
         self.time_strategy = TimeMaskingStrategy(encode_ratio, decode_ratio)
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+        self,
+        batch: HeliosSample,
+        rank_batch_seed: int,
+        patch_size: int | None = None,
+        **kwargs: Any,
     ) -> MaskedHeliosSample:
-        """Apply space or time masking to the input data."""
+        """Apply space or time masking to the input data.
+
+        Args:
+            batch: Input data of type HeliosSample
+            rank_batch_seed: Seed for deterministic mask generation based on batch and rank
+            patch_size: patch size applied to sample
+            **kwargs: Additional arguments for maskings
+        """
         has_enough_timesteps = batch.time >= 3
+        # Use rank_batch_seed to deterministically choose strategy
+        self.generator = np.random.default_rng(rank_batch_seed)
         if (self.generator.random() < 0.5) or (not has_enough_timesteps):
             logger.info("Applying space masking")
-            return self.space_strategy.apply_mask(batch, patch_size, **kwargs)
+            return self.space_strategy.apply_mask(
+                batch, rank_batch_seed, patch_size, **kwargs
+            )
         else:
             logger.info("Applying time masking")
-            return self.time_strategy.apply_mask(batch, patch_size, **kwargs)
+            return self.time_strategy.apply_mask(
+                batch, rank_batch_seed, patch_size, **kwargs
+            )
 
 
 @MASKING_STRATEGY_REGISTRY.register("modality_space_time")
@@ -634,9 +719,20 @@ class ModalitySpaceTimeMaskingStrategy(MaskingStrategy):
         self.modality_strategy = ModalityMaskingStrategy(encode_ratio, decode_ratio)
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+        self,
+        batch: HeliosSample,
+        rank_batch_seed: int,
+        patch_size: int | None = None,
+        **kwargs: Any,
     ) -> MaskedHeliosSample:
-        """Apply band or space or time masking to the input data."""
+        """Apply band or space or time masking to the input data.
+
+        Args:
+            batch: Input data of type HeliosSample
+            rank_batch_seed: Seed for deterministic mask generation based on batch and rank
+            patch_size: patch size applied to sample
+            **kwargs: Additional arguments for maskings
+        """
         has_enough_timesteps = batch.time >= 3
         has_enough_modalities = (len(batch.as_dict()) - 1) >= 2
 
@@ -646,11 +742,13 @@ class ModalitySpaceTimeMaskingStrategy(MaskingStrategy):
         if has_enough_modalities:
             possible_strategies.append(self.modality_strategy)
 
+        # Use rank_batch_seed to deterministically choose strategy
+        self.generator = np.random.default_rng(rank_batch_seed)
         selected_strategy: MaskingStrategy = self.generator.choice(possible_strategies)
         if not isinstance(selected_strategy, ModalityMaskingStrategy):
             kwargs["patch_size"] = patch_size
 
-        return selected_strategy.apply_mask(batch, **kwargs)
+        return selected_strategy.apply_mask(batch, rank_batch_seed, **kwargs)
 
 
 @MASKING_STRATEGY_REGISTRY.register("random")
@@ -667,7 +765,11 @@ class RandomMaskingStrategy(MaskingStrategy):
         self._decode_ratio = decode_ratio
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+        self,
+        batch: HeliosSample,
+        rank_batch_seed: int,
+        patch_size: int | None = None,
+        **kwargs: Any,
     ) -> MaskedHeliosSample:
         """Apply random masking to the input data.
 
@@ -684,6 +786,7 @@ class RandomMaskingStrategy(MaskingStrategy):
 
         Args:
             batch: Input data of type HeliosSample
+            rank_batch_seed: Seed for deterministic mask generation based on batch and rank
             patch_size: patch size applied to sample
             **kwargs: Additional arguments for maskings
 
@@ -712,7 +815,11 @@ class RandomMaskingStrategy(MaskingStrategy):
                     device = None
 
                 mask = self._create_random_mask(
-                    Modality.get(modality_name), instance.shape, patch_size, device
+                    Modality.get(modality_name),
+                    instance.shape,
+                    patch_size,
+                    rank_batch_seed,
+                    device,
                 )
                 mask = self.fill_mask_with_missing_values(instance, mask)
                 output_dict[modality_name] = instance
