@@ -1,11 +1,16 @@
 """Unit tests for dataloader module."""
 
+import os
+from pathlib import Path
+
 import numpy as np
 
-from helios.data.dataloader import _get_batch_item_params_iterator
+from helios.data.constants import Modality
+from helios.data.dataloader import HeliosDataLoader
+from helios.data.dataset import HeliosDataset, collate_helios
 
 
-def test_get_batch_item_params_iterator() -> None:
+def test_get_batch_item_params_iterator(tmp_path: Path) -> None:
     """Test the _get_batch_item_params_iterator function."""
     # Setup test data
     indices = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
@@ -15,14 +20,66 @@ def test_get_batch_item_params_iterator() -> None:
 
     # Set a fixed random seed for reproducibility
     np.random.seed(42)
+    training_modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.WORLDCOVER.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+    ]
+    fake_h5py_dir = (
+        tmp_path
+        / "fake_h5py_dir/sentinel2_l2a_sentinel1_worldcover_openstreetmap_raster/2000"
+    )
+    # make fake sample_metadata.csv file inside it
+    os.makedirs(fake_h5py_dir, exist_ok=True)
 
+    # Patch the _filter_sample_indices_for_training method before creating the dataset
+    original_filter = HeliosDataset._filter_sample_indices_for_training
+    HeliosDataset._filter_sample_indices_for_training = lambda self: None  # type: ignore
+
+    # Create the dataset
+    dataset = HeliosDataset(
+        h5py_dir=fake_h5py_dir,
+        training_modalities=training_modalities,
+        dtype="float32",
+    )
+
+    # Set sample indices directly
+    dataset.sample_indices = np.arange(2000)
+
+    # Restore the original method
+    HeliosDataset._filter_sample_indices_for_training = original_filter  # type: ignore
+
+    dataset.prepare()
+    assert isinstance(dataset, HeliosDataset)
+    dataloader = HeliosDataLoader(
+        dataset=dataset,
+        work_dir=tmp_path,
+        global_batch_size=1,
+        dp_world_size=1,
+        dp_rank=0,
+        fs_local_rank=0,
+        seed=0,
+        shuffle=True,
+        num_workers=0,
+        collator=collate_helios,
+        target_device_type="cpu",
+        token_budget=1000000,
+        min_patch_size=1,
+        max_patch_size=1,
+        sampled_hw_p_list=[256],
+    )
     # Get iterator
-    iterator = _get_batch_item_params_iterator(
+    # set dataloader epoch to 0 for seeding
+    dataloader.reshuffle(1)
+    iterator = dataloader._get_batch_item_params_iterator(
         indices, patch_size, sampled_hw_p, rank_batch_size
     )
 
     # First batch (should all have the same patch_size and sampled_hw_p)
     first_batch = [next(iterator) for _ in range(3)]
+    # iterator needs to know how batches processed is updated which is controlled by the trainer
+    dataloader.batches_processed += 1
 
     # Check that all items in first batch have the same patch_size and sampled_hw_p
     first_patch_size = first_batch[0][1]
@@ -32,7 +89,7 @@ def test_get_batch_item_params_iterator() -> None:
 
     # Second batch (should have different patch_size and sampled_hw_p)
     second_batch = [next(iterator) for _ in range(3)]
-
+    dataloader.batches_processed += 1
     # Check that all items in second batch have the same patch_size and sampled_hw_p
     second_patch_size = second_batch[0][1]
     second_sampled_hw_p = second_batch[0][2]

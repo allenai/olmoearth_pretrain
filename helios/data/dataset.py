@@ -479,13 +479,17 @@ class HeliosDataset(Dataset):
         """Check if the dataset is prepared."""
         return self.sample_indices is not None
 
+    def load_sample_metadata_csv(self) -> pd.DataFrame:
+        """Load sample metadata csv."""
+        return pd.read_csv(self.sample_metadata_path)
+
     def _filter_sample_indices_for_training(self) -> None:
         """Filter the sample indices for training.
 
         Updates the sample indices numpy array to only include the indices we want to train on.
         """
         # Read the metadata CSV
-        metadata_df = pd.read_csv(self.sample_metadata_path)
+        metadata_df = self.load_sample_metadata_csv()
         logger.info(f"Metadata CSV has {len(metadata_df)} samples")
         logger.info(f"columns: {metadata_df.columns}")
         # For now we want to filter out any samples that have NAIP DATA or don't have any of the training modalities
