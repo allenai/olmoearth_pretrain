@@ -112,7 +112,7 @@ def image_tiles_to_samples(
 
     # Enumerate all the (grid_tile, time_span) tuples present in the dataset.
     # Each of these identifies a training example.
-    # We ignore static time span here, unless it is at the base resolution or if it is NAIP_10, in which
+    # We ignore static time span here, unless it is at the base resolution, in which
     # case we add it as both year and two-week, since currently all data at the base
     # resolution is static. (The intention here is to avoid adding a two-week tile
     # based on WorldCover being available if Sentinel-2 and others are only available
@@ -120,13 +120,10 @@ def image_tiles_to_samples(
     unique_image_tiles: set[tuple[GridTile, TimeSpan]] = set()
     for modality, grid_tile, time_span in image_tile_index.keys():
         if time_span == TimeSpan.STATIC:
-            # Now that we have NAIP_10, we want to include it in both datasets always
-            if (
-                grid_tile.resolution_factor > 1
-                and modality.name != Modality.NAIP_10.name
-            ):
+            if grid_tile.resolution_factor > 1:
                 logger.debug(
-                    f"ignoring static tile {grid_tile.resolution_factor} because it is coarser than the base resolution for modality {modality.name}"
+                    f"ignoring static tile {grid_tile.resolution_factor} "
+                    f"because it is coarser than the base resolution for modality {modality.name}"
                 )
                 continue
             else:
