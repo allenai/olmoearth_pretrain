@@ -18,6 +18,7 @@ from olmo_core.config import Config, DType
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
 from torch.utils.data import Dataset
+from olmo_core.data.utils import get_rng
 from tqdm import tqdm
 from upath import UPath
 
@@ -266,7 +267,7 @@ class HeliosSample(NamedTuple):
         return min(floor(max_t_within_budget), self.time)
 
     def subset(
-        self, patch_size: int, max_tokens_per_instance: int, sampled_hw_p: int
+        self, patch_size: int, max_tokens_per_instance: int, sampled_hw_p: int, rank_batch_seed: int
     ) -> "HeliosSample":
         """Subset a HelioSample that is unbatched ie no batch dimension.
 
@@ -276,6 +277,7 @@ class HeliosSample(NamedTuple):
                 to determine the maximum number of timesteps possible for a given
                 height and width.
             sampled_hw_p: The number of tokens in the height and width dimensions.
+            rank_batch_seed: The seed for the random number generator.
 
         The returned sample will have shape:
             height = hw_t * patch_size
@@ -289,9 +291,10 @@ class HeliosSample(NamedTuple):
             sampled_hw_p, max_tokens_per_instance
         )
         sampled_hw = sampled_hw_p * patch_size
-        start_h = np.random.choice(self.height - sampled_hw + 1)
-        start_w = np.random.choice(self.width - sampled_hw + 1)
-        start_t = np.random.choice(self.time - max_t + 1)
+        rng = get_rng(rank_batch_seed)
+        start_h = rng.choice(self.height - sampled_hw + 1)
+        start_w = rng.choice(self.width - sampled_hw + 1)
+        start_t = rng.choice(self.time - max_t + 1)
         new_data_dict: dict[str, ArrayTensor] = {}
         for attribute, modality in self.as_dict(ignore_nones=True).items():
             assert modality is not None
@@ -348,6 +351,7 @@ class GetItemArgs(NamedTuple):
     patch_size: int
     sampled_hw_p: int
     token_budget: int | None = None
+    rank_batch_seed = 0 # should this be required to avoid tricky bugs?
 
 
 # TODO should training modalities be str or modality_spec
@@ -674,6 +678,7 @@ class HeliosDataset(Dataset):
                 patch_size=args.patch_size,
                 max_tokens_per_instance=args.token_budget,
                 sampled_hw_p=args.sampled_hw_p,
+                rank_batch_seed=args.rank_batch_seed,
             )
         else:
             sample_subset = sample

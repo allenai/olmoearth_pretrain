@@ -454,7 +454,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
         global_indices = self.data_loader.get_global_indices()
         indices = self.data_loader._get_local_instance_indices(global_indices)
         instance_iterator = (
-            self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
+            self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p, self.data_loader.rank_batch_seed)
             for idx, patch_size, sampled_hw_p in self.data_loader._get_batch_item_params_iterator(
                 indices,
                 self.data_loader.patch_sizes,
