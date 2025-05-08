@@ -13,6 +13,8 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
 
+from helios.data.constants import ModalitySpec
+
 logger = logging.getLogger(__name__)
 
 
@@ -21,7 +23,8 @@ class FlexiPatchEmbed(nn.Module):
 
     def __init__(
         self,
-        patch_size: int | tuple[int, int],
+        modality_spec: ModalitySpec,
+        patch_size_at_16: int | tuple[int, int],
         in_chans: int = 3,
         embedding_size: int = 128,
         norm_layer: nn.Module | None = None,
@@ -35,7 +38,8 @@ class FlexiPatchEmbed(nn.Module):
         by https://github.com/bwconrad/flexivit/
 
         Args:
-            patch_size: Base patch size. i.e the size of the parameter buffer
+            modality_spec: The modality spec for this modality
+            patch_size_at_16: Base patch size. i.e the size of the parameter buffer at a resolution of 16
             in_chans: Number of input image channels
             embedding_size: Network embedding dimension size
             norm_layer: Optional normalization layer
@@ -47,13 +51,16 @@ class FlexiPatchEmbed(nn.Module):
 
         self.embedding_size = embedding_size
 
-        self.patch_size = self.to_2tuple(patch_size)
+        self.modality_spec = modality_spec
+        self.patch_size = self.to_2tuple(
+            patch_size_at_16 * modality_spec.image_tile_size_factor
+        )
 
         self.proj = nn.Conv2d(
             in_chans,
             embedding_size,
-            kernel_size=patch_size,
-            stride=patch_size,
+            kernel_size=self.patch_size,
+            stride=self.patch_size,
             bias=bias,
         )
         self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
@@ -85,14 +92,14 @@ class FlexiPatchEmbed(nn.Module):
     def forward(
         self,
         x: Tensor,
-        patch_size: int | tuple[int, int] | None = None,
+        patch_size_at_16: int | tuple[int, int] | None = None,
     ) -> Tensor | tuple[Tensor, tuple[int, int]]:
         """Forward pass for the FlexiPatchEmbed module.
 
         Args:
             x: Input tensor with shape [b, h, w, (t), c]
-            patch_size: Patch size to use for the embedding. If None, the base patch size
-                will be used.
+            patch_size_at_16: Patch size to use for the embedding. If None, the base patch size
+                will be used, at an image_tile_size_factor of 16
         """
         # x has input shape [b, h, w, (t), c]
         batch_size = x.shape[0]
@@ -106,10 +113,11 @@ class FlexiPatchEmbed(nn.Module):
         else:
             x = rearrange(x, "b h w c -> b c h w")
 
-        if not patch_size:
+        if not patch_size_at_16:
             # During evaluation use base patch size if not specified
             patch_size = self.patch_size
-
+        else:
+            patch_size = patch_size_at_16 * self.modality_spec.image_tile_size_factor
         patch_size = self.to_2tuple(patch_size)
         assert (
             isinstance(patch_size, tuple) and len(patch_size) == 2

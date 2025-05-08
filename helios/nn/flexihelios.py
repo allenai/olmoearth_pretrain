@@ -329,7 +329,8 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     self._get_embedding_module_name(modality, idx): FlexiPatchEmbed(
                         in_chans=len(channel_set_idxs),
                         embedding_size=self.embedding_size,
-                        patch_size=self.max_patch_size,
+                        patch_size_at_16=self.max_patch_size,
+                        modality_spec=modality_spec,
                     )
                     for idx, channel_set_idxs in enumerate(
                         modality_spec.bandsets_as_indices()
