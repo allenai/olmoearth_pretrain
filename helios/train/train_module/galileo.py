@@ -317,8 +317,8 @@ class GalileoTrainModule(HeliosTrainModule):
             )
         del batch, microbatch, batch_data
 
-    @staticmethod
     def apply_masks_and_compute_losses_and_latents(
+        self,
         microbatch: HeliosSample,
         mask_fn: Callable,
         model_forward_fn: Callable,
@@ -326,7 +326,11 @@ class GalileoTrainModule(HeliosTrainModule):
         token_exit_cfg: dict[str, int],
     ) -> tuple[torch.Tensor, TokensAndMasks, torch.Tensor]:
         """Apply masks and compute losses and latents."""
-        masked_batch = mask_fn(microbatch, patch_size=patch_size)
+        masked_batch = mask_fn(
+            microbatch,
+            rank_batch_seed=self.trainer.data_loader.rank_batch_seed,
+            patch_size=patch_size,
+        )
 
         # Run Encoder and decoder on the augmented input
         loss, latent, _, _, pooled = model_forward_fn(

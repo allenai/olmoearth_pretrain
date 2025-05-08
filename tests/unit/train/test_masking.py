@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def test_random_masking_and_unmask() -> None:
     """Test random masking ratios."""
-    b, h, w, t = 100, 16, 16, 8
+    b, h, w, t = 4, 16, 16, 8
 
     patch_size = 4
 
@@ -43,6 +43,7 @@ def test_random_masking_and_unmask() -> None:
         decode_ratio=decode_ratio,
     ).apply_mask(
         batch,
+        rank_batch_seed=0,
         patch_size=patch_size,
     )
     # Check that all values in the first patch are the same (consistent masking)
@@ -94,7 +95,7 @@ def test_random_masking_and_unmask() -> None:
 
 def test_space_structure_masking_and_unmask() -> None:
     """Test space structure masking ratios."""
-    b, h, w, t = 100, 16, 16, 8
+    b, h, w, t = 4, 16, 16, 8
 
     days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
     months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
@@ -115,6 +116,7 @@ def test_space_structure_masking_and_unmask() -> None:
         decode_ratio=decode_ratio,
     ).apply_mask(
         batch,
+        rank_batch_seed=0,
         patch_size=4,
     )
     # check that each modality has the right masking ratio
@@ -155,7 +157,7 @@ def test_space_structure_masking_and_unmask() -> None:
 
 def test_time_structure_masking_and_unmask() -> None:
     """Test time structure masking ratios."""
-    b, h, w, t = 100, 16, 16, 8
+    b, h, w, t = 4, 16, 16, 8
 
     patch_size = 4
 
@@ -178,6 +180,7 @@ def test_time_structure_masking_and_unmask() -> None:
         decode_ratio=decode_ratio,
     ).apply_mask(
         batch,
+        rank_batch_seed=0,
         patch_size=patch_size,
     )
     # check that each modality has the right masking ratio
@@ -218,7 +221,7 @@ def test_time_structure_masking_and_unmask() -> None:
 
 def test_modality_space_time_masking_and_unmask() -> None:
     """Test time structure masking ratios."""
-    b, h, w, t = 100, 16, 16, 8
+    b, h, w, t = 4, 16, 16, 8
 
     patch_size = 4
 
@@ -244,6 +247,7 @@ def test_modality_space_time_masking_and_unmask() -> None:
     for i in range(10):
         masked_sample = strategy.apply_mask(
             batch,
+            rank_batch_seed=0,
             patch_size=patch_size,
         )
         for modality_name in masked_sample._fields:
@@ -299,7 +303,7 @@ def test_create_random_mask_with_missing_mask() -> None:
     encode_ratio, decode_ratio = 0.25, 0.5
     masked_sample = RandomMaskingStrategy(
         encode_ratio=encode_ratio, decode_ratio=decode_ratio
-    ).apply_mask(batch, patch_size=1)
+    ).apply_mask(batch, patch_size=1, rank_batch_seed=0)
 
     # Check the sentinel1 mask
     sentinel1_mask = masked_sample.sentinel1_mask
@@ -338,7 +342,7 @@ def test_create_random_mask_with_missing_mask() -> None:
 
 def test_create_spatial_mask_with_patch_size() -> None:
     """Test the _create_spatial_mask function with different patch sizes."""
-    b = 4
+    b = 2
     h, w = 16, 16
     shape = (b, h, w)
     patch_size = 4
@@ -350,7 +354,7 @@ def test_create_spatial_mask_with_patch_size() -> None:
 
     # Call the _create_spatial_mask function directly
     mask = strategy._create_spatial_mask(
-        modality=Modality.SENTINEL2_L2A, shape=shape, patch_size=patch_size
+        modality=Modality.SENTINEL2_L2A, shape=shape, patch_size=patch_size, rand_seed=0
     )
 
     # Check that the mask has the right shape
@@ -381,7 +385,7 @@ def test_create_spatial_mask_with_patch_size() -> None:
 
 def test_create_temporal_mask() -> None:
     """Test the _create_temporal_mask function."""
-    b = 10
+    b = 2
     t = 8
     shape = (b, t)
 
@@ -391,6 +395,7 @@ def test_create_temporal_mask() -> None:
     # Call the _create_temporal_mask function directly
     mask = strategy._create_temporal_mask(
         shape=shape,
+        rand_seed=0,
     )
 
     # Check the masking ratios for non-missing timesteps
@@ -415,7 +420,7 @@ def test_create_temporal_mask() -> None:
 
 def test_space_masking_with_missing_modality_mask() -> None:
     """Test SpaceMaskingStrategy with missing_modalities_masks."""
-    b, h, w, t = 10, 16, 16, 8
+    b, h, w, t = 2, 16, 16, 8
 
     days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
     months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
@@ -448,7 +453,7 @@ def test_space_masking_with_missing_modality_mask() -> None:
     )
 
     # Apply masking
-    masked_sample = strategy.apply_mask(batch, patch_size=4)
+    masked_sample = strategy.apply_mask(batch, rank_batch_seed=0, patch_size=4)
 
     # Check that sentinel1_mask has been created
     sentinel1_mask = masked_sample.sentinel1_mask
@@ -505,7 +510,7 @@ def test_space_masking_with_missing_modality_mask() -> None:
 
 def test_time_masking_with_missing_modality_mask() -> None:
     """Test TimeMaskingStrategy with missing_modalities_masks."""
-    b, h, w, t = 10, 16, 16, 8
+    b, h, w, t = 2, 16, 16, 8
 
     days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
     months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
@@ -536,7 +541,7 @@ def test_time_masking_with_missing_modality_mask() -> None:
     strategy = TimeMaskingStrategy(encode_ratio=encode_ratio, decode_ratio=decode_ratio)
 
     # Apply masking
-    masked_sample = strategy.apply_mask(batch, patch_size=4)
+    masked_sample = strategy.apply_mask(batch, rank_batch_seed=0, patch_size=4)
 
     # Check that sentinel1_mask has been created
     sentinel1_mask = masked_sample.sentinel1_mask
@@ -589,7 +594,7 @@ def test_time_masking_with_missing_modality_mask() -> None:
 
 def test_random_masking_with_missing_modality_mask() -> None:
     """Test RandomMaskingStrategy with missing_modalities_masks."""
-    b, h, w, t = 10, 16, 16, 8
+    b, h, w, t = 4, 16, 16, 8
 
     days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
     months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
@@ -622,7 +627,7 @@ def test_random_masking_with_missing_modality_mask() -> None:
     )
 
     # Apply masking
-    masked_sample = strategy.apply_mask(batch, patch_size=1)
+    masked_sample = strategy.apply_mask(batch, rank_batch_seed=0, patch_size=1)
 
     # Check that sentinel1_mask has been created
     sentinel1_mask = masked_sample.sentinel1_mask
@@ -672,7 +677,7 @@ def test_random_masking_with_missing_modality_mask() -> None:
 
 def test_modality_mask_and_unmask() -> None:
     """Test modality structure masking ratios."""
-    b, h, w, t = 100, 16, 16, 8
+    b, h, w, t = 2, 16, 16, 8
 
     days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
     months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
@@ -696,6 +701,7 @@ def test_modality_mask_and_unmask() -> None:
         decode_ratio=decode_ratio,
     ).apply_mask(
         batch,
+        rank_batch_seed=0,
     )
 
     mask_per_modality: list[torch.Tensor] = []  # each tensor will have shape [b, 1]

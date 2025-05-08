@@ -212,7 +212,9 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 )
                 microbatch = self.transform.apply(microbatch).to_device(self.device)
                 masked_batch = self.masking_strategy.apply_mask(
-                    microbatch, patch_size=patch_size
+                    microbatch,
+                    rank_batch_seed=self.trainer.data_loader.rank_batch_seed,
+                    patch_size=patch_size,
                 )
                 # Run Encoder and decoder on the augmented input
                 loss, latent, decoded, target_output = self.model_forward(
