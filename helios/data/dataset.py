@@ -166,7 +166,7 @@ class HeliosSample(NamedTuple):
 
     @property
     def height(self) -> int:
-        """Get the height of the data."""
+        """Get the height of the data at resolution_factor == 16."""
         height_width_time_modalities = [
             "sentinel2_l2a",
             "sentinel1",
@@ -189,7 +189,7 @@ class HeliosSample(NamedTuple):
 
     @property
     def width(self) -> int:
-        """Get the height of the data."""
+        """Get the height of the data at resolution_factor == 16."""
         height_width_time_modalities = [
             "sentinel2_l2a",
             "sentinel1",
