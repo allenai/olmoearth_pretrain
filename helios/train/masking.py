@@ -198,12 +198,13 @@ class MaskingStrategy:
         self,
         modality: ModalitySpec,
         shape: torch.Size,
-        patch_size: int,
+        patch_size_at_16: int,
         device: torch.device | None = None,
     ) -> ArrayTensor:
         mask_shape = list(shape)
         mask_shape[-1] = modality.num_band_sets
         if modality.is_spatial:
+            patch_size = patch_size_at_16 * modality.image_tile_size_factor
             mask_shape[1] //= patch_size
             mask_shape[2] //= patch_size
 
@@ -378,18 +379,19 @@ class SpaceMaskingStrategy(MaskingStrategy):
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
 
-    def _create_spatial_mask(
+    def _create_patch_spatial_mask(
         self,
         modality: ModalitySpec,
         shape: torch.Size,
-        patch_size: int,
+        patch_size_at_16: int,
         device: torch.device | None = None,
-    ) -> ArrayTensor:
+    ) -> torch.Tensor:
         if not modality.is_spatial:
             raise ValueError("Non-spatial modality {modality}")
 
         b, h, w = shape[:3]
 
+        patch_size = patch_size_at_16 * modality.image_tile_size_factor
         assert (h % patch_size == 0) and (w % patch_size == 0)
         h_p = h // patch_size
         w_p = w // patch_size
@@ -415,12 +417,34 @@ class SpaceMaskingStrategy(MaskingStrategy):
 
         masks = [flat_mask[torch.randperm(patches, device=device)] for i in range(b)]
         random_batch_mask = torch.stack(masks)
-        patch_mask = rearrange(random_batch_mask, "b (h w) -> b h w", h=h_p, w=w_p)
+        return rearrange(random_batch_mask, "b (h w) -> b h w", h=h_p, w=w_p)
+
+    def _create_spatial_mask(
+        self,
+        patch_mask: torch.Tensor,
+        modality: ModalitySpec,
+        shape: torch.Size,
+        patch_size_at_16: int,
+    ) -> ArrayTensor:
+        if not modality.is_spatial:
+            raise ValueError("Non-spatial modality {modality}")
+
+        b, h, w = shape[:3]
+
+        patch_size = patch_size_at_16 * modality.image_tile_size_factor
+        assert (h % patch_size == 0) and (w % patch_size == 0)
+        h_p = h // patch_size
+        w_p = w // patch_size
+
+        if (patch_mask.shape[1] != h_p) or (patch_mask.shape[2] != w_p):
+            raise ValueError(
+                f"Mismached shapes for {modality.name}: "
+                f"got patch_mask {patch_mask.shape} for h_p {h_p}, w_p {w_p}"
+            )
 
         mask = repeat(
             patch_mask, "b h w -> b (h hp) (w wp)", hp=patch_size, wp=patch_size
         )
-
         return mask
 
     def apply_mask(
@@ -432,7 +456,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
 
         Args:
             batch: Input data of type HeliosSample
-            patch_size: patch size applied to sample
+            patch_size: patch size applied to sample, at an image_tile_size_factor == 16
             **kwargs: Additional arguments for maskings
 
         Returns:
@@ -441,7 +465,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
         if patch_size is None:
             raise ValueError("patch_size must be provided for space masking")
         output_dict: dict[str, ArrayTensor | None] = {}
-        spatial_mask = None
+        patch_spatial_mask = None
         for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
             if instance is None:
@@ -465,10 +489,13 @@ class SpaceMaskingStrategy(MaskingStrategy):
                 if not modality.is_spatial:
                     mask = self._create_random_mask(modality, shape, patch_size, device)
                 else:
-                    if spatial_mask is None:
-                        spatial_mask = self._create_spatial_mask(
+                    if patch_spatial_mask is None:
+                        patch_spatial_mask = self._create_patch_spatial_mask(
                             modality, shape, patch_size, device
                         )
+                    spatial_mask = self._create_spatial_mask(
+                        patch_spatial_mask, modality, shape, patch_size
+                    )
                     if len(shape) == 5:
                         t = shape[-2]
                     else:
