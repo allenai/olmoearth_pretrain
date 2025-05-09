@@ -176,8 +176,8 @@ def test_build_config_no_overrides() -> None:
     assert isinstance(config, HeliosExperimentConfig)
     assert config.run_name == "test_run"
     assert config.data_loader.global_batch_size == 16
-    assert config.visualize_config is not None
-    assert config.visualize_config.output_dir == "dummy_visuals"
+    assert config.visualize is not None
+    assert config.visualize.output_dir == "dummy_visuals"
 
 
 @pytest.mark.parametrize(

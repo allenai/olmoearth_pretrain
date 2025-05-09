@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import numpy as np
+
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoader
 from helios.data.dataset import HeliosDataset, collate_helios
@@ -18,7 +20,7 @@ def test_helios_dataloader(tmp_path: Path, setup_h5py_dir: Path) -> None:
     dataset = HeliosDataset(
         h5py_dir=setup_h5py_dir,
         training_modalities=training_modalities,
-        dtype="float32",
+        dtype=np.float32,
     )
 
     dataset.prepare()

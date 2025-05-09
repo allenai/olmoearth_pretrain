@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+import numpy as np
+
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosDataset
 from helios.data.visualize import visualize_sample
@@ -22,7 +24,7 @@ def test_visualize_sample(
     ]
     dataset = HeliosDataset(
         h5py_dir=setup_h5py_dir,
-        dtype="float32",
+        dtype=np.float32,
         training_modalities=training_modalities,
     )
     dataset.prepare()

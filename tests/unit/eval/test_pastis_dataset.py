@@ -57,7 +57,9 @@ def test_pastis_dataset_initialization(mock_pastis_data: Path) -> None:
     """Test basic initialization and functionality of PASTISRDataset."""
     # Test multimodal initialization
     dataset = PASTISRDataset(
-        path_to_splits=mock_pastis_data, split="train", is_multimodal=True
+        path_to_splits=mock_pastis_data,
+        split="train",
+        input_modalities=["sentinel1", "sentinel2"],
     )
 
     assert len(dataset) == 1  # Should have 1 sample
@@ -78,7 +80,7 @@ def test_pastis_dataset_initialization(mock_pastis_data: Path) -> None:
 
     # Test non-multimodal initialization
     dataset_s2_only = PASTISRDataset(
-        path_to_splits=mock_pastis_data, split="train", is_multimodal=False
+        path_to_splits=mock_pastis_data, split="train", input_modalities=["sentinel2"]
     )
 
     sample_s2, label_s2 = dataset_s2_only[0]
