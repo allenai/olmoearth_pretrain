@@ -862,7 +862,8 @@ class FlexiHeliosBase(nn.Module):
             masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
-            tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
+            modality_tokens = rearrange(x_modality, "b ... d -> b (...) d")
+            tokens.append(modality_tokens)
             masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
         tokens = torch.cat(tokens, dim=1)
         masks = torch.cat(masks, dim=1)
@@ -1190,6 +1191,9 @@ class Encoder(FlexiHeliosBase):
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
+            # Log the tokens shape here with a warning
+            if i_blk == 0:
+                logger.warning(f"Tokens shape: {tokens.shape}")
             tokens = blk(x=tokens, y=None, attn_mask=new_mask)
 
         if exit_ids_seq is not None:
@@ -1235,7 +1239,22 @@ class Encoder(FlexiHeliosBase):
             TokensAndMasks containing the encoded representations and their masks
         """
         # TODO: Add step to validate the exit config is valid
+
+        # Create CUDA events for timing
+        start_event = torch.cuda.Event(enable_timing=True)
+        patch_event = torch.cuda.Event(enable_timing=True)
+        attn_event = torch.cuda.Event(enable_timing=True)
+        proj_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        # Start timing
+        start_event.record()
+
+        # Time patch embedding
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
+        patch_event.record()
+
+        # Time attention if needed
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
@@ -1246,8 +1265,30 @@ class Encoder(FlexiHeliosBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
             )
+        attn_event.record()
+
+        # Time projection and aggregation
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        return output, self.project_and_aggregate(output)
+        result = output, self.project_and_aggregate(output)
+        proj_event.record()
+
+        # End timing
+        end_event.record()
+
+        # Synchronize to get accurate timing
+        torch.cuda.synchronize()
+
+        # Calculate time between each step
+        patch_time = start_event.elapsed_time(patch_event)
+        attn_time = patch_event.elapsed_time(attn_event)
+        proj_time = attn_event.elapsed_time(proj_event)
+        final_time = proj_event.elapsed_time(end_event)
+        total_time = start_event.elapsed_time(end_event)
+
+        if torch.distributed.get_rank() == 0:
+            logging.info(f"Encoder timing: patch={patch_time:.2f}ms, attn={attn_time:.2f}ms, proj={proj_time:.2f}ms, final={final_time:.2f}ms, total={total_time:.2f}ms")
+
+        return result
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""

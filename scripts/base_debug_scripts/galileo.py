@@ -16,6 +16,7 @@ from olmo_core.train.callbacks import (
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
+    ProfilerCallback
 )
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
@@ -87,8 +88,8 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> GalileoTrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 0.002
-    RANK_MICROBATCH_SIZE = 64
+    LR = 0.0001
+    RANK_MICROBATCH_SIZE = 32
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
     WD = 0.02
@@ -133,7 +134,7 @@ def build_train_module_config(
         )
     token_exit_cfg_b = {modality: 0 for modality in common.training_modalities}
     WARMUP_EPOCHS = 10
-    dp_config = DataParallelConfig(name=DataParallelType.ddp)
+    dp_config = None #  DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
@@ -149,6 +150,7 @@ def build_train_module_config(
         token_exit_cfg_a=token_exit_cfg_a,
         token_exit_cfg_b=token_exit_cfg_b,
         autocast_precision=DType.bfloat16,
+        compile_model=True,
         max_grad_norm=1.0,
         dp_config=dp_config,
         scheduler=scheduler,
@@ -162,7 +164,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # TODO: Include collate function here
 
     NUM_WORKERS = 8
-    GLOBAL_BATCH_SIZE = 128
+    GLOBAL_BATCH_SIZE = 64
     PREFETCH_FACTOR = 4
     TOKEN_BUDGET = 1500
     SAMPLE_HW_P_LIST = list(range(5, 13))
@@ -336,6 +338,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
+        # .with_callback("profiler", ProfilerCallback(repeat=3))
     )
     return trainer_config
 

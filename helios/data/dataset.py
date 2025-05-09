@@ -790,12 +790,13 @@ class HeliosDataset(Dataset):
         with h5_file_path.open("rb") as f:
             with h5py.File(f, "r") as h5file:
                 logger.info(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
-                # Not sure lat lon should be here
-                sample_dict = {
-                    k: v[()]
-                    for k, v in h5file.items()
-                    if k in self.training_modalities or k in ["latlon", "timestamps"]
-                }
+                # Track time per modality
+                for k, v in h5file.items():
+                    if k in self.training_modalities or k in ["latlon", "timestamps"]:
+                        modality_start_time = time.perf_counter()
+                        sample_dict[k] = v[()]
+                        modality_end_time = time.perf_counter()
+                        logger.info(f"Reading {k} took {modality_end_time - modality_start_time:.6f} seconds")
         return sample_dict
 
     def _get_h5_file_path(self, index: int) -> UPath:
@@ -810,13 +811,19 @@ class HeliosDataset(Dataset):
             index = args.idx
         h5_file_path = self._get_h5_file_path(index)
 
+        start_time = time.perf_counter()
         if not h5_file_path.exists():
             raise FileNotFoundError(
                 f"H5 file {h5_file_path} does not exist, Be Sure to run prepare before starting Training"
             )
+        file_check_time = time.perf_counter()
+        logger.info(f"File check took {file_check_time - start_time:.6f} seconds")
+
         # We are currently reading the entire h5 file into memory this can be made faster by chunking the dataset appropriately and only reading in the optimal chunks
         # THis io is the current bottleneck of the getitem operation
         sample_dict = self.read_h5_file(h5_file_path)
+        read_time = time.perf_counter()
+        logger.info(f"Reading h5 file took {read_time - file_check_time:.6f} seconds")
 
         """
         keys_to_replace = []
@@ -834,26 +841,45 @@ class HeliosDataset(Dataset):
         # Fill any training modalities that are not present in the h5 file with missing values
         # sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
         sample = HeliosSample(**sample_dict)
+        sample_creation_time = time.perf_counter()
+        logger.info(f"Sample creation took {sample_creation_time - read_time:.6f} seconds")
 
         subset_sample = self.apply_subset(sample, args)
+        subset_time = time.perf_counter()
+        logger.info(f"Applying subset took {subset_time - sample_creation_time:.6f} seconds")
+
         sample_dict = subset_sample.as_dict(ignore_nones=True)
+        dict_conversion_time = time.perf_counter()
+        logger.info(f"Dict conversion took {dict_conversion_time - subset_time:.6f} seconds")
+
         logger.info(f"Sample dict keys {sample_dict.keys()}")
         # Sample modalities should be written into the metadata of the h5 dataset
         sample_modalities = list(
             [Modality.get(key) for key in sample_dict.keys() if key != "timestamps"]
         )
+        modality_list_time = time.perf_counter()
+        logger.info(f"Creating modality list took {modality_list_time - dict_conversion_time:.6f} seconds")
 
         if self.normalize:
             for modality in sample_modalities:
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 # if modality.name in missing_modalities:
                 #     continue
+                normalize_start = time.perf_counter()
                 sample_dict[modality.name] = self.normalize_image(
                     modality, sample_dict[modality.name]
                 )
+                normalize_end = time.perf_counter()
+                logger.info(f"Normalizing {modality.name} took {normalize_end - normalize_start:.6f} seconds")
+
                 sample_dict[modality.name] = sample_dict[modality.name].astype(
                     self.dtype
                 )
+                dtype_conversion_time = time.perf_counter()
+                logger.info(f"Type conversion for {modality.name} took {dtype_conversion_time - normalize_end:.6f} seconds")
+
+        total_time = time.perf_counter() - start_time
+        logger.info(f"Total getitem processing took {total_time:.6f} seconds")
 
         return args.patch_size, HeliosSample(**sample_dict)
 
