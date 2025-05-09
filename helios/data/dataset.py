@@ -397,8 +397,7 @@ def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSa
                     dim=0,
                 )
             except RuntimeError as e:
-                print(f"Error triggered for {attr}")
-                raise e
+                raise RuntimeError(f"{e}, {attr}")
 
         stacked_tensor = torch.stack(
             [torch.from_numpy(getattr(sample, attr)) for _, sample in batch], dim=0
