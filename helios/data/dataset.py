@@ -282,8 +282,6 @@ class HeliosSample(NamedTuple):
         if max_t_within_budget < 1:
             raise ValueError("patch_size too small for this sample and budget")
 
-        if self.time < max_t_within_budget:
-            raise ValueError(f"{self.time} < {max_t_within_budget}")
         return min(floor(max_t_within_budget), self.time)
 
     def subset(
