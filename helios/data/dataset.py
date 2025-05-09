@@ -388,10 +388,17 @@ def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSa
 
             # we can't assign batch (ruff gets upset since this disrupts the scope) so we
             # have to do it this way
-            return torch.stack(
-                [torch.from_numpy(getattr(sample, attr)) for _, sample in new_batch],
-                dim=0,
-            )
+            try:
+                return torch.stack(
+                    [
+                        torch.from_numpy(getattr(sample, attr))
+                        for _, sample in new_batch
+                    ],
+                    dim=0,
+                )
+            except RuntimeError as e:
+                print(f"Error triggered for {attr}")
+                raise e
 
         stacked_tensor = torch.stack(
             [torch.from_numpy(getattr(sample, attr)) for _, sample in batch], dim=0
