@@ -660,7 +660,7 @@ class HeliosDataset(Dataset):
             return self.normalizer_predefined.normalize(modality, image)
 
     def fill_sample_with_missing_values(
-        self, sample_dict: dict[str, Any]
+        self, sample_dict: dict[str, Any], missing_timesteps_masks: dict[str, Any]
     ) -> tuple[HeliosSample, list[str]]:
         """Fill the sample with missing values."""
         missing_modalities = []
@@ -687,13 +687,16 @@ class HeliosDataset(Dataset):
             modality_data = modality_data.astype(self.dtype)
 
             missing_timesteps = []
-            # Check all timesteps at once for zeros
-            all_zeros_mask = np.all(
-                modality_data[..., :, :] == 0, axis=(-1, -3, -4)
-            )  # Checks H, W, bands dimensions
-            missing_timesteps = np.where(all_zeros_mask)[
-                0
-            ]  # Get indices where all values are 0
+            # Use the missing_timesteps_mask if available for this modality
+            if modality in missing_timesteps_masks:
+                # Get indices where the mask is False (missing timesteps)
+                missing_timesteps = np.where(~missing_timesteps_masks[modality])[0]
+            # else:
+            #     # Fallback to checking for zeros if mask not available
+            #     all_zeros_mask = np.all(
+            #         modality_data[..., :, :] == 0, axis=(-1, -3, -4)
+            #     )  # Checks H, W, bands dimensions
+            #     missing_timesteps = np.where(all_zeros_mask)[0]
 
             if len(missing_timesteps) > 0:
                 logger.info(
@@ -760,12 +763,17 @@ class HeliosDataset(Dataset):
             with h5py.File(f, "r") as h5file:
                 logger.info(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
                 # Not sure lat lon should be here
+                # timestamps should not be a floating string
                 sample_dict = {
                     k: v[()]
                     for k, v in h5file.items()
-                    if k in self.training_modalities or k in ["latlon", "timestamps"]
+                    if k in self.training_modalities or k in [Modality.LATLON.name, "timestamps", "missing_timesteps_masks"]
                 }
-        return sample_dict
+                missing_timesteps_masks = {
+                    k: v[()]
+                    for k, v in h5file["missing_timesteps_masks"].items()
+                }
+        return sample_dict, missing_timesteps_masks
 
     def _get_h5_file_path(self, index: int) -> UPath:
         """Get the h5 file path."""
@@ -784,9 +792,9 @@ class HeliosDataset(Dataset):
                 f"H5 file {h5_file_path} does not exist, Be Sure to run prepare before starting Training"
             )
 
-        sample_dict = self.read_h5_file(h5_file_path)
+        sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
-        sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
+        sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict, missing_timesteps_masks)
         subset_sample = self.apply_subset(sample, args)
 
         sample_dict = subset_sample.as_dict(ignore_nones=True)
