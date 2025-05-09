@@ -346,6 +346,24 @@ class HeliosSample(NamedTuple):
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
 
+    @property
+    def dtype(self) -> DType:
+        """Dtype of the ArrayTensors in this sample."""
+        cast(ArrayTensor, next(iter(self.as_dict().items()))[1]).dtype
+
+    def fill_modality(self, modality: str) -> None:
+        """If modality is missing, fill it with the expected shape."""
+        if getattr(self, modality) is None:
+            setattr(
+                self,
+                modality,
+                np.full(
+                    self.get_expected_shape(modality),
+                    fill_value=MISSING_VALUE,
+                    dtype=self.dtype,
+                ),
+            )
+
 
 def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSample]:
     """Collate function that automatically handles any modalities present in the samples."""
@@ -353,9 +371,18 @@ def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSa
     # Stack tensors while handling None values
     def stack_or_none(attr: str) -> torch.Tensor | None:
         """Stack the tensors while handling None values."""
-        # For partially missing samples we use MISSING_VALUE so we only check the first sample
-        if getattr(batch[0][1], attr) is None:
+        all_nones: bool = True
+        for sample in batch:
+            if getattr(sample[1], attr) is not None:
+                all_nones = False
+                break
+        if all_nones:
             return None
+        else:
+            # fill any missing modalities with None
+            for sample in batch:
+                sample[1].fill_modality(attr)
+
         stacked_tensor = torch.stack(
             [torch.from_numpy(getattr(sample, attr)) for _, sample in batch], dim=0
         )
@@ -680,22 +707,22 @@ class HeliosDataset(Dataset):
         except Exception:
             return self.normalizer_predefined.normalize(modality, image)
 
-    def fill_sample_with_missing_values(
-        self, sample_dict: dict[str, Any]
-    ) -> tuple[HeliosSample, list[str]]:
-        """Fill the sample with missing values."""
-        missing_modalities = []
-        sample = HeliosSample(**sample_dict)
-        for modality in self.training_modalities:
-            if modality not in sample_dict.keys():
-                logger.debug(f"Filling {modality} with missing values")
-                sample_dict[modality] = np.full(
-                    sample.get_expected_shape(modality),
-                    fill_value=MISSING_VALUE,
-                    dtype=self.dtype,
-                )
-                missing_modalities.append(modality)
-        return HeliosSample(**sample_dict), missing_modalities
+    # def fill_sample_with_missing_values(
+    #     self, sample_dict: dict[str, Any]
+    # ) -> tuple[HeliosSample, list[str]]:
+    #     """Fill the sample with missing values."""
+    #     missing_modalities = []
+    #     sample = HeliosSample(**sample_dict)
+    #     for modality in self.training_modalities:
+    #         if modality not in sample_dict.keys():
+    #             logger.debug(f"Filling {modality} with missing values")
+    #             sample_dict[modality] = np.full(
+    #                 sample.get_expected_shape(modality),
+    #                 fill_value=MISSING_VALUE,
+    #                 dtype=self.dtype,
+    #             )
+    #             missing_modalities.append(modality)
+    #     return HeliosSample(**sample_dict), missing_modalities
 
     def apply_subset(self, sample: HeliosSample, args: GetItemArgs) -> HeliosSample:
         """Apply the subset to the sample."""
@@ -789,7 +816,9 @@ class HeliosDataset(Dataset):
         """
 
         # Fill any training modalities that are not present in the h5 file with missing values
-        sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
+        # sample, missing_modalities = self.fill_sample_with_missing_values(sample_dict)
+        sample = HeliosSample(**sample_dict)
+
         subset_sample = self.apply_subset(sample, args)
         sample_dict = subset_sample.as_dict(ignore_nones=True)
         logger.info(f"Sample dict keys {sample_dict.keys()}")
@@ -801,8 +830,8 @@ class HeliosDataset(Dataset):
         if self.normalize:
             for modality in sample_modalities:
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
-                if modality.name in missing_modalities:
-                    continue
+                # if modality.name in missing_modalities:
+                #     continue
                 sample_dict[modality.name] = self.normalize_image(
                     modality, sample_dict[modality.name]
                 )
