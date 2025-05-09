@@ -191,6 +191,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         training_modalities=common.training_modalities,
         use_samples_with_missing_supported_modalities=True,
         dtype="float32",
+        cache_dir="/helios_cache/osm_sampling",
     )
 
 
@@ -219,7 +220,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(5),
+            eval_interval=Duration.epochs(1),
         ),
         "m-bigearthnet": DownstreamTaskConfig(
             dataset="m-bigearthnet",
