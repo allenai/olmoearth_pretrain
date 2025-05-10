@@ -70,7 +70,9 @@ def main() -> None:
     for modality_combo in MODALITY_COMBINATIONS:
         # Generate a descriptive name for the run
         modality_combo_name = "_".join([m.name.lower() for m in modality_combo])
-        run_name = f"modality_sweep_galileo_base_contrastive_0.05_{modality_combo_name}"
+        run_name = (
+            f"1_modality_sweep_galileo_base_contrastive_0.05_{modality_combo_name}"
+        )
 
         # Format the modality arguments
         modality_args = format_training_modalities(modality_combo)
