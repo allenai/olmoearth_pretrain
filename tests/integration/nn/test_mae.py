@@ -132,6 +132,9 @@ def test_mae_with_loss(
     mae = MAE(encoder, predictor, reconstructor)
     latent, decoded, reconstructed = mae.forward(x, patch_size)
 
+    assert decoded is not None
+    assert reconstructed is not None
+
     assert reconstructed.sentinel2_l2a is not None
     assert reconstructed.sentinel2_l2a_mask is not None
     assert x.sentinel2_l2a is not None
@@ -156,7 +159,7 @@ def test_mae_with_loss(
     loss_mim = PatchDiscriminationLossNew()
     with torch.no_grad():
         logger.info("target encoder running here")
-        target_output = mae.encoder.forward(
+        target_output, _ = mae.encoder.forward(
             x.unmask(),
             patch_size=patch_size,
             token_exit_cfg={
@@ -177,6 +180,7 @@ def test_mae_with_loss(
                 "month_embed",
                 "composite_encodings.per_modality_channel_embeddings.worldcover",
                 "patch_embeddings.per_modality_embeddings.worldcover",
+                "project_and_aggregate",
             ]
         ):
             assert param.grad is not None, name

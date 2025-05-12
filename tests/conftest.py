@@ -130,6 +130,7 @@ def prepare_samples_and_supported_modalities() -> (
                             ): data_path / "s2_l2a_20m.tif",
                             BandSet(["B01", "B09"], 64): data_path / "s2_l2a_40m.tif",
                         },
+                        modality=Modality.SENTINEL2_L2A,
                     ),
                     Modality.SENTINEL1: ModalityTile(
                         grid_tile=GridTile(
@@ -140,6 +141,7 @@ def prepare_samples_and_supported_modalities() -> (
                         band_sets={
                             BandSet(["VV", "VH"], 16): data_path / "s1_10m.tif",
                         },
+                        modality=Modality.SENTINEL1,
                     ),
                     Modality.WORLDCOVER: ModalityTile(
                         grid_tile=GridTile(
@@ -148,6 +150,7 @@ def prepare_samples_and_supported_modalities() -> (
                         images=images,
                         center_time=datetime(2020, 6, 30),
                         band_sets={BandSet(["B1"], 16): data_path / "worldcover.tif"},
+                        modality=Modality.WORLDCOVER,
                     ),
                     Modality.OPENSTREETMAP_RASTER: ModalityTile(
                         grid_tile=GridTile(
@@ -192,6 +195,7 @@ def prepare_samples_and_supported_modalities() -> (
                                 4,
                             ): data_path / "openstreetmap.tif",
                         },
+                        modality=Modality.OPENSTREETMAP_RASTER,
                     ),
                 },
             )
@@ -282,9 +286,9 @@ def masked_sample_dict(
 @pytest.fixture
 def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
     """Samples with missing modalities."""
-    s2_H, s2_W, s2_T, s2_C = 16, 16, 12, 13
-    s1_H, s1_W, s1_T, s1_C = 16, 16, 12, 2
-    wc_H, wc_W, wc_T, wc_C = 16, 16, 1, 10
+    s2_H, s2_W, s2_T, s2_C = 8, 8, 12, 13
+    s1_H, s1_W, s1_T, s1_C = 8, 8, 12, 2
+    wc_H, wc_W, wc_T, wc_C = 8, 8, 1, 10
 
     example_s2_data = np.random.randn(s2_H, s2_W, s2_T, s2_C)
     example_s1_data = np.random.randn(s1_H, s1_W, s1_T, s1_C)
@@ -351,9 +355,9 @@ def samples_without_missing_modalities(
     set_random_seeds: None,
 ) -> list[tuple[int, HeliosSample]]:
     """Samples without missing modalities."""
-    s2_H, s2_W, s2_T, s2_C = 16, 16, 12, 13
-    s1_H, s1_W, s1_T, s1_C = 16, 16, 12, 2
-    wc_H, wc_W, wc_T, wc_C = 16, 16, 1, 10
+    s2_H, s2_W, s2_T, s2_C = 8, 8, 12, 13
+    s1_H, s1_W, s1_T, s1_C = 8, 8, 12, 2
+    wc_H, wc_W, wc_T, wc_C = 8, 8, 1, 10
     example_s2_data = np.random.randn(s2_H, s2_W, s2_T, s2_C).astype(np.float32)
     example_s1_data = np.random.randn(s1_H, s1_W, s1_T, s1_C).astype(np.float32)
     example_wc_data = np.random.randn(wc_H, wc_W, wc_T, wc_C).astype(np.float32)

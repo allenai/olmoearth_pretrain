@@ -26,7 +26,12 @@ def convert_sentinel2(window_path: UPath, helios_path: UPath) -> None:
         helios_path: Helios dataset path to write to.
     """
     convert_freq(
-        window_path, helios_path, LAYER_FREQ, Modality.SENTINEL2, unprepared_okay=True
+        window_path,
+        helios_path,
+        LAYER_FREQ,
+        Modality.SENTINEL2,
+        missing_okay=True,
+        unprepared_okay=True,
     )
     convert_monthly(window_path, helios_path, LAYER_MONTHLY, Modality.SENTINEL2)
 

@@ -271,8 +271,8 @@ class GalileoTrainModule(HeliosTrainModule):
                 loss = (loss_a + loss_b) / 2
 
                 # Scale loss by number of microbatches
-                reg_term_a = self.compute_regularization(latent_a)
-                reg_term_b = self.compute_regularization(latent_b)
+                reg_term_a = self.compute_regularization(pooled_a)
+                reg_term_b = self.compute_regularization(pooled_b)
                 if reg_term_a is not None:
                     assert reg_term_b is not None
                     loss = loss + (reg_term_a + reg_term_b) / 2
@@ -351,7 +351,7 @@ class GalileoTrainModule(HeliosTrainModule):
             )
             with torch.no_grad():
                 logger.info("target encoder running here")
-                target_output = self.model.target_encoder.forward(
+                target_output, _ = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
@@ -373,7 +373,7 @@ class GalileoTrainModule(HeliosTrainModule):
             )
             with torch.no_grad():
                 logger.info("target encoder running here")
-                target_output = self.model.target_encoder.forward(
+                target_output, _ = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,

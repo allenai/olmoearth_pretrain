@@ -14,7 +14,7 @@ import h5py
 import numpy as np
 import pandas as pd
 import torch
-from olmo_core.config import Config, DType
+from olmo_core.config import Config
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
 from torch.utils.data import Dataset
@@ -179,7 +179,12 @@ class HeliosSample(NamedTuple):
     @property
     def height(self) -> int:
         """Get the height of the data."""
-        height_width_time_modalities = ["sentinel2_l2a", "sentinel1", "worldcover"]
+        height_width_time_modalities = [
+            "sentinel2_l2a",
+            "sentinel1",
+            "worldcover",
+            "landsat",
+        ]
         for modality in height_width_time_modalities:
             x = getattr(self, modality)
             if x is not None:
@@ -195,7 +200,12 @@ class HeliosSample(NamedTuple):
     @property
     def width(self) -> int:
         """Get the height of the data."""
-        height_width_time_modalities = ["sentinel2_l2a", "sentinel1", "worldcover"]
+        height_width_time_modalities = [
+            "sentinel2_l2a",
+            "sentinel1",
+            "worldcover",
+            "landsat",
+        ]
         for modality in height_width_time_modalities:
             x = getattr(self, modality)
             if x is not None:
@@ -358,7 +368,7 @@ class HeliosDataset(Dataset):
         self,
         h5py_dir: UPath,
         training_modalities: list[str],
-        dtype: DType,
+        dtype: np.dtype,
         normalize: bool = True,
         use_samples_with_missing_supported_modalities: bool = False,
         cache_dir: UPath | None = None,
@@ -438,6 +448,9 @@ class HeliosDataset(Dataset):
             supported_modalities.remove("raster")
             supported_modalities.remove("openstreetmap")
             supported_modalities.append("openstreetmap_raster")
+        # latlons are saved with every h5py file, see
+        # helios.dataset.convert_to_h5py.ConvertToH5py._create_h5_file
+        supported_modalities.append("latlon")
         num_samples = int(self.h5py_dir.name)
 
         tile_path = self.h5py_dir.parent.parent.parent
@@ -776,7 +789,7 @@ class HeliosDatasetConfig(Config):
 
     h5py_dir: str
     training_modalities: list[str]
-    dtype: DType = DType.float32
+    dtype: str = "float32"
     normalize: bool = True
     use_samples_with_missing_supported_modalities: bool = False
     cache_dir: str | None = None
@@ -794,6 +807,15 @@ class HeliosDatasetConfig(Config):
         # Validate supported_modalities
         if not isinstance(self.training_modalities, list):
             raise ValueError("training_modalities must be a list")
+
+    def get_numpy_dtype(self) -> np.dtype:
+        """Get the numpy dtype."""
+        if self.dtype == "float16":
+            return np.float16
+        elif self.dtype == "float32":
+            return np.float32
+        else:
+            raise ValueError(f"Unsupported dtype: {self.dtype}")
 
     @property
     def h5py_dir_upath(self) -> UPath:
@@ -813,5 +835,6 @@ class HeliosDatasetConfig(Config):
         kwargs["cache_dir"] = (
             self.cache_dir_upath if self.cache_dir is not None else None
         )
+        kwargs["dtype"] = self.get_numpy_dtype()
         logger.info(f"HeliosDataset kwargs: {kwargs}")
         return HeliosDataset(**kwargs)

@@ -91,19 +91,19 @@ DATASET_TO_CONFIG = {
         is_multilabel=False,
         height_width=64,
     ),
-    "pastis-r": EvalDatasetConfig(
-        task_type=TaskType.SEGMENTATION,
-        imputes=[],
-        num_classes=19,
-        is_multilabel=False,
-        height_width=64,
-    ),
     "breizhcrops": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],
         num_classes=9,
         is_multilabel=False,
         height_width=1,
+    ),
+    "sickle": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=2,
+        is_multilabel=False,
+        height_width=32,
     ),
 }
 ALL_DATASETS = list(DATASET_TO_CONFIG.keys())

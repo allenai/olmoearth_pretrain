@@ -3,6 +3,8 @@
 import logging
 from pathlib import Path
 
+import numpy as np
+
 from helios.data.constants import Modality
 from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
 
@@ -21,7 +23,7 @@ def test_helios_dataset(
     ]
     dataset = HeliosDataset(
         h5py_dir=setup_h5py_dir,
-        dtype="float32",
+        dtype=np.float32,
         training_modalities=training_modalities,
     )
 
@@ -61,7 +63,7 @@ class TestHeliosDataset:
         ]
         dataset = HeliosDataset(
             h5py_dir=setup_h5py_dir,
-            dtype="float32",
+            dtype=np.float32,
             training_modalities=training_modalities,
             normalize=False,
         )

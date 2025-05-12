@@ -38,23 +38,16 @@ class MAE(nn.Module, DistributedMixins):
 
     def forward(
         self, x: MaskedHeliosSample, patch_size: int
-    ) -> tuple[TokensAndMasks, TokensAndMasks, TokensAndMasks]:
+    ) -> tuple[TokensAndMasks, TokensAndMasks | None, TokensAndMasks | None]:
         """Forward pass for the MAE Module."""
-        latent = self.encoder(x, patch_size=patch_size)
+        latent, _ = self.encoder(x, patch_size=patch_size)
+        decoded = self.decoder and self.decoder(
+            latent, timestamps=x.timestamps, patch_size=patch_size
+        )
+        reconstructed = self.reconstructor and self.reconstructor(
+            latent, timestamps=x.timestamps, patch_size=patch_size
+        )
 
-        if self.decoder is not None:
-            decoded = self.decoder(
-                latent, timestamps=x.timestamps, patch_size=patch_size
-            )
-        else:
-            decoded = None
-
-        if self.reconstructor is not None:
-            reconstructed = self.reconstructor(
-                latent, timestamps=x.timestamps, patch_size=patch_size
-            )
-        else:
-            reconstructed = None
         return latent, decoded, reconstructed
 
     def apply_compile(self) -> None:

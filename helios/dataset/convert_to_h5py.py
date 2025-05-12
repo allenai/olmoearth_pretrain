@@ -87,6 +87,7 @@ class ConvertToH5py:
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
+        logger.info(f"Supported modalities: {self.supported_modalities}")
         self.multiprocessed_h5_creation = multiprocessed_h5_creation
         self.compression = compression
         self.compression_opts = compression_opts
@@ -145,6 +146,7 @@ class ConvertToH5py:
                 )
         else:
             for i, sample in enumerate(samples):
+                logger.info(f"Processing sample {i}")
                 self.process_sample_into_h5((i, sample))
 
     def save_sample_metadata(self, samples: list[SampleInformation]) -> None:
@@ -360,8 +362,7 @@ class ConvertToH5py:
         This parses csvs, loads images, and filters samples to adjust to the HeliosSample format.
         """
         samples = self._get_samples()
-        samples = self._filter_samples(samples)
-        return samples
+        return self._filter_samples(samples)
 
     def save_compression_settings(self) -> None:
         """Save compression settings to a JSON file."""
