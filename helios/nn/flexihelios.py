@@ -367,13 +367,20 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                 ]
                 modality_specific_kwargs = {"patch_size": patch_size}
             # Now apply the embedding to the patchified data
-            patchified_data = modality_data[..., channel_set_indices]
-            embedding_module = self.per_modality_embeddings[modality][
-                self._get_embedding_module_name(modality, idx)
-            ]
-            patchified_data = embedding_module(
-                patchified_data, **modality_specific_kwargs
-            )
+            if (token_mask == MaskValue.ONLINE_ENCODER.value).any():
+                patchified_data = modality_data[..., channel_set_indices]
+                embedding_module = self.per_modality_embeddings[modality][
+                    self._get_embedding_module_name(modality, idx)
+                ]
+                patchified_data = embedding_module(
+                    patchified_data, **modality_specific_kwargs
+                )
+            else:
+                mask_shape = token_mask.shape + (self.embedding_size,)
+                patchified_data = torch.zeros(
+                    mask_shape, dtype=token_mask.dtype, device=token_mask.device
+                )
+
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
