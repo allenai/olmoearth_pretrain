@@ -107,7 +107,7 @@ def build_train_module_config(
     )
     token_exit_cfg = {modality: 0 for modality in common.training_modalities}
 
-    WARMUP_EPOCHS = 20
+    WARMUP_EPOCHS = 5
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides

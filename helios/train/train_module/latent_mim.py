@@ -267,7 +267,5 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
-            logger.info(f"decoded: {decoded.latlon_mask}")
-            logger.info(f"target_output: {target_output.latlon_mask}")
             loss = self.loss_fn(decoded, target_output)
             return loss, latent, decoded, target_output

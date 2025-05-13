@@ -526,7 +526,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
                         t = 1
                     b_s = modality.num_band_sets
                     mask = repeat(spatial_mask, "... -> ... t b_s", t=t, b_s=b_s)
-                    mask = mask.view(*shape[:-1], b_s).contiguous()
+                    mask = mask.view(*shape[:-1], b_s).clone()
                 mask = self.fill_mask_with_missing_values(instance, mask)
                 output_dict[modality_name] = instance
                 output_dict[
@@ -787,7 +787,6 @@ class ModalityCrossSpaceMaskingStrategy(MaskingStrategy):
         decoded_bandset_idxs = candidate_decoding_bandset_combinations[
             self.generator.integers(0, len(candidate_decoding_bandset_combinations))
         ]
-
         logger.info(f"decoded_bandset_idxs: {decoded_bandset_idxs}")
         logger.info(f"encoded_bandset_list: {encoded_bandset_list}")
         # Loop to handle the encoding bandset clamping
@@ -831,9 +830,28 @@ class ModalityCrossSpaceMaskingStrategy(MaskingStrategy):
 
             space_masked_sample_dict[masked_modality_name] = modality_mask
 
+        # log the number of encoded tokens for this modality bandset
 
+        for modality in batch.modalities:
+            if modality == "timestamps":
+                continue
+            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            modality_spec = Modality.get(modality)
+            modality_num_bandsets = modality_spec.num_band_sets
+            modality_mask = space_masked_sample_dict[masked_modality_name]
+            for bandset_idx in range(modality_num_bandsets):
+                logger.info(
+                    f"Number of encoded tokens before decode clampingfor {modality} bandset {bandset_idx}: {(modality_mask[..., bandset_idx] == MaskValue.ONLINE_ENCODER.value).sum()}"
+                )
+                logger.info(
+                    f"Number of decoded tokens before decode clamping for {modality} bandset {bandset_idx}: {(modality_mask[..., bandset_idx] == MaskValue.DECODER.value).sum()}"
+                )
+                logger.info(
+                    f"Number of target encoder tokens before decode clamping for {modality} bandset {bandset_idx}: {(modality_mask[..., bandset_idx] == MaskValue.TARGET_ENCODER_ONLY.value).sum()}"
+                )
         # Loop to handle the decoding bandset clamping
         for modality in batch.modalities:
+            logger.info(f"decoding bandset clamping for modality: {modality}")
             if modality == "timestamps":
                 continue
             masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
@@ -868,11 +886,12 @@ class ModalityCrossSpaceMaskingStrategy(MaskingStrategy):
                     )
                     logger.info(f"modality_mask shape: {modality_mask.shape}")
                     modality_mask[..., bandset_idx] = MaskValue.DECODER.value
-
+                if is_decoded:
+                    logger.info(f"modality_mask is decoded for {modality} bandset {bandset_idx}")
             space_masked_sample_dict[masked_modality_name] = modality_mask
-
-        # log the number of encoded tokens for this modality bandset
-
+            # check how many decoder tokens the worldcover mask has after every modality
+            worldcover_mask = space_masked_sample_dict["worldcover_mask"]
+            logger.info(f"Number of decoder tokens for worldcover: {(worldcover_mask[..., 0] == MaskValue.DECODER.value).sum()}")
         for modality in batch.modalities:
             if modality == "timestamps":
                 continue
@@ -881,6 +900,9 @@ class ModalityCrossSpaceMaskingStrategy(MaskingStrategy):
             modality_num_bandsets = modality_spec.num_band_sets
             modality_mask = space_masked_sample_dict[masked_modality_name]
             for bandset_idx in range(modality_num_bandsets):
+                # log the shape and dtype for the mask
+                logger.info(f"modality_mask shape: {modality_mask.shape}")
+                logger.info(f"modality_mask dtype: {modality_mask.dtype}")
                 logger.info(
                     f"Number of encoded tokens for {modality} bandset {bandset_idx}: {(modality_mask[..., bandset_idx] == MaskValue.ONLINE_ENCODER.value).sum()}"
                 )
