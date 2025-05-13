@@ -94,6 +94,7 @@ class LatentMIMConfig(Config):
         if (
             self.encoder_config.supported_modalities
             != self.decoder_config.supported_modalities
+            and not self.encoder_config.pool_tokens
         ):
             raise ValueError("Encoder and decoder must support the same modalities")
         if (

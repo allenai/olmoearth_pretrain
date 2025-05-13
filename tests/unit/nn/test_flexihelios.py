@@ -744,6 +744,29 @@ class TestTokensAndMasks:
         assert pooled_max.shape == (b, h, w, d)
         assert (pooled_max == 2).all()  # check the 3 tokens have been ignored
 
+    def test_pool_tokens_across_modalities(self) -> None:
+        """Test TokensAndMasks.pool_unmasked_tokens."""
+        b, h, w, t, b_s, d = 2, 4, 4, 3, 3, 128
+        sentinel_2 = torch.ones((b, h, w, t, b_s, d))
+        sentinel_2_mask = torch.randint(low=0, high=2, size=(b, h, w, t, b_s)).long()
+
+        b, h, w, t, b_s, d = 2, 4, 4, 3, 1, 128
+        sentinel_1 = torch.ones((b, h, w, t, b_s, d)) * 2
+        sentinel_1_mask = torch.randint(low=0, high=2, size=(b, h, w, t, b_s)).long()
+
+        tokens = TokensAndMasks(
+            sentinel2_l2a=sentinel_2,
+            sentinel2_l2a_mask=sentinel_2_mask,
+            sentinel1=sentinel_1,
+            sentinel1_mask=sentinel_1_mask,
+        )
+
+        pooled = tokens.pool_tokens_across_modalities()
+        assert pooled.sentinel1 is not None
+        assert pooled.sentinel1_mask is not None
+        assert pooled.sentinel1.shape == (2, 4, 4, 3, 1, 128)
+        assert pooled.sentinel1_mask.shape == (2, 4, 4, 3, 1)
+
     def test_missing_modalities_ignored(self) -> None:
         """Test TokensAndMasks.modalities does not return missing modalities."""
         b, h, w, t, b_s, d = 2, 4, 4, 3, 3, 128

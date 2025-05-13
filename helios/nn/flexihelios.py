@@ -163,6 +163,40 @@ class TokensAndMasks(NamedTuple):
         masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
         return x, masks
 
+    def pool_tokens_across_modalities(self) -> "TokensAndMasks":
+        """Return tokens pooled across spatial modalities, averaged across present tokens."""
+        spatial_tokens = []
+        spatial_masks = []
+
+        shape = None
+        for key in self.modalities:
+            modality = Modality.get(key)
+            if modality.is_multitemporal and modality.is_spatial:
+                shape = getattr(self, key).shape
+
+        assert shape is not None
+
+        for key in self.modalities:
+            modality = Modality.get(key)
+            if modality.is_spatial:
+                bool_mask = (
+                    getattr(self, self.get_masked_modality_name(key))
+                    == MaskValue.ONLINE_ENCODER.value
+                )
+                real_tokens = getattr(self, key) * bool_mask.unsqueeze(-1)
+                if not modality.is_multitemporal:
+                    real_tokens = real_tokens.expand(*shape)
+                    bool_mask = bool_mask.expand(*shape[:-1])
+                spatial_tokens.append(real_tokens)
+                spatial_masks.append(bool_mask)
+        summed_tokens = torch.cat(spatial_tokens, dim=-2).sum(dim=-2, keepdim=True)
+        summed_masks = torch.cat(spatial_masks, dim=-1).sum(dim=-1, keepdim=True)
+        pooled_tokens = summed_tokens / summed_masks.unsqueeze(-1)
+        pooled_masks = (summed_masks == 0) * MaskValue.DECODER.value + (
+            summed_masks != 0
+        ) * MaskValue.ONLINE_ENCODER.value
+        return TokensAndMasks(sentinel1=pooled_tokens, sentinel1_mask=pooled_masks)
+
     def pool_unmasked_tokens(
         self, pooling_type: PoolingType = PoolingType.MAX, spatial_pooling: bool = False
     ) -> Tensor:
@@ -964,6 +998,7 @@ class Encoder(FlexiHeliosBase):
         random_channel_embs: bool = False,
         num_projection_layers: int = 1,
         aggregate_then_project: bool = True,
+        pool_tokens: bool = False,
     ):
         """Initialize the encoder.
 
@@ -983,6 +1018,7 @@ class Encoder(FlexiHeliosBase):
                 a ReLU activation will be applied between layers
             aggregate_then_project: If True, then we will average the tokens before applying
                 the projection. If False, we will apply the projection first.
+            pool_tokens: Average tokens at the end into sentinel1
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1010,6 +1046,7 @@ class Encoder(FlexiHeliosBase):
         )
         self.norm = nn.LayerNorm(self.embedding_size)
         self.apply(self._init_weights)
+        self.pool_tokens = pool_tokens
 
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
@@ -1238,6 +1275,8 @@ class Encoder(FlexiHeliosBase):
                 token_exit_cfg=token_exit_cfg,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
+        if self.pool_tokens:
+            output = output.pool_tokens_across_modalities()
         return output, self.project_and_aggregate(output)
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
@@ -1583,6 +1622,7 @@ class EncoderConfig(Config):
     random_channel_embs: bool = False
     num_projection_layers: int = 1
     aggregate_then_project: bool = True
+    pool_tokens: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
