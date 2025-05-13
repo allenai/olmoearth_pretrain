@@ -93,16 +93,16 @@ def build_train_module_config(
     masking_config = MaskingConfig(
         strategy_config={
             "type": "modality_cross_space",
-            "max_unmasking_bandsets": 15,
+            "max_unmasking_bandsets": 20,
             "min_encoding_bandsets": 2,
-            "max_encoding_bandsets": 4,
+            "max_encoding_bandsets": 6,
             "encode_ratio": ENCODE_RATIO,
             "decode_ratio": DECODE_RATIO,
         }
     )
     loss_config = LossConfig(
         loss_config={
-            "type": "patch_discrimination",  # TODO: Should be registered via enum namecds
+            "type": "patch_discrimination_new",  # TODO: Should be registered via enum namecds
         }
     )
     token_exit_cfg = {modality: 0 for modality in common.training_modalities}

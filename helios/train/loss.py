@@ -167,8 +167,12 @@ class PatchDiscriminationLossNew(Loss):
             logger.warning("Some samples have no decoder tokens.")
         losses = []
         start = 0
+        # We could also compress the count by removing the 0s
         for c in count:
             end = start + c
+            if c == 0:
+                logger.warning("Sample has no decoder tokens.")
+                continue
             pred_sample = pred[:, start:end, :]
             target_sample = target[:, start:end, :]
             score_sample = (
