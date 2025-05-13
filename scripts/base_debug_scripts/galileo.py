@@ -27,12 +27,7 @@ from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
-from helios.nn.flexihelios import (
-    EncoderConfig,
-    PoolingType,
-    PredictorConfig,
-    ReconstructorConfig,
-)
+from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
 from helios.nn.galileo import GalileoConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -52,19 +47,18 @@ MIN_PATCH_SIZE = 1
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
-    ENCODER_EMBEDDING_SIZE = 768
-    DECODER_EMBEDDING_SIZE = 768
+    ENCODER_EMBEDDING_SIZE = 192
+    DECODER_EMBEDDING_SIZE = 192
     ENCODER_DEPTH = 12
-    DECODER_DEPTH = 2
-    ENCODER_NUM_HEADS = 12
-    DECODER_NUM_HEADS = 12
+    DECODER_DEPTH = 12
+    ENCODER_NUM_HEADS = 3
+    DECODER_NUM_HEADS = 3
     MLP_RATIO = 4.0
 
     encoder_config = EncoderConfig(
         supported_modality_names=common.training_modalities,
         embedding_size=ENCODER_EMBEDDING_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
-        min_patch_size=MIN_PATCH_SIZE,
         num_heads=ENCODER_NUM_HEADS,
         depth=ENCODER_DEPTH,
         mlp_ratio=MLP_RATIO,
@@ -82,17 +76,9 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
         supported_modality_names=common.training_modalities,
         learnable_channel_embeddings=True,
     )
-    reconstructor_config = ReconstructorConfig(
-        supported_modality_names=[
-            m for m in common.training_modalities if m != Modality.LATLON.name
-        ],
-        max_patch_size=MAX_PATCH_SIZE,
-        decoder_config=decoder_config,
-    )
     model_config = GalileoConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
-        reconstructor_config=reconstructor_config,
     )
     return model_config
 
@@ -104,7 +90,7 @@ def build_train_module_config(
     LR = 0.002
     RANK_MICROBATCH_SIZE = 64
     ENCODE_RATIO = 0.1
-    DECODE_RATIO = 0.9
+    DECODE_RATIO = 0.75
     WD = 0.02
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config_a = MaskingConfig(
@@ -129,20 +115,6 @@ def build_train_module_config(
     loss_config_b = LossConfig(
         loss_config={
             "type": "patch_discrimination_new",
-        }
-    )
-    contrastive_config = LossConfig(
-        loss_config={
-            "type": "InfoNCE",
-            "weight": 0.05,
-        }
-    )
-    mae_loss_config = LossConfig(
-        loss_config={
-            "type": "mae",
-            "loss_function": "SmoothL1Loss",
-            "beta": 0.1,
-            "weight": 1,
         }
     )
     token_exit_cfg_a = {
@@ -172,7 +144,6 @@ def build_train_module_config(
         masking_config_b=masking_config_b,
         loss_config_a=loss_config_a,
         loss_config_b=loss_config_b,
-        contrastive_config=contrastive_config,
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         token_exit_cfg_a=token_exit_cfg_a,
         token_exit_cfg_b=token_exit_cfg_b,
@@ -180,7 +151,6 @@ def build_train_module_config(
         max_grad_norm=1.0,
         dp_config=dp_config,
         scheduler=scheduler,
-        mae_loss_config=mae_loss_config,
     )
     return train_module_config
 
@@ -214,7 +184,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data_gzip_3_shuffle/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
+    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data_gzip_1/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
     return HeliosDatasetConfig(
         h5py_dir=h5py_dir,
         training_modalities=common.training_modalities,

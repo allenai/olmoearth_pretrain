@@ -54,11 +54,10 @@ MAE_MODALITIES = [
 
 def build_model_config(common: CommonComponents) -> MAEConfig:
     """Build the model config for an experiment."""
-    # Tiny ViT with shallow decoder
     ENCODER_EMBEDDING_SIZE = 192
     DECODER_EMBEDDING_SIZE = 192
     ENCODER_DEPTH = 12
-    DECODER_DEPTH = 4
+    DECODER_DEPTH = 12
     ENCODER_NUM_HEADS = 3
     DECODER_NUM_HEADS = 3
     MLP_RATIO = 4.0
@@ -86,8 +85,8 @@ def build_model_config(common: CommonComponents) -> MAEConfig:
     )
     reconstructor_config = ReconstructorConfig(
         supported_modality_names=common.training_modalities,
+        embedding_size=ENCODER_EMBEDDING_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
-        decoder_config=decoder_config,
     )
     model_config = MAEConfig(
         encoder_config=encoder_config,
@@ -101,8 +100,8 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> MAETrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 0.001
-    RANK_MICROBATCH_SIZE = 128
+    LR = 0.002
+    RANK_MICROBATCH_SIZE = 32
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.9
     WD = 0.02
@@ -114,20 +113,12 @@ def build_train_module_config(
             "decode_ratio": DECODE_RATIO,
         }
     )
-    mae_loss_config = LossConfig(
+    loss_config = LossConfig(
         loss_config={
             "type": "mae",
-            "loss_function": "SmoothL1Loss",
-            "beta": 0.1,
-            "weight": 10,
         }
     )
-    latent_mim_loss_config = LossConfig(
-        loss_config={
-            "type": "patch_discrimination_new",
-        }
-    )
-    token_exit_cfg = {modality: 0 for modality in common.training_modalities}
+    token_exit_cfg = {modality: 4 for modality in common.training_modalities}
     WARMUP_EPOCHS = 2
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
@@ -138,8 +129,7 @@ def build_train_module_config(
         optim_config=optim_config,
         masking_config=masking_config,
         warmup_duration=Duration.epochs(WARMUP_EPOCHS),
-        mae_loss_config=mae_loss_config,
-        latent_mim_loss_config=latent_mim_loss_config,
+        loss_config=loss_config,
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         token_exit_cfg=token_exit_cfg,
         autocast_precision=DType.bfloat16,
@@ -193,7 +183,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "helios-joer"
+    WANDB_PROJECT = "helios-debug"
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = HeliosWandBCallback(
         name=common.run_name,
@@ -251,7 +241,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(10),
+            eval_interval=Duration.epochs(20),
         ),
         "sen1floods11": DownstreamTaskConfig(
             dataset="sen1floods11",
@@ -260,7 +250,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(10),
+            eval_interval=Duration.epochs(20),
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",

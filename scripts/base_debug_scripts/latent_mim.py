@@ -49,6 +49,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     DECODER_DEPTH = 12
     ENCODER_NUM_HEADS = 3
     DECODER_NUM_HEADS = 3
+
     MLP_RATIO = 4.0
     encoder_config = EncoderConfig(
         supported_modality_names=common.training_modalities,
@@ -100,7 +101,7 @@ def build_train_module_config(
             "type": "patch_discrimination_new",  # TODO: Should be registered via enum names
         }
     )
-    token_exit_cfg = {modality: 12 for modality in common.training_modalities}
+    token_exit_cfg = {modality: 0 for modality in common.training_modalities}
 
     WARMUP_EPOCHS = 20
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
@@ -166,7 +167,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "helios-joer"
+    WANDB_PROJECT = "helios-debug"
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = HeliosWandBCallback(
         name=common.run_name,
@@ -225,7 +226,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(10),
+            eval_interval=Duration.epochs(20),
         ),
         "sen1floods11": DownstreamTaskConfig(
             dataset="sen1floods11",
@@ -234,7 +235,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(10),
+            eval_interval=Duration.epochs(20),
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
