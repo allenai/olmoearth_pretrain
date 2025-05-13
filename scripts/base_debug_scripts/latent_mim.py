@@ -49,6 +49,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     DECODER_DEPTH = 12
     ENCODER_NUM_HEADS = 3
     DECODER_NUM_HEADS = 3
+
     MLP_RATIO = 4.0
     encoder_config = EncoderConfig(
         supported_modality_names=common.training_modalities,
