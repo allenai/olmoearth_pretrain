@@ -7,15 +7,15 @@ from helios.internal.utils import MODEL_SIZE_ARGS
 # Model size configurations
 MODEL_SIZES = {
     "base": MODEL_SIZE_ARGS["base_shallow_decoder"],
-    "large": MODEL_SIZE_ARGS["large_super_shallow_decoder"],
-    "giga": MODEL_SIZE_ARGS["giga_shallow_decoder"],
+    # "large": MODEL_SIZE_ARGS["large_super_shallow_decoder"],
+    # "giga": MODEL_SIZE_ARGS["giga_shallow_decoder"],
 }
 
 # Checkpoint paths
 CHECKPOINT_PATHS = {
     "base": "/weka/dfive-default/helios/checkpoints/henryh/3_galileo_contrastive_base_decoder_4_lr_0.0001_weight_0.05/step312400",
-    "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec2_lr0.0001_titan/step109250",
-    "giga": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_giga_dec4_lr0.0001_jupiter/step140500",
+    # "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec2_lr0.0001_titan/step109250",
+    # "giga": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_giga_dec4_lr0.0001_jupiter/step140500",
 }
 
 # Base command template
@@ -53,11 +53,12 @@ BASE_COMMAND = (
 )
 
 # Learning rates to sweep for linear probe
-LP_LRs = [5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
+# LP_LRs = [5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
+LP_LRs = [1e-2]
 
 for lr in LP_LRs:
     for model_size in MODEL_SIZES:
-        run_name = f"20250430_galileo_all_evals_{model_size}_linear_probe_lr_{lr}"
+        run_name = f"20250514_galileo_all_evals_{model_size}_linear_probe_lr_{lr}"
         checkpoint_path = CHECKPOINT_PATHS[model_size]
         command = BASE_COMMAND.format(
             run_name=run_name,
