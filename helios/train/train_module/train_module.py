@@ -57,10 +57,10 @@ class HeliosTrainModuleConfig(Config):
         scheduler: Optional learning rate scheduler.
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
+        skip_optimizer_state: Whether to skip optimizer state in state dict. By default, optimizer state is loaded and saved.
     """
 
     # Training settings
-
     optim_config: OptimConfig
     rank_microbatch_size: int
 
@@ -86,6 +86,7 @@ class HeliosTrainModuleConfig(Config):
     state_dict_save_opts: dict[str, Any] | None = None
     state_dict_load_opts: dict[str, Any] | None = None
     regularizer_config: LossConfig | None = None
+    skip_optimizer_state: bool = False
 
     def prepare_kwargs(self) -> dict[str, Any]:
         """Prepare the kwargs for the train module."""
@@ -129,22 +130,6 @@ class HeliosTrainModule(TrainModule):
     """A :class:`TrainModule`.
 
     Initialize the training module.
-
-    Args:
-        model: The transformer model to train.
-        optim_config: The corresponding optimizer config.
-        transform_config: The transform configuration for the model.
-        rank_microbatch_size: The rank micro batch size in instances.
-        compile_model: Whether to compile to the model.
-        dp_config: Data parallel configuration for the model.
-        ac_config: Activation checkpointing configuration for the model.
-        compile_loss: Whether to compile the loss function.
-        autocast_precision: Enable AMP with this data type.
-        max_grad_norm: Clip gradient norms to this value.
-        scheduler: Optional learning rate scheduler.
-        device: The device to train on.
-        state_dict_save_opts: Override state dict options for saving.
-        state_dict_load_opts: Override state dict options for loading.
     """
 
     def __init__(
@@ -164,6 +149,7 @@ class HeliosTrainModule(TrainModule):
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
+        skip_optimizer_state: bool = False,
     ):
         """Initialize the training module.
 
@@ -183,6 +169,7 @@ class HeliosTrainModule(TrainModule):
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
+            skip_optimizer_state: Whether to skip optimizer state in state dict.
         """
         super().__init__()
 
@@ -275,6 +262,7 @@ class HeliosTrainModule(TrainModule):
         self.state_dict_load_opts = state_dict_load_opts or dist_cp_sd.StateDictOptions(
             flatten_optimizer_state_dict=True, strict=True
         )
+        self.skip_optimizer_state = skip_optimizer_state
 
     @property
     def dp_process_group(self) -> dist.ProcessGroup | None:
@@ -363,13 +351,14 @@ class HeliosTrainModule(TrainModule):
             options=self.state_dict_load_opts,
         )
         gc_cuda()
-        dist_cp_sd.set_optimizer_state_dict(
-            self.model,
-            self.optimizer,
-            state_dict["optim"],
-            options=self.state_dict_load_opts,
-        )
-        gc_cuda()
+        if not self.skip_optimizer_state:
+            dist_cp_sd.set_optimizer_state_dict(
+                self.model,
+                self.optimizer,
+                state_dict["optim"],
+                options=self.state_dict_load_opts,
+            )
+            gc_cuda()
 
     def zero_grads(self) -> None:
         """Zero the gradients."""
@@ -467,12 +456,21 @@ class HeliosTrainModule(TrainModule):
     def _get_state_dict(
         self, sd_options: dist_cp_sd.StateDictOptions
     ) -> dict[str, Any]:
-        return {
-            "model": dist_cp_sd.get_model_state_dict(self.model, options=sd_options),
-            "optim": dist_cp_sd.get_optimizer_state_dict(
-                self.model, self.optimizer, options=sd_options
-            ),
-        }
+        if self.skip_optimizer_state:
+            return {
+                "model": dist_cp_sd.get_model_state_dict(
+                    self.model, options=sd_options
+                ),
+            }
+        else:
+            return {
+                "model": dist_cp_sd.get_model_state_dict(
+                    self.model, options=sd_options
+                ),
+                "optim": dist_cp_sd.get_optimizer_state_dict(
+                    self.model, self.optimizer, options=sd_options
+                ),
+            }
 
     def _clip_grad_norm(
         self,
