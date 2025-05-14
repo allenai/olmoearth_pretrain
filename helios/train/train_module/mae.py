@@ -117,6 +117,7 @@ class MAETrainModule(HeliosTrainModule):
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
+        find_unused_parameters: bool = True,
     ):
         """Initialize the training module.
 
@@ -158,6 +159,7 @@ class MAETrainModule(HeliosTrainModule):
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
             warmup_duration=warmup_duration,
+            find_unused_parameters=find_unused_parameters, # Must be true so that we can deal with missing modalities
         )
         self.token_exit_cfg = token_exit_cfg
         self.base_loss = loss_config.build()
