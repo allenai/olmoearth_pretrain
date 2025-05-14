@@ -170,7 +170,6 @@ def build_train_module_config(
         scheduler=scheduler,
         contrastive_config=contrastive_config,
         state_dict_load_opts={"strict": False},
-        # skip_optimizer_state=True,
     )
     return train_module_config
 
