@@ -20,7 +20,7 @@ CHECKPOINT_PATHS = {
 
 # Base command template
 BASE_COMMAND = (
-    "python3 scripts/evaluation_scripts/galileo_eval.py launch {run_name} ai2/jupiter-cirrascale-2 "
+    "python3 scripts/evaluation_scripts/2025_04_30/galileo_eval.py launch {run_name} ai2/jupiter-cirrascale-2 "
     "--model.encoder_config.embedding_size={encoder_embedding_size} "
     "--model.encoder_config.depth={encoder_depth} "
     "--model.encoder_config.num_heads={encoder_num_heads} "
