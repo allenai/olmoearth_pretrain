@@ -7,7 +7,7 @@ from helios.internal.utils import MODEL_SIZE_ARGS
 # Model size configurations
 MODEL_SIZES = {
     # "base": MODEL_SIZE_ARGS["base_shallow_decoder"],
-    "large": MODEL_SIZE_ARGS["large_super_shallow_decoder"],
+    "large": MODEL_SIZE_ARGS["large_shallow_decoder"],
     # "giga": MODEL_SIZE_ARGS["giga_shallow_decoder"],
 }
 
@@ -68,7 +68,7 @@ LP_LRs = [1e-2]
 for lr in LP_LRs:
     for model_size in MODEL_SIZES:
         run_name = (
-            f"20250514_galileo_all_evals_test_2_{model_size}_linear_probe_lr_{lr}"
+            f"20250514_galileo_all_evals_test_3_{model_size}_linear_probe_lr_{lr}"
         )
         checkpoint_path = CHECKPOINT_PATHS[model_size]
         command = BASE_COMMAND.format(
