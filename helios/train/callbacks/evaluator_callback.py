@@ -4,7 +4,6 @@ import gc
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 import torch
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
@@ -160,25 +159,39 @@ class DownstreamEvaluatorCallback(Callback):
     """Runs in-loop evaluations periodically during training."""
 
     evaluators: list[DownstreamEvaluator] = field(default_factory=list)
+    eval_on_startup: bool = False
+    cancel_after_first_eval: bool = False
 
-    def pre_step(self, batch: dict[str, Any]) -> None:
-        """Run the evaluators."""
+    def pre_train(self) -> None:
+        """Run the evaluators on startup."""
+        if self.eval_on_startup:
+            for evaluator in self.evaluators:
+                self._perform_eval(evaluator)
+        if self.cancel_after_first_eval:
+            self.trainer.cancel_run(
+                "Cancelled from evaluator callback since 'cancel_after_first_eval' is set",
+                no_sync=True,  # 'no_sync' because we're calling this from all ranks at the same time.
+            )
+
+    def post_step(self) -> None:
+        """Run the evaluators in-loop."""
         for evaluator in self.evaluators:
             eval_interval_steps = self.trainer.convert_duration_to_steps(
                 evaluator.eval_interval
             )
-            # If eval_interval_steps is 0, evaluate immediately even if step is 1
-            if eval_interval_steps != 0 and (
-                self.step <= 1 or self.step % eval_interval_steps != 0
-            ):
+            if self.step <= 1 or self.step % eval_interval_steps != 0:
                 continue
-            logger.info(f"Running {evaluator.evaluation_name} evaluations...")
-            start_time = time.monotonic()
-            val_result = evaluator.val()
-            self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
-            logger.info(
-                f"Finished {evaluator.evaluation_name} evaluations in {time.monotonic() - start_time:.1f} seconds."
-            )
+            self._perform_eval(evaluator)
+
+    def _perform_eval(self, evaluator: DownstreamEvaluator) -> None:
+        """Run the evaluator."""
+        logger.info(f"Running {evaluator.evaluation_name} evaluations...")
+        start_time = time.monotonic()
+        val_result = evaluator.val()
+        self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
+        logger.info(
+            f"Finished {evaluator.evaluation_name} evaluations in {time.monotonic() - start_time:.1f} seconds."
+        )
 
 
 @dataclass
@@ -191,11 +204,7 @@ class DownstreamTaskConfig:
     pooling_type: PoolingType = PoolingType.MEAN
     norm_stats_from_pretrained: bool = True
     input_modalities: list[str] = field(default_factory=list)
-    # for MADOS and a default partition, the following lrs
-    # did best for Galileo:
-    # ViT-nano = 0.8 or 0.5
-    # ViT-tiny = 0.1
-    # ViT-base = 0.01
+    # Sweep across lrs for segmentation tasks
     probe_lr: float | None = None
     patch_size: int = 4
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(0))
@@ -206,8 +215,13 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     """Config for the downstream evaluator callback."""
 
     tasks: dict[str, DownstreamTaskConfig]
-
     enabled: bool = True
+    # Whether to run the evaluators on startup
+    eval_on_startup: bool = False
+    # Whether to cancel the training after the first evaluation
+    # This combined with ``eval_on_startup=True`` is useful if you just want to run in-loop evals
+    # without training any longer.
+    cancel_after_first_eval: bool = False
 
     def build(self, trainer: Trainer) -> Callback | None:
         """Build the downstream evaluator callback."""
@@ -256,4 +270,6 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             )
         return DownstreamEvaluatorCallback(
             evaluators=evaluators,
+            eval_on_startup=self.eval_on_startup,
+            cancel_after_first_eval=self.cancel_after_first_eval,
         )

@@ -4,7 +4,6 @@ These Settings are meant to help you get quick results on a single GPU in minima
 """
 
 import logging
-from typing import Any
 
 from olmo_core.config import Config, DType
 from olmo_core.distributed.parallel.data_parallel import (
@@ -249,7 +248,40 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(0),
+            eval_interval=Duration.epochs(5),
+        ),
+        "m-bigearthnet": DownstreamTaskConfig(
+            dataset="m-bigearthnet",
+            batch_size=64,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(20),
+        ),
+        "m-brick-kiln": DownstreamTaskConfig(
+            dataset="m-brick-kiln",
+            batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(20),
+        ),
+        "m-so2sat": DownstreamTaskConfig(
+            dataset="m-so2sat",
+            batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(20),
+        ),
+        "breizhcrops": DownstreamTaskConfig(
+            dataset="breizhcrops",
+            batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(20),
+            patch_size=1,
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
@@ -258,7 +290,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(0),
+            eval_interval=Duration.epochs(20),
         ),
         "sen1floods11": DownstreamTaskConfig(
             dataset="sen1floods11",
@@ -267,7 +299,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(0),
+            eval_interval=Duration.epochs(20),
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
@@ -276,25 +308,38 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(0),
+            eval_interval=Duration.epochs(20),
+            input_modalities=["sentinel2"],
         ),
         "pastis-r": DownstreamTaskConfig(
-            dataset="pastis-r",
+            dataset="pastis",
             batch_size=8,
             num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(0),
+            eval_interval=Duration.epochs(20),
+            input_modalities=["sentinel1", "sentinel2"],
         ),
-        "breizhcrops": DownstreamTaskConfig(
-            dataset="breizhcrops",
-            batch_size=128,
-            num_workers=8,
+        "sickle": DownstreamTaskConfig(
+            dataset="sickle",
+            batch_size=8,
+            num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(0),
-            patch_size=1,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(20),
+            input_modalities=["landsat8"],
+        ),
+        "sickle-r": DownstreamTaskConfig(
+            dataset="sickle",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(20),
+            input_modalities=["landsat8", "sentinel1", "sentinel2"],
         ),
     }
     # Let us not use garbage collector fallback
@@ -333,20 +378,9 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
     )
 
 
-def build_common_components_limited_modalities(*args: Any) -> CommonComponents:
-    """Build the common components for an experiment."""
-    config = build_common_components(*args)
-    config.training_modalities = [
-        Modality.SENTINEL1.name,
-        Modality.SENTINEL2_L2A.name,
-        Modality.WORLDCOVER.name,
-    ]
-    return config
-
-
 if __name__ == "__main__":
     main(
-        common_components_builder=build_common_components_limited_modalities,
+        common_components_builder=build_common_components,
         model_config_builder=build_model_config,
         train_module_config_builder=build_train_module_config,
         dataset_config_builder=build_dataset_config,

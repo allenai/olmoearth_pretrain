@@ -137,6 +137,15 @@ def build_config(
     return config
 
 
+# def evaluate(config: HeliosExperimentConfig) -> None:
+#     """Evaluate the model on all eval datasets."""
+#     # Set RNG states on all devices. Also, done in prepare_training_environment
+#     seed_all(config.init_seed)
+
+#     # Instead of using the trainer, here we just load the model and running the callbacks
+#     # But Callbacks are tight to the trainer
+
+
 def train(config: HeliosExperimentConfig) -> None:
     """Train an experiment."""
     # Set RNG states on all devices. Also, done in prepare_training_environment

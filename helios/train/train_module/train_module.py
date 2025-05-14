@@ -363,13 +363,13 @@ class HeliosTrainModule(TrainModule):
             options=self.state_dict_load_opts,
         )
         gc_cuda()
-        # dist_cp_sd.set_optimizer_state_dict(
-        #     self.model,
-        #     self.optimizer,
-        #     state_dict["optim"],
-        #     options=self.state_dict_load_opts,
-        # )
-        # gc_cuda()
+        dist_cp_sd.set_optimizer_state_dict(
+            self.model,
+            self.optimizer,
+            state_dict["optim"],
+            options=self.state_dict_load_opts,
+        )
+        gc_cuda()
 
     def zero_grads(self) -> None:
         """Zero the gradients."""
@@ -469,9 +469,9 @@ class HeliosTrainModule(TrainModule):
     ) -> dict[str, Any]:
         return {
             "model": dist_cp_sd.get_model_state_dict(self.model, options=sd_options),
-            # "optim": dist_cp_sd.get_optimizer_state_dict(
-            #     self.model, self.optimizer, options=sd_options
-            # ),
+            "optim": dist_cp_sd.get_optimizer_state_dict(
+                self.model, self.optimizer, options=sd_options
+            ),
         }
 
     def _clip_grad_norm(
