@@ -57,7 +57,7 @@ class HeliosTrainModuleConfig(Config):
         scheduler: Optional learning rate scheduler.
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
-        skip_optimizer_state: Whether to skip optimizer state in state dict. By default, optimizer state is loaded and saved.
+        skip_optimizer_state: Whether to skip optimizer state in state dict.
     """
 
     # Training settings
@@ -174,6 +174,8 @@ class HeliosTrainModule(TrainModule):
         super().__init__()
 
         self.model = model
+        # logging info model
+        logger.info(f"Model: {self.model}")
 
         self.transform = transform_config.build()
         logger.info(
@@ -345,6 +347,7 @@ class HeliosTrainModule(TrainModule):
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load the state dict."""
+        logger.info(f"Loading state dict for model: {self.model}")
         dist_cp_sd.set_model_state_dict(
             self.model,
             state_dict["model"],
