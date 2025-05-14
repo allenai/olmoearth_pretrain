@@ -88,28 +88,6 @@ class GalileoTrainModule(HeliosTrainModule):
     """A :class:`TrainModule`.
 
     Initialize the training module.
-
-    Args:
-        model: The transformer model to train.
-        optim: The corresponding optimizer config.
-        masking_config_a: The masking configuration for the model.
-        masking_config_b: The masking configuration for the model.
-        loss_config_a: The loss configuration for the model.
-        loss_config_b: The loss configuration for the model.
-        rank_microbatch_size: The rank microbatch size in instances.
-        compile_model: Whether to compile to the model.
-        dp_config: Data parallel configuration for the model.
-        ac_config: Activation checkpointing configuration for the model.
-        compile_loss: Whether to compile the loss function.
-        autocast_precision: Enable AMP with this data type.
-        max_grad_norm: Clip gradient norms to this value.
-        scheduler: Optional learning rate scheduler.
-        device: The device to train on.
-        state_dict_save_opts: Override state dict options for saving.
-        state_dict_load_opts: Override state dict options for loading.
-        token_exit_cfg_a: The token exit configuration for the model.
-        token_exit_cfg_b: The token exit configuration for the model.
-        warmup_duration: The warmup duration for the model.
     """
 
     def __init__(
@@ -134,6 +112,7 @@ class GalileoTrainModule(HeliosTrainModule):
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
+        skip_optimizer_state: bool = False,
         ema_decay: tuple[float, float] = (0.996, 1.0),
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
@@ -160,6 +139,7 @@ class GalileoTrainModule(HeliosTrainModule):
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
+            skip_optimizer_state: Whether to skip optimizer state in state dict.
             ema_decay: EMA decay rate for target encoder, as a tuple of (start_ema_decay, end_ema_decay)
             token_exit_cfg_a: The token exit configuration for the model.
             token_exit_cfg_b: The token exit configuration for the model.
@@ -183,6 +163,7 @@ class GalileoTrainModule(HeliosTrainModule):
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
             warmup_duration=warmup_duration,
+            skip_optimizer_state=skip_optimizer_state,
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg_a = token_exit_cfg_a
