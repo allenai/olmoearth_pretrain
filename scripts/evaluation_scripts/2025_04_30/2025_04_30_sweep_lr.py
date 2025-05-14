@@ -36,6 +36,7 @@ BASE_COMMAND = (
     "--train_module.token_exit_cfg_a.srtm={encoder_depth} "
     "--train_module.token_exit_cfg_a.landsat={encoder_depth} "
     "--trainer.load_path={checkpoint_path} "
+    "--trainer.checkpointer.work_dir={checkpoint_path} "
     "--trainer.callbacks.downstream_evaluator.tasks.mados.dataset=mados "
     "--trainer.callbacks.downstream_evaluator.tasks.mados.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.mados.norm_stats_from_pretrained=False "
