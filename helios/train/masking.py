@@ -757,8 +757,9 @@ class ModalityCrossSpaceMaskingStrategy(MaskingStrategy):
         # Each modality should have the indexes of the bandsets they are to put an encoder only mask on
 
         candidate_decoding_bandset_combinations = []
-        # Should we have a miinimum decoding value so we are not only predicitng the encoded bandsets? Why would we not want to just pick the largest random subset of
+        # Why would we not want to just pick the largest random subset of
         # the leftover bandsets that are less then the max unmasking bandsets?
+        # vs having a high minimum decoding value?
         for bandset_combination in ALL_BANDSET_POWSET:
             if len(bandset_combination) == 0:
                 logger.debug("Skipping empty bandset combination")
@@ -782,12 +783,16 @@ class ModalityCrossSpaceMaskingStrategy(MaskingStrategy):
                     f"Skipping bandset combination {bandset_combination} because it overlaps with encoded bandsets {encoded_bandset_list}"
                 )
                 continue
+            if len(bandset_combination) == 1 and bandset_combination == (('latlon', 0),):
+                logger.debug(
+                    f"Skipping bandset combination {bandset_combination} because it creates a single token per modality"
+                )
+                continue
             candidate_decoding_bandset_combinations.append(bandset_combination)
 
         decoded_bandset_idxs = candidate_decoding_bandset_combinations[
             self.generator.integers(0, len(candidate_decoding_bandset_combinations))
         ]
-        decoded_bandset_idxs = ((('latlon', 0),))
         logger.info(f"decoded_bandset_idxs: {decoded_bandset_idxs}")
         logger.info(f"encoded_bandset_list: {encoded_bandset_list}")
         # Loop to handle the encoding bandset clamping
