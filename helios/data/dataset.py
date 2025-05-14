@@ -499,7 +499,7 @@ class HeliosDataset(Dataset):
             self.naip_indices = naip_indices
         else:
             self.naip_indices = np.array([])
-        logger.info(f"NAIP indices: {self.naip_indices}")
+        logger.debug(f"NAIP indices: {self.naip_indices}")
 
         # Get the indices of samples that don't have any training modalities that are
         # multi-temporal.
