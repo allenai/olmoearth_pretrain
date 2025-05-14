@@ -112,6 +112,7 @@ class GalileoTrainModule(HeliosTrainModule):
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
+        skip_optimizer_state: bool = False,
         ema_decay: tuple[float, float] = (0.996, 1.0),
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
@@ -138,6 +139,7 @@ class GalileoTrainModule(HeliosTrainModule):
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
+            skip_optimizer_state: Whether to skip optimizer state in state dict.
             ema_decay: EMA decay rate for target encoder, as a tuple of (start_ema_decay, end_ema_decay)
             token_exit_cfg_a: The token exit configuration for the model.
             token_exit_cfg_b: The token exit configuration for the model.
@@ -161,6 +163,7 @@ class GalileoTrainModule(HeliosTrainModule):
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
             warmup_duration=warmup_duration,
+            skip_optimizer_state=skip_optimizer_state,
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg_a = token_exit_cfg_a

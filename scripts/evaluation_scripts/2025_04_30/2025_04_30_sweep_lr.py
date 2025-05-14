@@ -14,7 +14,7 @@ MODEL_SIZES = {
 # Checkpoint paths
 CHECKPOINT_PATHS = {
     # "base": "/weka/dfive-default/helios/checkpoints/henryh/3_galileo_contrastive_base_decoder_4_lr_0.0001_weight_0.05/step312400",
-    "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec2_lr0.0001_titan/step248500",
+    "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step192500",
     # "giga": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_giga_dec4_lr0.0001_jupiter/step140500",
 }
 
@@ -68,7 +68,7 @@ LP_LRs = [1e-2]
 for lr in LP_LRs:
     for model_size in MODEL_SIZES:
         run_name = (
-            f"20250514_galileo_all_evals_test_1_{model_size}_linear_probe_lr_{lr}"
+            f"20250514_galileo_all_evals_test_2_{model_size}_linear_probe_lr_{lr}"
         )
         checkpoint_path = CHECKPOINT_PATHS[model_size]
         command = BASE_COMMAND.format(
