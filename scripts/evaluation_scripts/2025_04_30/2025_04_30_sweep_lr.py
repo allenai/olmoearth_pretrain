@@ -14,7 +14,7 @@ MODEL_SIZES = {
 # Checkpoint paths
 CHECKPOINT_PATHS = {
     # "base": "/weka/dfive-default/helios/checkpoints/henryh/3_galileo_contrastive_base_decoder_4_lr_0.0001_weight_0.05/step312400",
-    "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec2_lr0.0001_titan/step109250",
+    "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec2_lr0.0001_titan/step248500",
     # "giga": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_giga_dec4_lr0.0001_jupiter/step140500",
 }
 
