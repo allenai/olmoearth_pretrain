@@ -7,15 +7,15 @@ from helios.internal.utils import MODEL_SIZE_ARGS
 # Model size configurations
 MODEL_SIZES = {
     "base": MODEL_SIZE_ARGS["base_shallow_decoder"],
-    # "large": MODEL_SIZE_ARGS["large_shallow_decoder"],
-    # "giga": MODEL_SIZE_ARGS["giga_shallow_decoder"],
+    "large": MODEL_SIZE_ARGS["large_shallow_decoder"],
+    "giga": MODEL_SIZE_ARGS["giga_shallow_decoder"],
 }
 
 # Checkpoint paths
 CHECKPOINT_PATHS = {
-    "base": "/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_base_linear_probe_lr_0.01",
-    # "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step192500",
-    # "giga": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_giga_dec4_lr0.0001_jupiter/step140500",
+    "base": "/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_base_linear_probe_lr_0.01/step0",
+    "large": "/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_large_linear_probe_lr_0.01/step0",
+    "giga": "/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_giga_linear_probe_lr_0.01/step0",
 }
 
 # Base command template
@@ -58,6 +58,7 @@ BASE_COMMAND = (
     "--trainer.callbacks.downstream_evaluator.tasks.sickle-r.batch_size=8 "
     "--trainer.callbacks.downstream_evaluator.tasks.sickle-r.num_workers=2 "
     "--launch.priority=urgent "
+    "--launch.num_gpus=8 "
 )
 
 # Learning rates to sweep for linear probe
@@ -67,7 +68,7 @@ LP_LRs = [1e-2]
 for lr in LP_LRs:
     for model_size in MODEL_SIZES:
         run_name = (
-            f"20250514_galileo_all_evals_test_4_{model_size}_linear_probe_lr_{lr}"
+            f"20250514_galileo_all_evals_test_5_{model_size}_linear_probe_lr_{lr}"
         )
         checkpoint_path = CHECKPOINT_PATHS[model_size]
         command = BASE_COMMAND.format(
