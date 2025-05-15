@@ -51,7 +51,7 @@ NUM_DATA_LOADER_WORKERS = 4
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
-    base_model_args = MODEL_SIZE_ARGS["large_super_shallow_decoder"]
+    base_model_args = MODEL_SIZE_ARGS["base_super_shallow_decoder"]
     ENCODER_EMBEDDING_SIZE = int(base_model_args["encoder_embedding_size"])
     DECODER_EMBEDDING_SIZE = int(base_model_args["decoder_embedding_size"])
     ENCODER_DEPTH = int(base_model_args["encoder_depth"])
@@ -123,7 +123,7 @@ def build_train_module_config(
         }
     )
     # Maybe we want to increase token exit for base model?
-    base_model_args = MODEL_SIZE_ARGS["large_super_shallow_decoder"]
+    base_model_args = MODEL_SIZE_ARGS["base_super_shallow_decoder"]
     token_exit_cfg_a = {
         Modality.SENTINEL2_L2A.name: int(base_model_args["encoder_depth"]),
         Modality.LATLON.name: int(base_model_args["encoder_depth"]),
@@ -169,7 +169,6 @@ def build_train_module_config(
         dp_config=dp_config,
         scheduler=scheduler,
         contrastive_config=contrastive_config,
-        skip_optimizer_state=False,
     )
     return train_module_config
 
