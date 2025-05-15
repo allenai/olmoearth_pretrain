@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
     """Speed monitor callback for the trainer for Helios."""
 
+    priority = 10
     _total_tokens_encoded = 0
     _total_tokens_decoded = 0
     _total_tokens_target_encoder = 0
@@ -64,6 +65,16 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
                 "Speed monitor callback only calculates token throughput with "
                 "MAETrainModule, LatentMIMTrainModule or GalileoTrainModule"
             )
+
+    def pre_load_batch(self):
+        if hasattr(self, "callback_start_time"):
+            # This is based on the assumption that this callback is the first one
+            # to run. We are measuring the time between this callback ending in post step and starting the next pre load step.
+            self.trainer.record_metric(
+                "throughput/callback time (s)",
+                time.perf_counter() - self.callback_start_time,
+            )
+        self._batch_load_start = time.perf_counter()
 
     def pre_step(self, batch: Any) -> None:
         """Pre-step callback for the speed monitor."""
@@ -123,7 +134,6 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         tps_decoded_avg = self._total_tokens_decoded / total_time
         tps_target_encoder = self._total_tokens_target_encoder / step_time
         tps_target_encoder_avg = self._total_tokens_target_encoder / total_time
-
         self.trainer.record_metric(
             "throughput/total tokens target encoder-since-restart",
             self._total_tokens_target_encoder,
@@ -159,3 +169,4 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         self.trainer.record_metric(
             "throughput/device/model duration (%)", self.model_duration / step_time
         )
+        self.callback_start_time = time.perf_counter()
