@@ -7,15 +7,15 @@ from helios.internal.utils import MODEL_SIZE_ARGS
 # Model size configurations
 MODEL_SIZES = {
     "base": MODEL_SIZE_ARGS["base_shallow_decoder"],
-    "large": MODEL_SIZE_ARGS["large_shallow_decoder"],
-    "giga": MODEL_SIZE_ARGS["giga_shallow_decoder"],
+    # "large": MODEL_SIZE_ARGS["large_shallow_decoder"],
+    # "giga": MODEL_SIZE_ARGS["giga_shallow_decoder"],
 }
 
 # Checkpoint paths
 CHECKPOINT_PATHS = {
     "base": "/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_base_linear_probe_lr_0.01/step0",
-    "large": "/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_large_linear_probe_lr_0.01/step0",
-    "giga": "/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_giga_linear_probe_lr_0.01/step0",
+    # "large": "/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_large_linear_probe_lr_0.01/step0",
+    # "giga": "/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_giga_linear_probe_lr_0.01/step0",
 }
 
 # Base command template
@@ -36,29 +36,13 @@ BASE_COMMAND = (
     "--train_module.token_exit_cfg_a.srtm={encoder_depth} "
     "--train_module.token_exit_cfg_a.landsat={encoder_depth} "
     "--trainer.load_path={checkpoint_path} "
-    "--trainer.callbacks.downstream_evaluator.tasks.mados.dataset=mados "
     "--trainer.callbacks.downstream_evaluator.tasks.mados.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.mados.norm_stats_from_pretrained=False "
-    "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.dataset=sen1floods11 "
     "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis.dataset=pastis "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis.batch_size=8 "
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis.num_workers=2 "
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis-r.dataset=pastis "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis-r.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis-r.batch_size=4 "
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis-r.num_workers=1 "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle.dataset=sickle "
     "--trainer.callbacks.downstream_evaluator.tasks.sickle.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle.batch_size=8 "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle.num_workers=2 "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle-r.dataset=sickle "
     "--trainer.callbacks.downstream_evaluator.tasks.sickle-r.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle-r.batch_size=8 "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle-r.num_workers=2 "
     "--launch.priority=urgent "
-    "--launch.num_gpus=8 "
 )
 
 # Learning rates to sweep for linear probe
@@ -68,7 +52,7 @@ LP_LRs = [1e-2]
 for lr in LP_LRs:
     for model_size in MODEL_SIZES:
         run_name = (
-            f"20250514_galileo_all_evals_test_5_{model_size}_linear_probe_lr_{lr}"
+            f"20250514_galileo_all_evals_test_6_{model_size}_linear_probe_lr_{lr}"
         )
         checkpoint_path = CHECKPOINT_PATHS[model_size]
         command = BASE_COMMAND.format(

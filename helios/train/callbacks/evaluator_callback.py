@@ -166,6 +166,8 @@ class DownstreamEvaluatorCallback(Callback):
         """Run the evaluators on startup."""
         if self.eval_on_startup:
             for evaluator in self.evaluators:
+                # logging number of evaluators
+                logger.info(f"Running {len(self.evaluators)} evaluators on startup.")
                 self._perform_eval(evaluator)
         if self.cancel_after_first_eval:
             self.trainer.cancel_run(

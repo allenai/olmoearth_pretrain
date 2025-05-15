@@ -348,7 +348,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             work_dir=common.save_folder,
             load_strategy=LOAD_STRATEGY,
             save_folder=common.save_folder,
-            # load_path="/weka/dfive-default/helios/checkpoints/henryh/2landsat_with_no_missg_timesteps_sickle/step30000",
+            load_path="/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_base_linear_probe_lr_0.01/step0",
             cancel_check_interval=CANCEL_CHECK_INTERVAL,
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
