@@ -51,7 +51,7 @@ NUM_DATA_LOADER_WORKERS = 4
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
-    base_model_args = MODEL_SIZE_ARGS["base_super_shallow_decoder"]
+    base_model_args = MODEL_SIZE_ARGS["giga_super_shallow_decoder"]
     ENCODER_EMBEDDING_SIZE = int(base_model_args["encoder_embedding_size"])
     DECODER_EMBEDDING_SIZE = int(base_model_args["decoder_embedding_size"])
     ENCODER_DEPTH = int(base_model_args["encoder_depth"])
@@ -123,7 +123,7 @@ def build_train_module_config(
         }
     )
     # Maybe we want to increase token exit for base model?
-    base_model_args = MODEL_SIZE_ARGS["base_super_shallow_decoder"]
+    base_model_args = MODEL_SIZE_ARGS["giga_super_shallow_decoder"]
     token_exit_cfg_a = {
         Modality.SENTINEL2_L2A.name: int(base_model_args["encoder_depth"]),
         Modality.LATLON.name: int(base_model_args["encoder_depth"]),
@@ -242,17 +242,17 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     logger.warning("WANDB Distribution Uploads are disabled for Debugging")
     EVAL_TASKS = {
-        "m-eurosat": DownstreamTaskConfig(
-            dataset="m-eurosat",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(5),
-        ),
+        # "m-eurosat": DownstreamTaskConfig(
+        #     dataset="m-eurosat",
+        #     batch_size=128,
+        #     num_workers=8,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     eval_interval=Duration.epochs(5),
+        # ),
         "m-bigearthnet": DownstreamTaskConfig(
             dataset="m-bigearthnet",
-            batch_size=32,
+            batch_size=16,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
@@ -303,8 +303,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
-            batch_size=4,
-            num_workers=2,
+            batch_size=2,
+            num_workers=1,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
@@ -313,8 +313,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "pastis_r": DownstreamTaskConfig(
             dataset="pastis",
-            batch_size=2,
-            num_workers=2,
+            batch_size=1,
+            num_workers=1,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
@@ -348,7 +348,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             work_dir=common.save_folder,
             load_strategy=LOAD_STRATEGY,
             save_folder=common.save_folder,
-            load_path="/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_base_linear_probe_lr_0.01/step0",
+            load_path="/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_giga_linear_probe_lr_0.01/step0",
             cancel_check_interval=CANCEL_CHECK_INTERVAL,
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
