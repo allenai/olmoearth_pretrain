@@ -311,7 +311,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(20),
             input_modalities=["sentinel2"],
         ),
-        "pastis-r": DownstreamTaskConfig(
+        "pastis_r": DownstreamTaskConfig(
             dataset="pastis",
             batch_size=8,
             num_workers=2,
@@ -331,7 +331,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(20),
             input_modalities=["landsat8"],
         ),
-        "sickle-r": DownstreamTaskConfig(
+        "sickle_r": DownstreamTaskConfig(
             dataset="sickle",
             batch_size=8,
             num_workers=2,
