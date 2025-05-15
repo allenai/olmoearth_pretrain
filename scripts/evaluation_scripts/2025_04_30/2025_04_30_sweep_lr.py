@@ -52,7 +52,7 @@ LP_LRs = [1e-2]
 for lr in LP_LRs:
     for model_size in MODEL_SIZES:
         run_name = (
-            f"20250515_galileo_all_evals_test_6_{model_size}_linear_probe_lr_{lr}"
+            f"20250515_galileo_all_evals_test_7_{model_size}_linear_probe_lr_{lr}"
         )
         checkpoint_path = CHECKPOINT_PATHS[model_size]
         command = BASE_COMMAND.format(
