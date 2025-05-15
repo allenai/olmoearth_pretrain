@@ -242,17 +242,17 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     logger.warning("WANDB Distribution Uploads are disabled for Debugging")
     EVAL_TASKS = {
-        # "m-eurosat": DownstreamTaskConfig(
-        #     dataset="m-eurosat",
-        #     batch_size=128,
-        #     num_workers=8,
-        #     pooling_type=PoolingType.MEAN,
-        #     norm_stats_from_pretrained=True,
-        #     eval_interval=Duration.epochs(5),
-        # ),
+        "m-eurosat": DownstreamTaskConfig(
+            dataset="m-eurosat",
+            batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(5),
+        ),
         "m-bigearthnet": DownstreamTaskConfig(
             dataset="m-bigearthnet",
-            batch_size=16,
+            batch_size=64,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
@@ -303,8 +303,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
-            batch_size=2,
-            num_workers=1,
+            batch_size=8,
+            num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
@@ -313,8 +313,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "pastis_r": DownstreamTaskConfig(
             dataset="pastis",
-            batch_size=1,
-            num_workers=1,
+            batch_size=8,
+            num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
