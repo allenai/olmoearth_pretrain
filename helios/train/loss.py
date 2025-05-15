@@ -161,21 +161,8 @@ class PatchDiscriminationLossNew(Loss):
         target = F.normalize(target, p=2, dim=-1)
 
         count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
-        # log if any of the count values are 0
-        if any(count == 0):
-            logger.warning("Some samples have no decoder tokens.")
-        if all(count == 1):
-            logger.warning(
-                "All samples have only one decoder token. Using AllDisc loss."
-            )
-            # set up and apply alldisc loss
-            all_disc_loss = AllDiscriminationLoss(
-                tau=self.tau, pred2unit=self.pred2unit
-            )
-            return all_disc_loss.compute(predictions, targets)
         losses = []
         start = 0
-        # We could also compress the count by removing the 0s
         for c in count:
             end = start + c
             if c == 0:
