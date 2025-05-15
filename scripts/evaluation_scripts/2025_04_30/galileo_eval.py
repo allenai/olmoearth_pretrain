@@ -51,7 +51,7 @@ NUM_DATA_LOADER_WORKERS = 4
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
-    base_model_args = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    base_model_args = MODEL_SIZE_ARGS["large_super_shallow_decoder"]
     ENCODER_EMBEDDING_SIZE = int(base_model_args["encoder_embedding_size"])
     DECODER_EMBEDDING_SIZE = int(base_model_args["decoder_embedding_size"])
     ENCODER_DEPTH = int(base_model_args["encoder_depth"])
@@ -123,7 +123,7 @@ def build_train_module_config(
         }
     )
     # Maybe we want to increase token exit for base model?
-    base_model_args = MODEL_SIZE_ARGS["base"]
+    base_model_args = MODEL_SIZE_ARGS["large_super_shallow_decoder"]
     token_exit_cfg_a = {
         Modality.SENTINEL2_L2A.name: int(base_model_args["encoder_depth"]),
         Modality.LATLON.name: int(base_model_args["encoder_depth"]),
@@ -169,7 +169,6 @@ def build_train_module_config(
         dp_config=dp_config,
         scheduler=scheduler,
         contrastive_config=contrastive_config,
-        state_dict_load_opts={"strict": False},
         skip_optimizer_state=True,
     )
     return train_module_config
@@ -350,7 +349,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             work_dir=common.save_folder,
             load_strategy=LOAD_STRATEGY,
             save_folder=common.save_folder,
-            load_path="/weka/dfive-default/helios/checkpoints/henryh/3_galileo_contrastive_base_decoder_4_lr_0.0001_weight_0.05/step312250",
+            load_path="/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec2_lr0.0001_titan/step210000",
             cancel_check_interval=CANCEL_CHECK_INTERVAL,
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,

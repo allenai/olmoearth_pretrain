@@ -70,7 +70,7 @@ class GalileoTrainModuleConfig(HeliosTrainModuleConfig):
         model: Galileo,
         device: torch.device | None = None,
     ) -> "GalileoTrainModule":
-        """Build the corresponding :class:`LatentMIMTrainModule`.
+        """Build the corresponding :class:`GalileoTrainModule`.
 
         Args:
             model: The model to train.
