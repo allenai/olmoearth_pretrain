@@ -169,7 +169,7 @@ def build_train_module_config(
         dp_config=dp_config,
         scheduler=scheduler,
         contrastive_config=contrastive_config,
-        skip_optimizer_state=True,
+        skip_optimizer_state=False,
     )
     return train_module_config
 
@@ -349,7 +349,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             work_dir=common.save_folder,
             load_strategy=LOAD_STRATEGY,
             save_folder=common.save_folder,
-            load_path="/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec2_lr0.0001_titan/step210000",
+            # load_path="/weka/dfive-default/helios/checkpoints/henryh/2landsat_with_no_missg_timesteps_sickle/step30000",
             cancel_check_interval=CANCEL_CHECK_INTERVAL,
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
@@ -388,6 +388,7 @@ def build_common_components_limited_modalities(*args: Any) -> CommonComponents:
         Modality.SENTINEL1.name,
         Modality.SENTINEL2_L2A.name,
         Modality.WORLDCOVER.name,
+        Modality.LANDSAT.name,
     ]
     return config
 

@@ -173,19 +173,6 @@ class HeliosTrainModule(TrainModule):
         """
         super().__init__()
 
-        # from olmo_core.distributed.checkpoint import load_model_and_optim_state
-        # import json
-        # with open(f"/weka/dfive-default/helios/checkpoints/henryh/2landsat_dataset_2_training/step140500/config.json") as f:
-        #     config_dict = json.load(f)
-        #     model_config = Config.from_dict(config_dict["model"])
-
-        # model = model_config.build()
-        # logger.info(f"Model: {model}")
-
-        # train_module_dir = f"/weka/dfive-default/helios/checkpoints/henryh/2landsat_dataset_2_training/step140500/model_and_optim"
-        # load_model_and_optim_state(train_module_dir, model)
-        # logger.info(f"Model: {model}")
-
         self.model = model
 
         self.transform = transform_config.build()
@@ -469,14 +456,13 @@ class HeliosTrainModule(TrainModule):
         self, sd_options: dist_cp_sd.StateDictOptions
     ) -> dict[str, Any]:
         if self.skip_optimizer_state:
-            state_dict = dist_cp_sd.get_model_state_dict(self.model, options=sd_options)
-            # state_dict = OrderedDict(
-            #     (f"model.{k}", v) for k, v in state_dict.items()
-            # )
-            logger.info(f"State dict: {state_dict}")
-            return {"model": state_dict}
-        else:
             return {
+                "model": dist_cp_sd.get_model_state_dict(
+                    self.model, options=sd_options
+                ),
+            }
+        else:
+            state_dict = {
                 "model": dist_cp_sd.get_model_state_dict(
                     self.model, options=sd_options
                 ),
@@ -484,6 +470,9 @@ class HeliosTrainModule(TrainModule):
                     self.model, self.optimizer, options=sd_options
                 ),
             }
+            logger.info("Saving optimizer state")
+            logger.info(state_dict["optim"])
+            return state_dict
 
     def _clip_grad_norm(
         self,
