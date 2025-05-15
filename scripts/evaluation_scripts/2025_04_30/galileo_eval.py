@@ -252,7 +252,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "m-bigearthnet": DownstreamTaskConfig(
             dataset="m-bigearthnet",
-            batch_size=64,
+            batch_size=16,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
@@ -303,8 +303,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
-            batch_size=8,
-            num_workers=2,
+            batch_size=2,
+            num_workers=1,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
@@ -313,8 +313,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "pastis_r": DownstreamTaskConfig(
             dataset="pastis",
-            batch_size=8,
-            num_workers=2,
+            batch_size=1,
+            num_workers=1,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,

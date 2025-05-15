@@ -20,7 +20,7 @@ CHECKPOINT_PATHS = {
 
 # Base command template
 BASE_COMMAND = (
-    "python3 scripts/evaluation_scripts/2025_04_30/galileo_eval.py launch {run_name} ai2/titan-cirrascale "
+    "python3 scripts/evaluation_scripts/2025_04_30/galileo_eval.py launch {run_name} ai2/jupiter-cirrascale-2 "
     "--model.encoder_config.embedding_size={encoder_embedding_size} "
     "--model.encoder_config.depth={encoder_depth} "
     "--model.encoder_config.num_heads={encoder_num_heads} "
@@ -52,7 +52,7 @@ LP_LRs = [1e-2]
 for lr in LP_LRs:
     for model_size in MODEL_SIZES:
         run_name = (
-            f"20250515_galileo_all_evals_test_7_{model_size}_linear_probe_lr_{lr}_titan"
+            f"20250515_galileo_all_evals_test_7_{model_size}_linear_probe_lr_{lr}"
         )
         checkpoint_path = CHECKPOINT_PATHS[model_size]
         command = BASE_COMMAND.format(
