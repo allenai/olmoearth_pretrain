@@ -351,6 +351,21 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
     )
 
 
+def build_common_components_debug_eval() -> CommonComponents:
+    """Build the common components for an experiment."""
+    common_components = build_common_components()
+    return CommonComponents(
+        run_name=common_components.run_name,
+        save_folder=common_components.save_folder,
+        training_modalities=[
+            Modality.SENTINEL1.name,
+            Modality.SENTINEL2.name,
+            Modality.WORLDCOVER.name,
+        ],
+        launch=common_components.launch,
+    )
+
+
 if __name__ == "__main__":
     main(
         common_components_builder=build_common_components,
