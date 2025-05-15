@@ -172,8 +172,12 @@ class DownstreamEvaluatorCallback(Callback):
             start_time = time.monotonic()
             val_result = evaluator.val()
             self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
+            eval_time = time.monotonic() - start_time
+            self.trainer.record_metric(
+                f"eval_time/{evaluator.evaluation_name}", eval_time
+            )
             logger.info(
-                f"Finished {evaluator.evaluation_name} evaluations in {time.monotonic() - start_time:.1f} seconds."
+                f"Finished {evaluator.evaluation_name} evaluations in {eval_time:.1f} seconds."
             )
 
 
