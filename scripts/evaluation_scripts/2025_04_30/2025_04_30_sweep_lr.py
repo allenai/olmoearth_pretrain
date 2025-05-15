@@ -7,15 +7,15 @@ from helios.internal.utils import MODEL_SIZE_ARGS
 # Model size configurations
 MODEL_SIZES = {
     "base": MODEL_SIZE_ARGS["base_shallow_decoder"],
-    "large": MODEL_SIZE_ARGS["large_shallow_decoder"],
-    "giga": MODEL_SIZE_ARGS["giga_shallow_decoder"],
+    # "large": MODEL_SIZE_ARGS["large_shallow_decoder"],
+    # "giga": MODEL_SIZE_ARGS["giga_shallow_decoder"],
 }
 
 # Checkpoint paths
 CHECKPOINT_PATHS = {
-    "base": "/weka/dfive-default/helios/checkpoints/henryh/3_galileo_contrastive_base_decoder_4_lr_0.0001_weight_0.05/step312400",
-    "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step192500",
-    "giga": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_giga_dec4_lr0.0001_jupiter/step140500",
+    "base": "/weka/dfive-default/helios/checkpoints/yawenzzzz/20250514_galileo_all_evals_test_3_base_linear_probe_lr_0.01",
+    # "large": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_large_dec4_lr0.0001_titan/step192500",
+    # "giga": "/weka/dfive-default/helios/checkpoints/henryh/1_galileo_contrastive_0.05_s2_s1_wc_giga_dec4_lr0.0001_jupiter/step140500",
 }
 
 # Base command template
@@ -35,7 +35,7 @@ BASE_COMMAND = (
     "--train_module.token_exit_cfg_a.sentinel1={encoder_depth} "
     "--train_module.token_exit_cfg_a.srtm={encoder_depth} "
     "--train_module.token_exit_cfg_a.landsat={encoder_depth} "
-    # "--trainer.load_path={checkpoint_path} "
+    "--trainer.load_path={checkpoint_path} "
     "--trainer.callbacks.downstream_evaluator.tasks.mados.dataset=mados "
     "--trainer.callbacks.downstream_evaluator.tasks.mados.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.mados.norm_stats_from_pretrained=False "
@@ -67,7 +67,7 @@ LP_LRs = [1e-2]
 for lr in LP_LRs:
     for model_size in MODEL_SIZES:
         run_name = (
-            f"20250514_galileo_all_evals_test_3_{model_size}_linear_probe_lr_{lr}"
+            f"20250514_galileo_all_evals_test_4_{model_size}_linear_probe_lr_{lr}"
         )
         checkpoint_path = CHECKPOINT_PATHS[model_size]
         command = BASE_COMMAND.format(
@@ -84,7 +84,7 @@ for lr in LP_LRs:
             ],
             decoder_num_heads=MODEL_SIZE_ARGS[model_size]["decoder_num_heads"],
             lr=lr,
-            # checkpoint_path=checkpoint_path,
+            checkpoint_path=checkpoint_path,
         )
         print(f"Launching: {command}")
         # Execute the command
