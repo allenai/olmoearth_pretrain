@@ -856,17 +856,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     )
                     modality_mask[..., bandset_idx] = MaskValue.ONLINE_ENCODER.value
 
-            masked_batch_dict[masked_modality_name] = modality_mask
-
-        # Loop to handle the decoding bandset clamping
-        for modality in masked_batch.modalities:
-            logger.info(f"decoding bandset clamping for modality: {modality}")
-            if modality == "timestamps":
-                continue
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
-            modality_spec = Modality.get(modality)
-            modality_num_bandsets = modality_spec.num_band_sets
-            modality_mask = masked_batch_dict[masked_modality_name]
+            # handle the decoding bandset clamping
             # For static in space data ignore all previous masking decisions and clamp
             if self.overide_random_mask_condition(modality_spec):
                 logger.info(
@@ -875,6 +865,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 modality_mask = torch.clamp(
                     modality_mask, max=MaskValue.TARGET_ENCODER_ONLY.value
                 )
+
             for bandset_idx in range(modality_num_bandsets):
                 is_decoded = (modality, bandset_idx) in decoded_bandset_idxs
                 # what about time based data and static data?

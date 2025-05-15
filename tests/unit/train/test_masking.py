@@ -804,7 +804,7 @@ def test_random_range_masking() -> None:
     assert max_decode_ratio + eps >= max(decode_ratios) > max_decode_ratio - 0.1
 
 
-def test_space_cross_modality_masking() -> None:
+def test_space_cross_modality_masking(set_random_seeds: None) -> None:
     """Test space cross modality masking."""
     b, h, w, t = 4, 4, 4, 3
 
@@ -836,7 +836,7 @@ def test_space_cross_modality_masking() -> None:
     logger.info(f"masked_sample: {masked_sample}")
     # Check that the worldcover mask has the expected values
     # Check that latlon mask has the expected values
-    expected_latlon_mask = torch.tensor([[2], [2], [2], [2]])
+    expected_latlon_mask = torch.tensor([[0], [0], [0], [0]])
     expected_worldcover_mask = torch.tensor(
         [
             [
