@@ -724,8 +724,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
         self.strategy = strategy
-        # Stop using the generator pattern here and use the torch random as above
-        self.generator = np.random.default_rng(0)
         self.max_unmasking_bandsets = max_unmasking_bandsets
         self.min_encoding_bandsets = min_encoding_bandsets
         self.max_encoding_bandsets = max_encoding_bandsets
@@ -745,8 +743,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self, bandset_list: list[tuple[str, int]]
     ) -> list[tuple[str, int]]:
         """Select the encoded bandsets."""
-        num_bandsets_to_encode = self.generator.integers(
-            low=self.min_encoding_bandsets, high=self.max_encoding_bandsets
+        num_bandsets_to_encode = np.random.choice(
+            range(self.min_encoding_bandsets, self.max_encoding_bandsets)
         )
         idxs_list = list(range(len(bandset_list)))
         encoded_bandset_idxs = np.random.choice(
@@ -760,9 +758,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
     ) -> tuple[tuple[str, int], ...]:
         """Select the decoded bandsets."""
         candidate_decoding_bandset_combinations = []
-        # Why would we not want to just pick the largest random subset of
-        # the leftover bandsets that are less then the max unmasking bandsets?
-        # vs having a high minimum decoding value?
         for bandset_combination in ALL_BANDSET_POWSET:
             if len(bandset_combination) == 0:
                 logger.debug("Skipping empty bandset combination")
@@ -795,11 +790,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 continue
             candidate_decoding_bandset_combinations.append(bandset_combination)
 
-        # This is the option to use random selection
-        # decoded_bandset_idxs = candidate_decoding_bandset_combinations[
-        #     self.generator.integers(0, len(candidate_decoding_bandset_combinations))
-        # ]
-        # this is the option to use the longest combination
         # Sort combinations by length (descending) and pick the longest one
         candidate_decoding_bandset_combinations.sort(key=len, reverse=True)
         decoded_bandset_idxs = candidate_decoding_bandset_combinations[0]
