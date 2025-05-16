@@ -137,7 +137,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     NUM_WORKERS = 8
     GLOBAL_BATCH_SIZE = 512
     PREFETCH_FACTOR = 4
-    TOKEN_BUDGET = 6000
+    TOKEN_BUDGET = 1500
     SAMPLE_HW_P_LIST = list(range(5, 13))
 
     dataloader_config = HeliosDataLoaderConfig(
