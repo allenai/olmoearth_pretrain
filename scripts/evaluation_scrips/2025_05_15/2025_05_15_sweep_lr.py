@@ -46,8 +46,7 @@ BASE_COMMAND = (
 )
 
 # Learning rates to sweep for linear probe
-# LP_LRs = [5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
-LP_LRs = [1e-2]
+LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 
 for lr in LP_LRs:
     for model_size in MODEL_SIZES:
