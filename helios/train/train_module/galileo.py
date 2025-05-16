@@ -204,7 +204,9 @@ class GalileoTrainModule(HeliosTrainModule):
         self.total_loss_name = f"{self.base_loss_a.name}+{self.base_loss_b.name}"
         if self.regularizer is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.regularizer.name}"
-        self.mae_loss = mae_loss_config and mae_loss_config.build()
+        self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
+        if self.mae_loss is not None:
+            self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
     def loss_fn_a(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""

@@ -438,6 +438,10 @@ class Reconstructor(nn.Module):
         """Apply torch.compile to the model."""
         self.decoder.apply_compile()
 
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        self.decoder.apply_fsdp(**fsdp_kwargs)
+
     @staticmethod
     def _get_reconstruction_module_name(modality: str, idx: int) -> str:
         """Get the reconstruction module name.

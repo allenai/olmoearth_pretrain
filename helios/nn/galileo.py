@@ -101,6 +101,8 @@ class Galileo(nn.Module, DistributedMixins):
         self.decoder_a.apply_fsdp(**fsdp_config)
         self.decoder_b.apply_fsdp(**fsdp_config)
         self.target_encoder.apply_fsdp(**fsdp_config)
+        if self.reconstructor:
+            self.reconstructor.apply_fsdp(**fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
