@@ -162,7 +162,7 @@ class DownstreamEvaluatorCallback(Callback):
     eval_on_startup: bool = False
     cancel_after_first_eval: bool = False
 
-    def pre_train(self) -> None:
+    def pre_step(self) -> None:
         """Run the evaluators on startup."""
         if self.eval_on_startup:
             logger.info(f"Running {len(self.evaluators)} evaluators on startup.")
@@ -191,9 +191,7 @@ class DownstreamEvaluatorCallback(Callback):
         val_result = evaluator.val()
         self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
         eval_time = time.monotonic() - start_time
-        self.trainer.record_metric(
-            f"eval_time/{evaluator.evaluation_name}", eval_time
-        )
+        self.trainer.record_metric(f"eval_time/{evaluator.evaluation_name}", eval_time)
         logger.info(
             f"Finished {evaluator.evaluation_name} evaluations in {eval_time:.1f} seconds."
         )
