@@ -14,7 +14,7 @@ from torch.distributed.fsdp import (
     register_fsdp_forward_method,
 )
 
-from helios.nn.flexihelios import EncoderConfig, PredictorConfig, TokensAndMasks
+from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.utils import DistributedMixins
 from helios.train.masking import MaskedHeliosSample
 
@@ -86,8 +86,8 @@ class LatentMIM(nn.Module, DistributedMixins):
 class LatentMIMConfig(Config):
     """Configuration for the Latent Predictor."""
 
-    encoder_config: "EncoderConfig"
-    decoder_config: "PredictorConfig"
+    encoder_config: Config
+    decoder_config: Config
 
     def validate(self) -> None:
         """Validate the configuration."""

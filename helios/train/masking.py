@@ -784,6 +784,48 @@ class RandomMaskingStrategy(MaskingStrategy):
         return MaskedHeliosSample(**output_dict)
 
 
+@MASKING_STRATEGY_REGISTRY.register("random_increasing")
+class RandomIncreasingMaskingStrategy(RandomMaskingStrategy):
+    """Gradually increase the masked tokens (reduce encode ratio)."""
+
+    def __init__(
+        self,
+        initial_encode_ratio: float = 0.5,
+        final_encode_ratio: float = 0.1,
+        initial_decode_ratio: float = 0.5,
+        final_decode_ratio: float = 0.9,
+        steps: int = 1000,
+    ) -> None:
+        """Initialize the masking strategy."""
+        super().__init__(initial_encode_ratio, initial_decode_ratio)
+        self.initial_encode_ratio = initial_encode_ratio
+        self.final_encode_ratio = final_encode_ratio
+        self.initial_decode_ratio = initial_decode_ratio
+        self.final_decode_ratio = final_decode_ratio
+        self.steps = steps
+        self.elapsed = 0
+
+    def apply_mask(
+        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedHeliosSample:
+        """Apply masking while changing the encode and decode ratio over time."""
+        self.elapsed += 1
+        if self.elapsed >= self.steps:
+            self._encode_ratio = self.final_encode_ratio
+            self._decode_ratio = self.final_decode_ratio
+        else:
+            factor = self.elapsed / self.steps
+            self._encode_ratio = (
+                self.initial_encode_ratio
+                + (self.final_encode_ratio - self.initial_encode_ratio) * factor
+            )
+            self._decode_ratio = (
+                self.initial_decode_ratio
+                + (self.final_decode_ratio - self.initial_decode_ratio) * factor
+            )
+        return super().apply_mask(batch, patch_size, **kwargs)
+
+
 @MASKING_STRATEGY_REGISTRY.register("random_range")
 class RandomRangeMaskingStrategy(MaskingStrategy):
     """Randomly masks the input data."""
