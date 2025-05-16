@@ -166,6 +166,10 @@ class PatchDiscriminationLossNew(Loss):
         start = 0
         for c in count:
             end = start + c
+            if c == 0:
+                # we will occasionally get a sample with no decoded values due to missing data this will let us skip it
+                logger.warning("No decoded values for this sample")
+                continue
             pred_sample = pred[:, start:end, :]
             target_sample = target[:, start:end, :]
             score_sample = (
@@ -640,13 +644,22 @@ class KoLeoLoss(Loss):
         Returns:
             The computed loss value.
         """
-        if self.mode == "patch":
-            all_preds, all_masks = predictions.flatten_tokens_and_masks()
-            online_encodings = all_preds[all_masks == MaskValue.ONLINE_ENCODER.value]
+        if isinstance(predictions, TokensAndMasks):
+            if self.mode == "patch":
+                if not isinstance(predictions, TokensAndMasks):
+                    raise ValueError(
+                        "predictions must be TokensAndMasks for patch mode"
+                    )
+                all_preds, all_masks = predictions.flatten_tokens_and_masks()
+                online_encodings = all_preds[
+                    all_masks == MaskValue.ONLINE_ENCODER.value
+                ]
+            else:
+                online_encodings = predictions.pool_unmasked_tokens(
+                    PoolingType.MEAN, spatial_pooling=False
+                )
         else:
-            online_encodings = predictions.pool_unmasked_tokens(
-                PoolingType.MEAN, spatial_pooling=False
-            )
+            online_encodings = predictions
 
         # apply l2 norm
         online_encodings = F.normalize(online_encodings, eps=self.eps, p=2, dim=-1)

@@ -12,9 +12,10 @@ from olmo_core.launch.beaker import (
     OLMoCoreBeakerImage,
 )
 from olmo_core.utils import generate_uuid
+from upath import UPath
 
 from helios.data.constants import Modality
-from helios.internal.experiment import CommonComponents, SubCmd
+from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, SubCmd
 
 logger = logging.getLogger(__name__)
 BUDGET = "ai2/d5"
@@ -24,6 +25,15 @@ DEFAULT_HELIOS_WEKA_BUCKET = BeakerWekaBucket("dfive-default", "/weka/dfive-defa
 PROJECT_NAME = "helios"
 
 WEKA_CLUSTER_NAMES = ["jupiter", "saturn", "neptune", "ceres", "triton", "titan"]
+
+
+def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
+    """Build the visualize config for an experiment."""
+    return HeliosVisualizeConfig(
+        num_samples=50,
+        output_dir=str(UPath(common.save_folder) / "visualizations"),
+        std_multiplier=2.0,
+    )
 
 
 def get_root_dir(cluster: str) -> str:
@@ -149,9 +159,10 @@ def build_common_components(
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
+        Modality.LATLON.name,
         # Modality.SRTM.name,
         # Modality.NAIP.name,
-        # Modality.LANDSAT.name,
+        Modality.LANDSAT.name,
         # Modality.OPENSTREETMAP_RASTER.name,
     ]
     cmd_to_launch = SubCmd.train

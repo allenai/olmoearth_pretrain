@@ -158,6 +158,7 @@ class HeliosTrainModule(TrainModule):
         dp_config: DataParallelConfig | None = None,
         ac_config: TransformerActivationCheckpointingConfig | None = None,
         compile_loss: bool = False,
+        find_unused_parameters: bool = False,
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
         scheduler: Scheduler | None = None,
@@ -177,6 +178,7 @@ class HeliosTrainModule(TrainModule):
             dp_config: Data parallel configuration for the model.
             ac_config: Activation checkpointing configuration for the model.
             compile_loss: Whether to compile the loss function.
+            find_unused_parameters: Whether to find unused parameters for DDP.
             autocast_precision: Enable AMP with this data type.
             max_grad_norm: Clip gradient norms to this value.
             scheduler: Optional learning rate scheduler.
@@ -251,7 +253,11 @@ class HeliosTrainModule(TrainModule):
                 )
                 logger.info("Applied FSDP to the model")
             elif dp_config.name == DataParallelType.ddp:
-                self.model.apply_ddp(dp_mesh=dp_mesh, compile_enabled=compile_model)
+                self.model.apply_ddp(
+                    dp_mesh=dp_mesh,
+                    compile_enabled=compile_model,
+                    find_unused_parameters=find_unused_parameters,
+                )
                 logger.info("Applied DDP to the model")
             else:
                 raise NotImplementedError(dp_config.name)
@@ -284,6 +290,13 @@ class HeliosTrainModule(TrainModule):
         return get_dp_process_group(self.world_mesh)
 
     @property
+    def is_fsdp(self) -> bool:
+        """Check if the model is FSDP."""
+        return self._dp_config is not None and self._dp_config.name in (
+            DataParallelType.fsdp
+        )
+
+    @property
     def eval_batch_spec(self) -> EvalBatchSpec:
         """Get the evaluation batch spec."""
         # Determine the number of micro-batches.
@@ -295,6 +308,11 @@ class HeliosTrainModule(TrainModule):
             rank_batch_size=rank_batch_size_instances,
             batch_size_unit=EvalBatchSizeUnit.instances,
         )
+
+    @property
+    def local_rank(self) -> int:
+        """Get the local rank."""
+        return self.trainer.data_loader.dp_rank
 
     @property
     def logits_dtype(self) -> torch.dtype:

@@ -2,18 +2,68 @@
 
 import logging
 import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 from olmo_core.distributed.utils import get_rank
 from olmo_core.exceptions import OLMoEnvironmentError
 from olmo_core.train.callbacks.wandb import WANDB_API_KEY_ENV_VAR, WandBCallback
+from tqdm import tqdm
 
+from helios.data.constants import IMAGE_TILE_SIZE, Modality
 from helios.data.dataloader import HeliosDataLoader
+from helios.data.dataset import GetItemArgs, HeliosDataset
 from helios.data.utils import plot_latlon_distribution, plot_modality_data_distribution
 
 logger = logging.getLogger(__name__)
+
+
+def get_sample_data_for_histogram(
+    dataset: HeliosDataset, num_samples: int = 100, num_values: int = 100
+) -> dict[str, Any]:
+    """Get the sample data per modality per band for showing the histogram.
+
+    Args:
+        dataset: The dataset to sample from.
+        num_samples: The number of samples to sample from the dataset.
+        num_values: The number of values to sample from each modality per band.
+
+    Returns:
+        dict: A dictionary containing the sample data per modality per band.
+    """
+    if num_samples > len(dataset):
+        raise ValueError(
+            f"num_samples {num_samples} is greater than the number of samples in the dataset {len(dataset)}"
+        )
+    indices_to_sample = random.sample(list(range(len(dataset))), k=num_samples)
+    sample_data: dict[str, Any] = {}
+
+    # Assume samples could include different modalities and bands
+    # TODO: compute the histogram for each modality and band directly
+    for i in tqdm(indices_to_sample):
+        get_item_args = GetItemArgs(idx=i, patch_size=1, sampled_hw_p=IMAGE_TILE_SIZE)
+        _, sample = dataset[get_item_args]
+        for modality in sample.modalities:
+            if modality == "timestamps" or modality == "latlon":
+                continue
+            modality_data = sample.as_dict(ignore_nones=True)[modality]
+            if modality_data is None:
+                continue
+            modality_spec = Modality.get(modality)
+            modality_bands = modality_spec.band_order
+            if modality not in sample_data:
+                sample_data[modality] = {band: [] for band in modality_bands}
+            # for each band, flatten the data and extend the list
+            for idx, band in enumerate(modality_bands):
+                sample_data[modality][band].extend(
+                    random.sample(
+                        modality_data[:, :, :, idx].flatten().tolist(), num_values
+                    )
+                )
+    return sample_data
 
 
 @dataclass
@@ -80,7 +130,7 @@ class HeliosWandBCallback(WandBCallback):
                 del dataset.latlon_distribution
                 if self.upload_modality_data_band_distribution_pre_train:
                     logger.info("Gathering normalized data distribution")
-                    sample_data = dataset.get_sample_data_for_histogram()
+                    sample_data = get_sample_data_for_histogram(dataset)
                     for modality, modality_data in sample_data.items():
                         fig = plot_modality_data_distribution(modality, modality_data)
                         self.wandb.log(

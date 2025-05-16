@@ -94,6 +94,9 @@ class MAETrainModule(HeliosTrainModule):
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
         token_exit_cfg: The token exit configuration for the model.
+        warmup_duration: The warmup duration for the model.
+        regularizer_config: An optional regularizer configuration for the model.
+        find_unused_parameters: Whether to find unused parameters in the model.
     """
 
     def __init__(
@@ -117,6 +120,7 @@ class MAETrainModule(HeliosTrainModule):
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
+        find_unused_parameters: bool = True,
     ):
         """Initialize the training module.
 
@@ -141,6 +145,7 @@ class MAETrainModule(HeliosTrainModule):
             token_exit_cfg: The token exit configuration for the model.
             warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
+            find_unused_parameters: Whether to find unused parameters in the model.
         """
         super().__init__(
             model=model,
@@ -158,6 +163,7 @@ class MAETrainModule(HeliosTrainModule):
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
             warmup_duration=warmup_duration,
+            find_unused_parameters=find_unused_parameters,  # Must be true so that we can deal with missing modalities
         )
         self.token_exit_cfg = token_exit_cfg
         self.base_loss = loss_config.build()

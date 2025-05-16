@@ -167,12 +167,13 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
     return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
+        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_gzip_3/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/285288",
         training_modalities=common.training_modalities,
-        use_samples_with_missing_supported_modalities=True,
+        use_modalities_with_missing_timesteps=True,  # False,
         dtype=DType.float32,
+        # cache_dir="/helios_cache/osm_sampling",
+        # samples_per_sec=4 / NUM_WORKERS,  # 2/ GBS
     )
 
 
@@ -260,15 +261,37 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
             eval_interval=Duration.epochs(20),
+            input_modalities=["sentinel2"],
         ),
         "pastis-r": DownstreamTaskConfig(
-            dataset="pastis-r",
+            dataset="pastis",
             batch_size=8,
             num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
             eval_interval=Duration.epochs(20),
+            input_modalities=["sentinel1", "sentinel2"],
+        ),
+        "sickle": DownstreamTaskConfig(
+            dataset="sickle",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(20),
+            input_modalities=["landsat8"],
+        ),
+        "sickle-r": DownstreamTaskConfig(
+            dataset="sickle",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(20),
+            input_modalities=["landsat8", "sentinel1", "sentinel2"],
         ),
     }
     trainer_config = (

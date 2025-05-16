@@ -239,7 +239,7 @@ class TestEncoder:
         input_res = 1
 
         # No early exit configuration is provided.
-        output = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output, _ = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
 
         # After patchification the spatial dimensions reduce.
         expected_H = H // patch_size
@@ -293,6 +293,7 @@ class TestEncoder:
             if not any(
                 ignore_param in name
                 for ignore_param in [
+                    "project_and_aggregate",
                     "pos_embed",
                     "month_embed",
                     "composite_encodings.per_modality_channel_embeddings.latlon",
@@ -340,7 +341,7 @@ class TestEncoder:
 
         token_exit_cfg = {"sentinel2_l2a": 2, "latlon": 0}
 
-        output = encoder.forward(
+        output, _ = encoder.forward(
             x,
             patch_size,
             input_res,
@@ -392,6 +393,7 @@ class TestEncoder:
                 any(
                     ignore_param in name
                     for ignore_param in [
+                        "project_and_aggregate",
                         "pos_embed",
                         "month_embed",
                         "composite_encodings.per_modality_channel_embeddings.latlon",
@@ -438,7 +440,7 @@ class TestEncoder:
         patch_size = 4
         input_res = 1
 
-        output = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output, _ = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
 
         # After patchification the spatial dimensions reduce.
         expected_H = H // patch_size
@@ -495,6 +497,7 @@ class TestEncoder:
                         "month_embed",
                         "composite_encodings.per_modality_channel_embeddings.latlon",
                         "patch_embeddings.per_modality_embeddings.latlon",
+                        "project_and_aggregate",
                     ]
                 )
                 or ("block" in name)
@@ -700,6 +703,7 @@ class TestPredictor:
                     "pos_embed",
                     "month_embed",
                     "composite_encodings.per_modality_channel_embeddings.latlon",
+                    "project_and_aggregate",
                 ]
             ):
                 assert param.grad is not None, name
@@ -757,7 +761,7 @@ def test_end_to_end_with_exit_config(
         drop_path=DROP_PATH,
         learnable_channel_embeddings=True,
     )
-    output = encoder.forward(
+    output, _ = encoder.forward(
         x,
         patch_size,
         input_res,
@@ -819,6 +823,7 @@ def test_end_to_end_with_exit_config(
                 "pos_embed",
                 "month_embed",
                 "composite_encodings.per_modality_channel_embeddings.latlon",
+                "project_and_aggregate",
             ]
         ):
             assert param.grad is not None, name

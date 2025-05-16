@@ -7,6 +7,9 @@ from typing import Any
 from olmo_core.train.callbacks.speed_monitor import SpeedMonitorCallback
 
 from helios.data.dataset import HeliosSample
+from helios.train.train_module.contrastive_latentmim import (
+    ContrastiveLatentMIMTrainModule,
+)
 from helios.train.train_module.galileo import GalileoTrainModule
 from helios.train.train_module.latent_mim import LatentMIMTrainModule
 from helios.train.train_module.mae import MAETrainModule
@@ -27,7 +30,10 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         train_module = self.trainer.train_module
 
         self._token_budget = self.trainer.data_loader.token_budget
-        if isinstance(train_module, MAETrainModule | LatentMIMTrainModule):
+        if isinstance(
+            train_module,
+            MAETrainModule | LatentMIMTrainModule | ContrastiveLatentMIMTrainModule,
+        ):
             # Unwrap if the model is in DDP
             self._encoder_ratio = train_module.masking_strategy.encode_ratio
             self._decoder_ratio = train_module.masking_strategy.decode_ratio
@@ -108,6 +114,8 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
 
         bps = 1 / step_time
         bps_avg = self._total_steps / total_time
+        # Save BPS average so we can use the beaker callback to estimate time remaining
+        self._bps_avg = bps_avg
         data_pct = 100 * self._batch_load_time / step_time
         tps_encoded = self._total_tokens_encoded / step_time
         tps_encoded_avg = self._total_tokens_encoded / total_time

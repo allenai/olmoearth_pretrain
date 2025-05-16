@@ -1,9 +1,14 @@
 """Unit tests for the dataset module."""
 
+from pathlib import Path
+
+import numpy as np
+import pytest
 import torch
+from upath import UPath
 
 from helios.data.constants import MISSING_VALUE
-from helios.data.dataset import HeliosSample, collate_helios
+from helios.data.dataset import HeliosDataset, HeliosSample, collate_helios
 
 
 def test_collate_helios(
@@ -36,7 +41,6 @@ def test_collate_helios(
 class TestHeliosSample:
     """Test the HeliosSample class."""
 
-    # Test subsetting collate function with missing modalities
     def test_subset_with_missing_modalities(
         self,
         samples_with_missing_modalities: list[tuple[int, HeliosSample]],
@@ -62,5 +66,115 @@ class TestHeliosSample:
         assert subset_sample.worldcover.shape[0] == 8
 
         # Check that the missing modality masks are preserved
-        # Check the missing modality mask values
         assert (subset_sample.sentinel1[1] != MISSING_VALUE).sum() == 0
+
+
+class TestHeliosDataset:
+    """Test the HeliosDataset class."""
+
+    @pytest.fixture
+    def tmp_h5py_dir(self, tmp_path: Path) -> UPath:
+        """Create a temporary h5py directory."""
+        h5py_dir = tmp_path / "h5py_data"
+        h5py_dir.mkdir()
+        return UPath(h5py_dir)
+
+    def test_fill_missing_timesteps(self, tmp_h5py_dir: UPath) -> None:
+        """Test _fill_missing_timesteps function."""
+        # Create test data
+        h, w, t, c = 4, 4, 2, 2
+        data = np.random.randn(h, w, t, c).astype(np.float32)
+        # Only first and last timesteps present
+        mask = np.array([True, False, True])
+        max_sequence_length = 5
+
+        # Create dataset instance
+        dataset = HeliosDataset(
+            h5py_dir=tmp_h5py_dir,
+            training_modalities=["sentinel2_l2a"],
+            dtype=np.float32,
+            max_sequence_length=max_sequence_length,
+            normalize=False,  # Disable normalization for testing
+        )
+
+        # Fill missing timesteps
+        filled_data = dataset._fill_missing_timesteps(data, mask)
+
+        # Check shape
+        assert filled_data.shape == (h, w, max_sequence_length, c)
+
+        # Check that original data is preserved at correct timesteps
+        # the data is stored without any missing data for the missing timesteps
+        assert np.array_equal(filled_data[..., 0, :], data[..., 0, :])
+        assert np.array_equal(filled_data[..., 2, :], data[..., 1, :])
+
+        # Check that missing timesteps are filled with MISSING_VALUE
+        assert np.all(filled_data[..., 1, :] == MISSING_VALUE)
+        assert np.all(filled_data[..., 3:, :] == MISSING_VALUE)
+
+    def test_fill_missing_modality(
+        self,
+        tmp_h5py_dir: UPath,
+        samples_with_missing_modalities: list[tuple[int, HeliosSample]],
+    ) -> None:
+        """Test _fill_missing_modality function."""
+        sample = samples_with_missing_modalities[0][1]
+        dataset = HeliosDataset(
+            h5py_dir=tmp_h5py_dir,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,  # Disable normalization for testing
+        )
+
+        # Test filling a missing modality
+        filled_data = dataset._fill_missing_modality(sample, "sentinel1")
+
+        # Check shape matches expected shape
+        expected_shape = sample.get_expected_shape("sentinel1")
+        assert filled_data.shape == expected_shape
+
+        # Check all values are MISSING_VALUE
+        assert np.all(filled_data == MISSING_VALUE)
+
+    def test_fill_sample_with_missing_values(self, tmp_h5py_dir: UPath) -> None:
+        """Test fill_sample_with_missing_values function."""
+        # Create test data
+        h, w, t, c = 4, 4, 3, 2
+        data = np.random.randn(h, w, t, c).astype(np.float32)
+        max_sequence_length = 5
+
+        # Create timestamps array with max_sequence_length
+        timestamps = np.zeros((max_sequence_length, 3), dtype=np.int32)
+        timestamps[:3] = np.array([[1, 1, 2023], [2, 1, 2023], [3, 1, 2023]])
+
+        sample_dict = {
+            "sentinel2_l2a": data,
+            "timestamps": timestamps,
+        }
+        missing_timesteps_masks = {"sentinel2_l2a": np.array([True, False, True])}
+
+        dataset = HeliosDataset(
+            h5py_dir=tmp_h5py_dir,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            max_sequence_length=max_sequence_length,
+            use_modalities_with_missing_timesteps=True,
+            normalize=False,  # Disable normalization for testing
+        )
+
+        # Fill missing values
+        sample, missing_modalities = dataset.fill_sample_with_missing_values(
+            sample_dict, missing_timesteps_masks
+        )
+
+        # Check that sentinel1 is in missing_modalities
+        assert "sentinel1" in missing_modalities
+
+        # Check that sentinel2_l2a has been filled correctly
+        assert sample.sentinel2_l2a is not None
+        expected_shape = (h, w, dataset.max_sequence_length, c)
+        assert sample.sentinel2_l2a.shape == expected_shape
+
+        # Check that missing timesteps are filled with MISSING_VALUE
+        assert np.all(sample.sentinel2_l2a[..., 1, :] == MISSING_VALUE)
+        assert np.all(sample.sentinel2_l2a[..., 3:, :] == MISSING_VALUE)

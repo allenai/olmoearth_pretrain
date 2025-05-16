@@ -103,6 +103,7 @@ class ModalitySpec:
         band_sets: the band sets of the modality, ie the units of tokenization.
         is_multitemporal: whether the modality is multitemporal.
         ignore_when_parsing: whether to ignore the modality when parsing the data form the csv file.
+        image_tile_size_factor: the factor of how much bigger the dimensions of the image tile are compared with the base tile size.
     """
 
     name: str
@@ -110,6 +111,7 @@ class ModalitySpec:
     band_sets: list[BandSet]
     is_multitemporal: bool
     ignore_when_parsing: bool  # If true this modality is not parsed from the csv file and not loaded form a file
+    image_tile_size_factor: int = 1
 
     def __hash__(self) -> int:
         """Hash this Modality."""
@@ -192,6 +194,7 @@ class Modality:
         band_sets=[BandSet(["R", "G", "B", "IR"], 1)],
         is_multitemporal=False,
         ignore_when_parsing=False,
+        image_tile_size_factor=16,
     )
 
     SENTINEL1 = ModalitySpec(

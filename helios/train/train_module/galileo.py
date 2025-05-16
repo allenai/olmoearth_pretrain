@@ -229,6 +229,8 @@ class GalileoTrainModule(HeliosTrainModule):
         self.model.train()
 
         # Set the maximum number of tokens
+        total_mask_a_loss = torch.tensor(0.0, device=self.device)
+        total_mask_b_loss = torch.tensor(0.0, device=self.device)
         total_batch_loss = torch.tensor(0.0, device=self.device)
         total_batch_reg = torch.tensor(0.0, device=self.device)
         total_batch_con = torch.tensor(0.0, device=self.device)
@@ -253,6 +255,7 @@ class GalileoTrainModule(HeliosTrainModule):
                         self.token_exit_cfg_a,
                     )
                 )
+
                 loss_b, latent_b, pooled_b = (
                     self.apply_masks_and_compute_losses_and_latents(
                         microbatch,
@@ -262,12 +265,17 @@ class GalileoTrainModule(HeliosTrainModule):
                         self.token_exit_cfg_b,
                     )
                 )
-
                 loss = (loss_a + loss_b) / 2
+                total_mask_a_loss += (
+                    get_local_tensor(loss_a.detach()) / num_microbatches
+                )
+                total_mask_b_loss += (
+                    get_local_tensor(loss_b.detach()) / num_microbatches
+                )
 
                 # Scale loss by number of microbatches
-                reg_term_a = self.compute_regularization(latent_a)
-                reg_term_b = self.compute_regularization(latent_b)
+                reg_term_a = self.compute_regularization(pooled_a)
+                reg_term_b = self.compute_regularization(pooled_b)
                 if reg_term_a is not None:
                     assert reg_term_b is not None
                     loss = loss + (reg_term_a + reg_term_b) / 2
@@ -280,35 +288,74 @@ class GalileoTrainModule(HeliosTrainModule):
 
                 if self.contrastive_loss is not None:
                     contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
-                    loss += contrastive_loss
-                    total_batch_con += (
-                        get_local_tensor(contrastive_loss.detach()) / num_microbatches
-                    )
+                    logger.info(f"contrastive loss: {contrastive_loss}")
+                    if (
+                        torch.isnan(contrastive_loss).any()
+                        or torch.isinf(contrastive_loss).any()
+                    ):
+                        logger.warning(
+                            f"contrastive loss is nan or inf: {contrastive_loss} not adding to total loss. "
+                            f"rank: {self.local_rank}, epoch: {self.trainer.epoch}, "
+                            f"step: {self.trainer.global_step}"
+                        )
+                    else:
+                        loss += contrastive_loss
+                        total_batch_con += (
+                            get_local_tensor(contrastive_loss.detach())
+                            / num_microbatches
+                        )
 
                 loss = loss / num_microbatches
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
-
                 # Skip bad batches
+                # this does not work with fsdp need skip step optimizer instead of loss
                 if torch.isnan(loss).any() or torch.isinf(loss).any():
                     logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}. "
+                        f"Skipping batch on rank {self.local_rank}, "
+                        f"step {self.trainer.global_step}, epoch {self.trainer.epoch}"
                     )
-                    del latent_a, latent_b
+                    if self.is_fsdp:
+                        raise ValueError(
+                            "FSDP does not support skipping bad batches as the backwards pass will not sync correctly"
+                        )
                     break
-
                 del latent_a, latent_b
                 loss.backward()
 
+        # what happens if both batches are bad?
         if dry_run:
             return
         # Remember to detach the loss before recording
+
+        # check if each metric is nan or inf and if so turn to float('inf') tensor
+        total_batch_loss = torch.nan_to_num(total_batch_loss, nan=float("inf"))
+        total_batch_reg = torch.nan_to_num(total_batch_reg, nan=float("inf"))
+        total_batch_con = torch.nan_to_num(total_batch_con, nan=float("inf"))
+        total_mask_a_loss = torch.nan_to_num(total_mask_a_loss, nan=float("inf"))
+        total_mask_b_loss = torch.nan_to_num(total_mask_b_loss, nan=float("inf"))
+
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
             total_batch_loss,
             ReduceType.mean,
         )
+        self.trainer.record_metric(
+            f"{self.masking_strategy_a.name}_masking_{self.base_loss_a.name}",
+            total_mask_a_loss,
+            ReduceType.mean,
+            namespace="train",
+        )
+        self.trainer.record_metric(
+            f"{self.masking_strategy_b.name}_masking_{self.base_loss_b.name}",
+            total_mask_b_loss,
+            ReduceType.mean,
+            namespace="train",
+        )
+        self.trainer.record_metric("train/epoch", self.trainer.epoch)
         self.log_regularization(total_batch_reg)
+
         if self.contrastive_loss is not None:
             self.trainer.record_metric(
                 f"train/{self.contrastive_loss.name}",
@@ -327,7 +374,6 @@ class GalileoTrainModule(HeliosTrainModule):
     ) -> tuple[torch.Tensor, TokensAndMasks, torch.Tensor]:
         """Apply masks and compute losses and latents."""
         masked_batch = mask_fn(microbatch, patch_size=patch_size)
-
         # Run Encoder and decoder on the augmented input
         loss, latent, _, _, pooled = model_forward_fn(
             masked_batch, patch_size, token_exit_cfg
@@ -344,11 +390,12 @@ class GalileoTrainModule(HeliosTrainModule):
             latent, decoded, pooled = self.model.forward_a(batch, patch_size)
             with torch.no_grad():
                 logger.info("target encoder running here")
-                target_output = self.model.target_encoder.forward(
+                target_output, _ = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
+
             loss = self.loss_fn_a(decoded, target_output)
             return loss, latent, decoded, target_output, pooled
 
@@ -362,10 +409,11 @@ class GalileoTrainModule(HeliosTrainModule):
             latent, decoded, pooled = self.model.forward_b(batch, patch_size)
             with torch.no_grad():
                 logger.info("target encoder running here")
-                target_output = self.model.target_encoder.forward(
+                target_output, _ = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
+
             loss = self.loss_fn_b(decoded, target_output)
             return loss, latent, decoded, target_output, pooled

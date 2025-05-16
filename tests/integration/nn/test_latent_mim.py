@@ -87,7 +87,7 @@ def test_latentmim_with_loss(
     )
     latentmim = LatentMIM(encoder, predictor)
 
-    _, output = latentmim.forward(x, patch_size)
+    _, output, _ = latentmim.forward(x, patch_size)
     output = predictor.forward(output, x.timestamps, patch_size, input_res=1)
     patched_H = H // patch_size
     patched_W = W // patch_size
@@ -139,7 +139,7 @@ def test_latentmim_with_loss(
     loss_fn = PatchDiscriminationLoss()
     with torch.no_grad():
         logger.info("target encoder running here")
-        target_output = latentmim.target_encoder.forward(
+        target_output, _ = latentmim.target_encoder.forward(
             x.unmask(),
             patch_size=patch_size,
             token_exit_cfg={
@@ -159,6 +159,7 @@ def test_latentmim_with_loss(
                 "composite_encodings.per_modality_channel_embeddings.worldcover",
                 "patch_embeddings.per_modality_embeddings.latlon",
                 "patch_embeddings.per_modality_embeddings.worldcover",
+                "project_and_aggregate",
             ]
         ):
             assert param.grad is not None, name

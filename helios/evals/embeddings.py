@@ -44,7 +44,7 @@ def get_embeddings(
                 # Likely we want to have a flag that checks for eval mode and passes empty masks
                 batch_embeddings: TokensAndMasks = model(
                     masked_helios_sample, patch_size=patch_size
-                )  # (bsz, dim)
+                )[0]  # (bsz, dim)
 
             spatial_pool = True if task_type == TaskType.SEGMENTATION else False
             averaged_embeddings = batch_embeddings.pool_unmasked_tokens(

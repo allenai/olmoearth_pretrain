@@ -155,7 +155,7 @@ class BreizhCropsDataset(Dataset):
 
         masked_sample = MaskedHeliosSample.from_heliossample(
             HeliosSample(
-                sentinel1=torch.tensor(image).float(), timestamps=timestamp.long()
+                sentinel2_l2a=torch.tensor(image).float(), timestamps=timestamp.long()
             )
         )
         return masked_sample, y_true.long()

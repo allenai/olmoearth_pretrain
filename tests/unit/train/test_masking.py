@@ -11,6 +11,7 @@ from helios.train.masking import (
     ModalityMaskingStrategy,
     ModalitySpaceTimeMaskingStrategy,
     RandomMaskingStrategy,
+    RandomRangeMaskingStrategy,
     SpaceMaskingStrategy,
     TimeMaskingStrategy,
 )
@@ -415,7 +416,7 @@ def test_create_temporal_mask() -> None:
 
 def test_space_masking_with_missing_modality_mask() -> None:
     """Test SpaceMaskingStrategy with missing_modalities_masks."""
-    b, h, w, t = 10, 16, 16, 8
+    b, h, w, t = 4, 8, 8, 8
 
     days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
     months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
@@ -505,7 +506,7 @@ def test_space_masking_with_missing_modality_mask() -> None:
 
 def test_time_masking_with_missing_modality_mask() -> None:
     """Test TimeMaskingStrategy with missing_modalities_masks."""
-    b, h, w, t = 10, 16, 16, 8
+    b, h, w, t = 4, 8, 8, 8
 
     days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
     months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
@@ -743,3 +744,60 @@ def test_modality_mask_and_unmask() -> None:
     assert (
         num_decoder / total_elements
     ) == expected_decode_ratio, "Incorrect decode mask ratio"
+
+
+def test_random_range_masking() -> None:
+    """Test random range masking."""
+    b, h, w, t = 100, 16, 16, 8
+    patch_size = 4
+
+    days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
+    months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
+    years = torch.randint(2018, 2020, (b, 1, t), dtype=torch.long)
+    timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
+    sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
+    worldcover_num_bands = Modality.WORLDCOVER.num_bands
+    latlon_num_bands = Modality.LATLON.num_bands
+    batch = HeliosSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
+        latlon=torch.ones((b, latlon_num_bands)),
+        timestamps=timestamps,
+        worldcover=torch.ones((b, h, w, 1, worldcover_num_bands)),
+    )
+    min_encode_ratio = 0.4
+    max_encode_ratio = 0.9
+    masked_sample = RandomRangeMaskingStrategy(
+        min_encode_ratio=min_encode_ratio,
+        max_encode_ratio=max_encode_ratio,
+    ).apply_mask(
+        batch,
+        patch_size=patch_size,
+    )
+    # Check that all values in the first patch are the same (consistent masking)
+    assert masked_sample.sentinel2_l2a_mask is not None
+    first_patch: torch.Tensor = masked_sample.sentinel2_l2a_mask[0, :4, :4, 0, 0]
+    first_value: int = first_patch[0, 0]
+    assert (first_patch == first_value).all()
+    second_patch: torch.Tensor = masked_sample.sentinel2_l2a_mask[0, :4, :4, 1, 0]
+    second_value: int = second_patch[0, 0]
+    assert (second_patch == second_value).all()
+    worldcover_patch: torch.Tensor = masked_sample.worldcover_mask[0, :4, :4, 0]  # type: ignore
+    worldcover_value: int = worldcover_patch[0, 0]
+    assert (worldcover_patch == worldcover_value).all()
+    # Check that the distribution of masking ratios is roughly correct.
+    encode_ratios = []
+    decode_ratios = []
+    for example_idx in range(b):
+        mask = masked_sample.sentinel2_l2a_mask[example_idx]
+        total_elements = mask.numel()
+        num_encoder = len(mask[mask == MaskValue.ONLINE_ENCODER.value])
+        num_decoder = len(mask[mask == MaskValue.DECODER.value])
+        encode_ratios.append(num_encoder / total_elements)
+        decode_ratios.append(num_decoder / total_elements)
+    eps = 0.02
+    assert min_encode_ratio - eps <= min(encode_ratios) < min_encode_ratio + 0.1
+    assert max_encode_ratio + eps >= max(encode_ratios) > max_encode_ratio - 0.1
+    min_decode_ratio = 1 - max_encode_ratio
+    max_decode_ratio = 1 - min_encode_ratio
+    assert min_decode_ratio - eps <= min(decode_ratios) < min_decode_ratio + 0.1
+    assert max_decode_ratio + eps >= max(decode_ratios) > max_decode_ratio - 0.1
