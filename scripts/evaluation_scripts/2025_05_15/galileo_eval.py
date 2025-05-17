@@ -1,7 +1,4 @@
-"""Script for Debugging Galileo.
-
-These Settings are meant to help you get quick results on a single GPU in minimal time
-"""
+"""Script for Galileo evaluation."""
 
 import logging
 from typing import Any
