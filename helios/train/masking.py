@@ -911,9 +911,9 @@ class ModalityCrossSpaceMaskingStrategy(ModalityCrossMaskingStrategy):
 
     def __init__(
         self,
-        max_unmasking_bandsets: int,
-        min_encoding_bandsets: int,
-        max_encoding_bandsets: int,
+        max_unmasking_bandsets: int = 50,
+        min_encoding_bandsets: int = 2,
+        max_encoding_bandsets: int = 6,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
     ) -> None:
@@ -941,9 +941,9 @@ class ModalityCrossTimeMaskingStrategy(ModalityCrossMaskingStrategy):
 
     def __init__(
         self,
-        max_unmasking_bandsets: int,
-        min_encoding_bandsets: int,
-        max_encoding_bandsets: int,
+        max_unmasking_bandsets: int = 50,
+        min_encoding_bandsets: int = 2,
+        max_encoding_bandsets: int = 6,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
     ) -> None:
@@ -971,9 +971,9 @@ class ModalityCrossSpaceTimeMaskingStrategy(MaskingStrategy):
 
     def __init__(
         self,
-        max_unmasking_bandsets: int,
-        min_encoding_bandsets: int,
-        max_encoding_bandsets: int,
+        max_unmasking_bandsets: int = 50,
+        min_encoding_bandsets: int = 2,
+        max_encoding_bandsets: int = 6,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
     ) -> None:
