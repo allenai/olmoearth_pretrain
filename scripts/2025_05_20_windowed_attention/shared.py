@@ -181,25 +181,21 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data/sentinel1_sentinel2_l2a_worldcover/116711",
             training_modalities=common.training_modalities,
-            use_samples_with_missing_supported_modalities=False,
             dtype=DType.float32,
         ),
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_rerun/sentinel1_sentinel2_l2a_worldcover/283204",
             training_modalities=common.training_modalities,
-            use_samples_with_missing_supported_modalities=False,
             dtype=DType.float32,
         ),
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data/sentinel1_sentinel2_l2a_worldcover/853624",
             training_modalities=common.training_modalities,
-            use_samples_with_missing_supported_modalities=False,
             dtype=DType.float32,
         ),
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data/sentinel1_sentinel2_l2a_worldcover/320831",
             training_modalities=common.training_modalities,
-            use_samples_with_missing_supported_modalities=False,
             dtype=DType.float32,
         ),
     ]
