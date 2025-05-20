@@ -67,7 +67,7 @@ def my_build_common_components(
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    base_model_args = MODEL_SIZE_ARGS["base_super_shallow_decoder"]
+    base_model_args = MODEL_SIZE_ARGS["base_shallow_decoder"]
     ENCODER_EMBEDDING_SIZE = int(base_model_args["encoder_embedding_size"])
     DECODER_EMBEDDING_SIZE = int(base_model_args["decoder_embedding_size"])
     ENCODER_DEPTH = int(base_model_args["encoder_depth"])
@@ -87,7 +87,6 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
         use_channel_embs=True,
-        windowed_attention_size=3,
     )
     decoder_config = STPredictorConfig(
         encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
@@ -98,7 +97,6 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_sequence_length=12,
         supported_modality_names=common.training_modalities,
         learnable_channel_embeddings=True,
-        windowed_attention_size=3,
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
