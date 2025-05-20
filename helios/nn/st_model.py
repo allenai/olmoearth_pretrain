@@ -1100,10 +1100,11 @@ class STPredictor(STBase):
         for i_blk, blk in enumerate(self.blocks):
             # On even blocks, do temporal attention.
             # On odd blocks, do spatial attention.
-            if i_blk % 2 == 0:
-                attention_mode = AttentionMode.TEMPORAL
-            else:
-                attention_mode = AttentionMode.SPATIAL
+            # if i_blk % 2 == 0:
+            #     attention_mode = AttentionMode.TEMPORAL
+            # else:
+            #     attention_mode = AttentionMode.SPATIAL
+            attention_mode = AttentionMode.FULL
 
             x, mask = self.collapse_and_combine(x, attention_mode)
             x, y, x_mask, y_mask, indices = self.split_x_y(x, mask)
