@@ -136,7 +136,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     GLOBAL_BATCH_SIZE = 512
     PREFETCH_FACTOR = 4
     TOKEN_BUDGET = 1500
-    SAMPLE_HW_P_LIST = list(range(5, 13))
+    SAMPLE_HW_P_LIST = list(range(5, 13))  # do we want to increase that
 
     dataloader_config = HeliosDataLoaderConfig(
         global_batch_size=GLOBAL_BATCH_SIZE,
@@ -159,7 +159,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
             h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_lz4_0/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
             training_modalities=common.training_modalities,
             use_modalities_with_missing_timesteps=True,  # False,
-            cache_dir="/helios_cache/presto",
+            # cache_dir="/helios_cache/presto",
             # samples_per_sec=4 / NUM_WORKERS,  # 2/ GBS
         ),
         # HeliosDatasetConfig(
