@@ -388,7 +388,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         #     eval_interval=Duration.epochs(50),
         #     input_modalities=["sentinel2"],
         # ),
-        "sickle-landsat": DownstreamTaskConfig(
+        "sickle_landsat": DownstreamTaskConfig(
             dataset="sickle",
             batch_size=8,
             num_workers=2,
@@ -398,7 +398,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(0),
             input_modalities=["landsat8"],
         ),
-        "sickle-sentinel1": DownstreamTaskConfig(
+        "sickle_sentinel1": DownstreamTaskConfig(
             dataset="sickle",
             batch_size=8,
             num_workers=2,
@@ -414,6 +414,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         TrainerConfig(
             work_dir=common.save_folder,
             load_strategy=LOAD_STRATEGY,
+            load_path="/weka/dfive-default/helios/checkpoints/joer/v0_base_latent_mim_random/step0",
             save_folder=common.save_folder,
             cancel_check_interval=CANCEL_CHECK_INTERVAL,
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
