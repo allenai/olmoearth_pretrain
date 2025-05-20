@@ -346,7 +346,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "v0-sweep"
+    WANDB_PROJECT = "v0-sweep-eval"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
 
@@ -361,32 +361,52 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     logger.warning("WANDB Distribution Uploads are disabled for Debugging")
     EVAL_TASKS = {
-        "m-eurosat": DownstreamTaskConfig(
-            dataset="m-eurosat",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(5),
-        ),
-        "breizhcrops": DownstreamTaskConfig(
-            dataset="breizhcrops",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(50),
-            patch_size=1,
-        ),
-        "pastis": DownstreamTaskConfig(
-            dataset="pastis",
+        # "m-eurosat": DownstreamTaskConfig(
+        #     dataset="m-eurosat",
+        #     batch_size=128,
+        #     num_workers=8,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     eval_interval=Duration.epochs(5),
+        # ),
+        # "breizhcrops": DownstreamTaskConfig(
+        #     dataset="breizhcrops",
+        #     batch_size=128,
+        #     num_workers=8,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     eval_interval=Duration.epochs(50),
+        #     patch_size=1,
+        # ),
+        # "pastis": DownstreamTaskConfig(
+        #     dataset="pastis",
+        #     batch_size=8,
+        #     num_workers=2,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     probe_lr=0.1,
+        #     eval_interval=Duration.epochs(50),
+        #     input_modalities=["sentinel2"],
+        # ),
+        "sickle-landsat": DownstreamTaskConfig(
+            dataset="sickle",
             batch_size=8,
             num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(50),
-            input_modalities=["sentinel2"],
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(0),
+            input_modalities=["landsat8"],
+        ),
+        "sickle-sentinel1": DownstreamTaskConfig(
+            dataset="sickle",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(0),
+            input_modalities=["sentinel1"],
         ),
     }
     # Let us not use garbage collector fallback
