@@ -12,6 +12,7 @@ import torch
 from class_registry import ClassRegistry
 from einops import rearrange, repeat
 from olmo_core.config import Config
+import time
 
 from helios.data.constants import MISSING_VALUE, Modality, ModalitySpec
 from helios.data.dataset import HeliosSample
@@ -25,17 +26,6 @@ for modality in Modality.values():
     for bandset_idx in range(modality.num_band_sets):
         ALL_BANDSET_IDXS.append((modality.name, bandset_idx))
 
-
-def powerset(iterable: list[tuple[str, int]]) -> list[tuple[tuple[str, int], ...]]:
-    """Powerset of [1,2,3] → (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)."""
-    s = list(iterable)
-    return_list = list(
-        chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))
-    )
-    return [item for item in return_list if len(item) > 0]
-
-
-ALL_BANDSET_POWSET = powerset(ALL_BANDSET_IDXS)
 
 
 class MaskValue(Enum):
@@ -783,37 +773,21 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self, batch: HeliosSample, encoded_bandset_list: list[tuple[str, int]]
     ) -> tuple[tuple[str, int], ...]:
         """Select the decoded bandsets."""
-        candidate_decoding_bandset_combinations = []
-        for bandset_combination in ALL_BANDSET_POWSET:
-            is_empty_bandset_combination = len(bandset_combination) == 0
-            is_too_large_bandset_combination = (
-                len(bandset_combination) > self.max_unmasking_bandsets
-            )
-            is_modality_combination_not_in_batch = any(
-                modality not in batch.modalities for modality, _ in bandset_combination
-            )
-            is_encoded_bandset_combination = set(bandset_combination) & set(
-                encoded_bandset_list
-            )
-            is_single_bandset_latlon = len(
-                bandset_combination
-            ) == 1 and bandset_combination == ((Modality.LATLON.name, 0),)
-            should_skip_combination = (
-                is_empty_bandset_combination
-                or is_too_large_bandset_combination
-                or is_modality_combination_not_in_batch
-                or is_encoded_bandset_combination
-                or is_single_bandset_latlon
-            )
-            if should_skip_combination:
+        decoding_bandset_combinations = []
+        for bandset_combination in ALL_BANDSET_IDXS:
+            modality, idx = bandset_combination
+            is_modality_not_in_batch = modality not in batch.modalities
+            is_encoded_bandset = (modality, idx) in encoded_bandset_list
+            if is_modality_not_in_batch or is_encoded_bandset:
                 continue
+            decoding_bandset_combinations.append(bandset_combination)
 
-            candidate_decoding_bandset_combinations.append(bandset_combination)
+        if decoding_bandset_combinations == (((Modality.LATLON.name, 0),)):
+            raise ValueError("Latlon is not a valid decoding bandset by itself, number of modalities is too low or encoding bandsets are too large")
 
-        # Sort combinations by length (descending) and pick the longest one
-        candidate_decoding_bandset_combinations.sort(key=len, reverse=True)
-        decoded_bandset_idxs = candidate_decoding_bandset_combinations[0]
-        return decoded_bandset_idxs
+        if len(decoding_bandset_combinations) == 0:
+            raise ValueError("No valid decoding bandset combinations found")
+        return decoding_bandset_combinations
 
     def overide_random_mask_condition(self, modality_spec: ModalitySpec) -> bool:
         """Overide the random mask  for the given modality by the encoding and decoding bandsets."""
@@ -891,9 +865,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
     ) -> MaskedHeliosSample:
         """Apply space masking to the input data."""
         masked_sample = self.strategy.apply_mask(batch, patch_size, **kwargs)
-        # we need to filter to bandset indices that don't include any not present modalities
         filtered_bandset_list = self.filter_bandset_indices(batch)
-
         encoded_bandset_list = self.select_encoded_bandsets(filtered_bandset_list)
         decoded_bandset_idxs = self.select_decoded_bandsets(batch, encoded_bandset_list)
         logger.info(f"decoded_bandset_idxs: {decoded_bandset_idxs}")
@@ -903,7 +875,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             masked_sample, encoded_bandset_list, decoded_bandset_idxs
         )
         return masked_sample
-
 
 @MASKING_STRATEGY_REGISTRY.register("modality_cross_space")
 class ModalityCrossSpaceMaskingStrategy(ModalityCrossMaskingStrategy):
