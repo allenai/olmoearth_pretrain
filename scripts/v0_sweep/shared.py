@@ -206,13 +206,13 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
         }
     )
     token_exit_cfg_galileo = {
-        Modality.SENTINEL2_L2A.name: 6,
-        Modality.LATLON.name: 6,
-        Modality.SENTINEL1.name: 6,
+        Modality.SENTINEL2_L2A.name: ENCODER_DEPTH,
+        Modality.LATLON.name: ENCODER_DEPTH,
+        Modality.SENTINEL1.name: ENCODER_DEPTH,
         Modality.WORLDCOVER.name: 0,
-        Modality.SRTM.name: 3,
+        Modality.SRTM.name: int(ENCODER_DEPTH / 2),
         Modality.OPENSTREETMAP_RASTER.name: 0,
-        Modality.LANDSAT.name: 6,
+        Modality.LANDSAT.name: ENCODER_DEPTH,
     }
     if any(modality not in token_exit_cfg_galileo for modality in TRAINING_MODALITIES):
         raise ValueError(
