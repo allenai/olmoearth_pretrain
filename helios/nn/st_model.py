@@ -702,6 +702,7 @@ class STBase(nn.Module):
                 modality_tokens = rearrange(
                     modality_tokens,
                     "(b hn wn) (bs hs ws) d -> b (hn hs) (wn ws) bs d",
+                    b=batch,
                     hn=hn,
                     wn=wn,
                     hs=window_size,
@@ -719,7 +720,7 @@ class STBase(nn.Module):
                 wn = (w + window_size - 1) // window_size
                 # Extract tokens for this modality (b*hn*wn t*bs*hs*ws d).
                 # Modalities are stacked on the token axis.
-                num_tokens_for_modality = b_s * window_size * window_size
+                num_tokens_for_modality = t * b_s * window_size * window_size
                 modality_tokens = x[
                     :, tokens_reshaped : tokens_reshaped + num_tokens_for_modality, :
                 ]
@@ -727,6 +728,7 @@ class STBase(nn.Module):
                 modality_tokens = rearrange(
                     modality_tokens,
                     "(b hn wn) (t bs hs ws) d -> b (hn hs) (wn ws) t bs d",
+                    b=batch,
                     hn=hn,
                     wn=wn,
                     hs=window_size,
