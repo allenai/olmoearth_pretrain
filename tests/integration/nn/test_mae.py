@@ -6,9 +6,9 @@ import pytest
 import torch
 
 from helios.data.constants import Modality, ModalitySpec
-from helios.nn.flexihelios import Encoder, Predictor, Reconstructor, TokensAndMasks
+from helios.nn.flexihelios import Encoder, Predictor, Reconstructor
 from helios.nn.mae import MAE
-from helios.train.loss import MAELoss
+from helios.train.loss import MAELoss, PatchDiscriminationLossNew
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
@@ -53,8 +53,9 @@ def test_mae_with_loss(
     # Create dummy sentinel2_l2a data: shape (B, H, W, T, C)
     sentinel2_l2a = torch.randn(B, H, W, T, C)
     # Here we assume 0 (ONLINE_ENCODER) means the token is visible.
-    sentinel2_l2a_mask = torch.zeros(
-        B, H, W, T, sentinel2_l2a_num_band_sets, dtype=torch.long
+    sentinel2_l2a_mask = (
+        torch.ones(B, H, W, T, sentinel2_l2a_num_band_sets, dtype=torch.long)
+        * MaskValue.ONLINE_ENCODER.value
     )
 
     worldcover = torch.randn(B, H, W, 1, 1)
@@ -113,37 +114,66 @@ def test_mae_with_loss(
         drop_path=DROP_PATH,
         learnable_channel_embeddings=True,
     )
+    predictor2 = Predictor(
+        supported_modalities=supported_modalities,
+        encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
+        decoder_embedding_size=DECODER_EMBEDDING_SIZE,
+        depth=DEPTH,
+        mlp_ratio=MLP_RATIO,
+        num_heads=NUM_HEADS,
+        max_sequence_length=MAX_SEQ_LENGTH,
+        drop_path=DROP_PATH,
+        learnable_channel_embeddings=True,
+    )
     reconstructor = Reconstructor(
+        decoder=predictor2,
         supported_modalities=supported_modalities,
         max_patch_size=MAX_PATCH_SIZE,
-        embedding_size=ENCODER_EMBEDDING_SIZE,
     )
     mae = MAE(encoder, predictor, reconstructor)
-    _, output = mae.forward(x, patch_size)
-    assert output.sentinel2_l2a is not None
-    assert output.sentinel2_l2a_mask is not None
+    latent, decoded, reconstructed = mae.forward(x, patch_size)
+
+    assert decoded is not None
+    assert reconstructed is not None
+
+    assert reconstructed.sentinel2_l2a is not None
+    assert reconstructed.sentinel2_l2a_mask is not None
     assert x.sentinel2_l2a is not None
     assert x.sentinel2_l2a_mask is not None
-    assert output.sentinel2_l2a.shape == x.sentinel2_l2a.shape
-    assert output.sentinel2_l2a_mask.shape == x.sentinel2_l2a_mask.shape
+    assert reconstructed.sentinel2_l2a.shape == x.sentinel2_l2a.shape
+    assert reconstructed.sentinel2_l2a_mask.shape == x.sentinel2_l2a_mask.shape
 
-    assert output.worldcover is not None
-    assert output.worldcover_mask is not None
+    assert reconstructed.worldcover is not None
+    assert reconstructed.worldcover_mask is not None
     assert x.worldcover is not None
     assert x.worldcover_mask is not None
-    assert output.worldcover.shape == x.worldcover.shape
-    assert output.worldcover_mask.shape == x.worldcover_mask.shape
+    assert reconstructed.worldcover.shape == x.worldcover.shape
+    assert reconstructed.worldcover_mask.shape == x.worldcover_mask.shape
+    assert (reconstructed.worldcover_mask == MaskValue.DECODER.value).all()
+    assert (reconstructed.sentinel2_l2a_mask == MaskValue.ONLINE_ENCODER.value).all()
 
-    assert (output.worldcover_mask == x.worldcover_mask).all()
-    assert (output.sentinel2_l2a_mask == x.sentinel2_l2a_mask).all()
+    assert decoded.worldcover_mask is not None
+    assert decoded.sentinel2_l2a_mask is not None
+    assert (decoded.worldcover_mask == MaskValue.DECODER.value).all()
+    assert (decoded.sentinel2_l2a_mask == MaskValue.ONLINE_ENCODER.value).all()
 
     # this reflects the forward_model function in mae
-    loss_fn = MAELoss()
-    reconstructed = output
-    labels = x.as_dict()
-    labels.pop("timestamps")
-    target_output = TokensAndMasks(**labels)
-    loss = loss_fn.compute(reconstructed, target_output)
+    loss_mae = MAELoss()
+    loss = loss_mae.compute(reconstructed, x)
+
+    loss_mim = PatchDiscriminationLossNew()
+    with torch.no_grad():
+        logger.info("target encoder running here")
+        target_output, _ = mae.encoder.forward(
+            x.unmask(),
+            patch_size=patch_size,
+            token_exit_cfg={
+                modality: 0 for modality in mae.encoder.supported_modality_names
+            },
+        )
+
+    loss += loss_mim.compute(decoded, target_output)
+
     loss.backward()
 
     for name, param in mae.encoder.named_parameters():
@@ -159,13 +189,25 @@ def test_mae_with_loss(
             ]
         ):
             assert param.grad is not None, name
-    for name, param in mae.decoder.named_parameters():
-        # sentinel2_l2a is "masked" from the decoder
-        if not any(
-            ignore_param in name
-            for ignore_param in [
-                "pos_embed",
-                "month_embed",
-            ]
-        ):
-            assert param.grad is not None, name
+    if mae.decoder is not None:
+        for name, param in mae.decoder.named_parameters():
+            # sentinel2_l2a is "masked" from the decoder
+            if not any(
+                ignore_param in name
+                for ignore_param in [
+                    "pos_embed",
+                    "month_embed",
+                ]
+            ):
+                assert param.grad is not None, name
+    if mae.reconstructor is not None:
+        for name, param in mae.reconstructor.named_parameters():
+            # sentinel2_l2a is "masked" from the decoder
+            if not any(
+                ignore_param in name
+                for ignore_param in [
+                    "pos_embed",
+                    "month_embed",
+                ]
+            ):
+                assert param.grad is not None, name

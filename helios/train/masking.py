@@ -4,6 +4,7 @@ import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
+from itertools import chain, combinations
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -17,6 +18,24 @@ from helios.data.dataset import HeliosSample
 from helios.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
+
+# all bandset indices should be tuples of (modality, bandset_idx) sow e can create a power set of these combinations from it
+ALL_BANDSET_IDXS: list[tuple[str, int]] = []
+for modality in Modality.values():
+    for bandset_idx in range(modality.num_band_sets):
+        ALL_BANDSET_IDXS.append((modality.name, bandset_idx))
+
+
+def powerset(iterable: list[tuple[str, int]]) -> list[tuple[tuple[str, int], ...]]:
+    """Powerset of [1,2,3] → (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)."""
+    s = list(iterable)
+    return_list = list(
+        chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))
+    )
+    return [item for item in return_list if len(item) > 0]
+
+
+ALL_BANDSET_POWSET = powerset(ALL_BANDSET_IDXS)
 
 
 class MaskValue(Enum):
@@ -405,7 +424,7 @@ class TimeMaskingStrategy(MaskingStrategy):
                     mask = repeat(
                         temporal_mask, "b t -> b h w t b_s", h=h, w=w, b_s=b_s
                     )
-                    mask = mask.view(*shape[:-1], b_s).contiguous()
+                    mask = mask.view(*shape[:-1], b_s).clone()
                 mask = self.fill_mask_with_missing_values(instance, mask, modality)
                 output_dict[modality_name] = instance
                 output_dict[
@@ -531,7 +550,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
                 b_s = modality.num_band_sets
                 # Mask is a view of the spatial mask, so changes to mask will change spatial_mask
                 mask = repeat(spatial_mask, "... -> ... t b_s", t=t, b_s=b_s)
-                mask = mask.view(*shape[:-1], b_s).contiguous()
+                mask = mask.view(*shape[:-1], b_s).clone()
             mask = self.fill_mask_with_missing_values(instance, mask, modality)
 
             # Keep data as is
@@ -713,6 +732,281 @@ class ModalitySpaceTimeMaskingStrategy(MaskingStrategy):
             kwargs["patch_size"] = patch_size
 
         return selected_strategy.apply_mask(batch, **kwargs)
+
+
+class ModalityCrossMaskingStrategy(MaskingStrategy):
+    """Abstract class for masking strategies that select a seperate set of bandsets to encode and decode on top of another masking strategy."""
+
+    def __init__(
+        self,
+        max_unmasking_bandsets: int,
+        min_encoding_bandsets: int,
+        max_encoding_bandsets: int,
+        strategy: MaskingStrategy,
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+    ) -> None:
+        """Initialize the masking strategy."""
+        self._encode_ratio = encode_ratio
+        self._decode_ratio = decode_ratio
+        self.strategy = strategy
+        self.max_unmasking_bandsets = max_unmasking_bandsets
+        self.min_encoding_bandsets = min_encoding_bandsets
+        self.max_encoding_bandsets = max_encoding_bandsets
+
+    def filter_bandset_indices(self, batch: HeliosSample) -> list[tuple[str, int]]:
+        """Filter the bandset indices to only include present modalities."""
+        # DO we also want to filter out missing modalities here?
+        filtered_bandset_list = []
+        for bandset_idx in ALL_BANDSET_IDXS:
+            if bandset_idx[0] not in batch.modalities:
+                continue
+
+            filtered_bandset_list.append(bandset_idx)
+        return filtered_bandset_list
+
+    def select_encoded_bandsets(
+        self, bandset_list: list[tuple[str, int]]
+    ) -> list[tuple[str, int]]:
+        """Select the encoded bandsets."""
+        num_bandsets_to_encode = np.random.choice(
+            range(self.min_encoding_bandsets, self.max_encoding_bandsets)
+        )
+        idxs_list = list(range(len(bandset_list)))
+        encoded_bandset_idxs = np.random.choice(
+            idxs_list, size=num_bandsets_to_encode, replace=False
+        ).tolist()
+        encoded_bandset_list = [bandset_list[i] for i in encoded_bandset_idxs]
+        return encoded_bandset_list
+
+    def select_decoded_bandsets(
+        self, batch: HeliosSample, encoded_bandset_list: list[tuple[str, int]]
+    ) -> tuple[tuple[str, int], ...]:
+        """Select the decoded bandsets."""
+        candidate_decoding_bandset_combinations = []
+        for bandset_combination in ALL_BANDSET_POWSET:
+            is_empty_bandset_combination = len(bandset_combination) == 0
+            is_too_large_bandset_combination = (
+                len(bandset_combination) > self.max_unmasking_bandsets
+            )
+            is_modality_combination_not_in_batch = any(
+                modality not in batch.modalities for modality, _ in bandset_combination
+            )
+            is_encoded_bandset_combination = set(bandset_combination) & set(
+                encoded_bandset_list
+            )
+            is_single_bandset_latlon = len(
+                bandset_combination
+            ) == 1 and bandset_combination == ((Modality.LATLON.name, 0),)
+            should_skip_combination = (
+                is_empty_bandset_combination
+                or is_too_large_bandset_combination
+                or is_modality_combination_not_in_batch
+                or is_encoded_bandset_combination
+                or is_single_bandset_latlon
+            )
+            if should_skip_combination:
+                continue
+
+            candidate_decoding_bandset_combinations.append(bandset_combination)
+
+        # Sort combinations by length (descending) and pick the longest one
+        candidate_decoding_bandset_combinations.sort(key=len, reverse=True)
+        decoded_bandset_idxs = candidate_decoding_bandset_combinations[0]
+        return decoded_bandset_idxs
+
+    def overide_random_mask_condition(self, modality_spec: ModalitySpec) -> bool:
+        """Overide the random mask  for the given modality by the encoding and decoding bandsets."""
+        # Defaults to not overiding anything that may be random masked
+        return False
+
+    def apply_bandset_mask_rules(
+        self,
+        masked_batch: MaskedHeliosSample,
+        encoded_bandset_list: list[tuple[str, int]],
+        decoded_bandset_idxs: tuple[tuple[str, int], ...],
+    ) -> MaskedHeliosSample:
+        """Allow encoding of encoded bandsets and decoding of decoded bandsets."""
+        masked_batch_dict = masked_batch.as_dict(return_none=False)
+        for modality in masked_batch.modalities:
+            if modality == "timestamps":
+                continue
+            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            modality_spec = Modality.get(modality)
+            modality_num_bandsets = modality_spec.num_band_sets
+            modality_mask = masked_batch_dict[masked_modality_name]
+            # Be Careful to ensure that the missing mask is not overriden
+            for bandset_idx in range(modality_num_bandsets):
+                is_encoded = (modality, bandset_idx) in encoded_bandset_list
+                is_decoded = (modality, bandset_idx) in decoded_bandset_idxs
+
+                if self.overide_random_mask_condition(modality_spec):
+                    # assumes the mask is random so we overide to make it all the same
+                    if is_encoded:
+                        forced_mask_value = MaskValue.ONLINE_ENCODER.value
+                    elif is_decoded:
+                        forced_mask_value = MaskValue.DECODER.value
+                    logger.info(
+                        f"Setting {modality} bandset {bandset_idx} to {forced_mask_value}"
+                    )
+                    not_missing_mask = (
+                        modality_mask[..., bandset_idx] != MaskValue.MISSING.value
+                    )
+                    modality_mask[..., bandset_idx] = torch.where(
+                        not_missing_mask,
+                        forced_mask_value,
+                        modality_mask[..., bandset_idx],
+                    )
+                    continue
+
+                if not is_encoded:
+                    # Supress all encoded values for a not encoded bandset
+                    online_encoder_mask = (
+                        modality_mask[..., bandset_idx]
+                        == MaskValue.ONLINE_ENCODER.value
+                    )
+                    modality_mask[..., bandset_idx] = torch.where(
+                        online_encoder_mask,
+                        MaskValue.TARGET_ENCODER_ONLY.value,
+                        modality_mask[..., bandset_idx],
+                    )
+
+                if not is_decoded:
+                    decoder_mask = (
+                        modality_mask[..., bandset_idx] == MaskValue.DECODER.value
+                    )
+                    modality_mask[..., bandset_idx] = torch.where(
+                        decoder_mask,
+                        MaskValue.TARGET_ENCODER_ONLY.value,
+                        modality_mask[..., bandset_idx],
+                    )
+
+            masked_batch_dict[masked_modality_name] = modality_mask
+
+        masked_batch = MaskedHeliosSample(**masked_batch_dict)
+        return masked_batch
+
+    def apply_mask(
+        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedHeliosSample:
+        """Apply space masking to the input data."""
+        masked_sample = self.strategy.apply_mask(batch, patch_size, **kwargs)
+        # we need to filter to bandset indices that don't include any not present modalities
+        filtered_bandset_list = self.filter_bandset_indices(batch)
+
+        encoded_bandset_list = self.select_encoded_bandsets(filtered_bandset_list)
+        decoded_bandset_idxs = self.select_decoded_bandsets(batch, encoded_bandset_list)
+        logger.info(f"decoded_bandset_idxs: {decoded_bandset_idxs}")
+        logger.info(f"encoded_bandset_list: {encoded_bandset_list}")
+
+        masked_sample = self.apply_bandset_mask_rules(
+            masked_sample, encoded_bandset_list, decoded_bandset_idxs
+        )
+        return masked_sample
+
+
+@MASKING_STRATEGY_REGISTRY.register("modality_cross_space")
+class ModalityCrossSpaceMaskingStrategy(ModalityCrossMaskingStrategy):
+    """Randomly select a modality and apply space masking to it."""
+
+    def __init__(
+        self,
+        max_unmasking_bandsets: int,
+        min_encoding_bandsets: int,
+        max_encoding_bandsets: int,
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+    ) -> None:
+        """Initialize the masking strategy."""
+        space_strategy = SpaceMaskingStrategy(encode_ratio, decode_ratio)
+        super().__init__(
+            max_unmasking_bandsets=max_unmasking_bandsets,
+            min_encoding_bandsets=min_encoding_bandsets,
+            max_encoding_bandsets=max_encoding_bandsets,
+            strategy=space_strategy,
+            encode_ratio=encode_ratio,
+            decode_ratio=decode_ratio,
+        )
+
+    def overide_random_mask_condition(self, modality_spec: ModalitySpec) -> bool:
+        """Overide the random mask  for the given modality by the encoding and decoding bandsets."""
+        # For space masking non spatial data is randomly masked but we want to use the encoding and decoding bandsets
+        # to determine the mask for the non spatial data
+        return not modality_spec.is_spatial
+
+
+@MASKING_STRATEGY_REGISTRY.register("modality_cross_time")
+class ModalityCrossTimeMaskingStrategy(ModalityCrossMaskingStrategy):
+    """Randomly select a modality and apply time masking to it."""
+
+    def __init__(
+        self,
+        max_unmasking_bandsets: int,
+        min_encoding_bandsets: int,
+        max_encoding_bandsets: int,
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+    ) -> None:
+        """Initialize the masking strategy."""
+        space_strategy = SpaceMaskingStrategy(encode_ratio, decode_ratio)
+        super().__init__(
+            max_unmasking_bandsets=max_unmasking_bandsets,
+            min_encoding_bandsets=min_encoding_bandsets,
+            max_encoding_bandsets=max_encoding_bandsets,
+            strategy=space_strategy,
+            encode_ratio=encode_ratio,
+            decode_ratio=decode_ratio,
+        )
+
+    def overide_random_mask_condition(self, modality_spec: ModalitySpec) -> bool:
+        """Overide the random mask  for the given modality by the encoding and decoding bandsets."""
+        # For time masking static data is randomly masked but we want to use the encoding and decoding bandsets
+        # to determine the mask for the static data
+        return not modality_spec.is_spatial
+
+
+@MASKING_STRATEGY_REGISTRY.register("modality_cross_space_time")
+class ModalityCrossSpaceTimeMaskingStrategy(MaskingStrategy):
+    """Randomly apply space cross modality masking and time cross modality masking."""
+
+    def __init__(
+        self,
+        max_unmasking_bandsets: int,
+        min_encoding_bandsets: int,
+        max_encoding_bandsets: int,
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+    ) -> None:
+        """Initialize the masking strategy."""
+        self._encode_ratio = encode_ratio
+        self._decode_ratio = decode_ratio
+        self.time_strategy = ModalityCrossTimeMaskingStrategy(
+            max_unmasking_bandsets,
+            min_encoding_bandsets,
+            max_encoding_bandsets,
+            encode_ratio,
+            decode_ratio,
+        )
+        self.space_strategy = ModalityCrossSpaceMaskingStrategy(
+            max_unmasking_bandsets,
+            min_encoding_bandsets,
+            max_encoding_bandsets,
+            encode_ratio,
+            decode_ratio,
+        )
+        self.generator = np.random.default_rng(0)
+
+    def apply_mask(
+        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedHeliosSample:
+        """Apply space and time cross modality masking to the input data."""
+        has_enough_timesteps = batch.time >= 3
+        if (self.generator.random() < 0.5) or (not has_enough_timesteps):
+            logger.info("Applying space masking")
+            return self.space_strategy.apply_mask(batch, patch_size, **kwargs)
+        else:
+            logger.info("Applying time masking")
+            return self.time_strategy.apply_mask(batch, patch_size, **kwargs)
 
 
 @MASKING_STRATEGY_REGISTRY.register("random")

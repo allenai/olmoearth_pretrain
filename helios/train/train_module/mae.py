@@ -18,7 +18,6 @@ from olmo_core.train.train_module.transformer import (
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
-from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.mae import MAE
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
@@ -40,9 +39,12 @@ class MAETrainModuleConfig(HeliosTrainModuleConfig):
         masking_config: The masking configuration for the model.
     """
 
-    loss_config: LossConfig = field(
-        default_factory=lambda: LossConfig(loss_config={"type": "mae"})
+    mae_loss_config: LossConfig | None = field(
+        default_factory=lambda: LossConfig(
+            loss_config={"type": "mae", "loss_function": "SmoothL1Loss", "beta": 0.1}
+        )
     )
+    latent_mim_loss_config: LossConfig | None = None
     masking_config: MaskingConfig = field(
         default_factory=lambda: MaskingConfig(strategy_config={"type": "random"})
     )
@@ -105,7 +107,6 @@ class MAETrainModule(HeliosTrainModule):
         optim_config: OptimConfig,
         transform_config: TransformConfig,
         masking_config: MaskingConfig,
-        loss_config: LossConfig,
         rank_microbatch_size: int,
         token_exit_cfg: dict[str, int],
         compile_model: bool = False,
@@ -119,6 +120,8 @@ class MAETrainModule(HeliosTrainModule):
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
         warmup_duration: Duration = Duration.epochs(2),
+        mae_loss_config: LossConfig | None = None,
+        latent_mim_loss_config: LossConfig | None = None,
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
     ):
@@ -129,7 +132,8 @@ class MAETrainModule(HeliosTrainModule):
             optim_config: The corresponding optimizer config.
             transform_config: The transform configuration for the model.
             masking_config: The masking configuration for the model.
-            loss_config: The loss configuration for the model.
+            mae_loss_config: The loss configuration for mae.
+            latent_mim_loss_config: The loss configuration for latent mim.
             rank_microbatch_size: The rank microbatch size in instances.
             compile_model: Whether to compile to the model.
             dp_config: Data parallel configuration for the model.
@@ -165,31 +169,43 @@ class MAETrainModule(HeliosTrainModule):
             warmup_duration=warmup_duration,
             find_unused_parameters=find_unused_parameters,  # Must be true so that we can deal with missing modalities
         )
-        self.token_exit_cfg = token_exit_cfg
-        self.base_loss = loss_config.build()
         self.masking_strategy = masking_config.build()
-        self.regularizer = (
-            regularizer_config.build() if regularizer_config is not None else None
-        )
-        self.total_loss_name = self.base_loss.name
-        if self.regularizer is not None:
-            self.total_loss_name = f"{self.base_loss.name}+{self.regularizer.name}"
+        self.token_exit_cfg = token_exit_cfg
+        self.mae_loss = mae_loss_config and mae_loss_config.build()
+        self.latent_mim_loss = latent_mim_loss_config and latent_mim_loss_config.build()
+        self.regularizer = regularizer_config and regularizer_config.build()
+
+        loss_names = [
+            loss.name
+            for loss in [self.mae_loss, self.latent_mim_loss, self.regularizer]
+            if loss is not None
+        ]
+        self.total_loss_name = "+".join(loss_names)
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
 
     def model_forward(
-        self, masked_batch: MaskedHeliosSample, patch_size: int
+        self, x: MaskedHeliosSample, patch_size: int
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass of the model."""
         with self._model_forward_context():
-            _, reconstructed = self.model(masked_batch, patch_size)
-            labels_dict = masked_batch.as_dict()
-            labels_dict.pop("timestamps", None)
-            labels = TokensAndMasks(**labels_dict)
-            loss = self.loss_fn(reconstructed, labels)
-            return loss, reconstructed, labels
+            latent, decoded, reconstructed = self.model(x, patch_size=patch_size)
+
+            loss = torch.zeros([], device=self.device)
+            if self.mae_loss and reconstructed is not None:
+                loss += self.mae_loss.compute(reconstructed, x)
+            if self.latent_mim_loss and decoded is not None:
+                with torch.no_grad():
+                    logger.info("Target Encoder forward pass...")
+                    target_output = self.model.encoder.forward(
+                        x.unmask(),
+                        patch_size=patch_size,
+                        token_exit_cfg=self.token_exit_cfg,
+                    )
+                loss += self.latent_mim_loss.compute(decoded, target_output)
+            return loss, latent, decoded
 
     def train_batch(
         self, patch_batch: tuple[int, HeliosSample], dry_run: bool = False
@@ -210,8 +226,8 @@ class MAETrainModule(HeliosTrainModule):
         patch_size, batch = patch_batch
         self.model.train()
         # Set the maximum number of tokens
-        total_batch_loss = torch.tensor(0.0, device=self.device)
-        total_batch_reg = torch.tensor(0.0, device=self.device)
+        total_batch_loss = torch.zeros([], device=self.device)
+        total_batch_reg = torch.zeros([], device=self.device)
         # Split into micro-batches.
         microbatches = split_batch(batch, self.rank_microbatch_size)
         num_microbatches = len(microbatches)
@@ -226,12 +242,7 @@ class MAETrainModule(HeliosTrainModule):
                 )
 
                 # Run Encoder and decoder on the augmented input
-                loss, latent, reconstructed = self.model_forward(
-                    masked_batch, patch_size
-                )
-                labels_dict = masked_batch.as_dict()
-                labels_dict.pop("timestamps", None)
-                labels = TokensAndMasks(**labels_dict)
+                loss, latent, decoded = self.model_forward(masked_batch, patch_size)
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
                     loss = loss + reg_term
@@ -248,10 +259,8 @@ class MAETrainModule(HeliosTrainModule):
                     logger.warning(
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
                     )
-                    del reconstructed, labels
                     break
 
-                del reconstructed, labels
                 loss.backward()
 
         self.trainer.record_metric(

@@ -14,9 +14,7 @@ from torch.distributed.fsdp import (
     register_fsdp_forward_method,
 )
 
-from helios.nn.flexihelios import (
-    TokensAndMasks,
-)
+from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.utils import DistributedMixins
 from helios.train.masking import MaskedHeliosSample
 
@@ -30,38 +28,61 @@ class Galileo(nn.Module, DistributedMixins):
         self,
         encoder: torch.nn.Module,
         decoder: torch.nn.Module,
+        reconstructor: torch.nn.Module | None = None,
     ):
         """Initialize the Galileo Style.
 
         Args:
             encoder: The encoder to use.
             decoder: The decoder to use.
+            reconstructor: Optional reconstructor for auto-encoding.
         """
         super().__init__()
         self.encoder = encoder
         self.decoder_a = decoder
         self.decoder_b = deepcopy(decoder)
         self.target_encoder = deepcopy(self.encoder)
+        self.reconstructor = reconstructor
         for p in self.target_encoder.parameters():
             p.requires_grad = False
 
     def forward_a(
         self, x: MaskedHeliosSample, patch_size: int
-    ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor]:
-        """Forward pass for the Latent MIM Style."""
+    ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
+        """Forward pass for the Latent MIM Style.
+
+        Returns:
+            latent: embeddings from encoder
+            decoded: predictions from decoder for masked tokens
+            latent_projected_and_pooled: pooled tokens for contrastive loss
+            reconstructed: MAE predictions if enabled
+        """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
+        reconstructed = None
+        if self.reconstructor:
+            reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
         decoded = self.decoder_a(latent, timestamps=x.timestamps, patch_size=patch_size)
-        return latent, decoded, latent_projected_and_pooled
+        return latent, decoded, latent_projected_and_pooled, reconstructed
 
     def forward_b(
         self, x: MaskedHeliosSample, patch_size: int
-    ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor]:
-        """Forward pass for the Latent MIM Style."""
+    ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
+        """Forward pass for the Latent MIM Style.
+
+        Returns:
+            latent: embeddings from encoder
+            decoded: predictions from decoder for masked tokens
+            latent_projected_and_pooled: pooled tokens for contrastive loss
+            reconstructed: MAE predictions if enabled
+        """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
+        reconstructed = None
+        if self.reconstructor:
+            reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
         decoded = self.decoder_b(latent, timestamps=x.timestamps, patch_size=patch_size)
-        return latent, decoded, latent_projected_and_pooled
+        return latent, decoded, latent_projected_and_pooled, reconstructed
 
     def apply_fsdp(
         self,
@@ -80,6 +101,8 @@ class Galileo(nn.Module, DistributedMixins):
         self.decoder_a.apply_fsdp(**fsdp_config)
         self.decoder_b.apply_fsdp(**fsdp_config)
         self.target_encoder.apply_fsdp(**fsdp_config)
+        if self.reconstructor:
+            self.reconstructor.apply_fsdp(**fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -92,6 +115,8 @@ class Galileo(nn.Module, DistributedMixins):
         self.decoder_a.apply_compile()
         self.decoder_b.apply_compile()
         self.target_encoder.apply_compile()
+        if self.reconstructor is not None:
+            self.reconstructor.apply_compile()
 
 
 @dataclass
@@ -100,6 +125,7 @@ class GalileoConfig(Config):
 
     encoder_config: Config
     decoder_config: Config
+    reconstructor_config: Config | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -126,7 +152,13 @@ class GalileoConfig(Config):
         self.validate()
         encoder = self.encoder_config.build()
         decoder = self.decoder_config.build()
+        reconstructor = (
+            self.reconstructor_config.build()
+            if self.reconstructor_config is not None
+            else None
+        )
         return Galileo(
             encoder=encoder,
             decoder=decoder,
+            reconstructor=reconstructor,
         )

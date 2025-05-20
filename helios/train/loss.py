@@ -15,7 +15,7 @@ from torch import Tensor
 
 from helios.data.constants import Modality
 from helios.nn.flexihelios import PoolingType, TokensAndMasks
-from helios.train.masking import MaskValue
+from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ class PatchDiscriminationLossNew(Loss):
 
     name = "PatchDisc"
 
-    def __init__(self, tau: float = 0.1, pred2unit: bool = False):
+    def __init__(self, tau: float = 0.1, pred2unit: bool = False, weight: float = 1.0):
         """Initialize patch discrimination loss.
 
         Args:
@@ -126,9 +126,11 @@ class PatchDiscriminationLossNew(Loss):
             mask_other_samples: whether to apply the contrastive loss drawing samples
                 from within a sample (True) or using all other instances in a batch (False).
                 If this is False, then this is the AllDisc loss from the Galileo paper
+            weight: the weight to apply to this loss
         """
         self.tau = tau
         self.pred2unit = pred2unit
+        self.weight = weight
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -161,7 +163,6 @@ class PatchDiscriminationLossNew(Loss):
         target = F.normalize(target, p=2, dim=-1)
 
         count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
-
         losses = []
         start = 0
         for c in count:
@@ -185,7 +186,7 @@ class PatchDiscriminationLossNew(Loss):
             losses.append(loss)
             start = end
         loss = torch.stack(losses).mean()
-        return loss
+        return self.weight * loss
 
 
 @LOSS_REGISTRY.register("patch_discrimination")
@@ -437,17 +438,23 @@ class MAELoss(Loss):
     name = "MAE"
 
     def __init__(
-        self, loss_function: str = "MSELoss", only_decode: bool = False, **kwargs: Any
+        self,
+        loss_function: str = "MSELoss",
+        only_decode: bool = True,
+        weight: float = 1.0,
+        **kwargs: Any,
     ):
         """Initialize MAE loss.
 
         Args:
             loss_function: pytorch loss to use
             only_decode: only calculate loss on DECODER masked tokens, otherwise all
+            weight: the weight to apply to this loss
             **kwargs: arguments for pytorch loss constructor
         """
         self.only_decode = only_decode
         self.loss = getattr(torch.nn, loss_function)(reduction="sum", **kwargs)
+        self.weight = weight
 
     # data: [B, H, W, T, C]
     def _flatten_helios_data(self, data: TokensAndMasks) -> tuple[Tensor, Tensor]:
@@ -473,7 +480,7 @@ class MAELoss(Loss):
         return torch.cat(datas, dim=1), torch.cat(masks, dim=1)
 
     def compute(
-        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+        self, predictions: TokensAndMasks, targets: MaskedHeliosSample, **kwargs: Any
     ) -> Tensor:
         """Compute MAE loss between predictions and targets.
 
@@ -489,7 +496,7 @@ class MAELoss(Loss):
         valid_dict = {}
         for modality in predictions.modalities:
             if getattr(predictions, modality) is not None:
-                masked_name = targets.get_masked_modality_name(modality)
+                masked_name = predictions.get_masked_modality_name(modality)
                 valid_dict[modality] = getattr(targets, modality)
                 valid_dict[masked_name] = getattr(targets, masked_name)
         valid_targets = TokensAndMasks(**valid_dict)
@@ -500,7 +507,7 @@ class MAELoss(Loss):
             decode = label_masks != MaskValue.MISSING.value
         data = data * decode
         labels = labels * decode
-        return self.loss(data, labels) / torch.count_nonzero(decode)
+        return self.weight * self.loss(data, labels) / torch.count_nonzero(decode)
 
 
 @LOSS_REGISTRY.register("cross_entropy")

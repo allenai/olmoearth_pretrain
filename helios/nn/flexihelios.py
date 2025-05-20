@@ -410,28 +410,37 @@ class Reconstructor(nn.Module):
 
     def __init__(
         self,
+        decoder: "Predictor",
         supported_modalities: list[ModalitySpec],
         max_patch_size: int,
-        embedding_size: int,
     ):
         """Initialize the patch embeddings.
 
         Args:
+            decoder: Predictor nn module to use on before reconstructor on input
             supported_modalities: Which modalities from Modality this model
                 instantiation supports
             max_patch_size: Maximum size of patches
-            embedding_size: Size of embeddings
         """
         super().__init__()
         self.max_patch_size = max_patch_size
-        self.embedding_size = embedding_size
+        self.embedding_size = decoder.output_embedding_size
         self.supported_modalities = supported_modalities
+        self.decoder = decoder
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_reconstructions = nn.ModuleDict({})
         for modality in self.supported_modalities:
             self.per_modality_reconstructions[modality.name] = (
                 self._get_patch_reconstruction_module_for_modality(modality)
             )
+
+    def apply_compile(self) -> None:
+        """Apply torch.compile to the model."""
+        self.decoder.apply_compile()
+
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        self.decoder.apply_fsdp(**fsdp_kwargs)
 
     @staticmethod
     def _get_reconstruction_module_name(modality: str, idx: int) -> str:
@@ -518,13 +527,16 @@ class Reconstructor(nn.Module):
 
     def forward(
         self,
-        input_data: TokensAndMasks,
+        x: TokensAndMasks,
+        timestamps: Tensor,
         patch_size: int,
+        input_res: int = BASE_GSD,
     ) -> TokensAndMasks:
         """Return flexibly patchified reconstruction for each modality of the input data.
 
         Given a [B, H, W, (T), b_s, D] inputs, returns a [B, H, W, (T), C] output.
         """
+        input_data = self.decoder(x, timestamps, patch_size, input_res)
         output_dict = {}
         modalities_to_process = get_modalities_to_process(
             input_data.modalities, [m.name for m in self.supported_modalities]
@@ -543,8 +555,8 @@ class Reconstructor(nn.Module):
 class ReconstructorConfig(Config):
     """Configuration for the Reconstructor."""
 
+    decoder_config: "PredictorConfig"
     supported_modality_names: list[str]
-    embedding_size: int = 16
     max_patch_size: int = 8
 
     def validate(self) -> None:
@@ -567,6 +579,8 @@ class ReconstructorConfig(Config):
         kwargs = self.as_dict(exclude_none=True, recurse=False)
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
+        kwargs.pop("decoder_config")
+        kwargs["decoder"] = self.decoder_config.build()
         logger.info(f"Predictor kwargs: {kwargs}")
         return Reconstructor(**kwargs)
 
@@ -1542,7 +1556,6 @@ class Predictor(FlexiHeliosBase):
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
-
         for modality in modalities_to_process:
             masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
             modality_mask = tokens_and_masks[masked_modality_name]

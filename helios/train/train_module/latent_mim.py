@@ -44,6 +44,7 @@ class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     loss_config: LossConfig = field(
         default_factory=lambda: LossConfig(loss_config={"type": "patch_discrimination"})
     )
+    mae_loss_config: LossConfig | None = None
     masking_config: MaskingConfig = field(
         default_factory=lambda: MaskingConfig(strategy_config={"type": "random"})
     )
@@ -84,6 +85,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         transform_config: The transform configuration for the model.
         masking_config: The masking configuration for the model.
         loss_config: The loss configuration for the model.
+        mae_loss_config: Optional loss config for masked auto-encoding.
         rank_microbatch_size: The rank microbatch size in instances.
         compile_model: Whether to compile to the model.
         dp_config: Data parallel configuration for the model.
@@ -109,6 +111,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         loss_config: LossConfig,
         rank_microbatch_size: int,
         token_exit_cfg: dict[str, int],
+        mae_loss_config: LossConfig | None = None,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
         ac_config: TransformerActivationCheckpointingConfig | None = None,
@@ -145,6 +148,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
             state_dict_load_opts: Override state dict options for loading.
             ema_decay: EMA decay rate for target encoder, as a tuple of (start_ema_decay, end_ema_decay)
             token_exit_cfg: The token exit configuration for the model.
+            mae_loss_config: Optional loss config for masked auto-encoding.
             warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
         """
@@ -176,6 +180,10 @@ class LatentMIMTrainModule(HeliosTrainModule):
         self.total_loss_name = self.base_loss.name
         if self.regularizer is not None:
             self.total_loss_name = f"{self.base_loss.name}+{self.regularizer.name}"
+
+        self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
+        if self.mae_loss is not None:
+            self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -259,7 +267,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
     ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, _ = self.model.forward(batch, patch_size)
+            latent, decoded, _, reconstructed = self.model.forward(batch, patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 target_output, _ = self.model.target_encoder.forward(
@@ -268,4 +276,6 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
             loss = self.loss_fn(decoded, target_output)
+            if self.mae_loss is not None:
+                loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output

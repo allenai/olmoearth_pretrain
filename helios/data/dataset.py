@@ -128,6 +128,7 @@ class HeliosSample(NamedTuple):
     @property
     def missing_modalities(self) -> list[str]:
         """Get the modalities missing from the sample."""
+        # TODO: THis does nto apply to sentinel values so maybe should be removed
         return [
             modality
             for modality in self.as_dict(ignore_nones=True).keys()

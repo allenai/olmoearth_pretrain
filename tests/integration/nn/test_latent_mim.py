@@ -87,7 +87,7 @@ def test_latentmim_with_loss(
     )
     latentmim = LatentMIM(encoder, predictor)
 
-    _, output, _ = latentmim.forward(x, patch_size)
+    _, output, _, _ = latentmim.forward(x, patch_size)
     output = predictor.forward(output, x.timestamps, patch_size, input_res=1)
     patched_H = H // patch_size
     patched_W = W // patch_size

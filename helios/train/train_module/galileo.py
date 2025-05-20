@@ -48,6 +48,7 @@ class GalileoTrainModuleConfig(HeliosTrainModuleConfig):
     loss_config_b: LossConfig = field(
         default_factory=lambda: LossConfig(loss_config={"type": "patch_discrimination"})
     )
+    mae_loss_config: LossConfig | None = None
     masking_config_a: MaskingConfig = field(
         default_factory=lambda: MaskingConfig(strategy_config={"type": "random"})
     )
@@ -100,6 +101,7 @@ class GalileoTrainModule(HeliosTrainModule):
         compile_model: Whether to compile to the model.
         dp_config: Data parallel configuration for the model.
         ac_config: Activation checkpointing configuration for the model.
+        mae_loss_config: Optional loss config for masked auto-encoding.
         compile_loss: Whether to compile the loss function.
         autocast_precision: Enable AMP with this data type.
         max_grad_norm: Clip gradient norms to this value.
@@ -124,6 +126,7 @@ class GalileoTrainModule(HeliosTrainModule):
         rank_microbatch_size: int,
         token_exit_cfg_a: dict[str, int],
         token_exit_cfg_b: dict[str, int],
+        mae_loss_config: LossConfig | None = None,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
         ac_config: TransformerActivationCheckpointingConfig | None = None,
@@ -153,6 +156,7 @@ class GalileoTrainModule(HeliosTrainModule):
             compile_model: Whether to compile to the model.
             dp_config: Data parallel configuration for the model.
             ac_config: Activation checkpointing configuration for the model.
+            mae_loss_config: Optional loss config for masked auto-encoding.
             compile_loss: Whether to compile the loss function.
             autocast_precision: Enable AMP with this data type.
             max_grad_norm: Clip gradient norms to this value.
@@ -200,6 +204,9 @@ class GalileoTrainModule(HeliosTrainModule):
         self.total_loss_name = f"{self.base_loss_a.name}+{self.base_loss_b.name}"
         if self.regularizer is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.regularizer.name}"
+        self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
+        if self.mae_loss is not None:
+            self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
     def loss_fn_a(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -387,7 +394,9 @@ class GalileoTrainModule(HeliosTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, pooled = self.model.forward_a(batch, patch_size)
+            latent, decoded, pooled, reconstructed = self.model.forward_a(
+                batch, patch_size
+            )
             with torch.no_grad():
                 logger.info("target encoder running here")
                 target_output, _ = self.model.target_encoder.forward(
@@ -397,6 +406,8 @@ class GalileoTrainModule(HeliosTrainModule):
                 )
 
             loss = self.loss_fn_a(decoded, target_output)
+            if self.mae_loss is not None:
+                loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output, pooled
 
     def model_forward_b(
@@ -406,7 +417,9 @@ class GalileoTrainModule(HeliosTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, pooled = self.model.forward_b(batch, patch_size)
+            latent, decoded, pooled, reconstructed = self.model.forward_b(
+                batch, patch_size
+            )
             with torch.no_grad():
                 logger.info("target encoder running here")
                 target_output, _ = self.model.target_encoder.forward(
@@ -416,4 +429,6 @@ class GalileoTrainModule(HeliosTrainModule):
                 )
 
             loss = self.loss_fn_b(decoded, target_output)
+            if self.mae_loss is not None:
+                loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output, pooled

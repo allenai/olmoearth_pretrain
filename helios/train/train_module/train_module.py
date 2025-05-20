@@ -1,6 +1,7 @@
 """Training and optimizer abstraction for Helios."""
 
 import contextlib
+import json
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from logging import getLogger
@@ -195,7 +196,7 @@ class HeliosTrainModule(TrainModule):
             "Number of encoder parameters: %d",
             sum(p.numel() for p in self.model.encoder.parameters()),
         )
-        if hasattr(self.model, "decoder"):
+        if hasattr(self.model, "decoder") and self.model.decoder is not None:
             logger.info(
                 "Number of decoder parameters: %d",
                 sum(p.numel() for p in self.model.decoder.parameters()),
@@ -485,11 +486,30 @@ class HeliosTrainModule(TrainModule):
     def _get_state_dict(
         self, sd_options: dist_cp_sd.StateDictOptions
     ) -> dict[str, Any]:
+        """Get the state dict."""
+        # This is a sanity check to make sure the checkpoint is compatible
+        # with the current model architecture, mainly useful when running evaluation beaker jobs
+        if self.trainer.load_path is not None:
+            with open(f"{self.trainer.load_path}/config.json") as f:
+                config_dict = json.load(f)
+                model_config = Config.from_dict(config_dict["model"])
+            model = model_config.build()
+            # Check if any keys are missing
+            for key in self.model.state_dict().keys():
+                if key not in model.state_dict():
+                    logger.info("Key %s not in checkpoint", key)
+                    raise RuntimeError("Model and checkpoint are not compatible")
+            logger.info("Model and checkpoint are compatible")
+
+        model_state_dict = dist_cp_sd.get_model_state_dict(
+            self.model, options=sd_options
+        )
+        optim_state_dict = dist_cp_sd.get_optimizer_state_dict(
+            self.model, self.optimizer, options=sd_options
+        )
         return {
-            "model": dist_cp_sd.get_model_state_dict(self.model, options=sd_options),
-            "optim": dist_cp_sd.get_optimizer_state_dict(
-                self.model, self.optimizer, options=sd_options
-            ),
+            "model": model_state_dict,
+            "optim": optim_state_dict,
         }
 
     def _clip_grad_norm(
