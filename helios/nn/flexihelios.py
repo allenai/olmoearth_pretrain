@@ -595,6 +595,8 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         max_sequence_length: int,
         use_channel_embs: bool = True,
         random_channel_embs: bool = False,
+        use_learnable_ape: bool = False,
+        max_height_patch: int = 12,  # need to be here but it is probably not optimal
     ):
         """Initialize the composite encodings.
 
@@ -616,6 +618,8 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         self.max_sequence_length = (
             max_sequence_length  # This max sequence length is a time dim thing
         )
+        self.use_learnable_ape = use_learnable_ape
+        self.max_height_patch = max_height_patch
         # TODO: we need to be able to calculate the size of the param based on what types of embeddings it will get
 
         # we have 4 embeddings types (pos_in_time, pos_in_space, month, channel) so each get
@@ -629,6 +633,13 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             ),
             requires_grad=False,
         )
+
+        if use_learnable_ape:
+            self.learnable_spatial_embed = nn.Parameter(
+                torch.zeros(max_height_patch, max_height_patch, embedding_size),
+                requires_grad=True,
+            )
+
         # M
         month_tab = get_month_encoding_table(self.embedding_dim_per_embedding_type)
         self.month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
@@ -655,6 +666,9 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             if isinstance(m, nn.Linear) and m.bias is not None:
                 # TODO: fix the dtype here
                 nn.init.constant_(m.bias, 0).to(torch.float32)
+
+        if self.use_learnable_ape:
+            nn.init.trunc_normal_(self.learnable_spatial_embed, std=0.02)
 
     @staticmethod
     def calculate_gsd_ratio(input_res: float, patch_size: int) -> float:
