@@ -59,6 +59,7 @@ def my_build_common_components(
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
+        Modality.LANDSAT.name,
     ]
     components.launch.num_gpus = 8
     print(components)
@@ -67,7 +68,7 @@ def my_build_common_components(
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    base_model_args = MODEL_SIZE_ARGS["base_super_shallow_decoder"]
+    base_model_args = MODEL_SIZE_ARGS["base_shallow_decoder"]
     ENCODER_EMBEDDING_SIZE = int(base_model_args["encoder_embedding_size"])
     DECODER_EMBEDDING_SIZE = int(base_model_args["decoder_embedding_size"])
     ENCODER_DEPTH = int(base_model_args["encoder_depth"])
@@ -226,7 +227,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(1),
+            eval_interval=Duration.epochs(5),
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
@@ -235,7 +236,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
             probe_lr=0.01,
-            eval_interval=Duration.epochs(2),
+            eval_interval=Duration.epochs(20),
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
@@ -244,7 +245,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.01,
-            eval_interval=Duration.epochs(2),
+            eval_interval=Duration.epochs(20),
+            input_modalities=["sentinel2"],
         ),
     }
     trainer_config = (
