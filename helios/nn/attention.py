@@ -134,8 +134,6 @@ class Attention(nn.Module):
             if self.use_alibi:
                 slopes = get_slopes(self.num_heads, device=q.device, dtype=q.dtype)
                 slopes = slopes.view(1, -1, 1, 1)
-                logger.info(f"Slopes: {slopes}")
-                logger.info(f"attn_mask: {attn_mask}")
                 attn_mask = attn_mask * slopes
                 # Compute slopes based on heads and multiply by the mask to do slope scaling
             x = F.scaled_dot_product_attention(

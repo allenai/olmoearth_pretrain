@@ -596,6 +596,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         use_channel_embs: bool = True,
         random_channel_embs: bool = False,
         use_learnable_ape: bool = False,
+        no_ape: bool = True,
         max_height_patch: int = 12,  # need to be here but it is probably not optimal
     ):
         """Initialize the composite encodings.
@@ -622,6 +623,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         )
         self.use_learnable_ape = use_learnable_ape
         self.max_height_patch = max_height_patch
+        self.no_ape = no_ape
         # TODO: we need to be able to calculate the size of the param based on what types of embeddings it will get
 
         # we have 4 embeddings types (pos_in_time, pos_in_space, month, channel) so each get
@@ -636,7 +638,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             requires_grad=False,
         )
 
-        if use_learnable_ape:
+        if use_learnable_ape and not self.no_ape:
             self.learnable_spatial_embed = nn.Parameter(
                 torch.zeros(
                     self.embedding_dim_per_embedding_type,
@@ -673,7 +675,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
                 # TODO: fix the dtype here
                 nn.init.constant_(m.bias, 0).to(torch.float32)
 
-        if self.use_learnable_ape:
+        if self.use_learnable_ape and not self.no_ape:
             nn.init.trunc_normal_(self.learnable_spatial_embed, std=0.02)
 
     @staticmethod
@@ -747,6 +749,10 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             month_embed = self.month_embed(months)
             month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
             modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
+
+        if self.no_ape:
+            return modality_tokens + modality_embed
+
         if modality.is_spatial:
             # Spatial encodings
             assert input_res is not None
@@ -983,6 +989,68 @@ class FlexiHeliosBase(nn.Module):
 
         return tokens_only_dict
 
+    def collapse_and_combine_alibi_masks(self, alibi_masks: dict[str, Tensor]) -> Tensor:
+        """Collapse and combine the alibi masks."""
+        # THis could be added to the other collapse and combine function
+        alibi_mask_list = []
+        available_modalities = return_modalities_from_dict(alibi_masks)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            alibi_mask_list.append(rearrange(alibi_masks[modality], "b ... -> b (...)"))
+        alibi_masks = torch.cat(alibi_mask_list, dim=1)
+        return alibi_masks
+
+    def create_alibi_mask(self, padding_mask: Tensor, alibi_mask: Tensor) -> Tensor:
+        """Create the alibi mask."""
+        # fill the padding mask so that values that are not to take part in attention are set to -inf
+        float_padding_mask = torch.zeros_like(padding_mask, dtype=torch.float32, device=padding_mask.device)
+        float_padding_mask = float_padding_mask.masked_fill(~padding_mask, float("-inf"))
+        # this mask still needs to be scaled by the slope
+        logger.info(f"padding mask dtype: {float_padding_mask.dtype}")
+        logger.info(f"alibi mask dtype: {alibi_mask.dtype}")
+        return float_padding_mask - alibi_mask
+
+    def compute_alibi_masks(self, masks: dict[str, Tensor], patch_size: int) -> dict[str, Tensor]:
+        """Compute the alibi masks without per head slope scaling."""
+        # assume that all spatial modalities have the same patch size and dimensions
+        # we cna alter this later if needed
+        alibi_masks = {}
+        for modality in self.supported_modality_names:
+            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            if masked_modality_name not in masks:
+                continue
+            mask = masks[masked_modality_name]
+            logger.info(f"Mask shape: {mask.shape} for modality: {modality}")
+            modality_spec = Modality.get(modality)
+            if not modality_spec.is_spatial:
+                # Make an all zeros alibi mask in the same shape as the mask
+                alibi_masks[modality] = torch.zeros_like(mask)
+                continue
+            B, H, W, T, B_S = mask.shape
+            # TODO: These masks can easily be shared across modalities
+            # we want the mask to be of Shape H, W and then to repeat it across the other dimensions
+            # Why do we need attnetion heads
+            # 1) build patch-grid coordinates of shape (N, 2)
+            grid_size = int(H)
+            coords = torch.stack(torch.meshgrid(
+                torch.arange(grid_size, device=mask.device),
+                torch.arange(grid_size, device=mask.device),
+                indexing='ij'
+            ), dim=-1).view(-1, 2)                        # → [N, 2]
+            #TODO: We may or may not want to scale based on patch size
+
+            # 2) compute pairwise Euclidean distances [N, N]
+            #    (coords[:,None] - coords[None,:])² → [N, N, 2]
+            diff = coords[:, None, :] - coords[None, :, :]
+            dists = diff.pow(2).sum(-1).sqrt()            # → [N, N]
+            # repeat this back over the other dimensions
+            dists = repeat(dists, "h w -> b h w t b_s", t=T, b_s=B_S, b=B)
+            logger.info(f"Alibi mask shape: {dists.shape}")
+            alibi_masks[modality] = dists
+        return alibi_masks
+
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         for block in self.blocks:
@@ -1185,68 +1253,6 @@ class Encoder(FlexiHeliosBase):
             exit_ids_seq = None
         return exit_ids_seq
 
-    def collapse_and_combine_alibi_masks(self, alibi_masks: dict[str, Tensor]) -> Tensor:
-        """Collapse and combine the alibi masks."""
-        # THis could be added to the other collapse and combine function
-        alibi_mask_list = []
-        available_modalities = return_modalities_from_dict(alibi_masks)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
-        )
-        for modality in modalities_to_process:
-            alibi_mask_list.append(rearrange(alibi_masks[modality], "b ... -> b (...)"))
-        alibi_masks = torch.cat(alibi_mask_list, dim=1)
-        return alibi_masks
-
-    def create_alibi_mask(self, padding_mask: Tensor, alibi_mask: Tensor) -> Tensor:
-        """Create the alibi mask."""
-        # fill the padding mask so that values that are not to take part in attention are set to -inf
-        float_padding_mask = torch.zeros_like(padding_mask, dtype=torch.float32, device=padding_mask.device)
-        float_padding_mask = float_padding_mask.masked_fill(~padding_mask, float("-inf"))
-        # this mask still needs to be scaled by the slope
-        logger.info(f"padding mask dtype: {float_padding_mask.dtype}")
-        logger.info(f"alibi mask dtype: {alibi_mask.dtype}")
-        return float_padding_mask - alibi_mask
-
-    def compute_alibi_masks(self, masks: dict[str, Tensor], patch_size: int) -> dict[str, Tensor]:
-        """Compute the alibi masks without per head slope scaling."""
-        # assume that all spatial modalities have the same patch size and dimensions
-        # we cna alter this later if needed
-        alibi_masks = {}
-        for modality in self.supported_modality_names:
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
-            if masked_modality_name not in masks:
-                continue
-            mask = masks[masked_modality_name]
-            logger.info(f"Mask shape: {mask.shape} for modality: {modality}")
-            modality_spec = Modality.get(modality)
-            if not modality_spec.is_spatial:
-                # Make an all zeros alibi mask in the same shape as the mask
-                alibi_masks[modality] = torch.zeros_like(mask)
-                continue
-            B, H, W, T, B_S = mask.shape
-            # TODO: These masks can easily be shared across modalities
-            # we want the mask to be of Shape H, W and then to repeat it across the other dimensions
-            # Why do we need attnetion heads
-            # 1) build patch-grid coordinates of shape (N, 2)
-            grid_size = int(H)
-            coords = torch.stack(torch.meshgrid(
-                torch.arange(grid_size, device=mask.device),
-                torch.arange(grid_size, device=mask.device),
-                indexing='ij'
-            ), dim=-1).view(-1, 2)                        # → [N, 2]
-            #TODO: We may or may not want to scale based on patch size
-
-            # 2) compute pairwise Euclidean distances [N, N]
-            #    (coords[:,None] - coords[None,:])² → [N, N, 2]
-            diff = coords[:, None, :] - coords[None, :, :]
-            dists = diff.pow(2).sum(-1).sqrt()            # → [N, N]
-            # repeat this back over the other dimensions
-            dists = repeat(dists, "h w -> b h w t b_s", t=T, b_s=B_S, b=B)
-            logger.info(f"Alibi mask shape: {dists.shape}")
-            alibi_masks[modality] = dists
-        return alibi_masks
-
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -1399,6 +1405,7 @@ class Predictor(FlexiHeliosBase):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         output_embedding_size: int | None = None,
+        use_alibi: bool = True,
     ):
         """Initialize the predictor.
 
@@ -1414,6 +1421,7 @@ class Predictor(FlexiHeliosBase):
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Whether to randomly initialize channel embeddings
             output_embedding_size: Size of output embeddings
+            use_alibi: Whether to use alibi mask
         """
         super().__init__(
             embedding_size=decoder_embedding_size,
@@ -1427,6 +1435,7 @@ class Predictor(FlexiHeliosBase):
             supported_modalities=supported_modalities,
         )
         # TODO: Rename this weird misname
+        self.use_alibi = use_alibi
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.encoder_embedding_size = encoder_embedding_size
@@ -1484,7 +1493,7 @@ class Predictor(FlexiHeliosBase):
     # TODO: GIVE more explicit function names
     @staticmethod
     def split_x_y(
-        tokens: Tensor, mask: Tensor
+        tokens: Tensor, mask: Tensor, alibi_mask: Tensor | None = None
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """Splits tokens into three groups based on mask values.
 
@@ -1516,6 +1525,8 @@ class Predictor(FlexiHeliosBase):
             mask.int(), dim=1, descending=True, stable=True
         )
         tokens = tokens.gather(1, indices[:, :, None].expand_as(tokens))
+        if alibi_mask is not None:
+            alibi_mask = alibi_mask.gather(1, indices)
 
         # Create binary masks for Encoder and Decoder
         binarized_decoder_mask = sorted_mask == MaskValue.DECODER.value
@@ -1540,11 +1551,15 @@ class Predictor(FlexiHeliosBase):
             :, -max_length_of_unmasked_tokens:
         ].to(org_mask_dtype)
 
+        if alibi_mask is not None:
+            alibi_mask = alibi_mask[:, -max_length_of_unmasked_tokens:]
+
         return (
             tokens_to_decode,
             unmasked_tokens,
             tokens_to_decode_mask,
             unmasked_tokens_mask,
+            alibi_mask,
             indices,
         )
 
@@ -1601,14 +1616,19 @@ class Predictor(FlexiHeliosBase):
         tokens_dict = self.composite_encodings(
             tokens_only_dict, timestamps, patch_size, input_res
         )
+        alibi_masks = self.compute_alibi_masks(original_masks_dict, patch_size)
         tokens_dict.update(original_masks_dict)
         x, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        alibi_mask = self.collapse_and_combine_alibi_masks(alibi_masks)
         # X contains the tokens to decode, Y contains the tokens to attend to for context
-        x, y, x_mask, y_mask, indices = self.split_x_y(x, mask)
+        x, y, x_mask, y_mask, alibi_mask, indices = self.split_x_y(x, mask, alibi_mask)
+        # so the y mask is where want to add the alibi mask so we want to be able to
+        if self.use_alibi:
+            alibi_mask = self.create_alibi_mask(y_mask.bool(), alibi_mask)
         for blk in self.blocks:
             # note that we are not taking the inverse of the mask, since split_x_y gives us
             # true values for values we want to take part in attention
-            x = blk(x=x, y=y, attn_mask=y_mask.bool())
+            x = blk(x=x, y=y, attn_mask=y_mask.bool() if not self.use_alibi else alibi_mask)
         x = self.combine_x_y(
             tokens_to_decode=x,
             unmasked_tokens=y,
