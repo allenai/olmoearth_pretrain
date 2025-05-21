@@ -607,6 +607,8 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             max_sequence_length: Maximum sequence length
             use_channel_embs: Whether to use learnable channel embeddings
             random_channel_embs: Initialize channel embeddings randomly (zeros if False)
+            use_learnable_ape: Whether to use learnable spatial embeddings
+            max_height_patch: Maximum height of the patch
         """
         super().__init__()
         self.embedding_size = embedding_size
@@ -746,13 +748,30 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             assert input_res is not None
             assert patch_size is not None
             gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
-            spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
-                grid_size=h,
-                res=torch.ones(b, device=device) * gsd_ratio,
-                encoding_dim=self.embedding_dim_per_embedding_type,
-                device=device,
-            )
-            spatial_embed = rearrange(spatial_embed, "b (h w) d -> b h w d", h=h, w=w)
+            if not self.use_learnable_ape:
+                spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
+                    grid_size=h,
+                    res=torch.ones(b, device=device) * gsd_ratio,
+                    encoding_dim=self.embedding_dim_per_embedding_type,
+                    device=device,
+                )
+                spatial_embed = rearrange(
+                    spatial_embed, "b (h w) d -> b h w d", h=h, w=w
+                )
+            else:
+                interp_pos = (
+                    torch.nn.functional.interpolate(
+                        self.learnable_spatial_embed,
+                        size=(h, w),
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+                    * gsd_ratio
+                )
+                spatial_embed = repeat(
+                    interp_pos, f"b h w d -> {ein_string}", **ein_dict
+                )
+
             spatial_embed = repeat(
                 spatial_embed, f"b h w d -> {ein_string}", **ein_dict
             )
