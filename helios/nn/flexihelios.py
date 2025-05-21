@@ -638,7 +638,11 @@ class FlexiHeliosCompositeEncodings(nn.Module):
 
         if use_learnable_ape:
             self.learnable_spatial_embed = nn.Parameter(
-                torch.zeros(self.embedding_dim_per_embedding_type, max_height_patch, max_height_patch),
+                torch.zeros(
+                    self.embedding_dim_per_embedding_type,
+                    max_height_patch,
+                    max_height_patch,
+                ),
                 requires_grad=True,
             )
 
@@ -759,8 +763,8 @@ class FlexiHeliosCompositeEncodings(nn.Module):
                     spatial_embed, "b (h w) d -> b h w d", h=h, w=w
                 )
                 spatial_embed = repeat(
-                spatial_embed, f"b h w d -> {ein_string}", **ein_dict
-            )
+                    spatial_embed, f"b h w d -> {ein_string}", **ein_dict
+                )
             else:
                 interp_pos = (
                     torch.nn.functional.interpolate(
@@ -771,9 +775,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
                     ).squeeze(0)
                 ) * gsd_ratio
                 interp_pos = rearrange(interp_pos, "d h w -> h w d")
-                spatial_embed = repeat(
-                    interp_pos, f"h w d -> {ein_string}", **ein_dict
-                )
+                spatial_embed = repeat(interp_pos, f"h w d -> {ein_string}", **ein_dict)
 
             modality_embed[..., n * 3 : n * 4] += spatial_embed
         return modality_tokens + modality_embed
@@ -1012,6 +1014,7 @@ class Encoder(FlexiHeliosBase):
         random_channel_embs: bool = False,
         num_projection_layers: int = 1,
         aggregate_then_project: bool = True,
+        use_alibi: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1043,6 +1046,7 @@ class Encoder(FlexiHeliosBase):
             supported_modalities=supported_modalities,
             random_channel_embs=random_channel_embs,
         )
+        self.use_alibi = use_alibi
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
@@ -1229,6 +1233,8 @@ class Encoder(FlexiHeliosBase):
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
+
+            # This is where we want to add the alibi mask
             tokens = blk(x=tokens, y=None, attn_mask=new_mask)
 
         if exit_ids_seq is not None:
