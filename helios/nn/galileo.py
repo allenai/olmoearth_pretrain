@@ -147,6 +147,10 @@ class GalileoConfig(Config):
         ):
             raise ValueError("Encoder embedding size must be consistent!")
 
+        if hasattr(self.encoder_config, "use_alibi") and hasattr(self.decoder_config, "use_alibi"):
+            if self.encoder_config.use_alibi != self.decoder_config.use_alibi:
+                raise ValueError("Encoder and decoder must have the same use_alibi")
+
     def build(self) -> "Galileo":
         """Build the Galileo model."""
         self.validate()

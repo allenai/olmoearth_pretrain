@@ -1616,10 +1616,14 @@ class Predictor(FlexiHeliosBase):
         tokens_dict = self.composite_encodings(
             tokens_only_dict, timestamps, patch_size, input_res
         )
-        alibi_masks = self.compute_alibi_masks(original_masks_dict, patch_size)
+        if self.use_alibi:
+            alibi_masks = self.compute_alibi_masks(original_masks_dict, patch_size)
         tokens_dict.update(original_masks_dict)
         x, mask = self.collapse_and_combine_hwtc(tokens_dict)
-        alibi_mask = self.collapse_and_combine_alibi_masks(alibi_masks)
+        if self.use_alibi:
+            alibi_mask = self.collapse_and_combine_alibi_masks(alibi_masks)
+        else:
+            alibi_mask = None
         # X contains the tokens to decode, Y contains the tokens to attend to for context
         x, y, x_mask, y_mask, alibi_mask, indices = self.split_x_y(x, mask, alibi_mask)
         # so the y mask is where want to add the alibi mask so we want to be able to
@@ -1732,7 +1736,7 @@ class EncoderConfig(Config):
     random_channel_embs: bool = False
     num_projection_layers: int = 1
     aggregate_then_project: bool = True
-
+    use_alibi: bool = True
     def validate(self) -> None:
         """Validate the configuration."""
         if len(self.supported_modalities) == 0:
@@ -1773,7 +1777,7 @@ class PredictorConfig(Config):
     learnable_channel_embeddings: bool = True
     random_channel_embeddings: bool = False
     output_embedding_size: int | None = None
-
+    use_alibi: bool = True
     def validate(self) -> None:
         """Validate the configuration."""
         if len(self.supported_modalities) == 0:
