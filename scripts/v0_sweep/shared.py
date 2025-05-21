@@ -395,7 +395,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.01,
-            eval_interval=Duration.epochs(0),
+            eval_interval=Duration.epochs(10),
             input_modalities=["landsat8"],
         ),
         "sickle_sentinel1": DownstreamTaskConfig(
@@ -405,7 +405,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.01,
-            eval_interval=Duration.epochs(0),
+            eval_interval=Duration.epochs(10),
             input_modalities=["sentinel1"],
         ),
     }
