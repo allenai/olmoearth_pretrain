@@ -1014,7 +1014,7 @@ class Encoder(FlexiHeliosBase):
         random_channel_embs: bool = False,
         num_projection_layers: int = 1,
         aggregate_then_project: bool = True,
-        use_alibi: bool = False,
+        use_alibi: bool = True, # DOn't leave this false when we keep it
     ):
         """Initialize the encoder.
 
@@ -1082,7 +1082,7 @@ class Encoder(FlexiHeliosBase):
         return exit_ids_per_modality_dict
 
     @staticmethod
-    def remove_masked_tokens(x: Tensor, mask: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    def remove_masked_tokens(x: Tensor, mask: Tensor, alibi_mask: Tensor | None = None) -> tuple[Tensor, Tensor, Tensor, Tensor | None]:
         """Remove masked tokens from the tokens and masks.
 
         Implementation from https://stackoverflow.com/a/68621610/2332296
@@ -1105,17 +1105,21 @@ class Encoder(FlexiHeliosBase):
         # Now all the places where we want to keep the token are at the front of the tensor
         x = x.gather(1, indices[:, :, None].expand_as(x))
         # Now all tokens that should be kept are first in the tensor
+        if alibi_mask is not None:
+            alibi_mask = alibi_mask.gather(1, indices)
 
         # set masked values to 0 (not really necessary since we'll ignore them anyway)
         x = x * sorted_mask.unsqueeze(-1)
 
         # cut off to the length of the longest sequence
         max_length = sorted_mask.sum(-1).max()
+        if alibi_mask is not None:
+            alibi_mask = alibi_mask[:, :max_length]
         x = x[:, :max_length]
         # New mask chopped to the longest sequence
         updated_mask = sorted_mask[:, :max_length]
 
-        return x, indices, updated_mask
+        return x, indices, updated_mask, alibi_mask
 
     @staticmethod
     def add_removed_tokens(
@@ -1181,6 +1185,68 @@ class Encoder(FlexiHeliosBase):
             exit_ids_seq = None
         return exit_ids_seq
 
+    def collapse_and_combine_alibi_masks(self, alibi_masks: dict[str, Tensor]) -> Tensor:
+        """Collapse and combine the alibi masks."""
+        # THis could be added to the other collapse and combine function
+        alibi_mask_list = []
+        available_modalities = return_modalities_from_dict(alibi_masks)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            alibi_mask_list.append(rearrange(alibi_masks[modality], "b ... -> b (...)"))
+        alibi_masks = torch.cat(alibi_mask_list, dim=1)
+        return alibi_masks
+
+    def create_alibi_mask(self, padding_mask: Tensor, alibi_mask: Tensor) -> Tensor:
+        """Create the alibi mask."""
+        # fill the padding mask so that values that are not to take part in attention are set to -inf
+        float_padding_mask = torch.zeros_like(padding_mask, dtype=torch.float32, device=padding_mask.device)
+        float_padding_mask = float_padding_mask.masked_fill(~padding_mask, float("-inf"))
+        # this mask still needs to be scaled by the slope
+        logger.info(f"padding mask dtype: {float_padding_mask.dtype}")
+        logger.info(f"alibi mask dtype: {alibi_mask.dtype}")
+        return float_padding_mask - alibi_mask
+
+    def compute_alibi_masks(self, masks: dict[str, Tensor], patch_size: int) -> dict[str, Tensor]:
+        """Compute the alibi masks without per head slope scaling."""
+        # assume that all spatial modalities have the same patch size and dimensions
+        # we cna alter this later if needed
+        alibi_masks = {}
+        for modality in self.supported_modality_names:
+            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            if masked_modality_name not in masks:
+                continue
+            mask = masks[masked_modality_name]
+            logger.info(f"Mask shape: {mask.shape} for modality: {modality}")
+            modality_spec = Modality.get(modality)
+            if not modality_spec.is_spatial:
+                # Make an all zeros alibi mask in the same shape as the mask
+                alibi_masks[modality] = torch.zeros_like(mask)
+                continue
+            B, H, W, T, B_S = mask.shape
+            # TODO: These masks can easily be shared across modalities
+            # we want the mask to be of Shape H, W and then to repeat it across the other dimensions
+            # Why do we need attnetion heads
+            # 1) build patch-grid coordinates of shape (N, 2)
+            grid_size = int(H)
+            coords = torch.stack(torch.meshgrid(
+                torch.arange(grid_size, device=mask.device),
+                torch.arange(grid_size, device=mask.device),
+                indexing='ij'
+            ), dim=-1).view(-1, 2)                        # → [N, 2]
+            #TODO: We may or may not want to scale based on patch size
+
+            # 2) compute pairwise Euclidean distances [N, N]
+            #    (coords[:,None] - coords[None,:])² → [N, N, 2]
+            diff = coords[:, None, :] - coords[None, :, :]
+            dists = diff.pow(2).sum(-1).sqrt()            # → [N, N]
+            # repeat this back over the other dimensions
+            dists = repeat(dists, "h w -> b h w t b_s", t=T, b_s=B_S, b=B)
+            logger.info(f"Alibi mask shape: {dists.shape}")
+            alibi_masks[modality] = dists
+        return alibi_masks
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -1205,17 +1271,27 @@ class Encoder(FlexiHeliosBase):
             patch_size,
             input_res,
         )
+
+        alibi_masks = self.compute_alibi_masks(original_masks_dict, patch_size)
+        # logger.info(f"Alibi masks: {alibi_masks}")
         tokens_dict.update(original_masks_dict)
+
+        # We need to create the alibi mask here
+        # Then we need to collapse and combine it so it aligns with the other masks and x
         x, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        alibi_mask = self.collapse_and_combine_alibi_masks(alibi_masks)
 
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
-
-        tokens, indices, new_mask = self.remove_masked_tokens(x, bool_mask)
+        # We need to remove masked tokens from the alibi mask as well to keep it aligned
+        tokens, indices, new_mask, alibi_mask = self.remove_masked_tokens(x, bool_mask, alibi_mask)
+        # remove the masked tokens from the alibi mask
+        if self.use_alibi:
+            alibi_mask = self.create_alibi_mask(new_mask, alibi_mask)
         if exit_ids_seq is not None:
-            exit_ids_seq, _, _ = self.remove_masked_tokens(exit_ids_seq, bool_mask)
+            exit_ids_seq, _, _, _ = self.remove_masked_tokens(exit_ids_seq, bool_mask)
             # still linear projections
-            exited_tokens, _, _ = self.remove_masked_tokens(exited_tokens, bool_mask)
-
+            exited_tokens, _, _, _ = self.remove_masked_tokens(exited_tokens, bool_mask)
+        # we need to apply the alibi mask to the padding mask here so that we can use it in attention
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -1233,9 +1309,8 @@ class Encoder(FlexiHeliosBase):
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
-
-            # This is where we want to add the alibi mask
-            tokens = blk(x=tokens, y=None, attn_mask=new_mask)
+            # Tell the block the mask is an alibi mask so we can do the slope scaling for each head
+            tokens = blk(x=tokens, y=None, attn_mask=new_mask if not self.use_alibi else alibi_mask)
 
         if exit_ids_seq is not None:
             # this should only ever be called by the target encoder,

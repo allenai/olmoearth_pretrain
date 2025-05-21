@@ -3,11 +3,49 @@
 from typing import Any
 
 import torch
+from logging import getLogger
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
+
+import math
+
+logger = getLogger(__name__)
+
+def get_slopes(n: int,
+               device: torch.device | None = None,
+               dtype: torch.dtype | None = None
+              ) -> torch.Tensor:
+    """
+    Returns a 1-D tensor of length n containing the ALiBi slopes m_h
+    for h in [0..n-1].
+
+    Args:
+        n (int): number of heads.
+        device (torch.device, optional): device for the returned tensor.
+        dtype (torch.dtype, optional): dtype for the returned tensor.
+    """
+    # largest power-of-2 ≤ n
+    m = 1 << (n.bit_length() - 1)
+
+    def slopes_power_of_2(k: int) -> torch.Tensor:
+        # α = 2^{-2^{-(log2(k)-3)}}; then slopes = α * α^h for h=0..k-1
+        alpha = 2 ** (-2 ** (-(math.log2(k) - 3)))
+        # arange on correct device/dtype, then exponentiate
+        h_idx = torch.arange(k, device=device, dtype=dtype)
+        return (alpha * alpha**h_idx).to(device=device, dtype=dtype)
+
+    if m == n:
+        return slopes_power_of_2(n)
+
+    # for non-power-of-2, build:
+    #  1) first m slopes directly
+    #  2) next (n-m) from down-sampled slopes of length 2m
+    slopes1 = slopes_power_of_2(m)
+    slopes2 = get_slopes(2 * m, device=device, dtype=dtype)[::2][: n - m]
+    return torch.cat([slopes1, slopes2], dim=0)
 
 
 class Attention(nn.Module):
@@ -36,6 +74,7 @@ class Attention(nn.Module):
         proj_drop: float = 0.0,
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
+        use_alibi: bool = False,
     ) -> None:
         """Initialize the attention module.
 
@@ -48,13 +87,14 @@ class Attention(nn.Module):
             proj_drop: Output projection dropout rate
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
+            use_alibi: Whether to use alibi mask
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.scale = self.head_dim**-0.5
-
+        self.use_alibi = use_alibi
         self.cross_attn = cross_attn
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
 
@@ -91,6 +131,13 @@ class Attention(nn.Module):
         if self.fast_attn:
             if attn_mask is not None:
                 attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
+            if self.use_alibi:
+                slopes = get_slopes(self.num_heads, device=q.device, dtype=q.dtype)
+                slopes = slopes.view(1, -1, 1, 1)
+                logger.info(f"Slopes: {slopes}")
+                logger.info(f"attn_mask: {attn_mask}")
+                attn_mask = attn_mask * slopes
+                # Compute slopes based on heads and multiply by the mask to do slope scaling
             x = F.scaled_dot_product_attention(
                 q,
                 k,
@@ -320,6 +367,7 @@ class Block(nn.Module):
         act_layer: nn.Module = nn.GELU,
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
+        use_alibi: bool = True,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -336,6 +384,7 @@ class Block(nn.Module):
             act_layer: Activation layer
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
+            use_alibi: Whether to use alibi mask
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -348,6 +397,7 @@ class Block(nn.Module):
             proj_drop=drop,
             norm_layer=norm_layer,
             cross_attn=cross_attn,
+            use_alibi=use_alibi,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
