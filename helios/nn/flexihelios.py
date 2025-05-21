@@ -596,7 +596,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         use_channel_embs: bool = True,
         random_channel_embs: bool = False,
         use_learnable_ape: bool = False,
-        no_ape: bool = True,
+        no_ape: bool = True, # be careful here
         max_height_patch: int = 12,  # need to be here but it is probably not optimal
     ):
         """Initialize the composite encodings.
@@ -751,6 +751,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
 
         if self.no_ape:
+            logger.info("No APE applied")
             return modality_tokens + modality_embed
 
         if modality.is_spatial:
@@ -759,6 +760,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             assert patch_size is not None
             gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
             if not self.use_learnable_ape:
+                logger.info("Using 2d sincos pos encoding")
                 spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
                     grid_size=h,
                     res=torch.ones(b, device=device) * gsd_ratio,
@@ -772,6 +774,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
                     spatial_embed, f"b h w d -> {ein_string}", **ein_dict
                 )
             else:
+                logger.info("Using learnable APE")
                 interp_pos = (
                     torch.nn.functional.interpolate(
                         self.learnable_spatial_embed.unsqueeze(0),
@@ -836,6 +839,7 @@ class FlexiHeliosBase(nn.Module):
         drop_path: float,
         supported_modalities: list[ModalitySpec],
         random_channel_embs: bool = False,
+        no_ape: bool = True,
     ) -> None:
         """Initialize the FlexiHeliosBase class."""
         super().__init__()
@@ -870,7 +874,8 @@ class FlexiHeliosBase(nn.Module):
             max_sequence_length,
             use_channel_embs,
             random_channel_embs,
-            use_learnable_ape=True,
+            use_learnable_ape=True, # TODO: make this configurable
+            no_ape=no_ape,
         )
         self.apply(self._init_weights)
 
@@ -1022,7 +1027,7 @@ class FlexiHeliosBase(nn.Module):
             if masked_modality_name not in masks:
                 continue
             mask = masks[masked_modality_name]
-            logger.info(f"Mask shape: {mask.shape} for modality: {modality}")
+
             modality_spec = Modality.get(modality)
             if not modality_spec.is_spatial:
                 # Make an all zeros alibi mask in the same shape as the mask
@@ -1047,7 +1052,6 @@ class FlexiHeliosBase(nn.Module):
             dists = diff.pow(2).sum(-1).sqrt()            # → [N, N]
             # repeat this back over the other dimensions
             dists = repeat(dists, "h w -> b h w t b_s", t=T, b_s=B_S, b=B)
-            logger.info(f"Alibi mask shape: {dists.shape}")
             alibi_masks[modality] = dists
         return alibi_masks
 
@@ -1277,15 +1281,17 @@ class Encoder(FlexiHeliosBase):
             patch_size,
             input_res,
         )
-
-        alibi_masks = self.compute_alibi_masks(original_masks_dict, patch_size)
+        if self.use_alibi:
+            alibi_masks = self.compute_alibi_masks(original_masks_dict, patch_size)
+            alibi_mask = self.collapse_and_combine_alibi_masks(alibi_masks)
+        else:
+            alibi_mask = None
         # logger.info(f"Alibi masks: {alibi_masks}")
         tokens_dict.update(original_masks_dict)
 
         # We need to create the alibi mask here
         # Then we need to collapse and combine it so it aligns with the other masks and x
         x, mask = self.collapse_and_combine_hwtc(tokens_dict)
-        alibi_mask = self.collapse_and_combine_alibi_masks(alibi_masks)
 
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
         # We need to remove masked tokens from the alibi mask as well to keep it aligned
@@ -1632,6 +1638,8 @@ class Predictor(FlexiHeliosBase):
         for blk in self.blocks:
             # note that we are not taking the inverse of the mask, since split_x_y gives us
             # true values for values we want to take part in attention
+            if self.use_alibi:
+                logger.info(f"Using alibi mask")
             x = blk(x=x, y=y, attn_mask=y_mask.bool() if not self.use_alibi else alibi_mask)
         x = self.combine_x_y(
             tokens_to_decode=x,
