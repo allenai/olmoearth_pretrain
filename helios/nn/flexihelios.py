@@ -762,7 +762,6 @@ class FlexiHeliosCompositeEncodings(nn.Module):
                 spatial_embed, f"b h w d -> {ein_string}", **ein_dict
             )
             else:
-                logger.info(f"learnable_spatial_embed: {self.learnable_spatial_embed.shape}")
                 interp_pos = (
                     torch.nn.functional.interpolate(
                         self.learnable_spatial_embed.unsqueeze(0),
@@ -771,8 +770,6 @@ class FlexiHeliosCompositeEncodings(nn.Module):
                         align_corners=False,
                     ).squeeze(0)
                 ) * gsd_ratio
-                logger.info(f"interp_pos: {interp_pos.shape}")
-                logger.info(f"ein_dict: {ein_dict}")
                 interp_pos = rearrange(interp_pos, "d h w -> h w d")
                 spatial_embed = repeat(
                     interp_pos, f"h w d -> {ein_string}", **ein_dict
