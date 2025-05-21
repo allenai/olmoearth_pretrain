@@ -267,15 +267,15 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             eval_interval=Duration.epochs(20),
         ),
-        "pastis-r": DownstreamTaskConfig(
-            dataset="pastis-r",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-        ),
+        # "pastis-r": DownstreamTaskConfig(
+        #     dataset="pastis-r",
+        #     batch_size=8,
+        #     num_workers=2,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     probe_lr=0.1,
+        #     eval_interval=Duration.epochs(20),
+        # ),
     }
     # Let us not use garbage collector fallback
     trainer_config = (
@@ -318,9 +318,9 @@ def build_common_components_limited_modalities(*args: Any) -> CommonComponents:
         Modality.SENTINEL1.name,
         Modality.SENTINEL2_L2A.name,
         Modality.WORLDCOVER.name,
-        #     Modality.LANDSAT.name,
-        #     Modality.OPENSTREETMAP_RASTER.name,
-        #     Modality.SRTM.name,
+            Modality.LANDSAT.name,
+            Modality.OPENSTREETMAP_RASTER.name,
+            Modality.SRTM.name,
     ]
     return config
 

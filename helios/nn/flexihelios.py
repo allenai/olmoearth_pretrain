@@ -638,7 +638,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
 
         if use_learnable_ape:
             self.learnable_spatial_embed = nn.Parameter(
-                torch.zeros(max_height_patch, max_height_patch, embedding_size),
+                torch.zeros(self.embedding_dim_per_embedding_type, max_height_patch, max_height_patch),
                 requires_grad=True,
             )
 
@@ -758,23 +758,26 @@ class FlexiHeliosCompositeEncodings(nn.Module):
                 spatial_embed = rearrange(
                     spatial_embed, "b (h w) d -> b h w d", h=h, w=w
                 )
+                spatial_embed = repeat(
+                spatial_embed, f"b h w d -> {ein_string}", **ein_dict
+            )
             else:
+                logger.info(f"learnable_spatial_embed: {self.learnable_spatial_embed.shape}")
                 interp_pos = (
                     torch.nn.functional.interpolate(
-                        self.learnable_spatial_embed,
+                        self.learnable_spatial_embed.unsqueeze(0),
                         size=(h, w),
                         mode="bilinear",
                         align_corners=False,
-                    )
-                    * gsd_ratio
-                )
+                    ).squeeze(0)
+                ) * gsd_ratio
+                logger.info(f"interp_pos: {interp_pos.shape}")
+                logger.info(f"ein_dict: {ein_dict}")
+                interp_pos = rearrange(interp_pos, "d h w -> h w d")
                 spatial_embed = repeat(
-                    interp_pos, f"b h w d -> {ein_string}", **ein_dict
+                    interp_pos, f"h w d -> {ein_string}", **ein_dict
                 )
 
-            spatial_embed = repeat(
-                spatial_embed, f"b h w d -> {ein_string}", **ein_dict
-            )
             modality_embed[..., n * 3 : n * 4] += spatial_embed
         return modality_tokens + modality_embed
 
@@ -862,6 +865,7 @@ class FlexiHeliosBase(nn.Module):
             max_sequence_length,
             use_channel_embs,
             random_channel_embs,
+            use_learnable_ape=True,
         )
         self.apply(self._init_weights)
 
