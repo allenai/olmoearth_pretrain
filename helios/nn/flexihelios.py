@@ -874,7 +874,7 @@ class FlexiHeliosBase(nn.Module):
             max_sequence_length,
             use_channel_embs,
             random_channel_embs,
-            use_learnable_ape=True,  # TODO: make this configurable
+            use_learnable_ape=False,  # True,  # TODO: make this configurable
             no_ape=no_ape,
         )
         self.apply(self._init_weights)
@@ -1098,6 +1098,7 @@ class Encoder(FlexiHeliosBase):
         num_projection_layers: int = 1,
         aggregate_then_project: bool = True,
         use_alibi: bool = True,  # DOn't leave this false when we keep it
+        no_ape: bool = True,
     ):
         """Initialize the encoder.
 
@@ -1128,6 +1129,7 @@ class Encoder(FlexiHeliosBase):
             drop_path=drop_path,
             supported_modalities=supported_modalities,
             random_channel_embs=random_channel_embs,
+            no_ape=no_ape,
         )
         self.use_alibi = use_alibi
         self.min_patch_size = min_patch_size
@@ -1431,6 +1433,7 @@ class Predictor(FlexiHeliosBase):
         random_channel_embeddings: bool = False,
         output_embedding_size: int | None = None,
         use_alibi: bool = True,
+        no_ape: bool = True,
     ):
         """Initialize the predictor.
 
@@ -1447,6 +1450,7 @@ class Predictor(FlexiHeliosBase):
             random_channel_embeddings: Whether to randomly initialize channel embeddings
             output_embedding_size: Size of output embeddings
             use_alibi: Whether to use alibi mask
+            no_ape: Whether to not use ape
         """
         super().__init__(
             embedding_size=decoder_embedding_size,
@@ -1458,6 +1462,7 @@ class Predictor(FlexiHeliosBase):
             use_channel_embs=learnable_channel_embeddings,
             random_channel_embs=random_channel_embeddings,
             supported_modalities=supported_modalities,
+            no_ape=no_ape,
         )
         # TODO: Rename this weird misname
         self.use_alibi = use_alibi
@@ -1766,6 +1771,7 @@ class EncoderConfig(Config):
     num_projection_layers: int = 1
     aggregate_then_project: bool = True
     use_alibi: bool = True
+    no_ape: bool = True
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1808,6 +1814,7 @@ class PredictorConfig(Config):
     random_channel_embeddings: bool = False
     output_embedding_size: int | None = None
     use_alibi: bool = True
+    no_ape: bool = True
 
     def validate(self) -> None:
         """Validate the configuration."""
