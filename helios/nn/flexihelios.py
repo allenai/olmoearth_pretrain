@@ -840,7 +840,7 @@ class FlexiHeliosBase(nn.Module):
         supported_modalities: list[ModalitySpec],
         random_channel_embs: bool = False,
         no_ape: bool = True,
-        non_spatial_coord_value: int = -1,
+        non_spatial_coord_value: int = 0, # upper left corner of the image?
     ) -> None:
         """Initialize the FlexiHeliosBase class."""
         super().__init__()
@@ -1256,10 +1256,7 @@ class Encoder(FlexiHeliosBase):
         # Now all the places where we want to keep the token are at the front of the tensor
         if x.ndim == 2:
             # This is to use this on the coords this is very messy
-            logger.info(x[:, :10])
             x = x.gather(1, indices)
-            logger.info(x[:, :10])
-            logger.info(f"x coords shape mask removal: {x.shape}")
         elif x.ndim == 3:
             x = x.gather(1, indices[:, :, None].expand_as(x))
 
@@ -1270,7 +1267,6 @@ class Encoder(FlexiHeliosBase):
         # set masked values to 0 (not really necessary since we'll ignore them anyway)
         if not x.ndim == 2:
             x = x * sorted_mask.unsqueeze(-1)
-        logger.info(f"x shape post mask multiplication: {x.shape}")
         # cut off to the length of the longest sequence
         max_length = sorted_mask.sum(-1).max()
         if alibi_mask is not None:
@@ -1278,7 +1274,6 @@ class Encoder(FlexiHeliosBase):
         x = x[:, :max_length]
         # New mask chopped to the longest sequence
         updated_mask = sorted_mask[:, :max_length]
-        logger.info(f"x shape post slicing: {x.shape}")
         return x, indices, updated_mask, alibi_mask
 
     @staticmethod
@@ -1887,7 +1882,8 @@ class EncoderConfig(Config):
     aggregate_then_project: bool = True
     use_alibi: bool = True
     no_ape: bool = True
-    non_spatial_coord_value: int = -1
+    non_spatial_coord_value: int = 0 # upper left corner of the image?
+    use_rope: bool = True
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1931,7 +1927,8 @@ class PredictorConfig(Config):
     output_embedding_size: int | None = None
     use_alibi: bool = True
     no_ape: bool = True
-    non_spatial_coord_value: int = -1
+    non_spatial_coord_value: int = 0 # upper left corner of the image?
+    use_rope: bool = True
 
     def validate(self) -> None:
         """Validate the configuration."""

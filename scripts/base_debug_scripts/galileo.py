@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 MIN_PATCH_SIZE = 1
 
-tiny_model_args = MODEL_SIZE_ARGS["base_shallow_decoder"]
+tiny_model_args = MODEL_SIZE_ARGS["tiny"]
 MAX_SEQUENCE_LENGTH = 12
 
 
