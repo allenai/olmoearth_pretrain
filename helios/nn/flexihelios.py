@@ -1922,7 +1922,7 @@ class PredictorConfig(Config):
     num_heads: int = 2
     max_sequence_length: int = 12
     drop_path: float = 0.0
-    learnable_channel_embeddings: bool = True
+    learnable_channel_embeddings: bool = True # why are there two?
     random_channel_embeddings: bool = False
     output_embedding_size: int | None = None
     use_alibi: bool = True
