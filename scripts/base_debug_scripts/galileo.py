@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 MIN_PATCH_SIZE = 1
 
-tiny_model_args = MODEL_SIZE_ARGS["tiny"]
+tiny_model_args = MODEL_SIZE_ARGS["base_super_shallow_decoder"]
 MAX_SEQUENCE_LENGTH = 12
 
 
@@ -136,7 +136,7 @@ def build_train_module_config(
             f"All modalities must be in token_exit_cfg_a: {common.training_modalities}"
         )
     token_exit_cfg_b = {modality: 0 for modality in common.training_modalities}
-    WARMUP_EPOCHS = 5
+    WARMUP_EPOCHS = 10
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
