@@ -9,6 +9,14 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
+from functools import partial
+
+from .rope_utils import (
+    compute_mixed_cis,
+    init_2d_freqs,
+    init_t_xy,
+    apply_rotary_emb,
+)
 
 import math
 
@@ -47,7 +55,6 @@ def get_slopes(n: int,
     slopes2 = get_slopes(2 * m, device=device, dtype=dtype)[::2][: n - m]
     return torch.cat([slopes1, slopes2], dim=0)
 
-
 class Attention(nn.Module):
     """Multi-head attention module with optional cross-attention support.
 
@@ -75,6 +82,8 @@ class Attention(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_alibi: bool = False,
+        use_rope: bool = True,
+        rope_theta: float = 10.0,
     ) -> None:
         """Initialize the attention module.
 
@@ -88,6 +97,8 @@ class Attention(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
             use_alibi: Whether to use alibi mask
+            use_rope: Whether to use rope
+            rope_theta: The theta value for rope
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -107,6 +118,19 @@ class Attention(nn.Module):
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
+        self.use_rope = use_rope
+        if use_rope:
+
+            freqs = init_2d_freqs(
+                dim=self.head_dim, num_heads=self.num_heads, theta=rope_theta,
+                rotate=True
+            ).view(2, -1)
+            self.freqs = nn.Parameter(freqs, requires_grad=True)
+
+            # In our set up these change so frequently a buffer is not appropriate
+            # t_x, t_y = init_t_xy(end_x=14, end_y=14) # Not sure what these need to be set at
+            # self.register_buffer('freqs_t_x', t_x)
+            # self.register_buffer('freqs_t_y', t_y)
 
     def sdpa(
         self,
@@ -161,6 +185,9 @@ class Attention(nn.Module):
         x: torch.Tensor,
         y: torch.Tensor | None = None,
         attn_mask: torch.Tensor | None = None,
+        x_coords: torch.Tensor | None = None,
+        y_coords: torch.Tensor | None = None,
+        is_spatial_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -168,6 +195,9 @@ class Attention(nn.Module):
             x: Input tensor of shape (B, N, C)
             y: Second input for cross-attention. Defaults to None.
             attn_mask: Attention mask. Defaults to None.
+            x_coords: x coordinates of the input tensor. Defaults to None.
+            y_coords: y coordinates of the input tensor. Defaults to None.
+            is_spatial_mask: is spatial mask of the input tensor. Defaults to None.
 
         Returns:
             Output tensor of shape (B, N, C)
@@ -188,6 +218,13 @@ class Attention(nn.Module):
         q = rearrange(q, "b n (h d) -> b h n d", h=self.num_heads)
         k = rearrange(k, "b n (h d) -> b h n d", h=self.num_heads)
         v = rearrange(v, "b n (h d) -> b h n d", h=self.num_heads)
+
+        # Apply Rope
+        if x_coords is not None and y_coords is not None and is_spatial_mask is not None:
+            logger.info(f"Applying Rope to {x_coords.shape} and {y_coords.shape}")
+            logger.info(f"freqs shape: {self.freqs.shape}")
+            rotary_freqs = compute_mixed_cis(self.freqs, x_coords, y_coords, self.num_heads)
+            q, k = apply_rotary_emb(q, k, rotary_freqs)
 
         q, k = self.q_norm(q), self.k_norm(k)
 
@@ -414,7 +451,7 @@ class Block(nn.Module):
         )
 
     def forward(
-        self, x: torch.Tensor, y: torch.Tensor | None, attn_mask: torch.Tensor | None
+        self, x: torch.Tensor, y: torch.Tensor | None, attn_mask: torch.Tensor | None, x_coords: torch.Tensor | None, y_coords: torch.Tensor | None, is_spatial_mask: torch.Tensor | None
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -426,7 +463,7 @@ class Block(nn.Module):
         Returns:
             Output tensor of shape (B, N, C)
         """
-        x = x + self.drop_path(self.ls1(self.attn(self.norm1(x), y, attn_mask)))
+        x = x + self.drop_path(self.ls1(self.attn(self.norm1(x), y, attn_mask, x_coords, y_coords, is_spatial_mask)))
         x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
         return x
 

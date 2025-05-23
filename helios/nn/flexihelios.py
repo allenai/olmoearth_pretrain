@@ -840,6 +840,7 @@ class FlexiHeliosBase(nn.Module):
         supported_modalities: list[ModalitySpec],
         random_channel_embs: bool = False,
         no_ape: bool = True,
+        non_spatial_coord_value: int = -1,
     ) -> None:
         """Initialize the FlexiHeliosBase class."""
         super().__init__()
@@ -852,6 +853,7 @@ class FlexiHeliosBase(nn.Module):
         self.max_sequence_length = max_sequence_length
         self.use_channel_embs = use_channel_embs
         self.random_channel_embs = random_channel_embs
+        self.non_spatial_coord_value = non_spatial_coord_value
 
         self.blocks = nn.ModuleList(
             [
@@ -903,9 +905,15 @@ class FlexiHeliosBase(nn.Module):
         return modality_data.shape[1:-2] if modality_data.ndim > 3 else ()
 
     # is naming here confusing if one of these channels can be missing?
-    def collapse_and_combine_hwtc(self, x: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
-        """Collapse the tokens and masks, respectively, into two tensors."""
+    def collapse_and_combine_hwtc(self, x: dict[str, Tensor]) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Collapse the tokens and masks, respectively, into two tensors.
+        Also returns x and y coordinates for spatial tokens, and a boolean spatial mask.
+        Coordinates are `self.non_spatial_coord_value` for non-spatial tokens.
+        """
         tokens, masks = [], []
+        x_coords_list, y_coords_list = [], []
+        is_spatial_list = []
+
         available_modalities = return_modalities_from_dict(x)
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
@@ -914,12 +922,64 @@ class FlexiHeliosBase(nn.Module):
             masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
-            tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
-            masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
-        tokens = torch.cat(tokens, dim=1)
-        masks = torch.cat(masks, dim=1)
 
-        return tokens, masks
+            tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
+            rearranged_current_mask = rearrange(x_modality_mask, "b ... -> b (...)")
+            masks.append(rearranged_current_mask)
+
+            modality_spec = Modality.get(modality)
+            device = x_modality.device
+            coord_dtype = torch.long
+
+            if modality_spec.is_spatial:
+                if x_modality_mask.ndim < 3:
+                    raise ValueError(
+                        f"Spatial modality {modality} has mask with ndim < 3: {x_modality_mask.shape}"
+                    )
+
+                mask_shape = x_modality_mask.shape
+                _B, H, W = mask_shape[0], mask_shape[1], mask_shape[2]
+
+                h_indices = torch.arange(H, device=device, dtype=coord_dtype)
+                reshape_dims_h = [1] * x_modality_mask.ndim
+                reshape_dims_h[1] = H
+                h_coords_broadcastable = h_indices.reshape(*reshape_dims_h)
+                h_coords_tensor = h_coords_broadcastable.expand_as(x_modality_mask)
+
+                w_indices = torch.arange(W, device=device, dtype=coord_dtype)
+                reshape_dims_w = [1] * x_modality_mask.ndim
+                reshape_dims_w[2] = W
+                w_coords_broadcastable = w_indices.reshape(*reshape_dims_w)
+                w_coords_tensor = w_coords_broadcastable.expand_as(x_modality_mask)
+
+                x_coords_list.append(rearrange(h_coords_tensor, "b ... -> b (...)"))
+                y_coords_list.append(rearrange(w_coords_tensor, "b ... -> b (...)"))
+
+                is_spatial_modality_tensor = torch.ones_like(x_modality_mask, dtype=torch.bool, device=device)
+                is_spatial_list.append(rearrange(is_spatial_modality_tensor, "b ... -> b (...)"))
+
+            else:
+                num_flat_tokens_modality = rearranged_current_mask.shape[1]
+                batch_size_modality = rearranged_current_mask.shape[0]
+
+                placeholder_coords_modality = torch.full(
+                    (batch_size_modality, num_flat_tokens_modality), self.non_spatial_coord_value, device=device, dtype=coord_dtype
+                )
+                x_coords_list.append(placeholder_coords_modality)
+                y_coords_list.append(placeholder_coords_modality)
+
+                is_spatial_modality_flat = torch.full(
+                    (batch_size_modality, num_flat_tokens_modality), False, device=device, dtype=torch.bool
+                )
+                is_spatial_list.append(is_spatial_modality_flat)
+
+        tokens_cat = torch.cat(tokens, dim=1)
+        masks_cat = torch.cat(masks, dim=1)
+        x_coords_cat = torch.cat(x_coords_list, dim=1)
+        y_coords_cat = torch.cat(y_coords_list, dim=1)
+        is_spatial_cat = torch.cat(is_spatial_list, dim=1)
+
+        return tokens_cat, masks_cat, x_coords_cat, y_coords_cat, is_spatial_cat
 
     @staticmethod
     def _construct_einops_pattern(
@@ -1099,6 +1159,8 @@ class Encoder(FlexiHeliosBase):
         aggregate_then_project: bool = True,
         use_alibi: bool = True,  # DOn't leave this false when we keep it
         no_ape: bool = True,
+        use_rope: bool = True,
+        non_spatial_coord_value: int = -1,
     ):
         """Initialize the encoder.
 
@@ -1130,8 +1192,10 @@ class Encoder(FlexiHeliosBase):
             supported_modalities=supported_modalities,
             random_channel_embs=random_channel_embs,
             no_ape=no_ape,
+            non_spatial_coord_value=non_spatial_coord_value,
         )
         self.use_alibi = use_alibi
+        self.use_rope = use_rope
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
@@ -1190,14 +1254,23 @@ class Encoder(FlexiHeliosBase):
         """
         sorted_mask, indices = torch.sort(mask, dim=1, descending=True, stable=True)
         # Now all the places where we want to keep the token are at the front of the tensor
-        x = x.gather(1, indices[:, :, None].expand_as(x))
+        if x.ndim == 2:
+            # This is to use this on the coords this is very messy
+            logger.info(x[:, :10])
+            x = x.gather(1, indices)
+            logger.info(x[:, :10])
+            logger.info(f"x coords shape mask removal: {x.shape}")
+        elif x.ndim == 3:
+            x = x.gather(1, indices[:, :, None].expand_as(x))
+
         # Now all tokens that should be kept are first in the tensor
         if alibi_mask is not None:
             alibi_mask = alibi_mask.gather(1, indices)
 
         # set masked values to 0 (not really necessary since we'll ignore them anyway)
-        x = x * sorted_mask.unsqueeze(-1)
-
+        if not x.ndim == 2:
+            x = x * sorted_mask.unsqueeze(-1)
+        logger.info(f"x shape post mask multiplication: {x.shape}")
         # cut off to the length of the longest sequence
         max_length = sorted_mask.sum(-1).max()
         if alibi_mask is not None:
@@ -1205,7 +1278,7 @@ class Encoder(FlexiHeliosBase):
         x = x[:, :max_length]
         # New mask chopped to the longest sequence
         updated_mask = sorted_mask[:, :max_length]
-
+        logger.info(f"x shape post slicing: {x.shape}")
         return x, indices, updated_mask, alibi_mask
 
     @staticmethod
@@ -1288,7 +1361,7 @@ class Encoder(FlexiHeliosBase):
             tokens_only_dict, original_masks_dict, token_exit_cfg
         )
         # exited tokens are just the linear projection
-        exited_tokens, _ = self.collapse_and_combine_hwtc(x)
+        exited_tokens, _, _, _, _ = self.collapse_and_combine_hwtc(x)
 
         tokens_dict = self.composite_encodings.forward(
             tokens_only_dict,
@@ -1302,17 +1375,24 @@ class Encoder(FlexiHeliosBase):
         else:
             alibi_mask = None
         # logger.info(f"Alibi masks: {alibi_masks}")
+
         tokens_dict.update(original_masks_dict)
 
         # We need to create the alibi mask here
         # Then we need to collapse and combine it so it aligns with the other masks and x
-        x, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        x, mask, x_coords, y_coords, is_spatial_mask = self.collapse_and_combine_hwtc(tokens_dict)
+
 
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
         # We need to remove masked tokens from the alibi mask as well to keep it aligned
         tokens, indices, new_mask, alibi_mask = self.remove_masked_tokens(
             x, bool_mask, alibi_mask
         )
+        if self.use_rope:
+            # we need to filter the x_coords and y_coords to only include the tokens that are not masked but this may differ across samples
+            x_coords, _, _, _ = self.remove_masked_tokens(x_coords, bool_mask)
+            y_coords, _, _, _ = self.remove_masked_tokens(y_coords, bool_mask)
+            is_spatial_mask, _, _, _ = self.remove_masked_tokens(is_spatial_mask, bool_mask)
         # remove the masked tokens from the alibi mask
         if self.use_alibi:
             alibi_mask = self.create_alibi_mask(new_mask, alibi_mask)
@@ -1339,10 +1419,17 @@ class Encoder(FlexiHeliosBase):
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
             # Tell the block the mask is an alibi mask so we can do the slope scaling for each head
+            logger.info(f"tokens shape: {tokens.shape}")
+            logger.info(f"x coords shape: {x_coords.shape}")
+            logger.info(f"y coords shape: {y_coords.shape}")
+            logger.info(f"is spatial mask shape: {is_spatial_mask.shape}")
             tokens = blk(
                 x=tokens,
                 y=None,
                 attn_mask=new_mask if not self.use_alibi else alibi_mask,
+                x_coords=x_coords,
+                y_coords=y_coords,
+                is_spatial_mask=is_spatial_mask,
             )
 
         if exit_ids_seq is not None:
@@ -1434,6 +1521,7 @@ class Predictor(FlexiHeliosBase):
         output_embedding_size: int | None = None,
         use_alibi: bool = True,
         no_ape: bool = True,
+        non_spatial_coord_value: int = -1,
     ):
         """Initialize the predictor.
 
@@ -1463,6 +1551,7 @@ class Predictor(FlexiHeliosBase):
             random_channel_embs=random_channel_embeddings,
             supported_modalities=supported_modalities,
             no_ape=no_ape,
+            non_spatial_coord_value=non_spatial_coord_value,
         )
         # TODO: Rename this weird misname
         self.use_alibi = use_alibi
@@ -1772,6 +1861,7 @@ class EncoderConfig(Config):
     aggregate_then_project: bool = True
     use_alibi: bool = True
     no_ape: bool = True
+    non_spatial_coord_value: int = -1
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1815,6 +1905,7 @@ class PredictorConfig(Config):
     output_embedding_size: int | None = None
     use_alibi: bool = True
     no_ape: bool = True
+    non_spatial_coord_value: int = -1
 
     def validate(self) -> None:
         """Validate the configuration."""

@@ -11,7 +11,9 @@ They cover the following:
 
 import numpy as np
 import torch
+from logging import getLogger
 
+logger = getLogger(__name__)
 
 def get_1d_sincos_pos_encoding(pos: torch.Tensor, encoding_dim: int) -> torch.Tensor:
     """Get 1D sin cos position encoding for a given set of positions.
@@ -25,7 +27,6 @@ def get_1d_sincos_pos_encoding(pos: torch.Tensor, encoding_dim: int) -> torch.Te
     assert encoding_dim % 2 == 0, f"encoding_dim must be even, got {encoding_dim}"
     omega = torch.arange(encoding_dim // 2, device=pos.device) / encoding_dim / 2.0
     omega = 1.0 / 10000**omega  # (D/2,)
-
     pos = pos.reshape(-1)  # (L,)
     out = torch.einsum("l,d->ld", pos, omega)  # (L, D/2), outer product
     encoding_sin = torch.sin(out)  # (L, D/2)
@@ -66,7 +67,7 @@ def get_2d_sincos_pos_encoding_with_resolution(
 
     Args:
         grid_size: int of the grid height and width
-        res: array of size n, representing the resolution of a pixel (say, in meters),
+        res: array of size n, representing the resolution between array elements (say, in meters),
                 where n is the number of spatial dimensions
         encoding_dim: output dimension for each position
         cls_token: whether to add a cls token to the encoding
