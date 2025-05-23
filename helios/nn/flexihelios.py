@@ -840,7 +840,7 @@ class FlexiHeliosBase(nn.Module):
         supported_modalities: list[ModalitySpec],
         random_channel_embs: bool = False,
         no_ape: bool = True,
-        non_spatial_coord_value: int = 0, # upper left corner of the image?
+        non_spatial_coord_value: int = 0,  # upper left corner of the image?
     ) -> None:
         """Initialize the FlexiHeliosBase class."""
         super().__init__()
@@ -905,7 +905,9 @@ class FlexiHeliosBase(nn.Module):
         return modality_data.shape[1:-2] if modality_data.ndim > 3 else ()
 
     # is naming here confusing if one of these channels can be missing?
-    def collapse_and_combine_hwtc(self, x: dict[str, Tensor]) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    def collapse_and_combine_hwtc(
+        self, x: dict[str, Tensor]
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """Collapse the tokens and masks, respectively, into two tensors.
         Also returns x and y coordinates for spatial tokens, and a boolean spatial mask.
         Coordinates are `self.non_spatial_coord_value` for non-spatial tokens.
@@ -955,21 +957,31 @@ class FlexiHeliosBase(nn.Module):
                 x_coords_list.append(rearrange(h_coords_tensor, "b ... -> b (...)"))
                 y_coords_list.append(rearrange(w_coords_tensor, "b ... -> b (...)"))
 
-                is_spatial_modality_tensor = torch.ones_like(x_modality_mask, dtype=torch.bool, device=device)
-                is_spatial_list.append(rearrange(is_spatial_modality_tensor, "b ... -> b (...)"))
+                is_spatial_modality_tensor = torch.ones_like(
+                    x_modality_mask, dtype=torch.bool, device=device
+                )
+                is_spatial_list.append(
+                    rearrange(is_spatial_modality_tensor, "b ... -> b (...)")
+                )
 
             else:
                 num_flat_tokens_modality = rearranged_current_mask.shape[1]
                 batch_size_modality = rearranged_current_mask.shape[0]
 
                 placeholder_coords_modality = torch.full(
-                    (batch_size_modality, num_flat_tokens_modality), self.non_spatial_coord_value, device=device, dtype=coord_dtype
+                    (batch_size_modality, num_flat_tokens_modality),
+                    self.non_spatial_coord_value,
+                    device=device,
+                    dtype=coord_dtype,
                 )
                 x_coords_list.append(placeholder_coords_modality)
                 y_coords_list.append(placeholder_coords_modality)
 
                 is_spatial_modality_flat = torch.full(
-                    (batch_size_modality, num_flat_tokens_modality), False, device=device, dtype=torch.bool
+                    (batch_size_modality, num_flat_tokens_modality),
+                    False,
+                    device=device,
+                    dtype=torch.bool,
                 )
                 is_spatial_list.append(is_spatial_modality_flat)
 
@@ -1335,7 +1347,9 @@ class Encoder(FlexiHeliosBase):
             )
             exit_ids_per_modality.update(mask_only_dict)
             # Exit ids seqs tells us which layer to exit each token
-            exit_ids_seq, _, _, _, _ = self.collapse_and_combine_hwtc(exit_ids_per_modality)
+            exit_ids_seq, _, _, _, _ = self.collapse_and_combine_hwtc(
+                exit_ids_per_modality
+            )
         else:
             exit_ids_seq = None
         return exit_ids_seq
@@ -1375,8 +1389,12 @@ class Encoder(FlexiHeliosBase):
 
         # We need to create the alibi mask here
         # Then we need to collapse and combine it so it aligns with the other masks and x
-        x, mask, x_coords, y_coords, is_spatial_mask = self.collapse_and_combine_hwtc(tokens_dict)
-
+        x, mask, x_coords, y_coords, is_spatial_mask = self.collapse_and_combine_hwtc(
+            tokens_dict
+        )
+        # GSD scaling all same base resolution
+        x_coords = x_coords * patch_size
+        y_coords = y_coords * patch_size
 
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
         # We need to remove masked tokens from the alibi mask as well to keep it aligned
@@ -1387,7 +1405,9 @@ class Encoder(FlexiHeliosBase):
             # we need to filter the x_coords and y_coords to only include the tokens that are not masked but this may differ across samples
             x_coords, _, _, _ = self.remove_masked_tokens(x_coords, bool_mask)
             y_coords, _, _, _ = self.remove_masked_tokens(y_coords, bool_mask)
-            is_spatial_mask, _, _, _ = self.remove_masked_tokens(is_spatial_mask, bool_mask)
+            is_spatial_mask, _, _, _ = self.remove_masked_tokens(
+                is_spatial_mask, bool_mask
+            )
         # remove the masked tokens from the alibi mask
         if self.use_alibi:
             alibi_mask = self.create_alibi_mask(new_mask, alibi_mask)
@@ -1648,7 +1668,9 @@ class Predictor(FlexiHeliosBase):
         elif tokens.ndim == 2:
             tokens = tokens.gather(1, indices)
         else:
-            raise ValueError(f"Tokens must be of shape [B, T, D] or [B, T], got {tokens.shape}")
+            raise ValueError(
+                f"Tokens must be of shape [B, T, D] or [B, T], got {tokens.shape}"
+            )
         if alibi_mask is not None:
             alibi_mask = alibi_mask.gather(1, indices)
 
@@ -1743,7 +1765,12 @@ class Predictor(FlexiHeliosBase):
         if self.use_alibi:
             alibi_masks = self.compute_alibi_masks(original_masks_dict, patch_size)
         tokens_dict.update(original_masks_dict)
-        x, mask, x_coords, y_coords, is_spatial_mask = self.collapse_and_combine_hwtc(tokens_dict)
+        x, mask, x_coords, y_coords, is_spatial_mask = self.collapse_and_combine_hwtc(
+            tokens_dict
+        )
+        # GSD scaling all same base resolution
+        x_coords = x_coords * patch_size
+        y_coords = y_coords * patch_size
         if self.use_alibi:
             alibi_mask = self.collapse_and_combine_alibi_masks(alibi_masks)
         else:
@@ -1754,11 +1781,11 @@ class Predictor(FlexiHeliosBase):
             # I need both coords for the tokens to decode and the coords for the y tokens
             decode_x_coords, y_x_coords, _, _, _, _ = self.split_x_y(x_coords, mask)
             decode_y_coords, y_y_coords, _, _, _, _ = self.split_x_y(y_coords, mask)
-            is_spatial_x, is_spatial_y, _, _, _, _  = self.split_x_y(is_spatial_mask, mask)
+            is_spatial_x, is_spatial_y, _, _, _, _ = self.split_x_y(
+                is_spatial_mask, mask
+            )
             # I can stack the x coords and the y coords
             # I can stack the x coords and the y coords
-
-
 
         # so the y mask is where want to add the alibi mask so we want to be able to
         if self.use_alibi:
@@ -1769,7 +1796,9 @@ class Predictor(FlexiHeliosBase):
             if self.use_alibi:
                 logger.info("Using alibi mask")
             x = blk(
-                x=x, y=y, attn_mask=y_mask.bool() if not self.use_alibi else alibi_mask,
+                x=x,
+                y=y,
+                attn_mask=y_mask.bool() if not self.use_alibi else alibi_mask,
                 x_x_coords=decode_x_coords,
                 x_y_coords=decode_y_coords,
                 y_x_coords=y_x_coords,
@@ -1882,7 +1911,7 @@ class EncoderConfig(Config):
     aggregate_then_project: bool = True
     use_alibi: bool = True
     no_ape: bool = True
-    non_spatial_coord_value: int = 0 # upper left corner of the image?
+    non_spatial_coord_value: int = 0  # upper left corner of the image?
     use_rope: bool = True
 
     def validate(self) -> None:
@@ -1922,12 +1951,12 @@ class PredictorConfig(Config):
     num_heads: int = 2
     max_sequence_length: int = 12
     drop_path: float = 0.0
-    learnable_channel_embeddings: bool = True # why are there two?
+    learnable_channel_embeddings: bool = True  # why are there two?
     random_channel_embeddings: bool = False
     output_embedding_size: int | None = None
     use_alibi: bool = True
     no_ape: bool = True
-    non_spatial_coord_value: int = 0 # upper left corner of the image?
+    non_spatial_coord_value: int = 0  # upper left corner of the image?
     use_rope: bool = True
 
     def validate(self) -> None:
