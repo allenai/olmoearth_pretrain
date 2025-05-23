@@ -1340,7 +1340,7 @@ class Encoder(FlexiHeliosBase):
             )
             exit_ids_per_modality.update(mask_only_dict)
             # Exit ids seqs tells us which layer to exit each token
-            exit_ids_seq, _ = self.collapse_and_combine_hwtc(exit_ids_per_modality)
+            exit_ids_seq, _, _, _, _ = self.collapse_and_combine_hwtc(exit_ids_per_modality)
         else:
             exit_ids_seq = None
         return exit_ids_seq
@@ -1427,9 +1427,12 @@ class Encoder(FlexiHeliosBase):
                 x=tokens,
                 y=None,
                 attn_mask=new_mask if not self.use_alibi else alibi_mask,
-                x_coords=x_coords,
-                y_coords=y_coords,
-                is_spatial_mask=is_spatial_mask,
+                x_x_coords=x_coords,
+                x_y_coords=y_coords,
+                is_spatial_mask_x=is_spatial_mask,
+                y_x_coords=None,
+                y_y_coords=None,
+                is_spatial_mask_y=None,
             )
 
         if exit_ids_seq is not None:
@@ -1522,6 +1525,7 @@ class Predictor(FlexiHeliosBase):
         use_alibi: bool = True,
         no_ape: bool = True,
         non_spatial_coord_value: int = -1,
+        use_rope: bool = True,
     ):
         """Initialize the predictor.
 
@@ -1553,6 +1557,7 @@ class Predictor(FlexiHeliosBase):
             no_ape=no_ape,
             non_spatial_coord_value=non_spatial_coord_value,
         )
+        self.use_rope = use_rope
         # TODO: Rename this weird misname
         self.use_alibi = use_alibi
         self.learnable_channel_embeddings = learnable_channel_embeddings
@@ -1643,7 +1648,12 @@ class Predictor(FlexiHeliosBase):
         sorted_mask, indices = torch.sort(
             mask.int(), dim=1, descending=True, stable=True
         )
-        tokens = tokens.gather(1, indices[:, :, None].expand_as(tokens))
+        if tokens.ndim == 3:
+            tokens = tokens.gather(1, indices[:, :, None].expand_as(tokens))
+        elif tokens.ndim == 2:
+            tokens = tokens.gather(1, indices)
+        else:
+            raise ValueError(f"Tokens must be of shape [B, T, D] or [B, T], got {tokens.shape}")
         if alibi_mask is not None:
             alibi_mask = alibi_mask.gather(1, indices)
 
@@ -1738,13 +1748,23 @@ class Predictor(FlexiHeliosBase):
         if self.use_alibi:
             alibi_masks = self.compute_alibi_masks(original_masks_dict, patch_size)
         tokens_dict.update(original_masks_dict)
-        x, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        x, mask, x_coords, y_coords, is_spatial_mask = self.collapse_and_combine_hwtc(tokens_dict)
         if self.use_alibi:
             alibi_mask = self.collapse_and_combine_alibi_masks(alibi_masks)
         else:
             alibi_mask = None
         # X contains the tokens to decode, Y contains the tokens to attend to for context
         x, y, x_mask, y_mask, alibi_mask, indices = self.split_x_y(x, mask, alibi_mask)
+        if self.use_rope:
+            # I need both coords for the tokens to decode and the coords for the y tokens
+            decode_x_coords, y_x_coords, _, _, _, _ = self.split_x_y(x_coords, mask)
+            decode_y_coords, y_y_coords, _, _, _, _ = self.split_x_y(y_coords, mask)
+            is_spatial_x, is_spatial_y, _, _, _, _  = self.split_x_y(is_spatial_mask, mask)
+            # I can stack the x coords and the y coords
+            # I can stack the x coords and the y coords
+
+
+
         # so the y mask is where want to add the alibi mask so we want to be able to
         if self.use_alibi:
             alibi_mask = self.create_alibi_mask(y_mask.bool(), alibi_mask)
@@ -1754,7 +1774,13 @@ class Predictor(FlexiHeliosBase):
             if self.use_alibi:
                 logger.info("Using alibi mask")
             x = blk(
-                x=x, y=y, attn_mask=y_mask.bool() if not self.use_alibi else alibi_mask
+                x=x, y=y, attn_mask=y_mask.bool() if not self.use_alibi else alibi_mask,
+                x_x_coords=decode_x_coords,
+                x_y_coords=decode_y_coords,
+                y_x_coords=y_x_coords,
+                y_y_coords=y_y_coords,
+                is_spatial_mask_x=is_spatial_x,
+                is_spatial_mask_y=is_spatial_y,
             )
         x = self.combine_x_y(
             tokens_to_decode=x,

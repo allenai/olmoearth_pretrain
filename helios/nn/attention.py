@@ -15,7 +15,7 @@ from .rope_utils import (
     compute_mixed_cis,
     init_2d_freqs,
     init_t_xy,
-    apply_rotary_emb,
+    apply_rotarty_embed_to_matrix,
 )
 
 import math
@@ -185,9 +185,12 @@ class Attention(nn.Module):
         x: torch.Tensor,
         y: torch.Tensor | None = None,
         attn_mask: torch.Tensor | None = None,
-        x_coords: torch.Tensor | None = None,
-        y_coords: torch.Tensor | None = None,
-        is_spatial_mask: torch.Tensor | None = None,
+        x_x_coords: torch.Tensor | None = None, # should these be stacked?
+        x_y_coords: torch.Tensor | None = None,
+        y_x_coords: torch.Tensor | None = None,
+        y_y_coords: torch.Tensor | None = None,
+        is_spatial_mask_x: torch.Tensor | None = None,
+        is_spatial_mask_y: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -219,13 +222,26 @@ class Attention(nn.Module):
         k = rearrange(k, "b n (h d) -> b h n d", h=self.num_heads)
         v = rearrange(v, "b n (h d) -> b h n d", h=self.num_heads)
 
-        # Apply Rope
-        if x_coords is not None and y_coords is not None and is_spatial_mask is not None:
-            logger.info(f"Applying Rope to {x_coords.shape} and {y_coords.shape}")
+        # Apply Rope for normal attention
+        if x_x_coords is not None and x_y_coords is not None and is_spatial_mask_x is not None and y is None:
+            # TODO: Incorporate the is_spatial_mask
+            logger.info(f"Applying Rope to {x_x_coords.shape} and {x_y_coords.shape}")
             logger.info(f"freqs shape: {self.freqs.shape}")
-            rotary_freqs = compute_mixed_cis(self.freqs, x_coords, y_coords, self.num_heads)
-            q, k = apply_rotary_emb(q, k, rotary_freqs)
+            rotary_freqs = compute_mixed_cis(self.freqs, x_x_coords, x_y_coords, self.num_heads)
+            # Apply is _spatial mask so that it is just no rotation? Or how should we deal with the non spatial tokens?
+            # or do we filter out those tokens? or is the latlon just in the corner of th eimage? or is it the center
+            # we could just treat it as the upper left corner so it is coord 0,0
+            # actually is not spatial should just be colocated with whatever token it is being compared with like a rotation of zero
+            # I don't know if we cand o this without being internal to attention
+            q = apply_rotarty_embed_to_matrix(rotary_freqs, q)
+            k = apply_rotarty_embed_to_matrix(rotary_freqs, k)
 
+        # Apply Rope for cross attention
+        if x_x_coords is not None and x_y_coords is not None and y_x_coords is not None and y_y_coords is not None and is_spatial_mask_x is not None and is_spatial_mask_y is not None and y is not None:
+            rotary_freqs_x = compute_mixed_cis(self.freqs, x_x_coords, x_y_coords, self.num_heads)
+            rotary_freqs_y = compute_mixed_cis(self.freqs, y_x_coords, y_y_coords, self.num_heads)
+            q = apply_rotarty_embed_to_matrix(rotary_freqs_x, q)
+            k = apply_rotarty_embed_to_matrix(rotary_freqs_y, k)
         q, k = self.q_norm(q), self.k_norm(k)
 
         x = self.sdpa(q, k, v, N, attn_mask)
@@ -451,7 +467,7 @@ class Block(nn.Module):
         )
 
     def forward(
-        self, x: torch.Tensor, y: torch.Tensor | None, attn_mask: torch.Tensor | None, x_coords: torch.Tensor | None, y_coords: torch.Tensor | None, is_spatial_mask: torch.Tensor | None
+        self, x: torch.Tensor, y: torch.Tensor | None, attn_mask: torch.Tensor | None, x_x_coords: torch.Tensor | None, x_y_coords: torch.Tensor | None, y_x_coords: torch.Tensor | None, y_y_coords: torch.Tensor | None, is_spatial_mask_x: torch.Tensor | None, is_spatial_mask_y: torch.Tensor | None
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -463,7 +479,7 @@ class Block(nn.Module):
         Returns:
             Output tensor of shape (B, N, C)
         """
-        x = x + self.drop_path(self.ls1(self.attn(self.norm1(x), y, attn_mask, x_coords, y_coords, is_spatial_mask)))
+        x = x + self.drop_path(self.ls1(self.attn(self.norm1(x), y, attn_mask, x_x_coords, x_y_coords, y_x_coords, y_y_coords, is_spatial_mask_x, is_spatial_mask_y)))
         x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
         return x
 
