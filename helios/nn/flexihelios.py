@@ -1393,8 +1393,8 @@ class Encoder(FlexiHeliosBase):
             tokens_dict
         )
         # GSD scaling all same base resolution
-        x_coords = x_coords * patch_size
-        y_coords = y_coords * patch_size
+        # x_coords = x_coords * patch_size
+        # y_coords = y_coords * patch_size
 
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
         # We need to remove masked tokens from the alibi mask as well to keep it aligned
@@ -1769,8 +1769,8 @@ class Predictor(FlexiHeliosBase):
             tokens_dict
         )
         # GSD scaling all same base resolution
-        x_coords = x_coords * patch_size
-        y_coords = y_coords * patch_size
+        # x_coords = x_coords * patch_size
+        # y_coords = y_coords * patch_size
         if self.use_alibi:
             alibi_mask = self.collapse_and_combine_alibi_masks(alibi_masks)
         else:
