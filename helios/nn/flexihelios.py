@@ -1411,6 +1411,10 @@ class Encoder(FlexiHeliosBase):
             is_spatial_mask, _, _, _ = self.remove_masked_tokens(
                 is_spatial_mask, bool_mask
             )
+        else:
+            x_coords = None
+            y_coords = None
+            is_spatial_mask = None
         # remove the masked tokens from the alibi mask
         if self.use_alibi:
             alibi_mask = self.create_alibi_mask(new_mask, alibi_mask)
@@ -1437,10 +1441,6 @@ class Encoder(FlexiHeliosBase):
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
             # Tell the block the mask is an alibi mask so we can do the slope scaling for each head
-            logger.info(f"tokens shape: {tokens.shape}")
-            logger.info(f"x coords shape: {x_coords.shape}")
-            logger.info(f"y coords shape: {y_coords.shape}")
-            logger.info(f"is spatial mask shape: {is_spatial_mask.shape}")
             tokens = blk(
                 x=tokens,
                 y=None,
@@ -1787,6 +1787,13 @@ class Predictor(FlexiHeliosBase):
             is_spatial_x, is_spatial_y, _, _, _, _ = self.split_x_y(
                 is_spatial_mask, mask
             )
+        else:
+            decode_x_coords = None
+            decode_y_coords = None
+            y_x_coords = None
+            y_y_coords = None
+            is_spatial_x = None
+            is_spatial_y = None
             # I can stack the x coords and the y coords
             # I can stack the x coords and the y coords
 
