@@ -1119,14 +1119,17 @@ class FlexiHeliosBase(nn.Module):
             # Why do we need attnetion heads
             # 1) build patch-grid coordinates of shape (N, 2)
             grid_size = int(H)
-            coords = torch.stack(
-                torch.meshgrid(
-                    torch.arange(grid_size, device=mask.device),
-                    torch.arange(grid_size, device=mask.device),
-                    indexing="ij",
-                ),
-                dim=-1,
-            ).view(-1, 2)  # → [N, 2]
+            coords = (
+                torch.stack(
+                    torch.meshgrid(
+                        torch.arange(grid_size, device=mask.device),
+                        torch.arange(grid_size, device=mask.device),
+                        indexing="ij",
+                    ),
+                    dim=-1,
+                ).view(-1, 2)
+                * patch_size
+            )  # → [N, 2]
             # TODO: We may or may not want to scale based on patch size
 
             # 2) compute pairwise Euclidean distances [N, N]
