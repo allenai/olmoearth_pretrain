@@ -197,6 +197,14 @@ class Modality:
         image_tile_size_factor=16,
     )
 
+    POOLED_TOKENS = ModalitySpec(
+        name="pooled_tokens",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["pooled"], 16)],
+        is_multitemporal=True,
+        ignore_when_parsing=True,
+    )
+
     SENTINEL1 = ModalitySpec(
         name="sentinel1",
         tile_resolution_factor=16,

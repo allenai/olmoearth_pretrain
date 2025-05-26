@@ -61,7 +61,7 @@ def latent_mim_model(
 
     # Create predictor config
     predictor_config = PredictorConfig(
-        supported_modality_names=["sentinel1"],
+        supported_modality_names=["pooled_tokens"],
         encoder_embedding_size=16,
         decoder_embedding_size=16,
         depth=2,

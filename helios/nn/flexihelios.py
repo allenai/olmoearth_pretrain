@@ -88,6 +88,8 @@ class TokensAndMasks(NamedTuple):
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None
     naip_mask: Tensor | None = None
+    pooled_tokens: Tensor | None = None
+    pooled_tokens_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
@@ -195,7 +197,9 @@ class TokensAndMasks(NamedTuple):
         pooled_masks = (summed_masks == 0) * MaskValue.DECODER.value + (
             summed_masks != 0
         ) * MaskValue.ONLINE_ENCODER.value
-        return TokensAndMasks(sentinel1=pooled_tokens, sentinel1_mask=pooled_masks)
+        return TokensAndMasks(
+            pooled_tokens=pooled_tokens, pooled_tokens_mask=pooled_masks
+        )
 
     def pool_unmasked_tokens(
         self, pooling_type: PoolingType = PoolingType.MAX, spatial_pooling: bool = False

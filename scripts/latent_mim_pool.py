@@ -70,7 +70,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         mlp_ratio=MLP_RATIO,
         num_heads=DECODER_NUM_HEADS,
         max_sequence_length=12,
-        supported_modality_names=["sentinel1"],
+        supported_modality_names=["pooled_tokens"],
         learnable_channel_embeddings=True,
     )
     model_config = LatentMIMConfig(

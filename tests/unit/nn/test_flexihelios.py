@@ -762,10 +762,10 @@ class TestTokensAndMasks:
         )
 
         pooled = tokens.pool_tokens_across_modalities()
-        assert pooled.sentinel1 is not None
-        assert pooled.sentinel1_mask is not None
-        assert pooled.sentinel1.shape == (2, 4, 4, 3, 1, 128)
-        assert pooled.sentinel1_mask.shape == (2, 4, 4, 3, 1)
+        assert pooled.pooled_tokens is not None
+        assert pooled.pooled_tokens_mask is not None
+        assert pooled.pooled_tokens.shape == (2, 4, 4, 3, 1, 128)
+        assert pooled.pooled_tokens_mask.shape == (2, 4, 4, 3, 1)
 
     def test_missing_modalities_ignored(self) -> None:
         """Test TokensAndMasks.modalities does not return missing modalities."""
