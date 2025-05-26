@@ -766,6 +766,8 @@ class TestTokensAndMasks:
         assert pooled.pooled_tokens_mask is not None
         assert pooled.pooled_tokens.shape == (2, 4, 4, 3, 1, 128)
         assert pooled.pooled_tokens_mask.shape == (2, 4, 4, 3, 1)
+        assert not torch.isinf(pooled.pooled_tokens).any()
+        assert not torch.isnan(pooled.pooled_tokens).any()
 
     def test_missing_modalities_ignored(self) -> None:
         """Test TokensAndMasks.modalities does not return missing modalities."""

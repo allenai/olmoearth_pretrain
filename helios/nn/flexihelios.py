@@ -193,7 +193,9 @@ class TokensAndMasks(NamedTuple):
                 spatial_masks.append(bool_mask)
         summed_tokens = torch.cat(spatial_tokens, dim=-2).sum(dim=-2, keepdim=True)
         summed_masks = torch.cat(spatial_masks, dim=-1).sum(dim=-1, keepdim=True)
-        pooled_tokens = summed_tokens / summed_masks.unsqueeze(-1)
+        counts = summed_masks.unsqueeze(-1).clone()
+        counts[counts == 0] = 1
+        pooled_tokens = summed_tokens / counts
         pooled_masks = (summed_masks == 0) * MaskValue.DECODER.value + (
             summed_masks != 0
         ) * MaskValue.ONLINE_ENCODER.value
