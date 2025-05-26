@@ -1,6 +1,7 @@
 """Training and optimizer abstraction for Helios."""
 
 import contextlib
+import json
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from logging import getLogger
@@ -158,6 +159,7 @@ class HeliosTrainModule(TrainModule):
         dp_config: DataParallelConfig | None = None,
         ac_config: TransformerActivationCheckpointingConfig | None = None,
         compile_loss: bool = False,
+        find_unused_parameters: bool = False,
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
         scheduler: Scheduler | None = None,
@@ -177,6 +179,7 @@ class HeliosTrainModule(TrainModule):
             dp_config: Data parallel configuration for the model.
             ac_config: Activation checkpointing configuration for the model.
             compile_loss: Whether to compile the loss function.
+            find_unused_parameters: Whether to find unused parameters for DDP.
             autocast_precision: Enable AMP with this data type.
             max_grad_norm: Clip gradient norms to this value.
             scheduler: Optional learning rate scheduler.
@@ -193,7 +196,7 @@ class HeliosTrainModule(TrainModule):
             "Number of encoder parameters: %d",
             sum(p.numel() for p in self.model.encoder.parameters()),
         )
-        if hasattr(self.model, "decoder"):
+        if hasattr(self.model, "decoder") and self.model.decoder is not None:
             logger.info(
                 "Number of decoder parameters: %d",
                 sum(p.numel() for p in self.model.decoder.parameters()),
@@ -251,7 +254,11 @@ class HeliosTrainModule(TrainModule):
                 )
                 logger.info("Applied FSDP to the model")
             elif dp_config.name == DataParallelType.ddp:
-                self.model.apply_ddp(dp_mesh=dp_mesh, compile_enabled=compile_model)
+                self.model.apply_ddp(
+                    dp_mesh=dp_mesh,
+                    compile_enabled=compile_model,
+                    find_unused_parameters=find_unused_parameters,
+                )
                 logger.info("Applied DDP to the model")
             else:
                 raise NotImplementedError(dp_config.name)
@@ -284,6 +291,13 @@ class HeliosTrainModule(TrainModule):
         return get_dp_process_group(self.world_mesh)
 
     @property
+    def is_fsdp(self) -> bool:
+        """Check if the model is FSDP."""
+        return self._dp_config is not None and self._dp_config.name in (
+            DataParallelType.fsdp
+        )
+
+    @property
     def eval_batch_spec(self) -> EvalBatchSpec:
         """Get the evaluation batch spec."""
         # Determine the number of micro-batches.
@@ -295,6 +309,11 @@ class HeliosTrainModule(TrainModule):
             rank_batch_size=rank_batch_size_instances,
             batch_size_unit=EvalBatchSizeUnit.instances,
         )
+
+    @property
+    def local_rank(self) -> int:
+        """Get the local rank."""
+        return self.trainer.data_loader.dp_rank
 
     @property
     def logits_dtype(self) -> torch.dtype:
@@ -467,11 +486,30 @@ class HeliosTrainModule(TrainModule):
     def _get_state_dict(
         self, sd_options: dist_cp_sd.StateDictOptions
     ) -> dict[str, Any]:
+        """Get the state dict."""
+        # This is a sanity check to make sure the checkpoint is compatible
+        # with the current model architecture, mainly useful when running evaluation beaker jobs
+        if self.trainer.load_path is not None:
+            with open(f"{self.trainer.load_path}/config.json") as f:
+                config_dict = json.load(f)
+                model_config = Config.from_dict(config_dict["model"])
+            model = model_config.build()
+            # Check if any keys are missing
+            for key in self.model.state_dict().keys():
+                if key not in model.state_dict():
+                    logger.info("Key %s not in checkpoint", key)
+                    raise RuntimeError("Model and checkpoint are not compatible")
+            logger.info("Model and checkpoint are compatible")
+
+        model_state_dict = dist_cp_sd.get_model_state_dict(
+            self.model, options=sd_options
+        )
+        optim_state_dict = dist_cp_sd.get_optimizer_state_dict(
+            self.model, self.optimizer, options=sd_options
+        )
         return {
-            "model": dist_cp_sd.get_model_state_dict(self.model, options=sd_options),
-            "optim": dist_cp_sd.get_optimizer_state_dict(
-                self.model, self.optimizer, options=sd_options
-            ),
+            "model": model_state_dict,
+            "optim": optim_state_dict,
         }
 
     def _clip_grad_norm(

@@ -113,7 +113,7 @@ def build_train_module_config(
             "decode_ratio": DECODE_RATIO,
         }
     )
-    loss_config = LossConfig(
+    mae_loss_config = LossConfig(
         loss_config={
             "type": "mae",
         }
@@ -129,7 +129,7 @@ def build_train_module_config(
         optim_config=optim_config,
         masking_config=masking_config,
         warmup_duration=Duration.epochs(WARMUP_EPOCHS),
-        loss_config=loss_config,
+        mae_loss_config=mae_loss_config,
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         token_exit_cfg=token_exit_cfg,
         autocast_precision=DType.bfloat16,
@@ -167,12 +167,13 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data_gzip_3_shuffle/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
     return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
+        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_gzip_3/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/285288",
         training_modalities=common.training_modalities,
-        use_samples_with_missing_supported_modalities=True,
-        dtype="float32",
+        use_modalities_with_missing_timesteps=True,  # False,
+        dtype=DType.float32,
+        # cache_dir="/helios_cache/osm_sampling",
+        # samples_per_sec=4 / NUM_WORKERS,  # 2/ GBS
     )
 
 

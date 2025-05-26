@@ -8,6 +8,7 @@ einops>=0.7.0
 gcsfs
 geobench
 GitPython>=3.0,<4.0
+hdf5plugin
 interrogate
 matplotlib
 numpy

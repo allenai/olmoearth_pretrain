@@ -13,6 +13,7 @@ from olmo_core.distributed.parallel.data_parallel import (
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
+    BeakerCallback,
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
@@ -20,13 +21,13 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
-from upath import UPath
 
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
+from helios.internal.common import build_common_components, build_visualize_config
+from helios.internal.experiment import CommonComponents, main
+from helios.internal.utils import MODEL_SIZE_ARGS
 from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
 from helios.nn.galileo import GalileoConfig
 from helios.train.callbacks import (
@@ -44,16 +45,19 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 MIN_PATCH_SIZE = 1
 
+tiny_model_args = MODEL_SIZE_ARGS["tiny"]
+MAX_SEQUENCE_LENGTH = 12
+
 
 def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
-    ENCODER_EMBEDDING_SIZE = 192
-    DECODER_EMBEDDING_SIZE = 192
-    ENCODER_DEPTH = 12
-    DECODER_DEPTH = 12
-    ENCODER_NUM_HEADS = 3
-    DECODER_NUM_HEADS = 3
-    MLP_RATIO = 4.0
+    ENCODER_EMBEDDING_SIZE = int(tiny_model_args["encoder_embedding_size"])
+    DECODER_EMBEDDING_SIZE = int(tiny_model_args["decoder_embedding_size"])
+    ENCODER_DEPTH = int(tiny_model_args["encoder_depth"])
+    DECODER_DEPTH = int(tiny_model_args["decoder_depth"])
+    ENCODER_NUM_HEADS = int(tiny_model_args["encoder_num_heads"])
+    DECODER_NUM_HEADS = int(tiny_model_args["decoder_num_heads"])
+    MLP_RATIO = float(tiny_model_args["mlp_ratio"])
 
     encoder_config = EncoderConfig(
         supported_modality_names=common.training_modalities,
@@ -63,7 +67,7 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
         depth=ENCODER_DEPTH,
         mlp_ratio=MLP_RATIO,
         drop_path=0.1,
-        max_sequence_length=12,
+        max_sequence_length=MAX_SEQUENCE_LENGTH,
         use_channel_embs=True,
     )
     decoder_config = PredictorConfig(
@@ -72,7 +76,7 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
         depth=DECODER_DEPTH,
         mlp_ratio=MLP_RATIO,
         num_heads=DECODER_NUM_HEADS,
-        max_sequence_length=12,
+        max_sequence_length=MAX_SEQUENCE_LENGTH,
         supported_modality_names=common.training_modalities,
         learnable_channel_embeddings=True,
     )
@@ -118,20 +122,20 @@ def build_train_module_config(
         }
     )
     token_exit_cfg_a = {
-        Modality.SENTINEL2_L2A.name: 4,
-        Modality.LATLON.name: 4,
-        Modality.SENTINEL1.name: 4,
+        Modality.SENTINEL2_L2A.name: int(tiny_model_args["encoder_depth"]),
+        Modality.LATLON.name: int(tiny_model_args["encoder_depth"]),
+        Modality.SENTINEL1.name: int(tiny_model_args["encoder_depth"]),
         Modality.WORLDCOVER.name: 0,
-        Modality.SRTM.name: 2,
+        Modality.SRTM.name: int(tiny_model_args["encoder_depth"] // 2),
         Modality.OPENSTREETMAP_RASTER.name: 0,
-        Modality.LANDSAT.name: 4,
+        Modality.LANDSAT.name: int(tiny_model_args["encoder_depth"]),
     }
     if any(modality not in token_exit_cfg_a for modality in common.training_modalities):
         raise ValueError(
             f"All modalities must be in token_exit_cfg_a: {common.training_modalities}"
         )
     token_exit_cfg_b = {modality: 0 for modality in common.training_modalities}
-    WARMUP_EPOCHS = 10
+    WARMUP_EPOCHS = 5
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
@@ -184,12 +188,13 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data_gzip_3_shuffle/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
     return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
+        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_gzip_3/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/285288",
         training_modalities=common.training_modalities,
-        use_samples_with_missing_supported_modalities=True,
-        dtype="float32",
+        use_modalities_with_missing_timesteps=True,
+        dtype=DType.float32,
+        # cache_dir="/helios_cache/osm_sampling",
+        # samples_per_sec=4 / NUM_WORKERS,  # 2/ GBS
     )
 
 
@@ -334,17 +339,9 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
+        .with_callback("beaker", BeakerCallback())
     )
     return trainer_config
-
-
-def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
-    """Build the visualize config for an experiment."""
-    return HeliosVisualizeConfig(
-        num_samples=50,
-        output_dir=str(UPath(common.save_folder) / "visualizations"),
-        std_multiplier=2.0,
-    )
 
 
 if __name__ == "__main__":

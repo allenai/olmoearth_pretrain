@@ -230,7 +230,12 @@ def setup_h5py_dir(
     supported_modalities = [
         m.name for m in supported_modalities if m != Modality.LATLON
     ]
-    return tmp_path / "h5py_data" / "_".join(sorted(supported_modalities)) / "1"
+    return (
+        tmp_path
+        / ConvertToH5py.h5py_folder
+        / "_".join(sorted(supported_modalities))
+        / "1"
+    )
 
 
 @pytest.fixture

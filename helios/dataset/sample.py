@@ -61,29 +61,18 @@ class SampleInformation:
         lon, lat = transformer.transform(x, y)
         return np.array([lat, lon])
 
-    def get_timestamps(self) -> np.ndarray:
+    def get_timestamps(self) -> dict[ModalitySpec, np.ndarray]:
         """Get the timestamps of the sample."""
-        # Assume that all multitemporal modalities have the same timestamps
+        timestamps_dict: dict[ModalitySpec, np.ndarray] = {}
+
         for modality in self.modalities:
             if modality.is_multitemporal:
                 sample_modality = self.modalities[modality]
                 timestamps = [i.start_time for i in sample_modality.images]
                 dt = pd.to_datetime(timestamps)
-                if len(timestamps) != 12:
-                    raise ValueError(
-                        "Expected 12 timestamps for multitemporal modality, must adapt if this is to change"
-                    )
-                return np.array([dt.day, dt.month - 1, dt.year]).T
+                timestamps_dict[modality] = np.array([dt.day, dt.month - 1, dt.year]).T
 
-        # Now try non-multitemporal modalities as backups
-        for modality in self.modalities:
-            if not modality.is_multitemporal:
-                sample_modality = self.modalities[modality]
-                timestamps = [i.start_time for i in sample_modality.images]
-                dt = pd.to_datetime(timestamps)
-                return np.array([dt.day, dt.month - 1, dt.year]).T
-
-        raise ValueError("No multitemporal or non-multitemporal modalities found")
+        return timestamps_dict
 
 
 def image_tiles_to_samples(

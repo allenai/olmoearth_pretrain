@@ -24,7 +24,15 @@ WORKSPACE = "ai2/earth-systems"
 DEFAULT_HELIOS_WEKA_BUCKET = BeakerWekaBucket("dfive-default", "/weka/dfive-default")
 PROJECT_NAME = "helios"
 
-WEKA_CLUSTER_NAMES = ["jupiter", "saturn", "neptune", "ceres", "triton", "titan"]
+WEKA_CLUSTER_NAMES = [
+    "jupiter",
+    "saturn",
+    "neptune",
+    "ceres",
+    "triton",
+    "titan",
+    "rhea",
+]
 
 
 def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
@@ -160,10 +168,10 @@ def build_common_components(
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
         Modality.LATLON.name,
-        # Modality.SRTM.name,
+        Modality.SRTM.name,
         # Modality.NAIP.name,
         Modality.LANDSAT.name,
-        # Modality.OPENSTREETMAP_RASTER.name,
+        Modality.OPENSTREETMAP_RASTER.name,
     ]
     cmd_to_launch = SubCmd.train
     if cmd == SubCmd.launch_prep:

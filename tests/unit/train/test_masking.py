@@ -8,6 +8,7 @@ from helios.data.constants import MISSING_VALUE, Modality
 from helios.data.dataset import HeliosSample
 from helios.train.masking import (
     MaskValue,
+    ModalityCrossSpaceMaskingStrategy,
     ModalityMaskingStrategy,
     ModalitySpaceTimeMaskingStrategy,
     RandomMaskingStrategy,
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 def test_random_masking_and_unmask() -> None:
     """Test random masking ratios."""
-    b, h, w, t = 100, 16, 16, 8
+    b, h, w, t = 4, 16, 16, 8
 
     patch_size = 4
 
@@ -801,3 +802,109 @@ def test_random_range_masking() -> None:
     max_decode_ratio = 1 - min_encode_ratio
     assert min_decode_ratio - eps <= min(decode_ratios) < min_decode_ratio + 0.1
     assert max_decode_ratio + eps >= max(decode_ratios) > max_decode_ratio - 0.1
+
+
+def test_space_cross_modality_masking(set_random_seeds: None) -> None:
+    """Test space cross modality masking."""
+    b, h, w, t = 4, 4, 4, 3
+
+    patch_size = 1
+
+    days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
+    months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
+    years = torch.randint(2018, 2020, (b, 1, t), dtype=torch.long)
+    timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
+    sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
+    worldcover_num_bands = Modality.WORLDCOVER.num_bands
+    latlon_num_bands = Modality.LATLON.num_bands
+    batch = HeliosSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
+        sentinel1=torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands)),
+        latlon=torch.ones((b, latlon_num_bands)),
+        timestamps=timestamps,
+        worldcover=torch.ones((b, h, w, 1, worldcover_num_bands)),
+    )
+
+    strategy = ModalityCrossSpaceMaskingStrategy(
+        max_unmasking_bandsets=20,
+        min_encoding_bandsets=2,
+        max_encoding_bandsets=3,
+        encode_ratio=0.1,
+        decode_ratio=0.75,
+    )
+    masked_sample = strategy.apply_mask(batch, patch_size=patch_size)
+    logger.info(f"masked_sample: {masked_sample}")
+    # Check that the worldcover mask has the expected values
+    # Check that latlon mask has the expected values
+    expected_latlon_mask = torch.tensor([[0], [0], [0], [0]])
+    expected_worldcover_mask = torch.tensor(
+        [
+            [
+                [[[2]], [[2]], [[2]], [[1]]],
+                [[[2]], [[2]], [[1]], [[2]]],
+                [[[2]], [[2]], [[1]], [[2]]],
+                [[[2]], [[2]], [[1]], [[2]]],
+            ],
+            [
+                [[[1]], [[2]], [[2]], [[1]]],
+                [[[2]], [[2]], [[2]], [[2]]],
+                [[[2]], [[1]], [[2]], [[2]]],
+                [[[2]], [[2]], [[1]], [[2]]],
+            ],
+            [
+                [[[2]], [[2]], [[1]], [[2]]],
+                [[[2]], [[1]], [[2]], [[1]]],
+                [[[2]], [[2]], [[1]], [[2]]],
+                [[[2]], [[2]], [[2]], [[2]]],
+            ],
+            [
+                [[[2]], [[2]], [[2]], [[2]]],
+                [[[2]], [[1]], [[2]], [[2]]],
+                [[[2]], [[2]], [[1]], [[1]]],
+                [[[1]], [[2]], [[2]], [[2]]],
+            ],
+        ]
+    )
+
+    # Assert that the masks match the expected values
+    assert torch.equal(masked_sample.worldcover_mask, expected_worldcover_mask)
+    assert torch.equal(masked_sample.latlon_mask, expected_latlon_mask)
+
+
+def test_space_cross_modality_masking_with_missing_data(set_random_seeds: None) -> None:
+    """Test space cross modality masking."""
+    b, h, w, t = 4, 4, 4, 3
+
+    patch_size = 1
+
+    days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
+    months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
+    years = torch.randint(2018, 2020, (b, 1, t), dtype=torch.long)
+    timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
+    sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
+    worldcover_num_bands = Modality.WORLDCOVER.num_bands
+    latlon_num_bands = Modality.LATLON.num_bands
+    batch = HeliosSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
+        sentinel1=torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands)),
+        latlon=torch.ones((b, latlon_num_bands)),
+        timestamps=timestamps,
+        worldcover=torch.full((b, h, w, 1, worldcover_num_bands), MISSING_VALUE),
+    )
+
+    strategy = ModalityCrossSpaceMaskingStrategy(
+        max_unmasking_bandsets=20,
+        min_encoding_bandsets=2,
+        max_encoding_bandsets=3,
+        encode_ratio=0.1,
+        decode_ratio=0.75,
+    )
+    masked_sample = strategy.apply_mask(batch, patch_size=patch_size)
+    logger.info(f"masked_sample: {masked_sample}")
+    # Check that the worldcover mask has the expected values
+    # Check that latlon mask has the expected values
+    expected_latlon_mask = torch.tensor([[0], [0], [0], [0]])
+
+    # Assert that the masks match the expected values
+    assert (masked_sample.worldcover_mask == MaskValue.MISSING.value).all()  # type: ignore
+    assert torch.equal(masked_sample.latlon_mask, expected_latlon_mask)
