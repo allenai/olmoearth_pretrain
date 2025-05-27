@@ -167,7 +167,7 @@ def build_common_components(
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
-        Modality.LATLON.name,
+        # Modality.LATLON.name,
         # Modality.SRTM.name,
         # # Modality.NAIP.name,
         # Modality.LANDSAT.name,
