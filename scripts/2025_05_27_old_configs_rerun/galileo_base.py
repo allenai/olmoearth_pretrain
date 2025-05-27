@@ -197,14 +197,14 @@ def build_dataset_config(common: CommonComponents) -> Config:
     """Build the dataset config for an experiment."""
     dataset_configs = [
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
+            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_gzip_3_shuffle/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861//",
             training_modalities=common.training_modalities,
             use_modalities_with_missing_timesteps=False,
             dtype="float32",
             cache_dir="/helios_cache/presto",
         ),
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/285288/",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_rerun/sentinel1_sentinel2_l2a_worldcover/283204/",
             training_modalities=common.training_modalities,
             use_modalities_with_missing_timesteps=False,
             dtype="float32",
