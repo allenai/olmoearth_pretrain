@@ -192,6 +192,11 @@ class MaskingStrategy:
     Be sure to implement apply_mask in subclasses.
     """
 
+    @property
+    def name(self) -> str:
+        """Return the name of the masking strategy."""
+        return self.__class__.__name__.replace("MaskingStrategy", "").lower()
+
     def apply_mask(
         self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
     ) -> MaskedHeliosSample:
