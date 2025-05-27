@@ -262,6 +262,14 @@ class GalileoTrainModule(HeliosTrainModule):
                         self.token_exit_cfg_a,
                     )
                 )
+                # # logging the key and the shape of the corresponding value in the latent_a
+                # for field in latent_a._fields:
+                #     # if None, skip
+                #     value = getattr(latent_a, field)
+                #     if value is None:
+                #         continue
+                #     value = getattr(latent_a, field)
+                #     logger.info(f"latent_a {field} shape: {value.shape}")
 
                 loss_b, latent_b, pooled_b = (
                     self.apply_masks_and_compute_losses_and_latents(
@@ -272,6 +280,15 @@ class GalileoTrainModule(HeliosTrainModule):
                         self.token_exit_cfg_b,
                     )
                 )
+
+                # # logging the key and the shape of the corresponding value in the latent_b
+                # for field in latent_b._fields:
+                #     # if None, skip
+                #     value = getattr(latent_b, field)
+                #     if value is None:
+                #         continue
+                #     logger.info(f"latent_b {field} shape: {value.shape}")
+
                 loss = (loss_a + loss_b) / 2
                 total_mask_a_loss += (
                     get_local_tensor(loss_a.detach()) / num_microbatches

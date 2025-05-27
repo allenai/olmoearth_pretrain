@@ -5,7 +5,7 @@ These Settings are meant to help you get quick results on a single GPU in minima
 
 import logging
 
-from olmo_core.config import DType
+from olmo_core.config import Config, DType
 from olmo_core.distributed.parallel.data_parallel import (
     DataParallelConfig,
     DataParallelType,
@@ -22,6 +22,7 @@ from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
+from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
@@ -138,6 +139,13 @@ def build_train_module_config(
     WARMUP_EPOCHS = 5
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
+    contrastive_config = LossConfig(
+        loss_config={
+            "type": "InfoNCE",
+            "weight": 0.05,
+        }
+    )
+
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
     train_module_config = GalileoTrainModuleConfig(
@@ -155,6 +163,7 @@ def build_train_module_config(
         max_grad_norm=1.0,
         dp_config=dp_config,
         scheduler=scheduler,
+        contrastive_config=contrastive_config,
     )
     return train_module_config
 
@@ -186,16 +195,32 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     return dataloader_config
 
 
-def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
+def build_dataset_config(common: CommonComponents) -> Config:
     """Build the dataset config for an experiment."""
-    return HeliosDatasetConfig(
-        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_gzip_3/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/285288",
-        training_modalities=common.training_modalities,
-        use_modalities_with_missing_timesteps=True,
-        dtype=DType.float32,
-        # cache_dir="/helios_cache/osm_sampling",
-        # samples_per_sec=4 / NUM_WORKERS,  # 2/ GBS
-    )
+    dataset_configs = [
+        HeliosDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
+            training_modalities=common.training_modalities,
+            use_modalities_with_missing_timesteps=False,
+            dtype="float32",
+            # cache_dir="/helios_cache/presto",
+        ),
+        HeliosDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/285288/",
+            training_modalities=common.training_modalities,
+            use_modalities_with_missing_timesteps=False,
+            dtype="float32",
+            # cache_dir="/helios_cache/osm_sampling",
+        ),
+        HeliosDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/",
+            training_modalities=common.training_modalities,
+            use_modalities_with_missing_timesteps=False,
+            dtype="float32",
+            # cache_dir="/helios_cache/osmbig",
+        ),
+    ]
+    return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
@@ -286,36 +311,36 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(20),
             input_modalities=["sentinel2"],
         ),
-        "pastis-r": DownstreamTaskConfig(
-            dataset="pastis",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-            input_modalities=["sentinel1", "sentinel2"],
-        ),
-        "sickle": DownstreamTaskConfig(
-            dataset="sickle",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-            input_modalities=["landsat8"],
-        ),
-        "sickle-r": DownstreamTaskConfig(
-            dataset="sickle",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-            input_modalities=["landsat8", "sentinel1", "sentinel2"],
-        ),
+        # "pastis-r": DownstreamTaskConfig(
+        #     dataset="pastis",
+        #     batch_size=8,
+        #     num_workers=2,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     probe_lr=0.1,
+        #     eval_interval=Duration.epochs(20),
+        #     input_modalities=["sentinel1", "sentinel2"],
+        # ),
+        # "sickle": DownstreamTaskConfig(
+        #     dataset="sickle",
+        #     batch_size=8,
+        #     num_workers=2,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     probe_lr=0.1,
+        #     eval_interval=Duration.epochs(20),
+        #     input_modalities=["landsat8"],
+        # ),
+        # "sickle-r": DownstreamTaskConfig(
+        #     dataset="sickle",
+        #     batch_size=8,
+        #     num_workers=2,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     probe_lr=0.1,
+        #     eval_interval=Duration.epochs(20),
+        #     input_modalities=["landsat8", "sentinel1", "sentinel2"],
+        # ),
     }
     # Let us not use garbage collector fallback
     trainer_config = (
