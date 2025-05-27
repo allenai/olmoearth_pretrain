@@ -140,7 +140,7 @@ def build_train_module_config(
     token_exit_cfg_b = {modality: 0 for modality in common.training_modalities}
     WARMUP_EPOCHS = 20
     dp_config = DataParallelConfig(
-        name=DataParallelType.ddp,
+        name=DataParallelType.fsdp,
         param_dtype=DType.bfloat16,
         reduce_dtype=DType.float32,
     )
