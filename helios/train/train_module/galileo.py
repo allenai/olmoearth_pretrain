@@ -241,6 +241,8 @@ class GalileoTrainModule(HeliosTrainModule):
         total_batch_loss = torch.tensor(0.0, device=self.device)
         total_batch_reg = torch.tensor(0.0, device=self.device)
         total_batch_con = torch.tensor(0.0, device=self.device)
+        total_mask_loss_space = torch.tensor(0.0, device=self.device)
+        total_mask_loss_time = torch.tensor(0.0, device=self.device)
         # Split into micro-batches.
         patch_size, batch_data = batch
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
@@ -262,7 +264,6 @@ class GalileoTrainModule(HeliosTrainModule):
                         self.token_exit_cfg_a,
                     )
                 )
-
                 loss_b, latent_b, pooled_b = (
                     self.apply_masks_and_compute_losses_and_latents(
                         microbatch,
@@ -279,6 +280,11 @@ class GalileoTrainModule(HeliosTrainModule):
                 total_mask_b_loss += (
                     get_local_tensor(loss_b.detach()) / num_microbatches
                 )
+                if hasattr(self.masking_strategy_a, "last_strategy"):
+                    if self.masking_strategy_a.last_strategy == "space":
+                        total_mask_loss_space += get_local_tensor(loss_a.detach())
+                    elif self.masking_strategy_a.last_strategy == "time":
+                        total_mask_loss_time += get_local_tensor(loss_a.detach())
 
                 # Scale loss by number of microbatches
                 reg_term_a = self.compute_regularization(pooled_a)
@@ -342,6 +348,10 @@ class GalileoTrainModule(HeliosTrainModule):
         total_batch_con = torch.nan_to_num(total_batch_con, nan=float("inf"))
         total_mask_a_loss = torch.nan_to_num(total_mask_a_loss, nan=float("inf"))
         total_mask_b_loss = torch.nan_to_num(total_mask_b_loss, nan=float("inf"))
+        total_mask_loss_space = torch.nan_to_num(
+            total_mask_loss_space, nan=float("inf")
+        )
+        total_mask_loss_time = torch.nan_to_num(total_mask_loss_time, nan=float("inf"))
 
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
@@ -369,6 +379,16 @@ class GalileoTrainModule(HeliosTrainModule):
                 total_batch_con,
                 ReduceType.mean,
             )
+        self.trainer.record_metric(
+            "train/mask_loss_space",
+            total_mask_loss_space,
+            ReduceType.mean,
+        )
+        self.trainer.record_metric(
+            "train/mask_loss_time",
+            total_mask_loss_time,
+            ReduceType.mean,
+        )
         del batch, microbatch, batch_data
 
     @staticmethod
