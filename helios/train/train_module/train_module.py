@@ -405,14 +405,6 @@ class HeliosTrainModule(TrainModule):
             )
             if isinstance(self.optimizer, SkipStepOptimizer):
                 self.optimizer.latest_grad_norm = grad_norm
-        # log the grads for each rank here just locally
-        i = 0
-        for param in self.model.parameters():
-            logger.info(f"Grad for param {param.name}: {param.grad} on rank {self.local_rank}")
-            i += 1
-            if i > 1:
-                break
-        logger.info(f"Number of parameters: {i}")
         # Maybe adjust learning rate.
         if self.scheduler is not None:
             for group_idx, group in enumerate(self.optimizer.param_groups):
