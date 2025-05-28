@@ -199,24 +199,24 @@ def build_dataset_config(common: CommonComponents) -> Config:
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
             training_modalities=common.training_modalities,
-            use_modalities_with_missing_timesteps=False,
+            use_modalities_with_missing_timesteps=True,
             dtype="float32",
             cache_dir="/helios_cache/presto",
         ),
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/285288/",
             training_modalities=common.training_modalities,
-            use_modalities_with_missing_timesteps=False,
+            use_modalities_with_missing_timesteps=True,
             dtype="float32",
             cache_dir="/helios_cache/osm_sampling",
         ),
-        # HeliosDatasetConfig(
-        #     h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/",
-        #     training_modalities=common.training_modalities,
-        #     use_modalities_with_missing_timesteps=False,
-        #     dtype="float32",
-        #     cache_dir="/helios_cache/osmbig",
-        # ),
+        HeliosDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/",
+            training_modalities=common.training_modalities,
+            use_modalities_with_missing_timesteps=True,
+            dtype="float32",
+            cache_dir="/helios_cache/osmbig",
+        ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
@@ -319,10 +319,10 @@ def build_common_components_limited_modalities(*args: Any) -> CommonComponents:
         Modality.SENTINEL1.name,
         Modality.SENTINEL2_L2A.name,
         Modality.WORLDCOVER.name,
-        Modality.OPENSTREETMAP_RASTER.name,
-        Modality.SRTM.name,
-        Modality.LANDSAT.name,
-        Modality.LATLON.name,
+        # Modality.OPENSTREETMAP_RASTER.name,
+        # Modality.SRTM.name,
+        # Modality.LANDSAT.name,
+        # Modality.LATLON.name,
     ]
     return config
 
