@@ -38,8 +38,6 @@ class MaskValue(Enum):
     TARGET_ENCODER_ONLY = 1
     DECODER = 2
     MISSING = 3
-
-
 class MaskedHeliosSample(NamedTuple):
     """A masked sample of the data from the Helios dataset.
 
@@ -69,6 +67,33 @@ class MaskedHeliosSample(NamedTuple):
     landsat_mask: ArrayTensor | None = None
     naip: ArrayTensor | None = None
     naip_mask: ArrayTensor | None = None
+
+    def extend(self, other: "MaskedHeliosSample") -> "MaskedHeliosSample":
+        """Concatenate all fields from another MaskedHeliosSample onto this one.
+
+        Args:
+            other: Another MaskedHeliosSample to concatenate with
+
+        Returns:
+            A new MaskedHeliosSample with concatenated fields
+        """
+        return_dict = {}
+        for field in self._fields:
+            val1 = getattr(self, field)
+            val2 = getattr(other, field)
+
+            if val1 is None and val2 is None:
+                return_dict[field] = None
+            elif val1 is None:
+                return_dict[field] = val2
+            elif val2 is None:
+                return_dict[field] = val1
+            else:
+                # Concatenate along batch dimension (dim=0)
+                return_dict[field] = torch.cat([val1, val2], dim=0)
+
+        return MaskedHeliosSample(**return_dict)
+
 
     def as_dict(self, return_none: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
@@ -149,6 +174,14 @@ class MaskedHeliosSample(NamedTuple):
     def get_unmasked_modality_name(modality_mask_name: str) -> str:
         """Get the unmasked modality name."""
         return modality_mask_name.replace("_mask", "")
+
+    def batch_size(self) -> int:
+        """Get the batch size from any non-None tensor."""
+        for field in self._fields:
+            val = getattr(self, field)
+            if val is not None:
+                return val.shape[0]
+        raise ValueError("No data to get batch size from")
 
     # TODO: add unit test because this does modlaity based checking
     @classmethod

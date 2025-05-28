@@ -101,7 +101,6 @@ class TokensAndMasks(NamedTuple):
                     return getattr(self, modality).device
             raise ValueError("No data to get device from")
 
-    # TODO: It seems like we want a lot of our named tuples to have this functionality so we should probably create a utility base class for the named tuples and double subclass
     @classmethod
     def get_masked_modality_name(cls, modality: str) -> str:
         """Get the masked modality name."""
@@ -162,6 +161,36 @@ class TokensAndMasks(NamedTuple):
         x = torch.cat(flattened_x, dim=1)
         masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
         return x, masks
+
+    def split_batch(self, batch_size: int) -> list["TokensAndMasks"]:
+        """Split the batch into smaller batches.
+
+        Args:
+            batch_size: Size of each split batch
+
+        Returns:
+            List of TokensAndMasks with batch_size samples each
+        """
+        splits = []
+        for i in range(0, self.batch_size, batch_size):
+            split_dict = {}
+            for field in self._fields:
+                val = getattr(self, field)
+                if val is not None:
+                    split_dict[field] = val[i:i + batch_size]
+                else:
+                    split_dict[field] = None
+            splits.append(TokensAndMasks(**split_dict))
+        return splits
+
+    @property
+    def batch_size(self) -> int:
+        """Get the batch size from any non-None tensor."""
+        for field in self._fields:
+            val = getattr(self, field)
+            if val is not None:
+                return val.shape[0]
+        raise ValueError("No data to get batch size from")
 
     def pool_unmasked_tokens(
         self, pooling_type: PoolingType = PoolingType.MAX, spatial_pooling: bool = False

@@ -243,6 +243,7 @@ class GalileoTrainModule(HeliosTrainModule):
         total_batch_con = torch.tensor(0.0, device=self.device)
         total_mask_loss_space = torch.tensor(0.0, device=self.device)
         total_mask_loss_time = torch.tensor(0.0, device=self.device)
+        total_mae_loss = torch.tensor(0.0, device=self.device)
         # Split into micro-batches.
         patch_size, batch_data = batch
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
@@ -254,25 +255,10 @@ class GalileoTrainModule(HeliosTrainModule):
                 )
 
                 microbatch = self.transform.apply(microbatch).to_device(self.device)
-
-                loss_a, latent_a, pooled_a = (
-                    self.apply_masks_and_compute_losses_and_latents(
-                        microbatch,
-                        self.masking_strategy_a.apply_mask,
-                        self.model_forward_a,
-                        patch_size,
-                        self.token_exit_cfg_a,
-                    )
-                )
-                loss_b, latent_b, pooled_b = (
-                    self.apply_masks_and_compute_losses_and_latents(
-                        microbatch,
-                        self.masking_strategy_b.apply_mask,
-                        self.model_forward_b,
-                        patch_size,
-                        self.token_exit_cfg_b,
-                    )
-                )
+                masked_microbatch_a = self.masking_strategy_a.apply_mask(microbatch, patch_size)
+                masked_microbatch_b = self.masking_strategy_b.apply_mask(microbatch, patch_size)
+                masked_microbatch = masked_microbatch_a.extend(masked_microbatch_b)
+                loss_a, loss_b, mae_loss, latent, decoded_a, decoded_b, target_output, latent_projected_and_pooled_a, latent_projected_and_pooled_b = self.model_forward(masked_microbatch, patch_size, self.token_exit_cfg_a)
                 loss = (loss_a + loss_b) / 2
                 total_mask_a_loss += (
                     get_local_tensor(loss_a.detach()) / num_microbatches
@@ -280,6 +266,9 @@ class GalileoTrainModule(HeliosTrainModule):
                 total_mask_b_loss += (
                     get_local_tensor(loss_b.detach()) / num_microbatches
                 )
+                if self.mae_loss is not None:
+                    loss += mae_loss / num_microbatches
+
                 if hasattr(self.masking_strategy_a, "last_strategy"):
                     if self.masking_strategy_a.last_strategy == "space":
                         total_mask_loss_space += get_local_tensor(loss_a.detach())
@@ -287,8 +276,8 @@ class GalileoTrainModule(HeliosTrainModule):
                         total_mask_loss_time += get_local_tensor(loss_a.detach())
 
                 # Scale loss by number of microbatches
-                reg_term_a = self.compute_regularization(pooled_a)
-                reg_term_b = self.compute_regularization(pooled_b)
+                reg_term_a = self.compute_regularization(latent_projected_and_pooled_a)
+                reg_term_b = self.compute_regularization(latent_projected_and_pooled_b)
                 if reg_term_a is not None:
                     assert reg_term_b is not None
                     loss = loss + (reg_term_a + reg_term_b) / 2
@@ -300,7 +289,7 @@ class GalileoTrainModule(HeliosTrainModule):
                     )
 
                 if self.contrastive_loss is not None:
-                    contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
+                    contrastive_loss = self.contrastive_loss.compute(latent_projected_and_pooled_a, latent_projected_and_pooled_b)
                     logger.info(f"contrastive loss: {contrastive_loss}")
                     if (
                         torch.isnan(contrastive_loss).any()
@@ -334,7 +323,7 @@ class GalileoTrainModule(HeliosTrainModule):
                             "FSDP does not support skipping bad batches as the backwards pass will not sync correctly"
                         )
                     break
-                del latent_a, latent_b
+                del latent, latent_projected_and_pooled_a, latent_projected_and_pooled_b
                 loss.backward()
 
         # what happens if both batches are bad?
@@ -391,31 +380,15 @@ class GalileoTrainModule(HeliosTrainModule):
         )
         del batch, microbatch, batch_data
 
-    @staticmethod
-    def apply_masks_and_compute_losses_and_latents(
-        microbatch: HeliosSample,
-        mask_fn: Callable,
-        model_forward_fn: Callable,
-        patch_size: int,
-        token_exit_cfg: dict[str, int],
-    ) -> tuple[torch.Tensor, TokensAndMasks, torch.Tensor]:
-        """Apply masks and compute losses and latents."""
-        masked_batch = mask_fn(microbatch, patch_size=patch_size)
-        # Run Encoder and decoder on the augmented input
-        loss, latent, _, _, pooled = model_forward_fn(
-            masked_batch, patch_size, token_exit_cfg
-        )
-        return loss, latent, pooled
-
-    def model_forward_a(
+    def model_forward(
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
     ) -> tuple[
-        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
+        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, pooled, reconstructed = self.model(
-                batch, patch_size, strategy="a"
+            latent, decoded_a, decoded_b, latent_projected_and_pooled_a, latent_projected_and_pooled_b, reconstructed = self.model(
+                batch, patch_size
             )
             with torch.no_grad():
                 logger.info("target encoder running here")
@@ -424,31 +397,9 @@ class GalileoTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
-
-            loss = self.loss_fn_a(decoded, target_output)
+            target_output_a, target_output_b = target_output.split_batch(batch.batch_size() // 2)
+            loss_a = self.loss_fn_a(decoded_a, target_output_a)
+            loss_b = self.loss_fn_b(decoded_b, target_output_b)
             if self.mae_loss is not None:
-                loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output, pooled
-
-    def model_forward_b(
-        self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
-    ) -> tuple[
-        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
-    ]:
-        """Run a forward pass."""
-        with self._model_forward_context():
-            latent, decoded, pooled, reconstructed = self.model(
-                batch, patch_size, strategy="b"
-            )
-            with torch.no_grad():
-                logger.info("target encoder running here")
-                target_output, _ = self.model.target_encoder.forward(
-                    batch.unmask(),
-                    patch_size=patch_size,
-                    token_exit_cfg=token_exit_cfg,
-                )
-
-            loss = self.loss_fn_b(decoded, target_output)
-            if self.mae_loss is not None:
-                loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output, pooled
+                mae_loss = self.mae_loss.compute(reconstructed, batch)
+            return loss_a, loss_b, mae_loss, latent, decoded_a, decoded_b, target_output, latent_projected_and_pooled_a, latent_projected_and_pooled_b

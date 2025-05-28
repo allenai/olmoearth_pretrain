@@ -46,51 +46,59 @@ class Galileo(nn.Module, DistributedMixins):
         for p in self.target_encoder.parameters():
             p.requires_grad = False
 
-    def forward_a(
-        self, x: MaskedHeliosSample, patch_size: int
-    ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
-        """Forward pass for the Latent MIM Style.
+    # def forward_a(
+    #     self, x: MaskedHeliosSample, patch_size: int
+    # ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
+    #     """Forward pass for the Latent MIM Style.
 
-        Returns:
-            latent: embeddings from encoder
-            decoded: predictions from decoder for masked tokens
-            latent_projected_and_pooled: pooled tokens for contrastive loss
-            reconstructed: MAE predictions if enabled
-        """
-        # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
+    #     Returns:
+    #         latent: embeddings from encoder
+    #         decoded: predictions from decoder for masked tokens
+    #         latent_projected_and_pooled: pooled tokens for contrastive loss
+    #         reconstructed: MAE predictions if enabled
+    #     """
+    #     # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
+    #     latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
+    #     reconstructed = None
+    #     if self.reconstructor:
+    #         reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
+    #     decoded = self.decoder_a(latent, timestamps=x.timestamps, patch_size=patch_size)
+    #     return latent, decoded, latent_projected_and_pooled, reconstructed
+
+    # def forward_b(
+    #     self, x: MaskedHeliosSample, patch_size: int
+    # ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
+    #     """Forward pass for the Latent MIM Style.
+
+    #     Returns:
+    #         latent: embeddings from encoder
+    #         decoded: predictions from decoder for masked tokens
+    #         latent_projected_and_pooled: pooled tokens for contrastive loss
+    #         reconstructed: MAE predictions if enabled
+    #     """
+    #     # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
+    #     latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
+    #     reconstructed = None
+    #     if self.reconstructor:
+    #         reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
+    #     decoded = self.decoder_b(latent, timestamps=x.timestamps, patch_size=patch_size)
+    #     return latent, decoded, latent_projected_and_pooled, reconstructed
+
+    def forward(self, x: MaskedHeliosSample, patch_size: int) -> tuple[TokensAndMasks, TokensAndMasks, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor | None]:
         latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
+        #synchronize cuda streams
+        torch.cuda.synchronize()
         reconstructed = None
+        batch_size = x.timestamps.shape[0]
+        split_idx = batch_size // 2
+        latent_a, latent_b = latent.split_batch(split_idx)
+        timestamps_a, timestamps_b = torch.split(x.timestamps, split_idx)
+        latent_projected_and_pooled_a, latent_projected_and_pooled_b = torch.split(latent_projected_and_pooled, split_idx)
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
-        decoded = self.decoder_a(latent, timestamps=x.timestamps, patch_size=patch_size)
-        return latent, decoded, latent_projected_and_pooled, reconstructed
-
-    def forward_b(
-        self, x: MaskedHeliosSample, patch_size: int
-    ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
-        """Forward pass for the Latent MIM Style.
-
-        Returns:
-            latent: embeddings from encoder
-            decoded: predictions from decoder for masked tokens
-            latent_projected_and_pooled: pooled tokens for contrastive loss
-            reconstructed: MAE predictions if enabled
-        """
-        # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
-        reconstructed = None
-        if self.reconstructor:
-            reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
-        decoded = self.decoder_b(latent, timestamps=x.timestamps, patch_size=patch_size)
-        return latent, decoded, latent_projected_and_pooled, reconstructed
-
-    def forward(self, x: MaskedHeliosSample, patch_size: int, strategy: str = "a") -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
-        if strategy == "a":
-            return self.forward_a(x, patch_size)
-        elif strategy == "b":
-            return self.forward_b(x, patch_size)
-        else:
-            raise ValueError(f"Invalid strategy: {strategy}")
+        decoded_a = self.decoder_a(latent_a, timestamps=timestamps_a, patch_size=patch_size)
+        decoded_b = self.decoder_b(latent_b, timestamps=timestamps_b, patch_size=patch_size)
+        return latent, decoded_a, decoded_b, latent_projected_and_pooled_a, latent_projected_and_pooled_b, reconstructed
 
     def apply_fsdp(
         self,

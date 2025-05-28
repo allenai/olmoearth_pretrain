@@ -329,6 +329,7 @@ class HeliosDataLoader(DataLoaderBase):
                         patch_size, max_tokens_per_instance=1500, sampled_hw_p=6
                     ),
                 )
+                for _ in range(8)
             ]
         )
         return collated_sample
