@@ -63,7 +63,7 @@ class GalileoTrainModuleConfig(HeliosTrainModuleConfig):
     )
     warmup_duration: Duration = field(default_factory=lambda: Duration.epochs(2))
     ema_decay: tuple[float, float] = (0.996, 1.0)
-    max_grad_norm: float = 1.0
+    max_grad_norm: float | None = None
     contrastive_config: LossConfig | None = None
 
     def build(
