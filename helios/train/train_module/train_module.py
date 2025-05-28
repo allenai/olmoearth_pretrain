@@ -159,7 +159,7 @@ class HeliosTrainModule(TrainModule):
         dp_config: DataParallelConfig | None = None,
         ac_config: TransformerActivationCheckpointingConfig | None = None,
         compile_loss: bool = False,
-        find_unused_parameters: bool = False,
+        find_unused_parameters: bool = True,
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
         scheduler: Scheduler | None = None,
@@ -202,7 +202,9 @@ class HeliosTrainModule(TrainModule):
                 sum(p.numel() for p in self.model.decoder.parameters()),
             )
         # Num galileo_params
-        logger.info(f"Num galileo_params: {sum(p.numel() for p in self.model.parameters())}")
+        logger.info(
+            f"Num galileo_params: {sum(p.numel() for p in self.model.parameters())}"
+        )
         self.device = device or get_default_device()
 
         if dp_config is not None:
@@ -547,7 +549,10 @@ class HeliosTrainModule(TrainModule):
         # torch.nn.utils.clip_grads_with_norm_(parameters, max_grad_norm, total_norm, foreach=foreach)
         # return total_norm
         return torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(), max_grad_norm, norm_type=norm_type, foreach=False #foreach
+            self.model.parameters(),
+            max_grad_norm,
+            norm_type=norm_type,
+            foreach=False,  # foreach
         )
 
     def update_target_encoder(self) -> None:
