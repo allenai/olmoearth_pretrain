@@ -414,7 +414,7 @@ class GalileoTrainModule(HeliosTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, pooled, reconstructed = self.model.forward(
+            latent, decoded, pooled, reconstructed = self.model(
                 batch, patch_size, strategy="a"
             )
             with torch.no_grad():
@@ -437,7 +437,7 @@ class GalileoTrainModule(HeliosTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, pooled, reconstructed = self.model.forward(
+            latent, decoded, pooled, reconstructed = self.model(
                 batch, patch_size, strategy="b"
             )
             with torch.no_grad():
