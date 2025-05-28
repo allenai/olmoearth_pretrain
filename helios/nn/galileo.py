@@ -84,6 +84,15 @@ class Galileo(nn.Module, DistributedMixins):
         decoded = self.decoder_b(latent, timestamps=x.timestamps, patch_size=patch_size)
         return latent, decoded, latent_projected_and_pooled, reconstructed
 
+    def forward(self, x: MaskedHeliosSample, patch_size: int, strategy: str) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
+        """Forward pass for the Galileo Style."""
+        if strategy == "a":
+            return self.forward_a(x, patch_size)
+        elif strategy == "b":
+            return self.forward_b(x, patch_size)
+        else:
+            raise ValueError(f"Invalid strategy: {strategy}")
+
     def apply_fsdp(
         self,
         dp_mesh: DeviceMesh | None = None,

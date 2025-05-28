@@ -219,7 +219,7 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
             f"All modalities must be in token_exit_cfg_a: {TRAINING_MODALITIES}"
         )
     token_exit_cfg_zero = {modality: 0 for modality in TRAINING_MODALITIES}
-    dp_config = DataParallelConfig(name=DataParallelType.fsdp)
+    dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()

@@ -470,12 +470,15 @@ class HeliosTrainModule(TrainModule):
             yield
 
     @contextlib.contextmanager
-    def _model_forward_context(self) -> Generator[None, None, None]:
+    def _model_forward_context(self, no_sync: bool = False) -> Generator[None, None, None]:
         with contextlib.ExitStack() as stack:
             if self.autocast_precision is not None:
                 stack.enter_context(
                     torch.autocast(self.device.type, dtype=self.autocast_precision)
                 )
+            if isinstance(self.model, DDP) and no_sync:
+                # If we do multiple forwards through the  encoder we only want to sunc on the last one
+                stack.enter_context(self.model.no_sync())
             yield
 
     def _clear_loss_buffers(self) -> None:

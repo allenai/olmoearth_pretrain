@@ -393,9 +393,10 @@ class GalileoTrainModule(HeliosTrainModule):
         torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
     ]:
         """Run a forward pass."""
-        with self._model_forward_context():
-            latent, decoded, pooled, reconstructed = self.model.forward_a(
-                batch, patch_size
+        # SHOULD BE CALLED Before forward_b
+        with self._model_forward_context(no_sync=True):
+            latent, decoded, pooled, reconstructed = self.model(
+                batch, patch_size, strategy="a"
             )
             with torch.no_grad():
                 logger.info("target encoder running here")
@@ -417,8 +418,8 @@ class GalileoTrainModule(HeliosTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, pooled, reconstructed = self.model.forward_b(
-                batch, patch_size
+            latent, decoded, pooled, reconstructed = self.model(
+                batch, patch_size, strategy="b"
             )
             with torch.no_grad():
                 logger.info("target encoder running here")
