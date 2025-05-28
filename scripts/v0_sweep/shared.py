@@ -238,7 +238,7 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
             token_exit_cfg_a=token_exit_cfg_galileo,
             token_exit_cfg_b=token_exit_cfg_zero,
             autocast_precision=DType.bfloat16,
-            max_grad_norm=None,  # 1.0,
+            max_grad_norm=1.0, #None,  # 1.0,
             dp_config=dp_config,
             scheduler=scheduler,
         )

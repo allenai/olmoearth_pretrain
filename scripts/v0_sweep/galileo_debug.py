@@ -9,10 +9,12 @@ from olmo_core.train.callbacks import (
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
+    ProfilerCallback,
 )
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
+
 from shared import (
     TRAINING_MODALITIES,
     build_dataloader_config,
@@ -20,7 +22,6 @@ from shared import (
     build_train_module_config_builder,
     build_visualize_config,
 )
-
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
@@ -160,6 +161,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             max_duration=MAX_DURATION,
             checkpointer=checkpointer_config,
         )
+        .with_callback("profiler", ProfilerCallback())
         .with_callback("wandb", wandb_callback)
         .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
         .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
