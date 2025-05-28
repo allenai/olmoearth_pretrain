@@ -13,7 +13,7 @@ class DistributedMixins:
         dp_mesh: DeviceMesh | None = None,
         compile_enabled: bool = False,
         autograd_compile_enabled: bool = False,
-        find_unused_parameters: bool = False,
+        find_unused_parameters: bool = True,
     ) -> None:
         """Apply DDP to the model.
 
