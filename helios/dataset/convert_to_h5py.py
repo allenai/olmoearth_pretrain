@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import h5py
+import hdf5plugin
 import numpy as np
 import pandas as pd
 from einops import rearrange
@@ -42,6 +43,9 @@ class ConvertToH5pyConfig(Config):
     compression: str | None = None  # Compression algorithm
     compression_opts: int | None = None  # Compression level (0-9 for gzip)
     shuffle: bool | None = None  # Enable shuffle filter (only used with compression)
+    chunking: bool | None = (
+        None  # Enable chunking, by default we use dataset shape for chunking
+    )
 
     def build(self) -> "ConvertToH5py":
         """Build the ConvertToH5py object."""
@@ -54,6 +58,7 @@ class ConvertToH5pyConfig(Config):
             compression=self.compression,
             compression_opts=self.compression_opts,
             shuffle=self.shuffle,
+            chunking=self.chunking,
         )
 
 
@@ -75,6 +80,7 @@ class ConvertToH5py:
         compression: str | None = None,
         compression_opts: int | None = None,
         shuffle: bool | None = None,
+        chunking: bool | None = None,
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -85,6 +91,7 @@ class ConvertToH5py:
             compression: Compression algorithm to use (None, "gzip", "lzf", "szip")
             compression_opts: Compression level (0-9 for gzip), only used with gzip compression
             shuffle: Enable shuffle filter, only used with compression
+            chunking: Enable chunking, by default we use dataset shape for chunking
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
@@ -93,6 +100,7 @@ class ConvertToH5py:
         self.compression = compression
         self.compression_opts = compression_opts
         self.shuffle = shuffle
+        self.chunking = chunking
         self.h5py_dir: UPath | None = None
 
     @property
@@ -270,16 +278,32 @@ class ConvertToH5py:
                     # Create dataset with optional compression
                     create_kwargs: dict[str, Any] = {}
                     if self.compression is not None:
-                        create_kwargs["compression"] = self.compression
-                        if (
-                            self.compression == "gzip"
-                            and self.compression_opts is not None
-                        ):
-                            create_kwargs["compression_opts"] = self.compression_opts
-                        if (
-                            self.shuffle is not None
-                        ):  # Shuffle is typically used with compression
-                            create_kwargs["shuffle"] = self.shuffle
+                        # Gzip is natively supported by h5py
+                        if self.compression == "gzip":
+                            create_kwargs["compression"] = self.compression
+                            if self.compression_opts is not None:
+                                create_kwargs["compression_opts"] = (
+                                    self.compression_opts
+                                )
+                            if self.shuffle is not None:
+                                create_kwargs["shuffle"] = self.shuffle
+                        # For other compression algorithms, we switch to hdf5plugin
+                        elif self.compression == "zstd":
+                            create_kwargs["compression"] = hdf5plugin.Zstd(
+                                clevel=self.compression_opts
+                            )
+                        elif self.compression == "lz4":
+                            create_kwargs["compression"] = hdf5plugin.LZ4(nbytes=0)
+                        else:
+                            raise ValueError(
+                                f"Unsupported compression: {self.compression}"
+                            )
+
+                        # Apply chunking if enabled
+                        if self.chunking:
+                            create_kwargs["chunks"] = data_item.shape
+
+                    # Create the dataset per item
                     h5file.create_dataset(item_name, data=data_item, **create_kwargs)
 
                 # Store missing timesteps masks in a dedicated group
