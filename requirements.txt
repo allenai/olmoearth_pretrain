@@ -18,6 +18,7 @@ pre-commit
 pytest
 rasterio
 rioxarray
+simsimd==6.2.1
 torch>=2.7
 torchvision
 universal_pathlib>=0.2.5
