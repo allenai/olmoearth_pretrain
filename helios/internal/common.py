@@ -94,12 +94,12 @@ def build_launch_config(
                     "Jobs targeting Augusta should not target other clusters since Weka will not be mounted"
                 )
             weka_buckets = []
-        # if "titan" in c:
-        #     if len(clusters) > 1:
-        #         raise ValueError(
-        #             "Jobs targeting Titan should not target other clusters since Titan uses pytorch 2.7"
-        #         )
-        #     pytorch_upgrade = "pip install --upgrade --no-cache-dir torch==2.7.0 torchvision --index-url https://download.pytorch.org/whl/test/cu128"
+        if "titan" in c:
+            if len(clusters) > 1:
+                raise ValueError(
+                    "Jobs targeting Titan should not target other clusters since Titan uses pytorch 2.7"
+                )
+            pytorch_upgrade = "pip install --upgrade --pre --no-cache-dir torch==2.8.0.dev20250528+cu128 torchvision==0.22.0.dev20250528+cu128 --index-url https://download.pytorch.org/whl/nightly/cu128"
 
     beaker_user = get_beaker_username()
     return BeakerLaunchConfig(
@@ -168,10 +168,10 @@ def build_common_components(
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
         Modality.LATLON.name,
-        # Modality.SRTM.name,
-        # Modality.NAIP.name,
+        Modality.SRTM.name,
         Modality.LANDSAT.name,
-        # Modality.OPENSTREETMAP_RASTER.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+        # Modality.NAIP.name,
     ]
     cmd_to_launch = SubCmd.train
     if cmd == SubCmd.launch_prep:

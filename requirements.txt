@@ -8,6 +8,7 @@ einops>=0.7.0
 gcsfs
 geobench
 GitPython>=3.0,<4.0
+hdf5plugin
 interrogate
 matplotlib
 numpy
@@ -17,7 +18,7 @@ pre-commit
 pytest
 rasterio
 rioxarray
-torch>=2.7 # We use 2.7 for training on everything now
-torchvision>=0.20
+torch>=2.7
+torchvision
 universal_pathlib>=0.2.5
 wandb>=0.19.0

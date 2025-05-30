@@ -261,7 +261,7 @@ class SubCmd(StrEnum):
         if self == SubCmd.launch:
             launch(config)
         elif self == SubCmd.dry_run:
-            pass
+            logger.info(config)
         elif self == SubCmd.visualize:
             seed_all(config.init_seed)
             visualize(config)

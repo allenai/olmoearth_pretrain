@@ -100,6 +100,7 @@ class HeliosWandBCallback(WandBCallback):
                 config=self.config,
                 id=resume_id,
                 resume="allow",
+                settings=self.wandb.Settings(init_timeout=240),
             )
 
             if not resume_id and self.restart_on_same_run:
