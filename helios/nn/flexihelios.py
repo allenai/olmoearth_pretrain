@@ -410,7 +410,7 @@ class Reconstructor(nn.Module):
 
     def __init__(
         self,
-        decoder: "Predictor",
+        decoder: nn.Module,
         supported_modalities: list[ModalitySpec],
         max_patch_size: int,
     ):
@@ -555,7 +555,7 @@ class Reconstructor(nn.Module):
 class ReconstructorConfig(Config):
     """Configuration for the Reconstructor."""
 
-    decoder_config: "PredictorConfig"
+    decoder_config: "Config"
     supported_modality_names: list[str]
     max_patch_size: int = 8
 
