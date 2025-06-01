@@ -84,6 +84,17 @@ class Galileo(nn.Module, DistributedMixins):
         decoded = self.decoder_b(latent, timestamps=x.timestamps, patch_size=patch_size)
         return latent, decoded, latent_projected_and_pooled, reconstructed
 
+    def forward(
+        self, input_a: MaskedHeliosSample, input_b: MaskedHeliosSample, patch_size: int
+    ) -> dict[
+        str, tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]
+    ]:
+        """Forward pass for the Galileo Style."""
+        return {
+            "a": self.forward_a(input_a, patch_size),
+            "b": self.forward_b(input_b, patch_size),
+        }
+
     def apply_fsdp(
         self,
         dp_mesh: DeviceMesh | None = None,
@@ -106,8 +117,6 @@ class Galileo(nn.Module, DistributedMixins):
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
-        register_fsdp_forward_method(self, "forward_a")
-        register_fsdp_forward_method(self, "forward_b")
 
     def apply_compile(self) -> None:
         """Apply torch.compile to the model."""

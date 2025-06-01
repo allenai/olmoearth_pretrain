@@ -162,9 +162,9 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
     LR = 0.0001
     RANK_MICROBATCH_SIZE = 32
     ENCODE_RATIO = 0.1
-    DECODE_RATIO = 0.9
+    DECODE_RATIO = 0.75
     WD = 0.02
-    WARMUP_EPOCHS = 5
+    WARMUP_EPOCHS = 10
 
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config = MaskingConfig(
@@ -206,20 +206,20 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
         }
     )
     token_exit_cfg_galileo = {
-        Modality.SENTINEL2_L2A.name: 6,
-        Modality.LATLON.name: 6,
-        Modality.SENTINEL1.name: 6,
+        Modality.SENTINEL2_L2A.name: ENCODER_DEPTH,
+        Modality.LATLON.name: ENCODER_DEPTH,
+        Modality.SENTINEL1.name: ENCODER_DEPTH,
         Modality.WORLDCOVER.name: 0,
-        Modality.SRTM.name: 3,
+        Modality.SRTM.name: int(ENCODER_DEPTH / 2),
         Modality.OPENSTREETMAP_RASTER.name: 0,
-        Modality.LANDSAT.name: 6,
+        Modality.LANDSAT.name: ENCODER_DEPTH,
     }
     if any(modality not in token_exit_cfg_galileo for modality in TRAINING_MODALITIES):
         raise ValueError(
             f"All modalities must be in token_exit_cfg_a: {TRAINING_MODALITIES}"
         )
     token_exit_cfg_zero = {modality: 0 for modality in TRAINING_MODALITIES}
-    dp_config = DataParallelConfig(name=DataParallelType.ddp)
+    dp_config = DataParallelConfig(name=DataParallelType.fsdp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
@@ -262,6 +262,7 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
             masking_config=masking_config,
             warmup_duration=Duration.epochs(WARMUP_EPOCHS),
             loss_config=loss_config,
+            mae_loss_config=mae_loss_config,
             rank_microbatch_size=RANK_MICROBATCH_SIZE,
             token_exit_cfg=token_exit_cfg_zero,
             autocast_precision=DType.bfloat16,
@@ -328,22 +329,22 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
             cache_dir="/helios_cache/osm_sampling",
         ),
         # osmbig
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/",
-            training_modalities=TRAINING_MODALITIES,
-            # use_samples_with_missing_supported_modalities=False,
-            dtype=DType.float32,
-            cache_dir="/helios_cache/osmbig",
-        ),
+        # HeliosDatasetConfig(
+        #    h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/",
+        #    training_modalities=TRAINING_MODALITIES,
+        #    # use_samples_with_missing_supported_modalities=False,
+        #    dtype=DType.float32,
+        #    cache_dir="/helios_cache/osmbig",
+        # ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(200)
-    METRICS_COLLECT_INTERVAL = 10
-    CANCEL_CHECK_INTERVAL = 25
+    MAX_DURATION = Duration.epochs(300)
+    METRICS_COLLECT_INTERVAL = 1
+    CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "v0-sweep"
@@ -387,6 +388,44 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             eval_interval=Duration.epochs(50),
             input_modalities=["sentinel2"],
+        ),
+        "sickle-sentinel1": DownstreamTaskConfig(
+            dataset="sickle",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(10),
+            input_modalities=["sentinel1"],
+        ),
+        "sickle-landsat": DownstreamTaskConfig(
+            dataset="sickle",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(10),
+            input_modalities=["landsat8"],
+        ),
+        "mados": DownstreamTaskConfig(
+            dataset="mados",
+            batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(10),
+        ),
+        "sen1floods11": DownstreamTaskConfig(
+            dataset="sen1floods11",
+            batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(10),
         ),
     }
     # Let us not use garbage collector fallback

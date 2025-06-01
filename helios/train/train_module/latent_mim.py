@@ -213,7 +213,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
         num_microbatches = len(microbatches)
-        for microbatch_idx, microbatch in enumerate(microbatches, start=1):
+        for microbatch_idx, microbatch in enumerate(microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
@@ -267,7 +267,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
     ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, _, reconstructed = self.model.forward(batch, patch_size)
+            latent, decoded, _, reconstructed = self.model(batch, patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 target_output, _ = self.model.target_encoder.forward(
