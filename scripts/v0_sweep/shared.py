@@ -164,7 +164,7 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
     WD = 0.02
-    WARMUP_EPOCHS = 10
+    WARMUP_EPOCHS = 30
 
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config = MaskingConfig(
@@ -194,7 +194,7 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
     contrastive_config = LossConfig(
         loss_config={
             "type": "InfoNCE",
-            "weight": 0.1,
+            "weight": 0.05,
         }
     )
     mae_loss_config = LossConfig(
@@ -219,7 +219,7 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
             f"All modalities must be in token_exit_cfg_a: {TRAINING_MODALITIES}"
         )
     token_exit_cfg_zero = {modality: 0 for modality in TRAINING_MODALITIES}
-    dp_config = DataParallelConfig(name=DataParallelType.fsdp)
+    dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
@@ -347,7 +347,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "v0-sweep"
+    WANDB_PROJECT = "v0-sweep-rerun"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
 
