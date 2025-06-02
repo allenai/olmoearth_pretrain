@@ -200,8 +200,9 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
     mae_loss_config = LossConfig(
         loss_config={
             "type": "mae",
-            "loss_function": "MSELoss",
-            "weight": 5,
+            "loss_function": "SmoothL1Loss",
+            "beta": 0.02,
+            "weight": 0.1,
         }
     )
     token_exit_cfg_galileo = {
