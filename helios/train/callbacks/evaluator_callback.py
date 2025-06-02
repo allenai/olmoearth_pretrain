@@ -35,6 +35,7 @@ class DownstreamEvaluator:
         batch_size: int = 128,
         num_workers: int = 8,
         patch_size: int = 4,
+        epochs: int = 50,
         pooling_type: PoolingType = PoolingType.MEAN,
         norm_stats_from_pretrained: bool = True,
         device: torch.device | None = None,
@@ -70,7 +71,7 @@ class DownstreamEvaluator:
         self.probe_lr = probe_lr
         self.patch_size = patch_size
         self.input_modalities = input_modalities
-
+        self.epochs = epochs
     def _get_data_loader(self, split: str) -> DataLoader:
         """Get the data loader for the given split."""
         return DataLoader(
@@ -103,8 +104,12 @@ class DownstreamEvaluator:
         train_loader = self._get_data_loader("train")
         val_loader = self._get_data_loader("valid")
 
+        start_time = time.time()
+        logger.info(f"Getting train embeddings for {self.dataset}...")
         train_embeddings, train_labels = self._get_embeddings(train_loader)
+        logger.info(f"Getting test embeddings for {self.dataset}...")
         test_embeddings, test_labels = self._get_embeddings(val_loader)
+        logger.info(f"Time to get embeddings for {self.dataset}: {time.time() - start_time:.2f}s")
 
         logger.info(
             f"train embeddings shape for {self.dataset}: {train_embeddings.shape}"
@@ -143,6 +148,7 @@ class DownstreamEvaluator:
                 batch_size=self.batch_size,
                 lr=self.probe_lr,
                 grid_size=int(self.config.height_width / self.patch_size),
+                epochs=self.epochs,
             )
         else:
             raise ValueError(f"Unrecognized task type: {self.config.task_type}")
@@ -219,7 +225,7 @@ class DownstreamTaskConfig:
     """Config for a downstream task."""
 
     dataset: str
-    batch_size: int = 128
+    embedding_batch_size: int = 128
     num_workers: int = 8
     pooling_type: PoolingType = PoolingType.MEAN
     norm_stats_from_pretrained: bool = True
@@ -227,6 +233,8 @@ class DownstreamTaskConfig:
     # Sweep across lrs for segmentation tasks
     probe_lr: float | None = None
     patch_size: int = 4
+    probe_batch_size: int = 32
+    epochs: int = 50 # Number of training epochs for linear probing task
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
 
 
@@ -286,6 +294,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     probe_lr=task.probe_lr,
                     patch_size=task.patch_size,
                     eval_interval=task.eval_interval,
+                    epochs=task.epochs,
                 )
             )
         return DownstreamEvaluatorCallback(
