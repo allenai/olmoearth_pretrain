@@ -18,7 +18,7 @@ from olmo_core.distributed.parallel import (
     get_dp_mesh,
     get_dp_process_group,
 )
-from olmo_core.distributed.utils import get_full_tensor, get_world_size
+from olmo_core.distributed.utils import get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
@@ -569,12 +569,19 @@ class HeliosTrainModule(TrainModule):
                 cur_ema_value,
                 ReduceType.mean,
             )
-            for param, target_param in zip(
+            for p, tp in zip(
                 self.model.encoder.parameters(), self.model.target_encoder.parameters()
             ):
-                get_full_tensor(target_param.data).mul_(cur_ema_value).add_(
-                    get_full_tensor(param.data), alpha=(1 - cur_ema_value)
-                )
+                if isinstance(p.data, DTensor):
+                    # get the local shard, update it in place
+                    p_local = p.data.to_local()
+                    tp_local = tp.data.to_local()
+                    tp_local.mul_(cur_ema_value).add_(
+                        p_local, alpha=(1 - cur_ema_value)
+                    )
+                else:
+                    # fallback for any plain Tensor
+                    tp.data.mul_(cur_ema_value).add_(p.data, alpha=(1 - cur_ema_value))
 
     def eval_batch(
         self, batch: dict[str, Any], labels: torch.Tensor | None = None

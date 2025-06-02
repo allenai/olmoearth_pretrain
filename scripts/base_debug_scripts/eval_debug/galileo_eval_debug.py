@@ -191,12 +191,12 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/osmbig/h5py_data/sentinel1_sentinel2_l2a_worldcover/320831"
     return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
+        h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
         training_modalities=common.training_modalities,
-        use_samples_with_missing_supported_modalities=True,
         dtype="float32",
+        # cache_dir="/helios_cache/osm_sampling",
+        # samples_per_sec=4 / NUM_WORKERS,  # 2/ GBS
     )
 
 

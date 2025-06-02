@@ -84,7 +84,11 @@ class Galileo(nn.Module, DistributedMixins):
         decoded = self.decoder_b(latent, timestamps=x.timestamps, patch_size=patch_size)
         return latent, decoded, latent_projected_and_pooled, reconstructed
 
-    def forward(self, input_a: MaskedHeliosSample, input_b: MaskedHeliosSample, patch_size: int) -> dict[str, tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]]:
+    def forward(
+        self, input_a: MaskedHeliosSample, input_b: MaskedHeliosSample, patch_size: int
+    ) -> dict[
+        str, tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]
+    ]:
         """Forward pass for the Galileo Style."""
         return {
             "a": self.forward_a(input_a, patch_size),

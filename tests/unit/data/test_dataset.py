@@ -49,11 +49,13 @@ class TestHeliosSample:
         sampled_hw_p = 4
         patch_size = 2
         max_tokens_per_instance = 100
+        current_length = 12
         sample: HeliosSample = samples_with_missing_modalities[1][1]
         subset_sample = sample.subset(
             patch_size=patch_size,
             max_tokens_per_instance=max_tokens_per_instance,
             sampled_hw_p=sampled_hw_p,
+            current_length=current_length,
         )
 
         # Check that the shapes are correct
@@ -158,7 +160,6 @@ class TestHeliosDataset:
             training_modalities=["sentinel2_l2a", "sentinel1"],
             dtype=np.float32,
             max_sequence_length=max_sequence_length,
-            use_modalities_with_missing_timesteps=True,
             normalize=False,  # Disable normalization for testing
         )
 

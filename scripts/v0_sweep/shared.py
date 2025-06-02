@@ -162,9 +162,9 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
     LR = 0.0001
     RANK_MICROBATCH_SIZE = 32
     ENCODE_RATIO = 0.1
-    DECODE_RATIO = 0.9
+    DECODE_RATIO = 0.75
     WD = 0.02
-    WARMUP_EPOCHS = 5
+    WARMUP_EPOCHS = 10
 
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config = MaskingConfig(
@@ -329,20 +329,20 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
             cache_dir="/helios_cache/osm_sampling",
         ),
         # osmbig
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/",
-            training_modalities=TRAINING_MODALITIES,
-            # use_samples_with_missing_supported_modalities=False,
-            dtype=DType.float32,
-            cache_dir="/helios_cache/osmbig",
-        ),
+        # HeliosDatasetConfig(
+        #    h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/",
+        #    training_modalities=TRAINING_MODALITIES,
+        #    # use_samples_with_missing_supported_modalities=False,
+        #    dtype=DType.float32,
+        #    cache_dir="/helios_cache/osmbig",
+        # ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(200)
+    MAX_DURATION = Duration.epochs(300)
     METRICS_COLLECT_INTERVAL = 1
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
