@@ -62,9 +62,6 @@ TRAINING_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
     Modality.SENTINEL1.name,
     Modality.WORLDCOVER.name,
-    Modality.SRTM.name,
-    Modality.LANDSAT.name,
-    Modality.OPENSTREETMAP_RASTER.name,
 ]
 
 ENCODER_EMBEDDING_SIZE = 768
@@ -369,15 +366,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
-        "breizhcrops": DownstreamTaskConfig(
-            dataset="breizhcrops",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(50),
-            patch_size=1,
-        ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
             batch_size=8,
@@ -387,26 +375,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             eval_interval=Duration.epochs(50),
             input_modalities=["sentinel2"],
-        ),
-        "sickle-sentinel1": DownstreamTaskConfig(
-            dataset="sickle",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.01,
-            eval_interval=Duration.epochs(10),
-            input_modalities=["sentinel1"],
-        ),
-        "sickle-landsat": DownstreamTaskConfig(
-            dataset="sickle",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.01,
-            eval_interval=Duration.epochs(10),
-            input_modalities=["landsat8"],
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
