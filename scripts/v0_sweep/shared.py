@@ -389,9 +389,9 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             eval_interval=Duration.epochs(50),
             input_modalities=["sentinel2"],
-            epochs=50
+            epochs=50,
         ),
-        "pastis-sentinel1": DownstreamTaskConfig(
+        "pastis_sentinel1": DownstreamTaskConfig(
             dataset="pastis",
             embedding_batch_size=32,
             probe_batch_size=16,
@@ -401,9 +401,9 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             eval_interval=Duration.epochs(50),
             input_modalities=["sentinel1"],
-            epochs=50
+            epochs=50,
         ),
-        "sickle-sentinel1": DownstreamTaskConfig(
+        "sickle_sentinel1": DownstreamTaskConfig(
             dataset="sickle",
             embedding_batch_size=32,
             probe_batch_size=16,
@@ -413,9 +413,9 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.0004,
             eval_interval=Duration.epochs(10),
             input_modalities=["sentinel1"],
-            epochs=50
+            epochs=50,
         ),
-        "sickle-landsat": DownstreamTaskConfig(
+        "sickle_landsat": DownstreamTaskConfig(
             dataset="sickle",
             embedding_batch_size=32,
             probe_batch_size=16,
@@ -425,7 +425,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.01,
             eval_interval=Duration.epochs(10),
             input_modalities=["landsat8"],
-            epochs=50
+            epochs=50,
         ),
         "pastis_r": DownstreamTaskConfig(
             dataset="pastis",
@@ -437,7 +437,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             eval_interval=Duration.epochs(20),
             input_modalities=["sentinel1", "sentinel2"],
-            epochs=50
+            epochs=50,
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
