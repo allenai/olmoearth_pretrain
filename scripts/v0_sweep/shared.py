@@ -222,7 +222,7 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
     dp_config = DataParallelConfig(name=DataParallelType.fsdp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
-    scheduler = CosWithWarmup()
+    scheduler = CosWithWarmup(alpha_f=0.001)
     if model == "galileo":
         return GalileoTrainModuleConfig(
             # TODO: change name to optim config
