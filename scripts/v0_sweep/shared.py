@@ -165,19 +165,19 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config = MaskingConfig(
         strategy_config={
-            "type": "space_time",
-            "encode_ratio": ENCODE_RATIO,
-            "decode_ratio": DECODE_RATIO,
-        }
-    )
-    masking_config_b = MaskingConfig(
-        strategy_config={
             "type": "random_increasing",
             "initial_encode_ratio": 0.6,
             "initial_decode_ratio": 0.35,
             "final_encode_ratio": 0.1,
             "final_decode_ratio": 0.85,
             "steps": 1000,
+        }
+    )
+    masking_config_b = MaskingConfig(
+        strategy_config={
+            "type": "random",
+            "encode_ratio": ENCODE_RATIO,
+            "decode_ratio": DECODE_RATIO,
         }
     )
     loss_config = LossConfig(
