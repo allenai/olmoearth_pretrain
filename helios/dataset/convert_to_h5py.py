@@ -43,8 +43,8 @@ class ConvertToH5pyConfig(Config):
     compression: str | None = None  # Compression algorithm
     compression_opts: int | None = None  # Compression level (0-9 for gzip)
     shuffle: bool | None = None  # Enable shuffle filter (only used with compression)
-    chunking: bool | None = (
-        None  # Enable chunking, by default we use dataset shape for chunking
+    chunk_options: tuple | bool | None = (
+        None  # Chunking configuration. None: disabled. True: auto (data_item.shape). tuple: specific shape.
     )
 
     def build(self) -> "ConvertToH5py":
@@ -58,7 +58,7 @@ class ConvertToH5pyConfig(Config):
             compression=self.compression,
             compression_opts=self.compression_opts,
             shuffle=self.shuffle,
-            chunking=self.chunking,
+            chunk_options=self.chunk_options,
         )
 
 
@@ -80,8 +80,7 @@ class ConvertToH5py:
         compression: str | None = None,
         compression_opts: int | None = None,
         shuffle: bool | None = None,
-        chunking: bool | None = None,
-        chunk_shape: tuple | None = None,
+        chunk_options: tuple | bool | None = None,
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -92,7 +91,11 @@ class ConvertToH5py:
             compression: Compression algorithm to use (None, "gzip", "lzf", "szip")
             compression_opts: Compression level (0-9 for gzip), only used with gzip compression
             shuffle: Enable shuffle filter, only used with compression
-            chunking: Enable chunking, by default we use dataset shape for chunking
+            chunk_options: Chunking configuration.
+                         None: chunking disabled.
+                         True: auto-chunk (chunks will match dataset shape).
+                         tuple: specify a chunk shape. If tuple rank differs from data rank,
+                                it's adjusted (padded with full dimension sizes or truncated).
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
@@ -101,7 +104,7 @@ class ConvertToH5py:
         self.compression = compression
         self.compression_opts = compression_opts
         self.shuffle = shuffle
-        self.chunking = chunking
+        self.chunk_options = chunk_options
         self.h5py_dir: UPath | None = None
 
     @property
@@ -301,20 +304,25 @@ class ConvertToH5py:
                                 f"Unsupported compression: {self.compression}"
                             )
 
-                        # Apply chunking if enabled
-                        if self.chunking:
-                            if self.chunk_shape is None:
-                                create_kwargs["chunks"] = data_item.shape
-                            else:
-                                create_kwargs["chunks"] = self.chunk_shape
-                                if len(self.chunk_shape) != len(data_item.shape):
-                                    # fill  with chunk shape until exhausted
-                                    for i in range(len(data_item.shape)):
-                                        if i >= len(self.chunk_shape):
-                                            # use the dataset shape instead
-                                            create_kwargs["chunks"].append(data_item.shape[i])
-                                        else:
-                                            create_kwargs["chunks"].append(self.chunk_shape[i])
+                        # Apply chunking based on self.chunk_options
+                        if self.chunk_options is True:  # auto-chunk
+                            create_kwargs["chunks"] = True
+                        elif isinstance(
+                            self.chunk_options, tuple
+                        ):  # Specific chunk shape
+                            num_data_dims = len(data_item.shape)
+                            final_chunks_list = []
+                            for i in range(num_data_dims):
+                                if i < len(self.chunk_options):
+                                    final_chunks_list.append(self.chunk_options[i])
+                                else:
+                                    # If chunk_options is shorter, pad with full data dimension size
+                                    final_chunks_list.append(data_item.shape[i])
+                            create_kwargs["chunks"] = tuple(final_chunks_list)
+                        else:
+                            create_kwargs["chunks"] = (
+                                data_item.shape
+                            )  # use the dataset item shape as the chunk so it effectively does no chunking
 
                     # Create the dataset per item
                     h5file.create_dataset(item_name, data=data_item, **create_kwargs)
