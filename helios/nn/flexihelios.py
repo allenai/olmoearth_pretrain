@@ -1196,10 +1196,10 @@ class Encoder(FlexiHeliosBase):
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
             # WARNING: IF attention mask is not None we won't use an efficient implementation of attn under the hood
-            if new_mask.all():
-                new_mask = None
             tokens = blk(
-                x=tokens, y=None, attn_mask=new_mask if self.training else None
+                x=tokens,
+                y=None,
+                attn_mask=new_mask if self.training or not new_mask.all() else None,
             )  # requires batches to have same number of tokens
 
         if exit_ids_seq is not None:
