@@ -425,22 +425,22 @@ class PASTISRDataset(Dataset):
         if self.input_modalities == ["sentinel1", "sentinel2"]:
             masked_sample = MaskedHeliosSample.from_heliossample(
                 HeliosSample(
-                    sentinel2_l2a=torch.tensor(s2_image).float(),
-                    sentinel1=torch.tensor(s1_image).float(),
+                    sentinel2_l2a=s2_image.float(),
+                    sentinel1=s1_image.float(),
                     timestamps=timestamps,
                 )
             )
         elif self.input_modalities == ["sentinel2"]:
             masked_sample = MaskedHeliosSample.from_heliossample(
                 HeliosSample(
-                    sentinel2_l2a=torch.tensor(s2_image).float(),
+                    sentinel2_l2a=s2_image.float(),
                     timestamps=timestamps,
                 )
             )
         elif self.input_modalities == ["sentinel1"]:
             masked_sample = MaskedHeliosSample.from_heliossample(
                 HeliosSample(
-                    sentinel1=torch.tensor(s1_image).float(),
+                    sentinel1=s1_image.float(),
                     timestamps=timestamps,
                 )
             )

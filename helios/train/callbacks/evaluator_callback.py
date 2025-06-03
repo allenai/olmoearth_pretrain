@@ -32,7 +32,8 @@ class DownstreamEvaluator:
         dataset: str,
         trainer: Trainer,
         eval_interval: Duration,
-        batch_size: int = 128,
+        embedding_batch_size: int,
+        probe_batch_size: int,
         num_workers: int = 8,
         patch_size: int = 4,
         epochs: int = 50,
@@ -64,7 +65,8 @@ class DownstreamEvaluator:
         self.eval_interval = eval_interval
         self.trainer = trainer
         self.device = device
-        self.batch_size = batch_size
+        self.embedding_batch_size = embedding_batch_size
+        self.probe_batch_size = probe_batch_size
         self.num_workers = num_workers
         self.pooling_type = pooling_type
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
@@ -83,7 +85,7 @@ class DownstreamEvaluator:
                 input_modalities=self.input_modalities,
             ),
             collate_fn=eval_collate_fn,
-            batch_size=self.batch_size,
+            batch_size=self.embedding_batch_size,
             num_workers=self.num_workers,
         )
 
@@ -145,7 +147,7 @@ class DownstreamEvaluator:
                 test_embeddings=test_embeddings,
                 test_labels=test_labels,
                 device=self.device,
-                batch_size=self.batch_size,
+                batch_size=self.probe_batch_size,
                 lr=self.probe_lr,
                 grid_size=int(self.config.height_width / self.patch_size),
                 epochs=self.epochs,
@@ -285,7 +287,8 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     evaluation_name=evaluation_name,
                     dataset=task.dataset,
                     trainer=trainer,
-                    batch_size=task.batch_size,
+                    embedding_batch_size=task.embedding_batch_size,
+                    probe_batch_size=task.probe_batch_size,
                     num_workers=task.num_workers,
                     pooling_type=task.pooling_type,
                     norm_stats_from_pretrained=task.norm_stats_from_pretrained,

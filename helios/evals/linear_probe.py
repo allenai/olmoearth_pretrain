@@ -93,6 +93,7 @@ def train_and_eval_probe(
             patch_size=output_patch_size,
             device=device,
         )
+        print(f"Epoch {end_epoch}, MIoU: {eval_miou}")
         eval_mious.append(eval_miou)
     for i in range(len(eval_mious)):
         print(f"Epoch {(i + 1) * eval_interval}, MIoU: {eval_mious[i]}")
