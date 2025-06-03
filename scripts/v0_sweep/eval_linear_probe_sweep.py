@@ -31,11 +31,11 @@ BASE_COMMAND = (
 )
 
 # Learning rates to sweep for linear probe
-PROBE_BATCH_SIZES = [4, 8, 16, 32, 64, 128]
+PROBE_BATCH_SIZES = [128]
 LP_LRs = [
-    1e-4,
-    2e-4,
-    5e-4,
+    # 1e-4,
+    # 2e-4,
+    # 5e-4,
     7e-4,
     1e-3,
     2e-3,
