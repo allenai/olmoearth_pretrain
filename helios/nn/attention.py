@@ -154,7 +154,9 @@ class Attention(nn.Module):
             mod_mask = lambda b, h, q_idx, kv_idx: attn_mask[b, h, q_idx, kv_idx]
         q = self.q(x)
         if x.is_nested:
-            block_mask = create_nested_block_mask(mod_mask, B, self.num_heads, q, _compile=False)
+            block_mask = create_nested_block_mask(
+                mod_mask, B, self.num_heads, q, _compile=True
+            )
             logger.info(f"block_mask shape: {block_mask.shape}")
         if y is None:
             assert not self.cross_attn
@@ -171,7 +173,15 @@ class Attention(nn.Module):
 
         q, k = self.q_norm(q), self.k_norm(k)
 
-        x = self.sdpa(q, k, v, N, attn_mask)
+        if x.is_nested:
+            x = flex_attention(
+                query=q,
+                key=k,
+                value=v,
+                block_mask=block_mask,
+            )
+        else:
+            x = self.sdpa(q, k, v, N, attn_mask)
 
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
