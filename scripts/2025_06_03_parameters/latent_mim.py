@@ -3,10 +3,6 @@
 import logging
 
 from olmo_core.config import DType
-from olmo_core.distributed.parallel.data_parallel import (
-    DataParallelConfig,
-    DataParallelType,
-)
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
@@ -102,7 +98,6 @@ def build_train_module_config(
     token_exit_cfg = {modality: 0 for modality in common.training_modalities}
 
     WARMUP_EPOCHS = 5
-    dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
@@ -115,7 +110,6 @@ def build_train_module_config(
         token_exit_cfg=token_exit_cfg,
         autocast_precision=DType.bfloat16,
         max_grad_norm=1.0,
-        dp_config=dp_config,
         scheduler=scheduler,
     )
     return train_module_config
