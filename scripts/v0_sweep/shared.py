@@ -62,6 +62,10 @@ TRAINING_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
     Modality.SENTINEL1.name,
     Modality.WORLDCOVER.name,
+    Modality.SRTM.name,
+    Modality.LATLON.name,
+    Modality.LANDSAT.name,
+    Modality.OPENSTREETMAP_RASTER.name,
 ]
 
 ENCODER_EMBEDDING_SIZE = 768
@@ -165,12 +169,9 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config = MaskingConfig(
         strategy_config={
-            "type": "random_increasing",
-            "initial_encode_ratio": 0.6,
-            "initial_decode_ratio": 0.35,
-            "final_encode_ratio": 0.1,
-            "final_decode_ratio": 0.85,
-            "steps": 1000,
+            "type": "space_time",
+            "encode_ratio": ENCODE_RATIO,
+            "decode_ratio": DECODE_RATIO,
         }
     )
     masking_config_b = MaskingConfig(
