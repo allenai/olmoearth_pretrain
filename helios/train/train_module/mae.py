@@ -231,7 +231,7 @@ class MAETrainModule(HeliosTrainModule):
         # Split into micro-batches.
         microbatches = split_batch(batch, self.rank_microbatch_size)
         num_microbatches = len(microbatches)
-        for microbatch_idx, microbatch in enumerate(microbatches, start=1):
+        for microbatch_idx, microbatch in enumerate(microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"

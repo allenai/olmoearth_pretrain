@@ -44,6 +44,7 @@ class ContrastiveLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     loss_config: LossConfig = field(
         default_factory=lambda: LossConfig(loss_config={"type": "patch_discrimination"})
     )
+    mae_loss_config: LossConfig | None = None
     masking_config: MaskingConfig = field(
         default_factory=lambda: MaskingConfig(strategy_config={"type": "random"})
     )
@@ -85,6 +86,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         transform_config: The transform configuration for the model.
         masking_config: The masking configuration for the model.
         loss_config: The loss configuration for the model.
+        mae_loss_config: Optional loss config for masked auto-encoding.
         rank_microbatch_size: The rank microbatch size in instances.
         compile_model: Whether to compile to the model.
         dp_config: Data parallel configuration for the model.
@@ -110,6 +112,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         loss_config: LossConfig,
         rank_microbatch_size: int,
         token_exit_cfg: dict[str, int],
+        mae_loss_config: LossConfig | None = None,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
         ac_config: TransformerActivationCheckpointingConfig | None = None,
@@ -133,6 +136,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
             transform_config: The transform configuration for the model.
             masking_config: The masking configuration for the model.
             loss_config: The loss configuration for the model.
+            mae_loss_config: Optional loss config for masked auto-encoding.
             rank_microbatch_size: The rank microbatch size in instances.
             compile_model: Whether to compile to the model.
             dp_config: Data parallel configuration for the model.
@@ -182,6 +186,10 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         if self.regularizer is not None:
             self.total_loss_name = f"{self.base_loss.name}+{self.regularizer.name}"
 
+        self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
+        if self.mae_loss is not None:
+            self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
+
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
@@ -211,7 +219,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
         num_microbatches = len(microbatches)
-        for microbatch_idx, microbatch in enumerate(microbatches, start=1):
+        for microbatch_idx, microbatch in enumerate(microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
@@ -288,7 +296,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, latent_projected_and_pooled = self.model.forward(
+            latent, decoded, latent_projected_and_pooled, reconstructed = self.model(
                 batch, patch_size
             )
             with torch.no_grad():
@@ -299,4 +307,6 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
             loss = self.loss_fn(decoded, target_output)
+            if self.mae_loss is not None and reconstructed is not None:
+                loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output, latent_projected_and_pooled

@@ -326,7 +326,10 @@ class HeliosDataLoader(DataLoaderBase):
                 (
                     patch_size,
                     HeliosSample(**output_dict).subset(
-                        patch_size, max_tokens_per_instance=1500, sampled_hw_p=6
+                        patch_size,
+                        max_tokens_per_instance=1500,
+                        sampled_hw_p=6,
+                        current_length=12,
                     ),
                 )
             ]
