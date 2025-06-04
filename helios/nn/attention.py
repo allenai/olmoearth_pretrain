@@ -151,11 +151,12 @@ class Attention(nn.Module):
             logger.info(f"attn_mask shape: {(1, self.num_heads, N, 1)}")
             attn_mask = attn_mask.repeat((1, self.num_heads, N, 1))
             # Then I want to basically create a function that returns a boolean based on thi smask
-            mod_mask = lambda b, h, q_idx, kv_idx: attn_mask[b, h, q_idx, kv_idx]
+            mask_mod = lambda b, h, q_idx, kv_idx: attn_mask[b, h, q_idx, kv_idx]
         q = self.q(x)
         if x.is_nested:
+            # this should be cached or done at an outer layer
             block_mask = create_nested_block_mask(
-                mod_mask, B, self.num_heads, q, _compile=True
+                mask_mod, None, None, q, _compile=True
             )
             logger.info(f"block_mask shape: {block_mask.shape}")
         if y is None:
