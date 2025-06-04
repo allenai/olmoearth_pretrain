@@ -1084,8 +1084,10 @@ class Encoder(FlexiHeliosBase):
         else:
             x = x[:, :max_length]
             # New mask chopped to the longest sequence
-            updated_mask = sorted_mask[:, :max_length]
+        updated_mask = sorted_mask[:, :max_length]
 
+        if updated_mask.is_nested:
+            raise ValueError("Updated mask is nested")
         return x, indices, updated_mask
 
     @staticmethod

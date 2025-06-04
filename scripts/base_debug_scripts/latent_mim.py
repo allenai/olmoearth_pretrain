@@ -116,6 +116,7 @@ def build_train_module_config(
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         token_exit_cfg=token_exit_cfg,
         autocast_precision=DType.bfloat16,
+        compile_model=False,
         max_grad_norm=1.0,
         dp_config=dp_config,
         scheduler=scheduler,

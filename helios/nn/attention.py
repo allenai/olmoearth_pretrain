@@ -12,6 +12,9 @@ from torch.nn.attention.flex_attention import (
     create_nested_block_mask,  # NEW helper for jagged seqs
     flex_attention,
 )
+from logging import getLogger
+
+logger = getLogger(__name__)
 
 
 class Attention(nn.Module):
@@ -95,6 +98,7 @@ class Attention(nn.Module):
         """
         if self.fast_attn:
             if block_mask is not None:
+
                 x = flex_attention(
                     query=q,
                     key=k,
@@ -140,15 +144,18 @@ class Attention(nn.Module):
         """
         B, N, C = x.shape
         if attn_mask is not None and self.fast_attn:
-            attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, N, 1))
-            print(attn_mask.shape)
-            print(attn_mask)
+            logger.info(f"attn_mask shape: {attn_mask.shape}")
+            N = attn_mask.shape[1]
+            logger.info(f"attn_mask: {attn_mask}")
+            attn_mask = attn_mask[:, None, None]
+            logger.info(f"attn_mask shape: {(1, self.num_heads, N, 1)}")
+            attn_mask = attn_mask.repeat((1, self.num_heads, N, 1))
             # Then I want to basically create a function that returns a boolean based on thi smask
             mod_mask = lambda b, h, q_idx, kv_idx: attn_mask[b, h, q_idx, kv_idx]
-        if x.is_nested:
-            block_mask = create_nested_block_mask(attn_mask)
         q = self.q(x)
-
+        if x.is_nested:
+            block_mask = create_nested_block_mask(mod_mask, B, self.num_heads, q, _compile=False)
+            logger.info(f"block_mask shape: {block_mask.shape}")
         if y is None:
             assert not self.cross_attn
             k = self.k(x)
@@ -406,4 +413,5 @@ class Block(nn.Module):
 
     def apply_compile(self) -> None:
         """Apply torch.compile to the model."""
+        logger.info("Applying torch.compile to the model...")
         self.compile()
