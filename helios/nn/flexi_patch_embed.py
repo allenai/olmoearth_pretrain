@@ -188,7 +188,7 @@ class FlexiPatchReconstruction(nn.Module):
             stride=max_patch_size,
             bias=bias,
         )
-        self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
+        self.norm = norm_layer(mlp_size) if norm_layer else nn.Identity()
         self.out_mlp = nn.Conv2d(mlp_size, out_chans, kernel_size=1)
 
         # Flexi specific attributes
@@ -214,24 +214,6 @@ class FlexiPatchReconstruction(nn.Module):
             assert len(list(x)) == 2, "x must be a 2-tuple"
             return tuple(x)
         return (x, x)
-
-    def _resize(self, x: Tensor, shape: tuple[int, int]) -> Tensor:
-        """Resize the input tensor to the target shape.
-
-        Args:
-            x: Input tensor
-            shape: Target shape
-
-        Returns:
-            Resized tensor
-        """
-        x_resized = F.interpolate(
-            x[None, None, ...],
-            shape,
-            mode=self.interpolation,
-            antialias=self.antialias,
-        )
-        return x_resized[0, 0, ...]
 
     def forward(
         self,
