@@ -310,9 +310,9 @@ class ConvertToH5py:
 
             # Count modality combinations
             combination = frozenset(m.name for m in sample.modalities)
-            modality_combinations[combination] = (
-                modality_combinations.get(combination, 0) + 1
-            )
+        modality_combinations[combination] = (
+            modality_combinations.get(combination, 0) + 1
+        )
 
         # Log individual modality counts
         for modality_name, count in modality_counts.items():

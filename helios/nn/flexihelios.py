@@ -1044,7 +1044,9 @@ class Encoder(FlexiHeliosBase):
         return exit_ids_per_modality_dict
 
     @staticmethod
-    def remove_masked_tokens(x: Tensor, mask: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    def remove_masked_tokens(
+        x: Tensor, mask: Tensor, nested_tensors: bool = False
+    ) -> tuple[Tensor, Tensor, Tensor]:
         """Remove masked tokens from the tokens and masks.
 
         Implementation from https://stackoverflow.com/a/68621610/2332296
@@ -1072,10 +1074,17 @@ class Encoder(FlexiHeliosBase):
         x = x * sorted_mask.unsqueeze(-1)
 
         # cut off to the length of the longest sequence
-        max_length = sorted_mask.sum(-1).max()
-        x = x[:, :max_length]
-        # New mask chopped to the longest sequence
-        updated_mask = sorted_mask[:, :max_length]
+        seq_lengths = sorted_mask.sum(-1)
+        max_length = seq_lengths.max()
+        if nested_tensors:
+            # apparently contiguous is safer?
+            x = torch.nested.narrow(
+                x, dim=1, start=0, length=seq_lengths, layout=torch.jagged
+            ).contiguous()
+        else:
+            x = x[:, :max_length]
+            # New mask chopped to the longest sequence
+            updated_mask = sorted_mask[:, :max_length]
 
         return x, indices, updated_mask
 
@@ -1171,8 +1180,10 @@ class Encoder(FlexiHeliosBase):
         x, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
-
-        tokens, indices, new_mask = self.remove_masked_tokens(x, bool_mask)
+        nested_tensors = True
+        tokens, indices, new_mask = self.remove_masked_tokens(
+            x, bool_mask, nested_tensors
+        )
         if exit_ids_seq is not None:
             exit_ids_seq, _, _ = self.remove_masked_tokens(exit_ids_seq, bool_mask)
             # still linear projections

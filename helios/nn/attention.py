@@ -8,6 +8,10 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
+from torch.nn.attention.flex_attention import (
+    create_nested_block_mask,  # NEW helper for jagged seqs
+    flex_attention,
+)
 
 
 class Attention(nn.Module):
@@ -75,6 +79,7 @@ class Attention(nn.Module):
         v: torch.Tensor,
         n: int,
         attn_mask: torch.Tensor | None = None,
+        block_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute scaled dot product attention.
 
@@ -89,16 +94,22 @@ class Attention(nn.Module):
             Output tensor of shape (B, H, N, D)
         """
         if self.fast_attn:
-            if attn_mask is not None:
-                attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
-            x = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                # a value of True indicates that the element should take part in attention
-                attn_mask=attn_mask,
-                dropout_p=self.attn_drop.p,
-            )
+            if block_mask is not None:
+                x = flex_attention(
+                    query=q,
+                    key=k,
+                    value=v,
+                    block_mask=block_mask,
+                )
+            else:
+                x = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    # a value of True indicates that the element should take part in attention
+                    attn_mask=attn_mask,
+                    dropout_p=self.attn_drop.p,
+                )
         else:
             # Backward Compatible for older PyTorch versions
             if attn_mask is not None:
@@ -128,7 +139,14 @@ class Attention(nn.Module):
             Output tensor of shape (B, N, C)
         """
         B, N, C = x.shape
-
+        if attn_mask is not None and self.fast_attn:
+            attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, N, 1))
+            print(attn_mask.shape)
+            print(attn_mask)
+            # Then I want to basically create a function that returns a boolean based on thi smask
+            mod_mask = lambda b, h, q_idx, kv_idx: attn_mask[b, h, q_idx, kv_idx]
+        if x.is_nested:
+            block_mask = create_nested_block_mask(attn_mask)
         q = self.q(x)
 
         if y is None:
