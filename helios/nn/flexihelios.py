@@ -479,6 +479,7 @@ class Reconstructor(nn.Module):
                         out_chans=len(channel_set_idxs),
                         embedding_size=self.embedding_size,
                         max_patch_size=self.max_patch_size,
+                        norm_layer=nn.LayerNorm,
                     )
                     for idx, channel_set_idxs in enumerate(
                         modality.bandsets_as_indices()

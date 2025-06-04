@@ -366,7 +366,6 @@ class GalileoTrainModule(HeliosTrainModule):
             )
         del batch, microbatch, batch_data
 
-    # loss_a, latent_a, pooled_a, loss_b, latent_b, pooled_b
     def model_forward(
         self,
         batch_a: MaskedHeliosSample,

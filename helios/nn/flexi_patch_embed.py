@@ -157,6 +157,7 @@ class FlexiPatchReconstruction(nn.Module):
         max_patch_size: int | tuple[int, int],
         out_chans: int = 3,
         embedding_size: int = 128,
+        mlp_size: int = 128,
         norm_layer: nn.Module | None = None,
         bias: bool = True,
         interpolation: str = "bicubic",
@@ -168,6 +169,7 @@ class FlexiPatchReconstruction(nn.Module):
             max_patch_size: Base patch size. i.e the size of the parameter buffer
             out_chans: Number of out image channels
             embedding_size: Network embedding dimension size
+            mlp_size: size to up-sample to for final MLP.
             norm_layer: Optional normalization layer
             bias: Whether to use bias in convolution
             interpolation: Resize interpolation type
@@ -181,12 +183,13 @@ class FlexiPatchReconstruction(nn.Module):
 
         self.proj = nn.ConvTranspose2d(
             embedding_size,
-            out_chans,
+            mlp_size,
             kernel_size=max_patch_size,
             stride=max_patch_size,
             bias=bias,
         )
         self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
+        self.out_mlp = nn.Conv2d(mlp_size, out_chans, kernel_size=1)
 
         # Flexi specific attributes
         self.interpolation = interpolation
@@ -280,11 +283,15 @@ class FlexiPatchReconstruction(nn.Module):
                 x, "(b h w) c p_h p_w -> b c (h p_h) (w p_w)", b=bl, h=hl, w=wl
             )
 
+        x = rearrange(x, "b c h w -> b h w c")
+        x = self.norm(x)
+        x = rearrange(x, "b h w c -> b c h w")
+        x = F.relu(x)
+        x = self.out_mlp(x)
+
         if has_time_dimension:
             x = rearrange(x, "(b t) c h w -> b h w t c", b=b, t=t)
         else:
             x = rearrange(x, "b c h w -> b h w c")
-
-        x = self.norm(x)
 
         return x
