@@ -614,6 +614,14 @@ class SICKLEDataset(Dataset):
                     timestamps=timestamps,
                 )
             )
+        elif self.input_modalities == ["landsat8", "sentinel1"]:
+            masked_sample = MaskedHeliosSample.from_heliossample(
+                HeliosSample(
+                    sentinel1=torch.tensor(s1_image).float(),
+                    landsat=torch.tensor(l8_image).float(),
+                    timestamps=timestamps,
+                )
+            )
         elif self.input_modalities == ["sentinel1", "sentinel2"]:
             masked_sample = MaskedHeliosSample.from_heliossample(
                 HeliosSample(
