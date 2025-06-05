@@ -98,7 +98,7 @@ def build_train_module_config(
     train_module_config = LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
         masking_config=masking_config,
-        warmup_duration=Duration.epochs(5),
+        warmup_duration=Duration.steps(4000),
         loss_config=loss_config,
         rank_microbatch_size=128,
         token_exit_cfg=token_exit_cfg,
@@ -152,7 +152,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(300)
+    MAX_DURATION = Duration.steps(200000)
     METRICS_COLLECT_INTERVAL = 1
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
@@ -176,7 +176,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(5),
+            eval_interval=Duration.steps(4000),
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
@@ -185,7 +185,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(10),
+            eval_interval=Duration.steps(8000),
             input_modalities=["sentinel2"],
         ),
         "mados": DownstreamTaskConfig(
@@ -195,7 +195,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(10),
+            eval_interval=Duration.steps(4000),
         ),
         "m-bigearthnet": DownstreamTaskConfig(
             dataset="m-bigearthnet",
@@ -203,7 +203,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(10),
+            eval_interval=Duration.steps(4000),
         ),
         "m-brick-kiln": DownstreamTaskConfig(
             dataset="m-brick-kiln",
@@ -211,7 +211,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(10),
+            eval_interval=Duration.steps(4000),
         ),
         "sickle": DownstreamTaskConfig(
             dataset="sickle",
@@ -220,7 +220,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(10),
+            eval_interval=Duration.steps(4000),
             input_modalities=["landsat8"],
         ),
     }
