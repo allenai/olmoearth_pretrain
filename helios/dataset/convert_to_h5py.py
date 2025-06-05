@@ -135,7 +135,7 @@ class ConvertToH5py:
         self, index_sample_tuple: tuple[int, SampleInformation]
     ) -> None:
         """Process a sample into an h5 file."""
-        i, sublock_index, sample = index_sample_tuple
+        i, (sublock_index, sample) = index_sample_tuple
         h5_file_path = self._get_h5_file_path(i)
         if h5_file_path.exists():
             return
@@ -161,7 +161,7 @@ class ConvertToH5py:
         else:
             for i, (sublock_index, sample) in enumerate(samples):
                 logger.info(f"Processing sample {i}")
-                self.process_sample_into_h5((i, sublock_index, sample))
+                self.process_sample_into_h5((i, (sublock_index, sample)))
 
     def save_sample_metadata(self, samples: list[SampleInformation]) -> None:
         """Save metadata about which samples contain which modalities."""
