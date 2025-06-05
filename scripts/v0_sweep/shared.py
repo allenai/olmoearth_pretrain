@@ -394,7 +394,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
-        "m-sa-crop-type": DownstreamTaskConfig(
+        "m_sa_crop_type": DownstreamTaskConfig(
             dataset="m-sa-crop-type",
             embedding_batch_size=128,
             probe_batch_size=128,
@@ -404,7 +404,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             eval_interval=Duration.epochs(10),
         ),
-        "m-cashew-plant": DownstreamTaskConfig(
+        "m_cashew_plant": DownstreamTaskConfig(
             dataset="m-cashew-plant",
             embedding_batch_size=128,
             probe_batch_size=128,
