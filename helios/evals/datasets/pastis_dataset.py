@@ -116,7 +116,10 @@ class PASTISRProcessor:
         self, modality_name: str, images: torch.Tensor, dates: dict[str, int]
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Aggregate images into monthly averages."""
-        if modality_name != "sentinel2" or modality_name != "sentinel1":
+        if (
+            modality_name != Modality.SENTINEL2_L2A.name
+            and modality_name != Modality.SENTINEL1.name
+        ):
             raise ValueError(
                 f"Unsupported modality: {modality_name} for PASTIS dataset!"
             )
@@ -129,7 +132,7 @@ class PASTISRProcessor:
             month = str(date)[:6]
             img = torch.tensor(images[int(idx)], dtype=torch.float32)
             # S2 in PASTIS has 10 bands, so imputation is always needed
-            if modality_name == "sentinel2":
+            if modality_name == Modality.SENTINEL2_L2A.name:
                 if img.shape[1] == 10:
                     img = self.impute(img)
                 else:
@@ -172,8 +175,10 @@ class PASTISRProcessor:
 
         # Only extract the first two bands (vv/vh) for S1
         s1_images = s1_images[:, :2, ...]
-        s2_images, months = self.aggregate_months("sentinel2", s2_images, dates)
-        s1_images, _ = self.aggregate_months("sentinel1", s1_images, dates)
+        s2_images, months = self.aggregate_months(
+            Modality.SENTINEL2_L2A.name, s2_images, dates
+        )
+        s1_images, _ = self.aggregate_months(Modality.SENTINEL1.name, s1_images, dates)
 
         targets = torch.tensor(targets, dtype=torch.long)
         # PASTIS has 19 classes, the last one is void label, convert it to -1 to ignore
@@ -319,6 +324,8 @@ def process_pastis(
 class PASTISRDataset(Dataset):
     """PASTIS-R dataset class."""
 
+    allowed_modalities = [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]
+
     def __init__(
         self,
         path_to_splits: Path = PASTIS_DIR,
@@ -336,14 +343,14 @@ class PASTISRDataset(Dataset):
             partition: Partition to use
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
-            input_modalities: List of modalities to use, must be a subset of ["sentinel1", "sentinel2"]
+            input_modalities: List of modalities to use, must be a subset of ["sentinel1", "sentinel2_l2a"]
         """
         assert split in ["train", "valid", "test"]
 
         assert len(input_modalities) > 0, "input_modalities must be set"
         assert all(
-            modality in ["sentinel1", "sentinel2"] for modality in input_modalities
-        ), "input_modalities must be a subset of ['sentinel1', 'sentinel2']"
+            modality in self.allowed_modalities for modality in input_modalities
+        ), f"input_modalities must be a subset of {self.allowed_modalities}"
 
         self.input_modalities = input_modalities
 
@@ -422,29 +429,19 @@ class PASTISRDataset(Dataset):
             )
         timestamps = torch.stack(timestamps)
 
-        if self.input_modalities == ["sentinel1", "sentinel2"]:
-            masked_sample = MaskedHeliosSample.from_heliossample(
-                HeliosSample(
-                    sentinel2_l2a=torch.tensor(s2_image).float(),
-                    sentinel1=torch.tensor(s1_image).float(),
-                    timestamps=timestamps,
-                )
-            )
-        elif self.input_modalities == ["sentinel2"]:
-            masked_sample = MaskedHeliosSample.from_heliossample(
-                HeliosSample(
-                    sentinel2_l2a=torch.tensor(s2_image).float(),
-                    timestamps=timestamps,
-                )
-            )
-        elif self.input_modalities == ["sentinel1"]:
-            masked_sample = MaskedHeliosSample.from_heliossample(
-                HeliosSample(
-                    sentinel1=torch.tensor(s1_image).float(),
-                    timestamps=timestamps,
-                )
-            )
-        else:
-            raise ValueError(f"Invalid input modalities: {self.input_modalities}")
+        # Build sample dict based on requested modalities
+        sample_dict = {"timestamps": timestamps}
+
+        if Modality.SENTINEL1.name in self.input_modalities:
+            sample_dict[Modality.SENTINEL1.name] = torch.tensor(s1_image).float()
+        if Modality.SENTINEL2_L2A.name in self.input_modalities:
+            sample_dict[Modality.SENTINEL2_L2A.name] = torch.tensor(s2_image).float()
+
+        if not sample_dict:
+            raise ValueError(f"No valid modalities found in: {self.input_modalities}")
+
+        masked_sample = MaskedHeliosSample.from_heliossample(
+            HeliosSample(**sample_dict)
+        )
 
         return masked_sample, labels.long()

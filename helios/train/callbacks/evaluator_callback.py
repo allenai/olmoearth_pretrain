@@ -32,9 +32,11 @@ class DownstreamEvaluator:
         dataset: str,
         trainer: Trainer,
         eval_interval: Duration,
-        batch_size: int = 128,
+        embedding_batch_size: int,
+        probe_batch_size: int,
         num_workers: int = 8,
         patch_size: int = 4,
+        epochs: int = 50,
         pooling_type: PoolingType = PoolingType.MEAN,
         norm_stats_from_pretrained: bool = True,
         device: torch.device | None = None,
@@ -48,9 +50,11 @@ class DownstreamEvaluator:
             dataset: Dataset to evaluate on.
             trainer: Trainer object.
             eval_interval: Interval to evaluate on.
-            batch_size: Batch size.
+            embedding_batch_size: Batch size for embedding.
+            probe_batch_size: Batch size for probe.
             num_workers: Number of workers.
             patch_size: Patch size.
+            epochs: Number of epochs for linear probing.
             pooling_type: Pooling type.
             norm_stats_from_pretrained: Whether to use normalized stats from pretrained model.
             device: Device to evaluate on.
@@ -63,13 +67,15 @@ class DownstreamEvaluator:
         self.eval_interval = eval_interval
         self.trainer = trainer
         self.device = device
-        self.batch_size = batch_size
+        self.embedding_batch_size = embedding_batch_size
+        self.probe_batch_size = probe_batch_size
         self.num_workers = num_workers
         self.pooling_type = pooling_type
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
         self.probe_lr = probe_lr
         self.patch_size = patch_size
         self.input_modalities = input_modalities
+        self.epochs = epochs
 
     def _get_data_loader(self, split: str) -> DataLoader:
         """Get the data loader for the given split."""
@@ -82,7 +88,7 @@ class DownstreamEvaluator:
                 input_modalities=self.input_modalities,
             ),
             collate_fn=eval_collate_fn,
-            batch_size=self.batch_size,
+            batch_size=self.embedding_batch_size,
             num_workers=self.num_workers,
         )
 
@@ -103,8 +109,14 @@ class DownstreamEvaluator:
         train_loader = self._get_data_loader("train")
         val_loader = self._get_data_loader("valid")
 
+        start_time = time.time()
+        logger.info(f"Getting train embeddings for {self.dataset}...")
         train_embeddings, train_labels = self._get_embeddings(train_loader)
+        logger.info(f"Getting test embeddings for {self.dataset}...")
         test_embeddings, test_labels = self._get_embeddings(val_loader)
+        logger.info(
+            f"Time to get embeddings for {self.dataset}: {time.time() - start_time:.2f}s"
+        )
 
         logger.info(
             f"train embeddings shape for {self.dataset}: {train_embeddings.shape}"
@@ -140,9 +152,10 @@ class DownstreamEvaluator:
                 test_embeddings=test_embeddings,
                 test_labels=test_labels,
                 device=self.device,
-                batch_size=self.batch_size,
+                batch_size=self.probe_batch_size,
                 lr=self.probe_lr,
                 grid_size=int(self.config.height_width / self.patch_size),
+                epochs=self.epochs,
             )
         else:
             raise ValueError(f"Unrecognized task type: {self.config.task_type}")
@@ -219,7 +232,7 @@ class DownstreamTaskConfig:
     """Config for a downstream task."""
 
     dataset: str
-    batch_size: int = 128
+    embedding_batch_size: int = 128
     num_workers: int = 8
     pooling_type: PoolingType = PoolingType.MEAN
     norm_stats_from_pretrained: bool = True
@@ -227,6 +240,8 @@ class DownstreamTaskConfig:
     # Sweep across lrs for segmentation tasks
     probe_lr: float | None = None
     patch_size: int = 4
+    probe_batch_size: int = 32
+    epochs: int = 50  # Number of training epochs for linear probing task
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
 
 
@@ -277,7 +292,8 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     evaluation_name=evaluation_name,
                     dataset=task.dataset,
                     trainer=trainer,
-                    batch_size=task.batch_size,
+                    embedding_batch_size=task.embedding_batch_size,
+                    probe_batch_size=task.probe_batch_size,
                     num_workers=task.num_workers,
                     pooling_type=task.pooling_type,
                     norm_stats_from_pretrained=task.norm_stats_from_pretrained,
@@ -286,6 +302,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     probe_lr=task.probe_lr,
                     patch_size=task.patch_size,
                     eval_interval=task.eval_interval,
+                    epochs=task.epochs,
                 )
             )
         return DownstreamEvaluatorCallback(

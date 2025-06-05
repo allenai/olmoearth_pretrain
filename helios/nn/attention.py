@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
+from olmo_core.nn.attention.flash_attn_api import dispatch_flash_attn
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
@@ -36,6 +37,7 @@ class Attention(nn.Module):
         proj_drop: float = 0.0,
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
+        use_flash_attn: bool = True,
     ) -> None:
         """Initialize the attention module.
 
@@ -48,6 +50,7 @@ class Attention(nn.Module):
             proj_drop: Output projection dropout rate
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
+            use_flash_attn: Use flash attention
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -57,7 +60,7 @@ class Attention(nn.Module):
 
         self.cross_attn = cross_attn
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
-
+        self.use_flash_attn = use_flash_attn
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.k = nn.Linear(dim, dim, bias=qkv_bias)
         self.v = nn.Linear(dim, dim, bias=qkv_bias)
@@ -88,7 +91,16 @@ class Attention(nn.Module):
         Returns:
             Output tensor of shape (B, H, N, D)
         """
-        if self.fast_attn:
+        if self.use_flash_attn:
+            x = dispatch_flash_attn(
+                q,
+                k,
+                v,
+                attn_mask=attn_mask,
+                scale=self.scale,
+                dropout_p=self.attn_drop.p,
+            )
+        elif self.fast_attn:
             if attn_mask is not None:
                 attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
             x = F.scaled_dot_product_attention(

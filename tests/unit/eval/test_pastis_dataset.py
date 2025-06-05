@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from helios.data.constants import Modality
 from helios.evals.datasets.pastis_dataset import PASTISRDataset
 
 
@@ -59,7 +60,7 @@ def test_pastis_dataset_initialization(mock_pastis_data: Path) -> None:
     dataset = PASTISRDataset(
         path_to_splits=mock_pastis_data,
         split="train",
-        input_modalities=["sentinel1", "sentinel2"],
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
     )
 
     assert len(dataset) == 1  # Should have 1 sample
@@ -80,7 +81,9 @@ def test_pastis_dataset_initialization(mock_pastis_data: Path) -> None:
 
     # Test non-multimodal initialization
     dataset_s2_only = PASTISRDataset(
-        path_to_splits=mock_pastis_data, split="train", input_modalities=["sentinel2"]
+        path_to_splits=mock_pastis_data,
+        split="train",
+        input_modalities=[Modality.SENTINEL2_L2A.name],
     )
 
     sample_s2, label_s2 = dataset_s2_only[0]
