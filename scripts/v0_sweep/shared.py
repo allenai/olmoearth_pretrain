@@ -372,7 +372,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "m-bigearthnet": DownstreamTaskConfig(
             dataset="m-bigearthnet",
-            batch_size=128,
+            batch_size=64,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
