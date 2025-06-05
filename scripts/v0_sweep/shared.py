@@ -63,7 +63,7 @@ TRAINING_MODALITIES = [
     Modality.SENTINEL1.name,
     Modality.WORLDCOVER.name,
     Modality.SRTM.name,
-    Modality.LATLON.name,
+    # Modality.LATLON.name,
     Modality.LANDSAT.name,
     Modality.OPENSTREETMAP_RASTER.name,
 ]
