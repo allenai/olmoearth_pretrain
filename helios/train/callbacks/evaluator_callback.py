@@ -4,6 +4,7 @@ import gc
 import logging
 import time
 from dataclasses import dataclass, field
+from functools import partial
 
 import torch
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
@@ -40,6 +41,7 @@ class DownstreamEvaluator:
         device: torch.device | None = None,
         probe_lr: float | None = None,
         input_modalities: list[str] = field(default_factory=list),
+        eval_mode: str | None = None,
     ) -> None:
         """Initialize the downstream evaluator.
 
@@ -56,6 +58,8 @@ class DownstreamEvaluator:
             device: Device to evaluate on.
             probe_lr: Learning rate for probe.
             input_modalities: Input modalities, only used for multimodal tasks.
+            eval_mode: whether to use knn or linear probe. Defaults to KNN for classification
+                and linear probe for segmentation. Only classification is supported by KNN
         """
         self.evaluation_name = evaluation_name
         self.dataset = dataset
@@ -70,6 +74,34 @@ class DownstreamEvaluator:
         self.probe_lr = probe_lr
         self.patch_size = patch_size
         self.input_modalities = input_modalities
+
+        if eval_mode is None:
+            eval_mode = (
+                "knn"
+                if self.config.task_type == TaskType.CLASSIFICATION
+                else "linear_probe"
+            )
+        assert eval_mode in ["knn", "linear_probe"], f"Unexpected eval mode {eval_mode}"
+        if eval_mode == "linear_probe":
+            if self.probe_lr is None:
+                raise ValueError("probe_lr cannot be none for segmentation tasks.")
+            if self.config.task_type == TaskType.SEGMENTATION:
+                if self.config.height_width is None:
+                    raise ValueError(
+                        "config.height_width cannot be none for segmentation tasks."
+                    )
+                if self.config.height_width % self.patch_size != 0:
+                    raise ValueError("Image height / width indivisable by patch size.")
+        self.eval_function = (
+            run_knn
+            if eval_mode == "knn"
+            else partial(
+                train_and_eval_probe,
+                batch_size=self.batch_size,
+                lr=self.probe_lr,
+                patch_size=self.patch_size,
+            ),
+        )
 
     def _get_data_loader(self, split: str) -> DataLoader:
         """Get the data loader for the given split."""
@@ -115,37 +147,13 @@ class DownstreamEvaluator:
         logger.info(f"train labels shape for {self.dataset}: {train_labels.shape}")
         logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        if self.config.task_type == TaskType.CLASSIFICATION:
-            val_result = run_knn(
-                config=self.config,
-                train_embeddings=train_embeddings,
-                train_labels=train_labels,
-                test_embeddings=test_embeddings,
-                test_labels=test_labels,
-                device=self.device,
-            )
-        elif self.config.task_type == TaskType.SEGMENTATION:
-            if self.probe_lr is None:
-                raise ValueError("probe_lr cannot be none for segmentation tasks.")
-            if self.config.height_width is None:
-                raise ValueError(
-                    "config.height_width cannot be none for segmentation tasks."
-                )
-            if self.config.height_width % self.patch_size != 0:
-                raise ValueError("Image height / width indivisable by patch size.")
-            val_result = train_and_eval_probe(
-                config=self.config,
-                train_embeddings=train_embeddings,
-                train_labels=train_labels,
-                test_embeddings=test_embeddings,
-                test_labels=test_labels,
-                device=self.device,
-                batch_size=self.batch_size,
-                lr=self.probe_lr,
-                patch_size=self.patch_size,
-            )
-        else:
-            raise ValueError(f"Unrecognized task type: {self.config.task_type}")
+        val_result = self.eval_function(  # type: ignore
+            config=self.config,
+            train_embeddings=train_embeddings,
+            train_labels=train_labels,
+            test_embeddings=test_embeddings,
+            test_labels=test_labels,
+        )
         logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
         # free memory
         del train_embeddings, train_labels, test_embeddings, test_labels
