@@ -80,17 +80,11 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 0.0001
-    RANK_MICROBATCH_SIZE = 128
-    ENCODE_RATIO = 0.1
-    DECODE_RATIO = 0.9
-    WD = 0.02
-    optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config = MaskingConfig(
         strategy_config={
             "type": "space_time",
-            "encode_ratio": ENCODE_RATIO,
-            "decode_ratio": DECODE_RATIO,
+            "encode_ratio": 0.1,
+            "decode_ratio": 0.9,
         }
     )
     loss_config = LossConfig(
@@ -100,20 +94,18 @@ def build_train_module_config(
     )
     token_exit_cfg = {modality: 0 for modality in common.training_modalities}
 
-    WARMUP_EPOCHS = 5
-
     # TODO: would need a scheduler config and registry to be able to change this with overrides
-    scheduler = CosWithWarmup()
     train_module_config = LatentMIMTrainModuleConfig(
-        optim_config=optim_config,
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
         masking_config=masking_config,
-        warmup_duration=Duration.epochs(WARMUP_EPOCHS),
+        warmup_duration=Duration.epochs(5),
         loss_config=loss_config,
-        rank_microbatch_size=RANK_MICROBATCH_SIZE,
+        rank_microbatch_size=128,
         token_exit_cfg=token_exit_cfg,
         autocast_precision=DType.bfloat16,
         max_grad_norm=1.0,
-        scheduler=scheduler,
+        scheduler=CosWithWarmup(),
+        ema_decay=(1.0, 1.0),
     )
     return train_module_config
 
@@ -123,22 +115,16 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
 
-    NUM_WORKERS = 16
-    GLOBAL_BATCH_SIZE = 512
-    PREFETCH_FACTOR = 4
-    TOKEN_BUDGET = 1500
-    SAMPLE_HW_P_LIST = list(range(5, 13))
-
     dataloader_config = HeliosDataLoaderConfig(
-        global_batch_size=GLOBAL_BATCH_SIZE,
-        seed=3622,
-        work_dir=common.save_folder,
-        num_workers=NUM_WORKERS,
-        prefetch_factor=PREFETCH_FACTOR,
-        sampled_hw_p_list=SAMPLE_HW_P_LIST,
+        num_workers=16,
+        global_batch_size=512,
+        token_budget=1500,
+        prefetch_factor=4,
+        sampled_hw_p_list=range(5, 13),
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
-        token_budget=TOKEN_BUDGET,
+        work_dir=common.save_folder,
+        seed=3622,
     )
     return dataloader_config
 
