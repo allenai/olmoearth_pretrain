@@ -347,7 +347,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "v0-sweep"
+    WANDB_PROJECT = "v0-sweep-evals"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
 
@@ -370,6 +370,50 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
+        "m-bigearthnet": DownstreamTaskConfig(
+            dataset="m-bigearthnet",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(5),
+        ),
+        "m-so2sat": DownstreamTaskConfig(
+            dataset="m-so2sat",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(5),
+        ),
+        "m-brick-kiln": DownstreamTaskConfig(
+            dataset="m-brick-kiln",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(5),
+        ),
+        "m-sa-crop-type": DownstreamTaskConfig(
+            dataset="m-sa-crop-type",
+            embedding_batch_size=128,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(10),
+        ),
+        "m-cashew-plant": DownstreamTaskConfig(
+            dataset="m-cashew-plant",
+            embedding_batch_size=128,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(10),
+        ),
         "breizhcrops": DownstreamTaskConfig(
             dataset="breizhcrops",
             embedding_batch_size=128,
@@ -379,7 +423,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(50),
             patch_size=1,
         ),
-        "pastis": DownstreamTaskConfig(
+        "pastis_sentinel2": DownstreamTaskConfig(
             dataset="pastis",
             embedding_batch_size=32,
             probe_batch_size=128,
