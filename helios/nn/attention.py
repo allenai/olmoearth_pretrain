@@ -37,7 +37,7 @@ class Attention(nn.Module):
         proj_drop: float = 0.0,
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
-        use_flash_attn: bool = False,
+        use_flash_attn: bool = True,
     ) -> None:
         """Initialize the attention module.
 
@@ -96,7 +96,7 @@ class Attention(nn.Module):
                 q,
                 k,
                 v,
-                attn_mask=attn_mask,
+                # attn_mask=attn_mask,
                 scale=self.scale,
                 dropout_p=self.attn_drop.p,
             )

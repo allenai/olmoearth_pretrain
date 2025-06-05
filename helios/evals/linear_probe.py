@@ -159,7 +159,7 @@ def train_probe(
                         align_corners=True,
                     )  # (bsz, num_classes, H, W)
                 loss = loss_function(logits, batch_labels.to(device))
-                print(f"Epoch {epoch}, Step {i}, Loss: {loss.item()}")
+                # print(f"Epoch {epoch}, Step {i}, Loss: {loss.item()}")
 
             loss.backward()
             adjust_learning_rate(
