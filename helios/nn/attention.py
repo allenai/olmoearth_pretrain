@@ -107,8 +107,8 @@ class Attention(nn.Module):
                 q,
                 k,
                 v,
-                # a value of True indicates that the element should take part in attention
-                attn_mask=attn_mask,
+                # # a value of True indicates that the element should take part in attention
+                # attn_mask=attn_mask,
                 dropout_p=self.attn_drop.p,
             )
         else:
