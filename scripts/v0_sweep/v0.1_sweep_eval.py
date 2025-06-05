@@ -232,13 +232,13 @@ base_cmd = (
 lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.m-sa-crop-type.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.m-cashew-plant.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.mados.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.probe_lr={lr} "
+    # "--trainer.callbacks.downstream_evaluator.tasks.mados.probe_lr={lr} "
+    # "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr} "
+    # "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr} "
+    # "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}"
 ]
 
