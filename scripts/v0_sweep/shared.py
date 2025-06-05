@@ -347,7 +347,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "v0-sweep"
+    WANDB_PROJECT = "v0-sweep-evals"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
 
@@ -370,44 +370,29 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
-        "breizhcrops": DownstreamTaskConfig(
-            dataset="breizhcrops",
+        "m-bigearthnet": DownstreamTaskConfig(
+            dataset="m-bigearthnet",
+            batch_size=64,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(5),
+        ),
+        "m-so2sat": DownstreamTaskConfig(
+            dataset="m-so2sat",
             batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(50),
-            patch_size=1,
+            eval_interval=Duration.epochs(5),
         ),
-        "pastis": DownstreamTaskConfig(
-            dataset="pastis",
-            batch_size=8,
-            num_workers=2,
+        "m-brick-kiln": DownstreamTaskConfig(
+            dataset="m-brick-kiln",
+            batch_size=128,
+            num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(50),
-            input_modalities=["sentinel2"],
-        ),
-        "sickle-sentinel1": DownstreamTaskConfig(
-            dataset="sickle",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.01,
-            eval_interval=Duration.epochs(10),
-            input_modalities=["sentinel1"],
-        ),
-        "sickle-landsat": DownstreamTaskConfig(
-            dataset="sickle",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.01,
-            eval_interval=Duration.epochs(10),
-            input_modalities=["landsat8"],
+            eval_interval=Duration.epochs(5),
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
@@ -426,6 +411,93 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
             eval_interval=Duration.epochs(10),
+        ),
+        "sickle_sentinel1": DownstreamTaskConfig(
+            dataset="sickle",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(10),
+            input_modalities=["sentinel1"],
+        ),
+        "sickle_landsat": DownstreamTaskConfig(
+            dataset="sickle",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(10),
+            input_modalities=["landsat8"],
+        ),
+        "sickle_sentinel1_landsat": DownstreamTaskConfig(
+            dataset="sickle",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(10),
+            input_modalities=["landsat8", "sentinel1"],
+        ),
+        "m_sa_crop_type": DownstreamTaskConfig(
+            dataset="m-sa-crop-type",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(10),
+        ),
+        "m_cashew_plant": DownstreamTaskConfig(
+            dataset="m-cashew-plant",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(10),
+        ),
+        "pastis_sentinel2": DownstreamTaskConfig(
+            dataset="pastis",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=["sentinel2"],
+        ),
+        "pastis_sentinel1": DownstreamTaskConfig(
+            dataset="pastis",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=["sentinel1"],
+        ),
+        "pastis_sentinel1_sentinel2": DownstreamTaskConfig(
+            dataset="pastis",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=["sentinel1", "sentinel2"],
+        ),
+        "breizhcrops": DownstreamTaskConfig(
+            dataset="breizhcrops",
+            batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(50),
+            patch_size=1,
         ),
     }
     # Let us not use garbage collector fallback
@@ -447,6 +519,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
                 tasks=EVAL_TASKS,
+                eval_on_startup=True,
+                cancel_after_first_eval=True,
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
