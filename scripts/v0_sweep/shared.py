@@ -406,7 +406,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         "m_cashew_plant": DownstreamTaskConfig(
             dataset="m-cashew-plant",
             batch_size=128,
-            probe_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
