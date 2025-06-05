@@ -978,6 +978,7 @@ class Encoder(FlexiHeliosBase):
         random_channel_embeddings: bool = False,
         num_projection_layers: int = 1,
         aggregate_then_project: bool = True,
+        frozen_patch_embeddings: bool = False,
     ):
         """Initialize the encoder.
 
@@ -997,6 +998,8 @@ class Encoder(FlexiHeliosBase):
                 a ReLU activation will be applied between layers
             aggregate_then_project: If True, then we will average the tokens before applying
                 the projection. If False, we will apply the projection first.
+            frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
+                https://arxiv.org/pdf/2104.02057, Section 4.2
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1024,6 +1027,10 @@ class Encoder(FlexiHeliosBase):
         )
         self.norm = nn.LayerNorm(self.embedding_size)
         self.apply(self._init_weights)
+
+        if frozen_patch_embeddings:
+            for p in self.patch_embeddings.parameters():
+                p.requires_grad = False
 
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
@@ -1596,6 +1603,7 @@ class EncoderConfig(Config):
     random_channel_embeddings: bool = False
     num_projection_layers: int = 1
     aggregate_then_project: bool = True
+    frozen_patch_embeddings: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
