@@ -97,7 +97,7 @@ class Attention(nn.Module):
                 k,
                 v,
                 # attn_mask=attn_mask,
-                scale=self.scale,
+                # scale=self.scale,
                 dropout_p=self.attn_drop.p,
             )
         elif self.fast_attn:
