@@ -117,7 +117,7 @@ def build_launch_config(
         shared_memory="256GiB",
         shared_filesystem=True,  # We only use Weka for now
         allow_dirty=False,
-        priority=BeakerPriority.high,
+        priority=BeakerPriority.low,
         env_vars=[
             BeakerEnvVar(name="NCCL_DEBUG", value="INFO" if nccl_debug else "WARN"),
             BeakerEnvVar(
