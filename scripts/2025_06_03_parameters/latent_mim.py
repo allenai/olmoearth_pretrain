@@ -2,6 +2,10 @@
 
 import logging
 
+from olmo_core.distributed.parallel.data_parallel import (
+    DataParallelConfig,
+    DataParallelType,
+)
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
@@ -116,6 +120,7 @@ def build_train_module_config(
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(),
         ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(name=DataParallelType.fsdp),
     )
 
 
