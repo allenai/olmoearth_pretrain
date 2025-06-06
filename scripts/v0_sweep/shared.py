@@ -509,12 +509,15 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         "breizhcrops": DownstreamTaskConfig(
             dataset="breizhcrops",
             embedding_batch_size=128,
+            probe_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(50),
             patch_size=1,
             eval_mode="linear_probe",
+            probe_lr=0.1,
+            epochs=50,
         ),
     }
     # Let us not use garbage collector fallback
