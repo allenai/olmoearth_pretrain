@@ -2,7 +2,6 @@
 
 import logging
 
-from olmo_core.config import DType
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
@@ -23,6 +22,7 @@ from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
+from helios.internal.utils import MODEL_SIZE_ARGS
 from helios.nn.flexihelios import (
     EncoderConfig,
     PoolingType,
@@ -48,32 +48,26 @@ MIN_PATCH_SIZE = 1
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    ENCODER_EMBEDDING_SIZE = 768
-    DECODER_EMBEDDING_SIZE = 768
-    ENCODER_DEPTH = 12
-    DECODER_DEPTH = 4
-    ENCODER_NUM_HEADS = 12
-    DECODER_NUM_HEADS = 12
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
-    MLP_RATIO = 4.0
     encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
         supported_modality_names=common.training_modalities,
-        embedding_size=ENCODER_EMBEDDING_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
-        num_heads=ENCODER_NUM_HEADS,
-        depth=ENCODER_DEPTH,
-        mlp_ratio=MLP_RATIO,
         drop_path=0.1,
         max_sequence_length=12,
     )
     decoder_config = PredictorConfig(
-        encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
-        decoder_embedding_size=DECODER_EMBEDDING_SIZE,
-        depth=DECODER_DEPTH,
-        mlp_ratio=MLP_RATIO,
-        num_heads=DECODER_NUM_HEADS,
-        max_sequence_length=12,
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
         supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
     )
     reconstructor_config = ReconstructorConfig(
         supported_modality_names=[
@@ -97,7 +91,7 @@ def build_train_module_config(
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
         warmup_duration=Duration.steps(4000),
-        rank_microbatch_size=128,
+        rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "space_time",
@@ -119,7 +113,6 @@ def build_train_module_config(
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
-        autocast_precision=DType.bfloat16,
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(),
         ema_decay=(1.0, 1.0),
@@ -129,7 +122,6 @@ def build_train_module_config(
 def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     """Build the dataloader config for an experiment."""
     # things should be set during building
-    # TODO: Include collate function here
 
     return HeliosDataLoaderConfig(
         num_workers=16,
