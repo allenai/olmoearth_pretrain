@@ -18,11 +18,17 @@ from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
 from helios.data.concat import HeliosConcatDatasetConfig
+from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
-from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
+from helios.nn.flexihelios import (
+    EncoderConfig,
+    PoolingType,
+    PredictorConfig,
+    ReconstructorConfig,
+)
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -69,9 +75,17 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_sequence_length=12,
         supported_modality_names=common.training_modalities,
     )
+    reconstructor_config = ReconstructorConfig(
+        supported_modality_names=[
+            m for m in common.training_modalities if m != Modality.LATLON.name
+        ],
+        max_patch_size=MAX_PATCH_SIZE,
+        decoder_config=decoder_config,
+    )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
+        reconstructor_config=reconstructor_config,
     )
     return model_config
 
@@ -80,34 +94,36 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    masking_config = MaskingConfig(
-        strategy_config={
-            "type": "space_time",
-            "encode_ratio": 0.1,
-            "decode_ratio": 0.9,
-        }
-    )
-    loss_config = LossConfig(
-        loss_config={
-            "type": "patch_discrimination_new",  # TODO: Should be registered via enum names
-        }
-    )
-    token_exit_cfg = {modality: 0 for modality in common.training_modalities}
-
-    # TODO: would need a scheduler config and registry to be able to change this with overrides
-    train_module_config = LatentMIMTrainModuleConfig(
+    return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
-        masking_config=masking_config,
         warmup_duration=Duration.steps(4000),
-        loss_config=loss_config,
         rank_microbatch_size=128,
-        token_exit_cfg=token_exit_cfg,
+        masking_config=MaskingConfig(
+            strategy_config={
+                "type": "space_time",
+                "encode_ratio": 0.1,
+                "decode_ratio": 0.9,
+            }
+        ),
+        loss_config=LossConfig(
+            loss_config={
+                "type": "patch_discrimination_new",
+            }
+        ),
+        mae_loss_config=LossConfig(
+            loss_config={
+                "type": "mae",
+                "loss_function": "SmoothL1Loss",
+                "beta": 0.02,
+                "weight": 0.1,
+            }
+        ),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
         autocast_precision=DType.bfloat16,
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(),
         ema_decay=(1.0, 1.0),
     )
-    return train_module_config
 
 
 def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
@@ -115,7 +131,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
     # TODO: Include collate function here
 
-    dataloader_config = HeliosDataLoaderConfig(
+    return HeliosDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
         token_budget=1500,
@@ -126,7 +142,6 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         work_dir=common.save_folder,
         seed=3622,
     )
-    return dataloader_config
 
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
