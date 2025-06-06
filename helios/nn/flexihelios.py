@@ -1202,9 +1202,7 @@ class Encoder(FlexiHeliosBase):
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
-            tokens = blk(
-                x=tokens, y=None, attn_mask=new_mask if self.training else None
-            )
+            tokens = blk(x=tokens, y=None, attn_mask=new_mask)
 
         if exit_ids_seq is not None:
             # this should only ever be called by the target encoder,

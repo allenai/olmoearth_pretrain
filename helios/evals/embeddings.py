@@ -25,9 +25,8 @@ def get_embeddings(
 
     model = model.eval()
     device = next(model.parameters()).device
-    total_samples = len(data_loader)
     with torch.no_grad():
-        for i, (masked_helios_sample, label) in enumerate(data_loader):
+        for masked_helios_sample, label in data_loader:
             masked_helios_sample_dict = masked_helios_sample.as_dict(return_none=False)
             for key, val in masked_helios_sample_dict.items():
                 if key == "timestamps":
@@ -53,7 +52,6 @@ def get_embeddings(
             )
             embeddings.append(averaged_embeddings.cpu())
             labels.append(label)
-            logger.debug(f"Processed {i} / {total_samples}")
 
     embeddings = torch.cat(embeddings, dim=0)  # (N, dim)
     labels = torch.cat(labels, dim=0)  # (N)

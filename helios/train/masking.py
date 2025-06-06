@@ -118,41 +118,21 @@ class MaskedHeliosSample(NamedTuple):
     @property
     def height(self) -> int:
         """Get the height of the data."""
-        for modality in self.modalities:
-            if modality == "timestamps":
-                continue
-            modality_spec = Modality.get(modality)
-            if not modality_spec.is_spatial:
-                continue
+        height_width_time_modalities = ["sentinel2_l2a", "sentinel1", "worldcover"]
+        for modality in height_width_time_modalities:
             x = getattr(self, modality)
             if x is not None:
-                if len(x.shape) == 5:
-                    return x.shape[1]
-                else:
-                    # no batch dimension
-                    if len(x.shape) != 4:
-                        raise ValueError(f"Unexpected shape {x.shape} for {modality}")
-                    return x.shape[0]
+                return x.shape[1]
         raise ValueError("No modality with height or width present")
 
     @property
     def width(self) -> int:
-        """Get the height of the data."""
-        for modality in self.modalities:
-            if modality == "timestamps":
-                continue
-            modality_spec = Modality.get(modality)
-            if not modality_spec.is_spatial:
-                continue
+        """Get the width of the data."""
+        height_width_time_modalities = ["sentinel2_l2a", "sentinel1", "worldcover"]
+        for modality in height_width_time_modalities:
             x = getattr(self, modality)
             if x is not None:
-                if len(x.shape) == 5:
-                    return x.shape[2]
-                else:
-                    # no batch dimension
-                    if len(x.shape) != 4:
-                        raise ValueError(f"Unexpected shape {x.shape} for {modality}")
-                    return x.shape[1]
+                return x.shape[2]
         raise ValueError("No modality with height or width present")
 
     @property

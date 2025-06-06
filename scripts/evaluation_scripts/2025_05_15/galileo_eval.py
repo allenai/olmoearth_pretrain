@@ -324,7 +324,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
             eval_interval=Duration.epochs(20),
-            input_modalities=[Modality.LANDSAT.name],
+            input_modalities=["landsat8"],
         ),
         "sickle_r": DownstreamTaskConfig(
             dataset="sickle",
@@ -334,7 +334,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
             eval_interval=Duration.epochs(20),
-            input_modalities=[Modality.LANDSAT.name, "sentinel1", "sentinel2"],
+            input_modalities=["landsat8", "sentinel1", "sentinel2"],
         ),
     }
     # Let us not use garbage collector fallback
