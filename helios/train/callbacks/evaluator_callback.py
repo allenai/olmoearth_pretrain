@@ -165,6 +165,7 @@ class DownstreamEvaluator:
             train_labels=train_labels,
             test_embeddings=test_embeddings,
             test_labels=test_labels,
+            device=self.device,
         )
         logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
         # free memory
