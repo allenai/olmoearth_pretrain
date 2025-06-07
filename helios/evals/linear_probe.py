@@ -16,27 +16,6 @@ from helios.evals.utils import adjust_learning_rate
 
 logger = getLogger(__name__)
 
-PROBING_LRs = {
-    "LP": [
-        1e-4,
-        3e-4,
-        5e-4,
-        8e-4,
-        1e-3,
-        3e-3,
-        5e-3,
-        8e-3,
-        1e-2,
-        3e-2,
-        5e-2,
-        8e-2,
-        1e-1,
-        3e-1,
-        5e-1,
-        8e-1,
-    ],
-}
-
 
 def train_and_eval_probe(
     config: EvalDatasetConfig,
@@ -163,7 +142,7 @@ def train_probe(
                             align_corners=True,
                         )  # (bsz, num_classes, H, W)
                 loss = loss_function(logits, batch_labels.to(device))
-                print(f"Epoch {epoch}, Step {i}, Loss: {loss.item()}")
+                logger.debug(f"Epoch {epoch}, Step {i}, Loss: {loss.item()}")
 
             loss.backward()
             adjust_learning_rate(

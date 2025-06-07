@@ -106,7 +106,7 @@ class DownstreamEvaluator:
                 batch_size=self.probe_batch_size,
                 lr=self.probe_lr,
                 patch_size=self.patch_size,
-            ),
+            )
         )
 
     def _get_data_loader(self, split: str) -> DataLoader:
@@ -165,6 +165,7 @@ class DownstreamEvaluator:
             train_labels=train_labels,
             test_embeddings=test_embeddings,
             test_labels=test_labels,
+            device=self.device,
         )
         logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
         # free memory
@@ -250,6 +251,7 @@ class DownstreamTaskConfig:
     probe_batch_size: int = 32
     epochs: int = 50  # Number of training epochs for linear probing task
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
+    eval_mode: str | None = None
 
 
 @dataclass
@@ -310,6 +312,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     patch_size=task.patch_size,
                     eval_interval=task.eval_interval,
                     epochs=task.epochs,
+                    eval_mode=task.eval_mode,
                 )
             )
         return DownstreamEvaluatorCallback(
