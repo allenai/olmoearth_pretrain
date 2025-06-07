@@ -224,6 +224,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
+                # likely can do a non blocking transfer here
                 masked_batch_a = self.masking_strategy.apply_mask(
                     self.transform.apply(microbatch).to_device(self.device),
                     patch_size=patch_size,
