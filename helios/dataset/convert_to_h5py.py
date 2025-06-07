@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import h5py
+import hdf5plugin
 import numpy as np
 import pandas as pd
 from einops import rearrange
@@ -269,17 +270,24 @@ class ConvertToH5py:
                     )
                     # Create dataset with optional compression
                     create_kwargs: dict[str, Any] = {}
-                    if self.compression is not None:
-                        create_kwargs["compression"] = self.compression
-                        if (
-                            self.compression == "gzip"
-                            and self.compression_opts is not None
-                        ):
-                            create_kwargs["compression_opts"] = self.compression_opts
-                        if (
-                            self.shuffle is not None
-                        ):  # Shuffle is typically used with compression
-                            create_kwargs["shuffle"] = self.shuffle
+                    # if self.compression is not None:
+                    #     create_kwargs["compression"] = self.compression
+                    #     if (
+                    #         self.compression == "gzip"
+                    #         and self.compression_opts is not None
+                    #     ):
+                    #         create_kwargs["compression_opts"] = self.compression_opts
+                    #     if (
+                    #         self.shuffle is not None
+                    #     ):  # Shuffle is typically used with compression
+                    #         create_kwargs["shuffle"] = self.shuffle
+
+                    # Apply Zstd compression
+                    create_kwargs["compression"] = hdf5plugin.Zstd(clevel=3)
+                    # create_kwargs["compression"] = hdf5plugin.LZ4(nbytes=0)
+                    # Get the shape of the data item, and use that for chunking
+                    chunk_shape = data_item.shape
+                    create_kwargs["chunks"] = chunk_shape
                     h5file.create_dataset(item_name, data=data_item, **create_kwargs)
 
                 # Store missing timesteps masks in a dedicated group
@@ -446,4 +454,6 @@ class ConvertToH5py:
     def run(self) -> None:
         """Run the conversion."""
         samples = self.get_and_filter_samples()
+        # # Get the first 1000 samples for testing
+        # samples = samples[:1000]
         self.prepare_h5_dataset(samples)
