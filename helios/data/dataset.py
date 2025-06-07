@@ -832,6 +832,11 @@ class HeliosDataset(Dataset):
                     missing_mask, modality_data, normalized_data
                 ).astype(self.dtype)
 
+        if "sentinel2_l2a" not in sample_dict or sample_dict["sentinel2_l2a"] is None:
+            raise Exception(
+                f"oh no this looks bad at index {index} (args.idx={args.idx})"
+            )
+
         return args.patch_size, HeliosSample(**sample_dict)
 
 
