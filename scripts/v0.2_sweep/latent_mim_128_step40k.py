@@ -22,11 +22,11 @@ def my_build_train_module_config(
     train_module_config = build_train_module_config(common)
     train_module_config.scheduler = SequentialScheduler(
         schedulers=[
-            LinearWithWarmup(alpha_f=0.25),
-            LinearWithWarmup(alpha_f=0.25),
-            LinearWithWarmup(alpha_f=0.25),
-            LinearWithWarmup(alpha_f=0.25),
-            LinearWithWarmup(alpha_f=0.25),
+            LinearWithWarmup(alpha_f=0.25, warmup_steps=2000),
+            LinearWithWarmup(alpha_f=0.25, warmup_steps=0),
+            LinearWithWarmup(alpha_f=0.25, warmup_steps=0),
+            LinearWithWarmup(alpha_f=0.25, warmup_steps=0),
+            LinearWithWarmup(alpha_f=0.25, warmup_steps=0),
         ],
         schedulers_max_steps=[40000, 40000, 40000, 40000],
     )
