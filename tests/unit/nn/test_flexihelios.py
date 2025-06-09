@@ -526,6 +526,10 @@ class TestPredictor:
             tokens_to_decode_mask,
             unmasked_tokens_mask,
             indices,
+            _,
+            _,
+            _,
+            _,
         ) = Predictor.split_x_y(tokens, mask)
 
         # Check shapes
@@ -609,6 +613,10 @@ class TestPredictor:
             tokens_to_decode_mask,
             unmasked_tokens_mask,
             indices,
+            _,
+            _,
+            _,
+            _,
         ) = Predictor.split_x_y(tokens, mask)
 
         combined_tokens = Predictor.combine_x_y(
