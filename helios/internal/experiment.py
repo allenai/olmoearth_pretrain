@@ -9,7 +9,6 @@ from typing import cast
 import numpy as np
 from olmo_core.config import Config, StrEnum
 from olmo_core.distributed.utils import get_local_rank
-from olmo_core.launch.beaker import BeakerLaunchConfig
 from olmo_core.train import (
     TrainerConfig,
     prepare_training_environment,
@@ -25,6 +24,8 @@ from helios.data.visualize import visualize_sample
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 from helios.train.train_module.train_module import HeliosTrainModuleConfig
 
+from .common import HeliosBeakerLaunchConfig
+
 logger = logging.getLogger(__name__)
 
 # TODO: Make this more agnostic to the training setup
@@ -39,7 +40,7 @@ class CommonComponents(Config):
 
     run_name: str
     save_folder: str
-    launch: BeakerLaunchConfig
+    launch: HeliosBeakerLaunchConfig
     training_modalities: list[str]
     # callbacks: dict[str, Callback]
 
@@ -70,7 +71,7 @@ class HeliosExperimentConfig(Config):
     """Configuration for a Helios experiment."""
 
     run_name: str
-    launch: BeakerLaunchConfig
+    launch: HeliosBeakerLaunchConfig
     model: Config
     dataset: Config  # will likely be fixed for us
     data_loader: HeliosDataLoaderConfig  # will likely be fixed for us

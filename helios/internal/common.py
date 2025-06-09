@@ -1,7 +1,9 @@
 """Common utiities for laucnhing experiments on beaker."""
 
 import logging
+from dataclasses import dataclass
 
+from beaker import ExperimentSpec
 from olmo_core.internal.common import get_beaker_username
 from olmo_core.launch.beaker import (
     BeakerEnvSecret,
@@ -33,6 +35,30 @@ WEKA_CLUSTER_NAMES = [
     "titan",
     "rhea",
 ]
+
+
+@dataclass
+class HeliosBeakerLaunchConfig(BeakerLaunchConfig):
+    """Extend BeakerLaunchConfig with hostnames option.
+
+    This enables targeting specific Beaker hosts.
+    """
+
+    hostnames: list[str] | None
+
+    def build_experiment_spec(
+        self, torchrun: bool = True, entrypoint: str | None = None
+    ) -> ExperimentSpec:
+        """Build the experiment spec."""
+        # We simply call the superclass build_experiment_spec, but just replace cluster
+        # setting in the Constraints with hostname setting if user provided hostname
+        # list.
+        spec = super().build_experiment_spec(torchrun, entrypoint)
+        if self.hostnames:
+            constraints = spec.tasks[0].constraints
+            constraints.cluster = None
+            constraints.hostname = self.hostnames
+        return spec
 
 
 def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
@@ -73,7 +99,7 @@ def build_launch_config(
     workspace: str = WORKSPACE,
     budget: str = BUDGET,
     nccl_debug: bool = False,
-) -> BeakerLaunchConfig:
+) -> HeliosBeakerLaunchConfig:
     """Build a launch config for a helios experiment.
 
     THis will be the default setup, any changes that are temporary should be overriden
@@ -103,7 +129,7 @@ def build_launch_config(
             # pytorch_upgrade = "pip install --upgrade --pre --no-cache-dir torch==2.8.0.dev20250528+cu128 torchvision==0.22.0.dev20250528+cu128 --index-url https://download.pytorch.org/whl/nightly/cu128"
 
     beaker_user = get_beaker_username()
-    return BeakerLaunchConfig(
+    return HeliosBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",
         budget=budget,
         cmd=cmd,
