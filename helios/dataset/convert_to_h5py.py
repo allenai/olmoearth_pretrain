@@ -116,7 +116,7 @@ class ConvertToH5py:
             )
         self.tile_size = tile_size
         # Tile_size_split_factor is the factor by which the tile size is split into subtiles
-        self.num_subtiles_per_dim = (IMAGE_TILE_SIZE // tile_size)
+        self.num_subtiles_per_dim = IMAGE_TILE_SIZE // tile_size
         self.num_subtiles = self.num_subtiles_per_dim**2
 
     @property
