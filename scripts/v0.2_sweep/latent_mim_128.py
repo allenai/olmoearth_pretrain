@@ -87,7 +87,7 @@ def build_train_module_config(
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
         warmup_duration=Duration.steps(8000),
-        rank_microbatch_size=32,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
+        rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "space_time",
@@ -134,25 +134,12 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     dataset_configs = [
         # presto
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/rerun_1_h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
+            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892",
             training_modalities=common.training_modalities,
-            cache_dir="/helios_cache/presto",
         ),
         # osm_sampling
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/285288/",
-            training_modalities=common.training_modalities,
-            cache_dir="/helios_cache/osm_sampling",
-        ),
-        # osmbig
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/",
-            training_modalities=common.training_modalities,
-            cache_dir="/helios_cache/osmbig",
-        ),
-        # presto neighbor
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/876937/",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
             training_modalities=common.training_modalities,
         ),
     ]
@@ -161,7 +148,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(300)
+    MAX_DURATION = Duration.epochs(75)
     METRICS_COLLECT_INTERVAL = 1
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
