@@ -40,7 +40,7 @@ class HeliosBeakerLaunchConfig(BeakerLaunchConfig):
     This enables targeting specific Beaker hosts.
     """
 
-    hostnames: list[str] | None
+    hostnames: list[str] | None = None
 
     def build_experiment_spec(
         self, torchrun: bool = True, entrypoint: str | None = None
