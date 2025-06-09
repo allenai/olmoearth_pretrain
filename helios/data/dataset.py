@@ -802,12 +802,6 @@ class HeliosDataset(Dataset):
 
         sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
         sample_dict, current_length = self._pad_timestamps(sample_dict)
-
-        if "sentinel2_l2a" not in sample_dict or sample_dict["sentinel2_l2a"] is None:
-            raise Exception(
-                f"oh no this looks bad at index {index} (args.idx={args.idx})"
-            )
-
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
             sample_dict, missing_timesteps_masks
