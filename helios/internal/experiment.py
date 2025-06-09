@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from typing import cast
 
 import numpy as np
+from beaker import ExperimentSpec
 from olmo_core.config import Config, StrEnum
 from olmo_core.distributed.utils import get_local_rank
+from olmo_core.launch.beaker import BeakerLaunchConfig
 from olmo_core.train import (
     TrainerConfig,
     prepare_training_environment,
@@ -24,13 +26,35 @@ from helios.data.visualize import visualize_sample
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 from helios.train.train_module.train_module import HeliosTrainModuleConfig
 
-from .common import HeliosBeakerLaunchConfig
-
 logger = logging.getLogger(__name__)
 
 # TODO: Make this more agnostic to the training setup
 # TODO: Add support for different model configs
 # TODO: Add support for different train module configs
+
+
+@dataclass
+class HeliosBeakerLaunchConfig(BeakerLaunchConfig):
+    """Extend BeakerLaunchConfig with hostnames option.
+
+    This enables targeting specific Beaker hosts.
+    """
+
+    hostnames: list[str] | None
+
+    def build_experiment_spec(
+        self, torchrun: bool = True, entrypoint: str | None = None
+    ) -> ExperimentSpec:
+        """Build the experiment spec."""
+        # We simply call the superclass build_experiment_spec, but just replace cluster
+        # setting in the Constraints with hostname setting if user provided hostname
+        # list.
+        spec = super().build_experiment_spec(torchrun, entrypoint)
+        if self.hostnames:
+            constraints = spec.tasks[0].constraints
+            constraints.cluster = None
+            constraints.hostname = self.hostnames
+        return spec
 
 
 # maybe this build common components can be the same function for every experiment

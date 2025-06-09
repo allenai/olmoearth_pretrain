@@ -1,14 +1,11 @@
 """Common utiities for laucnhing experiments on beaker."""
 
 import logging
-from dataclasses import dataclass
 
-from beaker import ExperimentSpec
 from olmo_core.internal.common import get_beaker_username
 from olmo_core.launch.beaker import (
     BeakerEnvSecret,
     BeakerEnvVar,
-    BeakerLaunchConfig,
     BeakerPriority,
     BeakerWekaBucket,
     OLMoCoreBeakerImage,
@@ -17,7 +14,12 @@ from olmo_core.utils import generate_uuid
 from upath import UPath
 
 from helios.data.constants import Modality
-from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, SubCmd
+from helios.internal.experiment import (
+    CommonComponents,
+    HeliosBeakerLaunchConfig,
+    HeliosVisualizeConfig,
+    SubCmd,
+)
 
 logger = logging.getLogger(__name__)
 BUDGET = "ai2/d5"
@@ -35,30 +37,6 @@ WEKA_CLUSTER_NAMES = [
     "titan",
     "rhea",
 ]
-
-
-@dataclass
-class HeliosBeakerLaunchConfig(BeakerLaunchConfig):
-    """Extend BeakerLaunchConfig with hostnames option.
-
-    This enables targeting specific Beaker hosts.
-    """
-
-    hostnames: list[str] | None
-
-    def build_experiment_spec(
-        self, torchrun: bool = True, entrypoint: str | None = None
-    ) -> ExperimentSpec:
-        """Build the experiment spec."""
-        # We simply call the superclass build_experiment_spec, but just replace cluster
-        # setting in the Constraints with hostname setting if user provided hostname
-        # list.
-        spec = super().build_experiment_spec(torchrun, entrypoint)
-        if self.hostnames:
-            constraints = spec.tasks[0].constraints
-            constraints.cluster = None
-            constraints.hostname = self.hostnames
-        return spec
 
 
 def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
