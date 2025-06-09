@@ -3,6 +3,7 @@
 import glob
 import logging
 import os
+import random
 import warnings
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -488,6 +489,12 @@ def process_sickle(
 class SICKLEDataset(Dataset):
     """SICKLE dataset class."""
 
+    allowed_modalities = [
+        Modality.LANDSAT.name,
+        Modality.SENTINEL1.name,
+        Modality.SENTINEL2_L2A.name,
+    ]
+
     def __init__(
         self,
         path_to_splits: Path = SICKLE_DIR,
@@ -507,14 +514,21 @@ class SICKLEDataset(Dataset):
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             input_modalities: List of modalities to use, must be a subset of ["landsat8", "sentinel1", "sentinel2"]
         """
-        assert split in ["train", "valid"]
-        split = "val" if split == "valid" else split
+        assert split in ["train", "val", "valid", "test"]
+        if split == "valid":
+            split = "val"
+        if split in ["train", "val"]:
+            split_to_load = "train"
+        else:
+            # the validation set is used as the test set, since
+            # the test set has no labels. This means that for us,
+            # we will draw the validation set from the training set
+            split_to_load = "val"
 
         assert len(input_modalities) > 0, "input_modalities must be set"
         assert all(
-            modality in ["landsat8", "sentinel1", "sentinel2"]
-            for modality in input_modalities
-        ), "input_modalities must be a subset of ['landsat8', 'sentinel1', 'sentinel2']"
+            modality in self.allowed_modalities for modality in input_modalities
+        ), f"input_modalities must be a subset of {self.allowed_modalities}"
 
         self.input_modalities = input_modalities
 
@@ -537,11 +551,25 @@ class SICKLEDataset(Dataset):
 
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
 
-        self.s2_images_dir = path_to_splits / f"sickle_{split}" / "s2_images"
-        self.s1_images_dir = path_to_splits / f"sickle_{split}" / "s1_images"
-        self.l8_images_dir = path_to_splits / f"sickle_{split}" / "l8_images"
-        self.labels = torch.load(path_to_splits / f"sickle_{split}" / "targets.pt")
-        self.months = torch.load(path_to_splits / f"sickle_{split}" / "months.pt")
+        self.s2_images_dir = path_to_splits / f"sickle_{split_to_load}" / "s2_images"
+        self.s1_images_dir = path_to_splits / f"sickle_{split_to_load}" / "s1_images"
+        self.l8_images_dir = path_to_splits / f"sickle_{split_to_load}" / "l8_images"
+        self.labels = torch.load(
+            path_to_splits / f"sickle_{split_to_load}" / "targets.pt"
+        )
+        self.months = torch.load(
+            path_to_splits / f"sickle_{split_to_load}" / "months.pt"
+        )
+        self.indices = list(range(self.labels.shape[0]))
+
+        if split in ["train", "val"]:
+            # sample 90 % of the training data for training, 10% for val
+            num_train = int(len(self.indices) * 0.9)
+            random.Random(6012).shuffle(self.indices)
+            if split == "train":
+                self.indices = self.indices[:num_train]
+            elif split == "val":
+                self.indices = self.indices[num_train:]
 
     @staticmethod
     def _get_norm_stats(
@@ -558,10 +586,12 @@ class SICKLEDataset(Dataset):
 
     def __len__(self) -> int:
         """Length of the dataset."""
-        return self.labels.shape[0]
+        return len(self.indices)
 
     def __getitem__(self, idx: int) -> tuple[MaskedHeliosSample, torch.Tensor]:
         """Return a single SICKLE data instance."""
+        idx = self.indices[idx]
+
         l8_image = torch.load(self.l8_images_dir / f"{idx}.pt")
         l8_image = einops.rearrange(l8_image, "t c h w -> h w t c")  # (32, 32, 5, 11)
         l8_image = l8_image[:, :, :, EVAL_TO_HELIOS_L8_BANDS]
@@ -604,46 +634,21 @@ class SICKLEDataset(Dataset):
             )
         timestamps = torch.stack(timestamps)
 
-        # Support the combinations in Table 3 from the SICKLE paper
-        if self.input_modalities == ["landsat8", "sentinel1", "sentinel2"]:
-            masked_sample = MaskedHeliosSample.from_heliossample(
-                HeliosSample(
-                    sentinel2_l2a=torch.tensor(s2_image).float(),
-                    sentinel1=torch.tensor(s1_image).float(),
-                    landsat=torch.tensor(l8_image).float(),
-                    timestamps=timestamps,
-                )
-            )
-        elif self.input_modalities == ["sentinel1", "sentinel2"]:
-            masked_sample = MaskedHeliosSample.from_heliossample(
-                HeliosSample(
-                    sentinel2_l2a=torch.tensor(s2_image).float(),
-                    sentinel1=torch.tensor(s1_image).float(),
-                    timestamps=timestamps,
-                )
-            )
-        elif self.input_modalities == ["sentinel2"]:
-            masked_sample = MaskedHeliosSample.from_heliossample(
-                HeliosSample(
-                    sentinel2_l2a=torch.tensor(s2_image).float(),
-                    timestamps=timestamps,
-                )
-            )
-        elif self.input_modalities == ["sentinel1"]:
-            masked_sample = MaskedHeliosSample.from_heliossample(
-                HeliosSample(
-                    sentinel1=torch.tensor(s1_image).float(),
-                    timestamps=timestamps,
-                )
-            )
-        elif self.input_modalities == ["landsat8"]:
-            masked_sample = MaskedHeliosSample.from_heliossample(
-                HeliosSample(
-                    landsat=torch.tensor(l8_image).float(),
-                    timestamps=timestamps,
-                )
-            )
-        else:
-            raise ValueError(f"Invalid input modalities: {self.input_modalities}")
+        # Build sample dict based on requested modalities
+        sample_dict = {"timestamps": timestamps}
+
+        if Modality.LANDSAT.name in self.input_modalities:
+            sample_dict[Modality.LANDSAT.name] = torch.tensor(l8_image).float()
+        if Modality.SENTINEL1.name in self.input_modalities:
+            sample_dict[Modality.SENTINEL1.name] = torch.tensor(s1_image).float()
+        if Modality.SENTINEL2_L2A.name in self.input_modalities:
+            sample_dict[Modality.SENTINEL2_L2A.name] = torch.tensor(s2_image).float()
+
+        if not sample_dict:
+            raise ValueError(f"No modalities requested in {self.input_modalities}")
+
+        masked_sample = MaskedHeliosSample.from_heliossample(
+            HeliosSample(**sample_dict)
+        )
 
         return masked_sample, labels.long()

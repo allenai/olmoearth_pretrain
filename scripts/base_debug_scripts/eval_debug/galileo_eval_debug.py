@@ -191,12 +191,12 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/osmbig/h5py_data/sentinel1_sentinel2_l2a_worldcover/320831"
     return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
+        h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
         training_modalities=common.training_modalities,
-        use_samples_with_missing_supported_modalities=True,
         dtype="float32",
+        # cache_dir="/helios_cache/osm_sampling",
+        # samples_per_sec=4 / NUM_WORKERS,  # 2/ GBS
     )
 
 
@@ -306,7 +306,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         #     norm_stats_from_pretrained=True,
         #     probe_lr=0.1,
         #     eval_interval=Duration.steps(5),
-        #     input_modalities=["landsat8"],
+        #     input_modalities=[Modality.LANDSAT.name],
         # ),
         # "sickle-r": DownstreamTaskConfig(
         #     dataset="sickle",
@@ -316,7 +316,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         #     norm_stats_from_pretrained=True,
         #     probe_lr=0.1,
         #     eval_interval=Duration.steps(5),
-        #     input_modalities=["landsat8", "sentinel1", "sentinel2"],
+        #     input_modalities=[Modality.LANDSAT.name, "sentinel1", "sentinel2"],
         # ),
     }
     # Let us not use garbage collector fallback
