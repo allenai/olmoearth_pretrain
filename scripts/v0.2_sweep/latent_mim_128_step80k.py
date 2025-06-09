@@ -25,7 +25,8 @@ def my_build_train_module_config(
             LinearWithWarmup(alpha_f=0.25),
             LinearWithWarmup(alpha_f=0.25),
             LinearWithWarmup(alpha_f=0.25),
-        ]
+        ],
+        schedulers_max=[80000, 80000],
     )
     return train_module_config
 
