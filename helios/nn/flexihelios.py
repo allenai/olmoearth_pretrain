@@ -2,6 +2,7 @@
 
 import logging
 import math
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, NamedTuple
@@ -11,6 +12,15 @@ from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
+
+# Add matplotlib imports for visualization
+try:
+    import matplotlib.pyplot as plt
+    import numpy as np
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    print("Warning: matplotlib not available, histogram visualization will be disabled")
 
 from helios.data.constants import Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
@@ -1263,6 +1273,47 @@ class Encoder(FlexiHeliosBase):
                 # we will have to specify k and q lens for cross attention
                 attn_mask=new_mask if self.training else None,
             )
+            # I want to during training add the removed tokens back and split and expand them after every block
+            # First I just want the per modality and across all modalities token norms histograms so I can see what the range of values is like
+            # Then I want to look at the output of the block and visualize the token norms across both space and time for every modality
+            # For n samples, I want to plot the histogram of the token norms across space and
+            # FOr each modality, time step
+            with torch.no_grad():
+                if self.training:
+                    visualization_tokens = tokens.clone().detach()
+                    visualization_tokens, _ = self.add_removed_tokens(visualization_tokens, indices, new_mask)
+                    visualization_tokens_dict = self.split_and_expand_per_modality(visualization_tokens, modalities_to_dims_dict)
+                    visualization_tokens_dict.update(original_masks_dict)
+
+                    # Save histograms instead of just logging
+                    save_token_norm_histograms(
+                        visualization_tokens_dict=visualization_tokens_dict,
+                        block_idx=i_blk,
+                        save_dir="./token_norm_histograms",
+                        bins=50
+                    )
+
+                    # Keep the logging for immediate feedback
+                    logger.info(f"Visualization token Norms for block {i_blk}")
+                    for modality, data in visualization_tokens_dict.items():
+                        if modality.endswith("_mask"):
+                            continue
+                        logger.info(f"Modality: {modality}")
+                        # I want all the tokens to be present that are not missing
+                        modality_mask = visualization_tokens_dict[modality + "_mask"]
+                        present_mask = modality_mask == MaskValue.ONLINE_ENCODER.value
+                        logger.info(f"Present mask total: {present_mask.sum()}")
+
+                        for b in range(data.shape[0]):
+                            sample_data = data[b]
+                            sample_present_mask = present_mask[b]
+                            encoded_data = sample_data[sample_present_mask]
+                            if encoded_data.shape[0] < 1:
+                                logger.info(f"No present tokens for sample {b} modality {modality}")
+                                continue
+
+                            token_norms = encoded_data.norm(dim=-1)
+                            logger.info(f"Sample {b} - Min: {token_norms.min():.3f}, Max: {token_norms.max():.3f}, Mean: {token_norms.mean():.3f}, Std: {token_norms.std():.3f}")
 
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
@@ -1796,3 +1847,124 @@ class PredictorConfig(Config):
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Predictor kwargs: {kwargs}")
         return Predictor(**kwargs)
+
+# Add this function after the imports and before the existing functions
+def save_token_norm_histograms(
+    visualization_tokens_dict: dict[str, Tensor],
+    block_idx: int,
+    save_dir: str = "./token_norm_histograms",
+    bins: int = 50
+) -> None:
+    """Save histograms of token norms for visualization.
+
+    Args:
+        visualization_tokens_dict: Dictionary containing tokens and masks for each modality
+        block_idx: Current transformer block index
+        save_dir: Directory to save histogram plots
+        bins: Number of bins for histograms
+    """
+    if not MATPLOTLIB_AVAILABLE:
+        logger.warning("Matplotlib not available, skipping histogram generation")
+        return
+
+    # Create save directory if it doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Get batch size
+    batch_size = None
+    for modality, data in visualization_tokens_dict.items():
+        if not modality.endswith("_mask"):
+            batch_size = data.shape[0]
+            break
+
+    if batch_size is None:
+        logger.warning("No data found for histogram generation")
+        return
+
+    # Process each sample in the batch
+    for b in range(batch_size):
+        # Collect all token norms across modalities for this sample
+        all_token_norms = []
+        per_modality_norms = {}
+
+        for modality, data in visualization_tokens_dict.items():
+            if modality.endswith("_mask"):
+                continue
+
+            # Get the mask for this modality
+            modality_mask = visualization_tokens_dict[modality + "_mask"]
+            present_mask = modality_mask == MaskValue.ONLINE_ENCODER.value
+
+            if present_mask[b].sum() < 1:
+                logger.info(f"No present tokens for sample {b} modality {modality}")
+                continue
+
+            # Extract present tokens for this sample
+            sample_data = data[b]
+            sample_present_mask = present_mask[b]
+            encoded_data = sample_data[sample_present_mask]
+
+            # Calculate token norms
+            token_norms = encoded_data.norm(dim=-1).cpu().numpy().flatten()
+            per_modality_norms[modality] = token_norms
+            all_token_norms.extend(token_norms)
+
+        if not all_token_norms:
+            logger.info(f"No tokens to visualize for sample {b}")
+            continue
+
+        # Create figure with subplots
+        n_modalities = len(per_modality_norms)
+        fig, axes = plt.subplots(2, max(2, (n_modalities + 1) // 2), figsize=(15, 8))
+        fig.suptitle(f'Token Norm Histograms - Block {block_idx}, Sample {b}', fontsize=16)
+
+        # Flatten axes for easier indexing
+        axes = axes.flatten()
+
+        # Plot histogram for all modalities combined
+        axes[0].hist(all_token_norms, bins=bins, alpha=0.7, color='blue', edgecolor='black')
+        axes[0].set_title('All Modalities Combined')
+        axes[0].set_xlabel('Token Norm')
+        axes[0].set_ylabel('Frequency')
+        axes[0].grid(True, alpha=0.3)
+
+        # Add statistics text
+        stats_text = f'Min: {np.min(all_token_norms):.3f}\n'
+        stats_text += f'Max: {np.max(all_token_norms):.3f}\n'
+        stats_text += f'Mean: {np.mean(all_token_norms):.3f}\n'
+        stats_text += f'Std: {np.std(all_token_norms):.3f}'
+        axes[0].text(0.02, 0.98, stats_text, transform=axes[0].transAxes,
+                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+        # Plot histogram for each modality
+        colors = plt.cm.Set3(np.linspace(0, 1, n_modalities))
+        for idx, (modality, norms) in enumerate(per_modality_norms.items()):
+            ax_idx = idx + 1
+            if ax_idx < len(axes):
+                axes[ax_idx].hist(norms, bins=bins, alpha=0.7, color=colors[idx], edgecolor='black')
+                axes[ax_idx].set_title(f'{modality}')
+                axes[ax_idx].set_xlabel('Token Norm')
+                axes[ax_idx].set_ylabel('Frequency')
+                axes[ax_idx].grid(True, alpha=0.3)
+
+                # Add statistics text for this modality
+                mod_stats_text = f'Min: {np.min(norms):.3f}\n'
+                mod_stats_text += f'Max: {np.max(norms):.3f}\n'
+                mod_stats_text += f'Mean: {np.mean(norms):.3f}\n'
+                mod_stats_text += f'Std: {np.std(norms):.3f}'
+                axes[ax_idx].text(0.02, 0.98, mod_stats_text, transform=axes[ax_idx].transAxes,
+                                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+        # Hide unused subplots
+        for idx in range(n_modalities + 1, len(axes)):
+            axes[idx].set_visible(False)
+
+        plt.tight_layout()
+
+        # Save the figure
+        filename = f"token_norms_block_{block_idx}_sample_{b}.png"
+        filepath = os.path.join(save_dir, filename)
+        plt.savefig(filepath, dpi=300, bbox_inches='tight')
+        plt.close()
+
+        logger.info(f"Saved histogram: {filepath}")

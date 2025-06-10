@@ -247,7 +247,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     break
 
                 del latent, decoded, target_output
-                loss.backward()
+                # loss.backward()
 
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
@@ -267,7 +267,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
     ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, _, reconstructed = self.model(batch, patch_size)
+            latent, decoded, _, reconstructed = self.model(batch.unmask(), patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 target_output, _ = self.model.target_encoder.forward(
@@ -275,7 +275,19 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
-            loss = self.loss_fn(decoded, target_output)
-            if self.mae_loss is not None:
-                loss += self.mae_loss.compute(reconstructed, batch)
+            loss = torch.tensor(0.0, device=self.device)
+            # loss = self.loss_fn(decoded, target_output)
+            # if self.mae_loss is not None:
+            #     loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output
+
+    def optim_step(self) -> None:
+        """Optimize the model."""
+        logger.warning("Not training the model... we are doing attn visualizations")
+        # Maybe clip gradients.
+        if self.max_grad_norm is not None:
+            grad_norm = self._clip_grad_norm(self.max_grad_norm)
+            # NOTE: grad norm is already reduced over ranks, so we set `reduce_type` to `None`.
+            self.trainer.record_metric(
+                "total grad norm", grad_norm, reduce_type=None, namespace="optim"
+            )
