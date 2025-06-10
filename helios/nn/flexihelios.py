@@ -247,23 +247,31 @@ class TokensAndMasks(NamedTuple):
         spatial_mask_t = (
             torch.concat(spatial_mask, dim=-1) == MaskValue.ONLINE_ENCODER.value
         )
+        mask_to_return = spatial_mask_t.max(dim=-1).values
         spatial_tokens_t = torch.concat(spatial_tokens, dim=-2)
 
+        expanded_mask = repeat(
+            spatial_mask_t,
+            "b ph pw ba -> b ph pw ba d",
+            d=spatial_tokens_t.shape[-1],
+        )
         if pooling_type == PoolingType.MAX:
             fill_value = spatial_tokens_t.min() - 1
-            expanded_mask = repeat(
-                spatial_mask_t,
-                "b ph pw ba -> b ph pw ba d",
-                d=spatial_tokens_t.shape[-1],
-            )
+
             spatial_tokens_t = (spatial_tokens_t * expanded_mask) + (
                 ~expanded_mask * fill_value
             )
-            return spatial_tokens_t.max(dim=-2).values, spatial_mask_t.max(
-                dim=-1
-            ).values
+            return spatial_tokens_t.max(dim=-2).values, mask_to_return
         else:
-            raise NotImplementedError
+            zeroed_spatial_tokens = spatial_tokens_t * expanded_mask
+            num_tokens_per_spatial_patch = repeat(
+                torch.clip(spatial_mask_t.sum(-1), min=1),
+                "b ph pw -> b ph pw d",
+                d=zeroed_spatial_tokens.shape[-1],
+            )
+            return zeroed_spatial_tokens.sum(
+                dim=-2
+            ) / num_tokens_per_spatial_patch, mask_to_return
 
 
 class ProjectAndAggregate(nn.Module):
