@@ -5,6 +5,7 @@ from logging import getLogger
 from typing import Any
 
 import torch
+import time
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
 from olmo_core.distributed.utils import get_local_tensor
@@ -219,9 +220,12 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
                 microbatch = self.transform.apply(microbatch).to_device(self.device)
+                start_time = time.time()
                 masked_batch = self.masking_strategy.apply_mask(
                     microbatch, patch_size=patch_size
                 )
+                end_time = time.time()
+                logger.info(f"Time taken for apply_mask: {end_time - start_time:.4f} seconds")
                 # Run Encoder and decoder on the augmented input
                 loss, latent, decoded, target_output = self.model_forward(
                     masked_batch, patch_size, self.token_exit_cfg
