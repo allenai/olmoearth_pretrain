@@ -432,6 +432,7 @@ class TimeMaskingStrategy(MaskingStrategy):
                         temporal_mask, "b t -> b h w t b_s", h=h, w=w, b_s=b_s
                     )
                     mask = mask.view(*shape[:-1], b_s).clone()
+                # After setting up encoder and decoder masks, fill in missing values
                 mask = self.fill_mask_with_missing_values(instance, mask, modality)
                 output_dict[modality_name] = instance
                 output_dict[
@@ -748,67 +749,113 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
 
     def __init__(
         self,
-        max_unmasking_bandsets: int,
-        min_encoding_bandsets: int,
-        max_encoding_bandsets: int,
         strategy: MaskingStrategy,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
+        allow_encoding_decoding_same_bandset: bool = False,
     ) -> None:
         """Initialize the masking strategy."""
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
         self.strategy = strategy
-        self.max_unmasking_bandsets = max_unmasking_bandsets
-        self.min_encoding_bandsets = min_encoding_bandsets
-        self.max_encoding_bandsets = max_encoding_bandsets
+        self.allow_encoding_decoding_same_bandset = allow_encoding_decoding_same_bandset
 
-    def filter_bandset_indices(self, batch: HeliosSample) -> list[tuple[str, int]]:
-        """Filter the bandset indices to only include present modalities."""
-        # DO we also want to filter out missing modalities here?
-        filtered_bandset_list = []
-        for bandset_idx in ALL_BANDSET_IDXS:
-            if bandset_idx[0] not in batch.modalities:
+    def get_sample_present_modalities_bandsets(
+        self, batch: MaskedHeliosSample
+    ) -> list[list[tuple[str, int]]]:
+        """Get the modalities that are present for each sample."""
+        masked_sample_dict = batch.as_dict(return_none=False)
+        batch_size = batch.timestamps.shape[0]
+        present_modalities_bandsets: list[list[tuple[str, int]]] = [
+            [] for _ in range(batch_size)
+        ]
+        for modality in batch.modalities:
+            if modality == "timestamps":
                 continue
-
-            filtered_bandset_list.append(bandset_idx)
-        return filtered_bandset_list
-
-    def select_encoded_bandsets(
-        self, bandset_list: list[tuple[str, int]]
-    ) -> list[tuple[str, int]]:
-        """Select the encoded bandsets."""
-        num_bandsets_to_encode = np.random.choice(
-            range(self.min_encoding_bandsets, self.max_encoding_bandsets)
-        )
-        idxs_list = list(range(len(bandset_list)))
-        encoded_bandset_idxs = np.random.choice(
-            idxs_list, size=num_bandsets_to_encode, replace=False
-        ).tolist()
-        encoded_bandset_list = [bandset_list[i] for i in encoded_bandset_idxs]
-        return encoded_bandset_list
-
-    def select_decoded_bandsets(
-        self, batch: HeliosSample, encoded_bandset_list: list[tuple[str, int]]
-    ) -> list[tuple[str, int]]:
-        """Select the decoded bandsets."""
-        decoding_bandset_combinations = []
-        for bandset_combination in ALL_BANDSET_IDXS:
-            modality, idx = bandset_combination
-            is_modality_not_in_batch = modality not in batch.modalities
-            is_encoded_bandset = (modality, idx) in encoded_bandset_list
-            if is_modality_not_in_batch or is_encoded_bandset:
-                continue
-            decoding_bandset_combinations.append(bandset_combination)
-
-        if decoding_bandset_combinations == (((Modality.LATLON.name, 0),)):
-            raise ValueError(
-                "Latlon is not a valid decoding bandset by itself, number of modalities is too low or encoding bandsets are too large"
+            modality_mask_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            modality_mask = masked_sample_dict[modality_mask_name]
+            missing_values_mask = modality_mask == MaskValue.MISSING.value
+            # Find the samples where the modality is completely missing
+            is_modality_completely_missing_for_samples = torch.all(
+                missing_values_mask.view(batch_size, -1), dim=1
             )
+            is_modality_present_for_samples = (
+                ~is_modality_completely_missing_for_samples
+            )
+            num_bandsets = modality_mask.shape[-1]
 
-        if len(decoding_bandset_combinations) == 0:
-            raise ValueError("No valid decoding bandset combinations found")
-        return decoding_bandset_combinations
+            present_sample_indices = torch.where(is_modality_present_for_samples)[0]
+            for sample_idx in present_sample_indices:
+                sample_idx = sample_idx.item()
+                for bandset_idx in range(num_bandsets):
+                    present_modalities_bandsets[sample_idx].append(
+                        (modality, bandset_idx)
+                    )
+
+        return present_modalities_bandsets
+
+    def select_encoded_decoded_bandsets(
+        self, present_modalities_bandsets: list[list[tuple[str, int]]]
+    ) -> list[tuple[set[tuple[str, int]], set[tuple[str, int]]]]:
+        """Select the encoded and decoded bandsets for each sample."""
+        encoded_decoded_bandsets: list[
+            tuple[set[tuple[str, int]], set[tuple[str, int]]]
+        ] = []
+        for sample_idx in range(len(present_modalities_bandsets)):
+            present_modalities_bandsets_for_sample = present_modalities_bandsets[
+                sample_idx
+            ]
+            # If there is only one modality, we only encode not decode
+            if len(present_modalities_bandsets_for_sample) == 1:
+                encoded_bandset_idxs = set(present_modalities_bandsets_for_sample)
+                decoded_bandset_idxs = set()
+            # If there are two modalities, we encode one and decode the other
+            elif len(present_modalities_bandsets_for_sample) == 2:
+                encoded_bandset_idxs = set([present_modalities_bandsets_for_sample[0]])
+                decoded_bandset_idxs = set([present_modalities_bandsets_for_sample[1]])
+            # If there are more than two modalities, we randomly select some to encode and the rest to decode
+            else:
+                num_encoded_bandsets = np.random.randint(
+                    1, len(present_modalities_bandsets_for_sample)
+                )
+                encoded_idxs = np.random.choice(
+                    len(present_modalities_bandsets_for_sample),
+                    size=num_encoded_bandsets,
+                    replace=False,
+                )
+                encoded_bandset_idxs = set(
+                    [present_modalities_bandsets_for_sample[i] for i in encoded_idxs]
+                )
+                # If not allow overlapping bandsets, we make encoded and decoded bandsets disjoint
+                # Otherwise we allow them to overlap
+                if self.allow_encoding_decoding_same_bandset:
+                    num_decoded_bandsets = np.random.randint(
+                        1, len(present_modalities_bandsets_for_sample)
+                    )
+                    decoded_idxs = np.random.choice(
+                        len(present_modalities_bandsets_for_sample),
+                        size=num_decoded_bandsets,
+                        replace=False,
+                    )
+                    decoded_bandset_idxs = set(
+                        [
+                            present_modalities_bandsets_for_sample[i]
+                            for i in decoded_idxs
+                        ]
+                    )
+                else:
+                    decoded_bandset_idxs = set(
+                        [
+                            present_modalities_bandsets_for_sample[i]
+                            for i in range(len(present_modalities_bandsets_for_sample))
+                            if i not in encoded_idxs
+                        ]
+                    )
+
+            encoded_decoded_bandsets.append(
+                (encoded_bandset_idxs, decoded_bandset_idxs)
+            )
+        return encoded_decoded_bandsets
 
     def overide_random_mask_condition(self, modality_spec: ModalitySpec) -> bool:
         """Overide the random mask  for the given modality by the encoding and decoding bandsets."""
@@ -818,8 +865,9 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
     def apply_bandset_mask_rules(
         self,
         masked_batch: MaskedHeliosSample,
-        encoded_bandset_list: list[tuple[str, int]],
-        decoded_bandset_idxs: list[tuple[str, int]],
+        encoded_decoded_bandsets: list[
+            tuple[set[tuple[str, int]], set[tuple[str, int]]]
+        ],
     ) -> MaskedHeliosSample:
         """Allow encoding of encoded bandsets and decoding of decoded bandsets."""
         masked_batch_dict = masked_batch.as_dict(return_none=False)
@@ -828,53 +876,72 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 continue
             masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
             modality_spec = Modality.get(modality)
-            modality_num_bandsets = modality_spec.num_band_sets
             modality_mask = masked_batch_dict[masked_modality_name]
-            # Be Careful to ensure that the missing mask is not overriden
-            for bandset_idx in range(modality_num_bandsets):
-                is_encoded = (modality, bandset_idx) in encoded_bandset_list
-                is_decoded = (modality, bandset_idx) in decoded_bandset_idxs
+            num_bandsets = modality_mask.shape[-1]
 
-                if self.overide_random_mask_condition(modality_spec):
-                    # assumes the mask is random so we overide to make it all the same
-                    if is_encoded:
-                        forced_mask_value = MaskValue.ONLINE_ENCODER.value
-                    elif is_decoded:
-                        forced_mask_value = MaskValue.DECODER.value
-                    logger.info(
-                        f"Setting {modality} bandset {bandset_idx} to {forced_mask_value}"
-                    )
-                    not_missing_mask = (
-                        modality_mask[..., bandset_idx] != MaskValue.MISSING.value
-                    )
-                    modality_mask[..., bandset_idx] = torch.where(
-                        not_missing_mask,
-                        forced_mask_value,
-                        modality_mask[..., bandset_idx],
+            for sample_idx in range(masked_batch.timestamps.shape[0]):
+                encoded_bandset_idxs, decoded_bandset_idxs = encoded_decoded_bandsets[
+                    sample_idx
+                ]
+
+                # Get the modalities that are present for the sample
+                available_modalities = set([i[0] for i in encoded_bandset_idxs])
+                available_modalities.update([i[0] for i in decoded_bandset_idxs])
+
+                if modality not in available_modalities:
+                    logger.debug(
+                        f"Modality {modality} not present for sample {sample_idx}"
                     )
                     continue
 
-                if not is_encoded:
-                    # Supress all encoded values for a not encoded bandset
-                    online_encoder_mask = (
-                        modality_mask[..., bandset_idx]
-                        == MaskValue.ONLINE_ENCODER.value
-                    )
-                    modality_mask[..., bandset_idx] = torch.where(
-                        online_encoder_mask,
-                        MaskValue.TARGET_ENCODER_ONLY.value,
-                        modality_mask[..., bandset_idx],
-                    )
+                for bandset_idx in range(num_bandsets):
+                    is_encoded = (modality, bandset_idx) in encoded_bandset_idxs
+                    is_decoded = (modality, bandset_idx) in decoded_bandset_idxs
 
-                if not is_decoded:
-                    decoder_mask = (
-                        modality_mask[..., bandset_idx] == MaskValue.DECODER.value
-                    )
-                    modality_mask[..., bandset_idx] = torch.where(
-                        decoder_mask,
-                        MaskValue.TARGET_ENCODER_ONLY.value,
-                        modality_mask[..., bandset_idx],
-                    )
+                    if self.overide_random_mask_condition(modality_spec):
+                        if is_encoded:
+                            forced_mask_value = MaskValue.ONLINE_ENCODER.value
+                        elif is_decoded:
+                            forced_mask_value = MaskValue.DECODER.value
+                        else:
+                            continue
+                        logger.debug(
+                            f"Setting {modality} bandset {bandset_idx} to {forced_mask_value}"
+                        )
+                        not_missing_mask = (
+                            modality_mask[sample_idx, ..., bandset_idx]
+                            != MaskValue.MISSING.value
+                        )
+                        modality_mask[sample_idx, ..., bandset_idx] = torch.where(
+                            not_missing_mask,
+                            forced_mask_value,
+                            modality_mask[sample_idx, ..., bandset_idx],
+                        )
+                        continue
+
+                    if not is_encoded:
+                        # Supress all encoded values for a not encoded bandset
+                        online_encoder_mask = (
+                            modality_mask[sample_idx, ..., bandset_idx]
+                            == MaskValue.ONLINE_ENCODER.value
+                        )
+                        modality_mask[sample_idx, ..., bandset_idx] = torch.where(
+                            online_encoder_mask,
+                            MaskValue.TARGET_ENCODER_ONLY.value,
+                            modality_mask[sample_idx, ..., bandset_idx],
+                        )
+                        continue
+
+                    if not is_decoded:
+                        decoder_mask = (
+                            modality_mask[sample_idx, ..., bandset_idx]
+                            == MaskValue.DECODER.value
+                        )
+                        modality_mask[sample_idx, ..., bandset_idx] = torch.where(
+                            decoder_mask,
+                            MaskValue.TARGET_ENCODER_ONLY.value,
+                            modality_mask[sample_idx, ..., bandset_idx],
+                        )
 
             masked_batch_dict[masked_modality_name] = modality_mask
 
@@ -886,14 +953,16 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
     ) -> MaskedHeliosSample:
         """Apply space masking to the input data."""
         masked_sample = self.strategy.apply_mask(batch, patch_size, **kwargs)
-        filtered_bandset_list = self.filter_bandset_indices(batch)
-        encoded_bandset_list = self.select_encoded_bandsets(filtered_bandset_list)
-        decoded_bandset_idxs = self.select_decoded_bandsets(batch, encoded_bandset_list)
-        logger.info(f"decoded_bandset_idxs: {decoded_bandset_idxs}")
-        logger.info(f"encoded_bandset_list: {encoded_bandset_list}")
+
+        present_modalities_bandsets = self.get_sample_present_modalities_bandsets(
+            masked_sample
+        )
+        encoded_decoded_bandsets = self.select_encoded_decoded_bandsets(
+            present_modalities_bandsets
+        )
 
         masked_sample = self.apply_bandset_mask_rules(
-            masked_sample, encoded_bandset_list, decoded_bandset_idxs
+            masked_sample, encoded_decoded_bandsets
         )
         return masked_sample
 
@@ -904,21 +973,17 @@ class ModalityCrossSpaceMaskingStrategy(ModalityCrossMaskingStrategy):
 
     def __init__(
         self,
-        max_unmasking_bandsets: int = 50,
-        min_encoding_bandsets: int = 2,
-        max_encoding_bandsets: int = 6,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
+        allow_encoding_decoding_same_bandset: bool = False,
     ) -> None:
         """Initialize the masking strategy."""
         space_strategy = SpaceMaskingStrategy(encode_ratio, decode_ratio)
         super().__init__(
-            max_unmasking_bandsets=max_unmasking_bandsets,
-            min_encoding_bandsets=min_encoding_bandsets,
-            max_encoding_bandsets=max_encoding_bandsets,
             strategy=space_strategy,
             encode_ratio=encode_ratio,
             decode_ratio=decode_ratio,
+            allow_encoding_decoding_same_bandset=allow_encoding_decoding_same_bandset,
         )
 
     def overide_random_mask_condition(self, modality_spec: ModalitySpec) -> bool:
@@ -934,21 +999,17 @@ class ModalityCrossTimeMaskingStrategy(ModalityCrossMaskingStrategy):
 
     def __init__(
         self,
-        max_unmasking_bandsets: int = 50,
-        min_encoding_bandsets: int = 2,
-        max_encoding_bandsets: int = 6,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
+        allow_encoding_decoding_same_bandset: bool = False,
     ) -> None:
         """Initialize the masking strategy."""
         space_strategy = SpaceMaskingStrategy(encode_ratio, decode_ratio)
         super().__init__(
-            max_unmasking_bandsets=max_unmasking_bandsets,
-            min_encoding_bandsets=min_encoding_bandsets,
-            max_encoding_bandsets=max_encoding_bandsets,
             strategy=space_strategy,
             encode_ratio=encode_ratio,
             decode_ratio=decode_ratio,
+            allow_encoding_decoding_same_bandset=allow_encoding_decoding_same_bandset,
         )
 
     def overide_random_mask_condition(self, modality_spec: ModalitySpec) -> bool:
@@ -964,28 +1025,22 @@ class ModalityCrossSpaceTimeMaskingStrategy(MaskingStrategy):
 
     def __init__(
         self,
-        max_unmasking_bandsets: int = 50,
-        min_encoding_bandsets: int = 2,
-        max_encoding_bandsets: int = 6,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
+        allow_encoding_decoding_same_bandset: bool = False,
     ) -> None:
         """Initialize the masking strategy."""
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
         self.time_strategy = ModalityCrossTimeMaskingStrategy(
-            max_unmasking_bandsets,
-            min_encoding_bandsets,
-            max_encoding_bandsets,
             encode_ratio,
             decode_ratio,
+            allow_encoding_decoding_same_bandset=allow_encoding_decoding_same_bandset,
         )
         self.space_strategy = ModalityCrossSpaceMaskingStrategy(
-            max_unmasking_bandsets,
-            min_encoding_bandsets,
-            max_encoding_bandsets,
             encode_ratio,
             decode_ratio,
+            allow_encoding_decoding_same_bandset=allow_encoding_decoding_same_bandset,
         )
         self.generator = np.random.default_rng(0)
 

@@ -30,7 +30,6 @@ class TestSTBase:
                 Modality.LATLON,
             ],
             max_sequence_length=12,
-            use_channel_embs=True,
         )
 
     def test_collapse_and_combine_full(

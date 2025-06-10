@@ -99,7 +99,6 @@ def test_mae_with_loss(
         num_heads=NUM_HEADS,
         mlp_ratio=MLP_RATIO,
         max_sequence_length=MAX_SEQ_LENGTH,
-        use_channel_embs=True,
         depth=DEPTH,
         drop_path=DROP_PATH,
     )
@@ -112,7 +111,6 @@ def test_mae_with_loss(
         num_heads=NUM_HEADS,
         max_sequence_length=MAX_SEQ_LENGTH,
         drop_path=DROP_PATH,
-        learnable_channel_embeddings=True,
     )
     predictor2 = Predictor(
         supported_modalities=supported_modalities,
@@ -123,7 +121,6 @@ def test_mae_with_loss(
         num_heads=NUM_HEADS,
         max_sequence_length=MAX_SEQ_LENGTH,
         drop_path=DROP_PATH,
-        learnable_channel_embeddings=True,
     )
     reconstructor = Reconstructor(
         decoder=predictor2,

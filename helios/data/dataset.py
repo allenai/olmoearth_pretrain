@@ -23,6 +23,7 @@ from torch.utils.data import Dataset
 from upath import UPath
 
 from helios.data.constants import (
+    MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
     TIMESTAMPS,
     Modality,
@@ -128,16 +129,6 @@ class HeliosSample(NamedTuple):
         """
         return [modality for modality in self.as_dict(ignore_nones=True).keys()]
 
-    @property
-    def missing_modalities(self) -> list[str]:
-        """Get the modalities missing from the sample."""
-        # TODO: THis does nto apply to sentinel values so maybe should be removed
-        return [
-            modality
-            for modality in self.as_dict(ignore_nones=True).keys()
-            if self.as_dict(ignore_nones=True)[modality] is None
-        ]
-
     def to_device(self, device: torch.device) -> "HeliosSample":
         """Move all tensors to the specified device.
 
@@ -225,11 +216,15 @@ class HeliosSample(NamedTuple):
 
     @property
     def valid_time(self) -> int:
-        """Get the minimum number of valid time steps in the data."""
-        # Go through each sample, check the number of valid timesteps and get the min
-        min_valid_time = 12
+        """Get the minimum number of valid time steps in a batch.
+
+        Note that the timestamps are edge padded by repeating the last timestamp.
+        """
+        min_valid_time = MAX_SEQUENCE_LENGTH
         if self.timestamps is None:
             raise ValueError("Timestamps are not present in the sample")
+        if len(self.timestamps.shape) != 3:
+            raise ValueError("Valid time is only defined for a batch of samples")
         for i in range(self.timestamps.shape[0]):
             unique_timesteps = torch.unique(self.timestamps[i], dim=0)
             min_valid_time = min(min_valid_time, unique_timesteps.shape[0])
@@ -326,8 +321,7 @@ class HeliosSample(NamedTuple):
         start_h = np.random.choice(self.height - sampled_hw + 1)
         start_w = np.random.choice(self.width - sampled_hw + 1)
 
-        # If current_length > max_t, we can start from a random valid timestep
-        # Otherwise, we start from the first timestep
+        # The timestamps are edge padded and we always want to start from a valid timestep
         if current_length > max_t:
             start_t = np.random.choice(current_length - max_t + 1)
         else:
@@ -400,7 +394,7 @@ class HeliosDataset(Dataset):
         h5py_dir: UPath,
         training_modalities: list[str],
         dtype: np.dtype,
-        max_sequence_length: int = 12,
+        max_sequence_length: int = MAX_SEQUENCE_LENGTH,
         normalize: bool = True,
         cache_dir: UPath | None = None,
         samples_per_sec: float | None = None,

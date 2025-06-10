@@ -141,7 +141,6 @@ class TestEncoder:
             drop_path=0.1,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
-            use_channel_embs=True,
         )
 
     def test_apply_attn(
@@ -524,7 +523,6 @@ class TestPredictor:
             num_heads=2,
             max_sequence_length=12,
             drop_path=0.1,
-            learnable_channel_embeddings=True,
             output_embedding_size=8,
         )
 
@@ -746,7 +744,6 @@ def test_end_to_end_with_exit_config(
         num_heads=NUM_HEADS,
         mlp_ratio=MLP_RATIO,
         max_sequence_length=MAX_SEQ_LENGTH,
-        use_channel_embs=True,
         depth=DEPTH,
         drop_path=DROP_PATH,
     )
@@ -759,7 +756,6 @@ def test_end_to_end_with_exit_config(
         num_heads=NUM_HEADS,
         max_sequence_length=MAX_SEQ_LENGTH,
         drop_path=DROP_PATH,
-        learnable_channel_embeddings=True,
     )
     output, _ = encoder.forward(
         x,

@@ -1,5 +1,6 @@
 """Attention Components for Helios."""
 
+from logging import getLogger
 from typing import Any
 
 import torch
@@ -8,6 +9,78 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
+
+try:
+    import flash_attn
+except ImportError:
+    flash_attn = None
+
+logger = getLogger(__name__)
+
+
+@torch._dynamo.disable()
+def dispatch_flash_attn(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    cu_seqlens: torch.Tensor | None = None,
+    cu_seqlens_q: torch.Tensor | None = None,
+    cu_seqlens_k: torch.Tensor | None = None,
+    max_seqlen: int | None = None,
+    max_seqlen_q: int | None = None,
+    max_seqlen_k: int | None = None,
+    dropout_p: float = 0.0,
+    softmax_scale: float | None = None,
+    causal: bool = False,
+) -> torch.Tensor:
+    """Dispatch flash attention.
+
+    Modeled after olmo core but doesnt flatten internally
+    """
+    if flash_attn is None:
+        raise RuntimeError("flash-attn is required!")
+
+    if cu_seqlens is not None:
+        if cu_seqlens_q is None:
+            cu_seqlens_q = cu_seqlens
+        if cu_seqlens_k is None:
+            cu_seqlens_k = cu_seqlens
+    if max_seqlen is not None:
+        if max_seqlen_q is None:
+            max_seqlen_q = max_seqlen
+        if max_seqlen_k is None:
+            max_seqlen_k = max_seqlen
+
+    varlen = all(
+        x is not None for x in (cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k)
+    )
+
+    if varlen:
+        assert q.ndim == 3, "q must be pre-packed"
+        logger.debug("using varlen")
+
+        return flash_attn.flash_attn_varlen_func(
+            q,
+            k,
+            v,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            max_seqlen_q,
+            max_seqlen_k,
+            dropout_p=dropout_p,
+            softmax_scale=softmax_scale,
+            causal=causal,
+        )
+    else:
+        return flash_attn.flash_attn_func(
+            q,
+            k,
+            v,
+            dropout_p=dropout_p,
+            softmax_scale=softmax_scale,
+            causal=causal,
+        )
 
 
 class Attention(nn.Module):
@@ -36,6 +109,7 @@ class Attention(nn.Module):
         proj_drop: float = 0.0,
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
+        use_flash_attn: bool = False,
     ) -> None:
         """Initialize the attention module.
 
@@ -48,6 +122,7 @@ class Attention(nn.Module):
             proj_drop: Output projection dropout rate
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
+            use_flash_attn: Use flash attention
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -56,8 +131,8 @@ class Attention(nn.Module):
         self.scale = self.head_dim**-0.5
 
         self.cross_attn = cross_attn
+        self.use_flash_attn = use_flash_attn
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
-
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.k = nn.Linear(dim, dim, bias=qkv_bias)
         self.v = nn.Linear(dim, dim, bias=qkv_bias)
@@ -74,6 +149,12 @@ class Attention(nn.Module):
         k: torch.Tensor,
         v: torch.Tensor,
         n: int,
+        cu_seqlens: torch.Tensor | None = None,
+        cu_seqlens_q: torch.Tensor | None = None,
+        cu_seqlens_k: torch.Tensor | None = None,
+        max_seqlen: int | None = None,
+        max_seqlen_q: int | None = None,
+        max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute scaled dot product attention.
@@ -84,11 +165,35 @@ class Attention(nn.Module):
             v: Value tensor of shape (B, H, N, D)
             n: Number of tokens
             attn_mask: Attention mask. Defaults to None.
+            cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
+            cu_seqlens_q: Optional cumulative sequence lengths for the query tensor, needed for cross varlen flash attention
+            cu_seqlens_k: Optional cumulative sequence lengths for the key tensor, needed for cross varlen flash attention
+            max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
+            max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
+            max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
 
         Returns:
             Output tensor of shape (B, H, N, D)
         """
-        if self.fast_attn:
+        if self.use_flash_attn:
+            x = dispatch_flash_attn(
+                q,
+                k,
+                v,
+                cu_seqlens=cu_seqlens,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen=max_seqlen,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
+                softmax_scale=self.scale,
+                causal=False,
+            )
+            # Output is (B, Nq, H, D), transpose back to (B, H, Nq, D)
+            # matching the transpose of the other attention implementations that need to be transposed back
+            x = x.transpose(1, 2)
+        elif self.fast_attn:
             if attn_mask is not None:
                 attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
             x = F.scaled_dot_product_attention(
@@ -115,19 +220,31 @@ class Attention(nn.Module):
         self,
         x: torch.Tensor,
         y: torch.Tensor | None = None,
+        cu_seqlens: torch.Tensor | None = None,
+        cu_seqlens_q: torch.Tensor | None = None,
+        cu_seqlens_k: torch.Tensor | None = None,
+        max_seqlen: int | None = None,
+        max_seqlen_q: int | None = None,
+        max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
-            x: Input tensor of shape (B, N, C)
+            x: Input tensor of shape (B, N, C) or (B* N , C) if packed
             y: Second input for cross-attention. Defaults to None.
             attn_mask: Attention mask. Defaults to None.
+            cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
+            cu_seqlens_q: Optional cumulative sequence lengths for the query tensor, needed for cross varlen flash attention
+            cu_seqlens_k: Optional cumulative sequence lengths for the key tensor, needed for cross varlen flash attention
+            max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
+            max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
+            max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
 
         Returns:
-            Output tensor of shape (B, N, C)
+            Output tensor of shape (B, N, C) or (B* N , C) if packed
         """
-        B, N, C = x.shape
+        original_shape = x.shape
 
         q = self.q(x)
 
@@ -139,16 +256,34 @@ class Attention(nn.Module):
             assert self.cross_attn
             k = self.k(y)
             v = self.v(y)
-
-        q = rearrange(q, "b n (h d) -> b h n d", h=self.num_heads)
-        k = rearrange(k, "b n (h d) -> b h n d", h=self.num_heads)
-        v = rearrange(v, "b n (h d) -> b h n d", h=self.num_heads)
+        if not self.use_flash_attn:
+            q = rearrange(q, "b n (h d) -> b h n d", h=self.num_heads)
+            k = rearrange(k, "b n (h d) -> b h n d", h=self.num_heads)
+            v = rearrange(v, "b n (h d) -> b h n d", h=self.num_heads)
+        else:
+            q = rearrange(q, "bn (h d) -> bn h d", h=self.num_heads)
+            # Flash attention only supports k v heads that divide the number of query heads
+            k = rearrange(k, "bn (h d) -> bn h d", h=self.num_heads)
+            v = rearrange(v, "bn (h d) -> bn h d", h=self.num_heads)
+        # logger.info(f"q shape: {q.shape} k shape: {k.shape} v shape: {v.shape}")
 
         q, k = self.q_norm(q), self.k_norm(k)
-
-        x = self.sdpa(q, k, v, N, attn_mask)
-
-        x = x.transpose(1, 2).reshape(B, N, C)
+        x = self.sdpa(
+            q,
+            k,
+            v,
+            n=original_shape[
+                -2
+            ],  # supposed to be the number of tokens in each sample with padding
+            cu_seqlens=cu_seqlens,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen=max_seqlen,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            attn_mask=attn_mask,
+        )
+        x = x.transpose(1, 2).reshape(original_shape)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -320,6 +455,7 @@ class Block(nn.Module):
         act_layer: nn.Module = nn.GELU,
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
+        use_flash_attn: bool = False,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -336,6 +472,7 @@ class Block(nn.Module):
             act_layer: Activation layer
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
+            use_flash_attn: Whether to use flash attention
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -348,6 +485,7 @@ class Block(nn.Module):
             proj_drop=drop,
             norm_layer=norm_layer,
             cross_attn=cross_attn,
+            use_flash_attn=use_flash_attn,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -366,7 +504,16 @@ class Block(nn.Module):
         )
 
     def forward(
-        self, x: torch.Tensor, y: torch.Tensor | None, attn_mask: torch.Tensor | None
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor | None = None,
+        cu_seqlens: torch.Tensor | None = None,
+        cu_seqlens_q: torch.Tensor | None = None,
+        cu_seqlens_k: torch.Tensor | None = None,
+        max_seqlen: int | None = None,
+        max_seqlen_q: int | None = None,
+        max_seqlen_k: int | None = None,
+        attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -374,11 +521,32 @@ class Block(nn.Module):
             x: Input tensor of shape (B, N, C)
             y: Optional context tensor for cross attention of shape (B, M, C)
             attn_mask: Optional attention mask tensor
+            cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
+            cu_seqlens_q: Optional cumulative sequence lengths for the query tensor, needed for cross varlen flash attention
+            cu_seqlens_k: Optional cumulative sequence lengths for the key tensor, needed for cross varlen flash attention
+            max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
+            max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
+            max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
 
         Returns:
             Output tensor of shape (B, N, C)
         """
-        x = x + self.drop_path(self.ls1(self.attn(self.norm1(x), y, attn_mask)))
+        x = x + self.drop_path(
+            self.ls1(
+                self.attn(
+                    x=self.norm1(x),
+                    y=y,
+                    cu_seqlens=cu_seqlens,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_k=cu_seqlens_k,
+                    max_seqlen=max_seqlen,
+                    max_seqlen_q=max_seqlen_q,
+                    max_seqlen_k=max_seqlen_k,
+                    attn_mask=attn_mask,
+                )
+            )
+        )
+
         x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
         return x
 

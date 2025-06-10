@@ -62,7 +62,6 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         mlp_ratio=MLP_RATIO,
         drop_path=0.1,
         max_sequence_length=12,
-        use_channel_embs=True,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
@@ -72,7 +71,6 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         num_heads=DECODER_NUM_HEADS,
         max_sequence_length=12,
         supported_modality_names=common.training_modalities,
-        learnable_channel_embeddings=True,
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,

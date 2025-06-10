@@ -572,6 +572,7 @@ class InfoNCELoss(Loss):
         # online_encodings_b = predictions.pool_unmasked_tokens(
         #     PoolingType.MEAN, spatial_pooling=False
         # )
+
         predictions = F.normalize(predictions, p=2, dim=-1)
         targets = F.normalize(targets, p=2, dim=-1)
         logits = predictions @ targets.transpose(-2, -1)
