@@ -1080,6 +1080,8 @@ class Encoder(FlexiHeliosBase):
             for p in self.patch_embeddings.parameters():
                 p.requires_grad = False
 
+        self.global_step = 0
+
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
     ) -> dict[str, Tensor]:
@@ -1278,9 +1280,11 @@ class Encoder(FlexiHeliosBase):
             # Then I want to look at the output of the block and visualize the token norms across both space and time for every modality
             # For n samples, I want to plot the histogram of the token norms across space and
             # FOr each modality, time step
-            with torch.no_grad():
-                if self.training:
-                    visualization_tokens = tokens.clone().detach()
+            if token_exit_cfg is None:
+                num_samples_to_record = 10
+                with torch.no_grad():
+                    if self.training:
+                        visualization_tokens = tokens.clone().detach()
                     visualization_tokens, _ = self.add_removed_tokens(visualization_tokens, indices, new_mask)
                     visualization_tokens_dict = self.split_and_expand_per_modality(visualization_tokens, modalities_to_dims_dict)
                     visualization_tokens_dict.update(original_masks_dict)
@@ -1290,7 +1294,9 @@ class Encoder(FlexiHeliosBase):
                         visualization_tokens_dict=visualization_tokens_dict,
                         block_idx=i_blk,
                         save_dir="./token_norm_histograms",
-                        bins=50
+                        bins=75,
+                        global_step=self.global_step,
+                        num_samples_to_record=num_samples_to_record,
                     )
 
                     # Keep the logging for immediate feedback
@@ -1304,7 +1310,7 @@ class Encoder(FlexiHeliosBase):
                         present_mask = modality_mask == MaskValue.ONLINE_ENCODER.value
                         logger.info(f"Present mask total: {present_mask.sum()}")
 
-                        for b in range(data.shape[0]):
+                        for b in range(min(num_samples_to_record, data.shape[0])):
                             sample_data = data[b]
                             sample_present_mask = present_mask[b]
                             encoded_data = sample_data[sample_present_mask]
@@ -1374,6 +1380,7 @@ class Encoder(FlexiHeliosBase):
                 token_exit_cfg=token_exit_cfg,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
+        self.global_step += 1
         return output, self.project_and_aggregate(output)
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
@@ -1775,8 +1782,8 @@ class EncoderConfig(Config):
     depth: int = 2
     drop_path: float = 0.1
     max_sequence_length: int = 12
-    learnable_channel_embeddings: bool = True
-    random_channel_embeddings: bool = False
+    use_channel_embs: bool = True
+    random_channel_embs: bool = False
     num_projection_layers: int = 1
     aggregate_then_project: bool = True
     use_flash_attn: bool = False
@@ -1802,6 +1809,10 @@ class EncoderConfig(Config):
         kwargs = self.as_dict(exclude_none=True, recurse=False)
         # supported_modality_names is replaced by supported_modalities
         kwargs.pop("supported_modality_names")
+        use_channel_embs = kwargs.pop("use_channel_embs")
+        random_channel_embs = kwargs.pop("random_channel_embs")
+        kwargs["learnable_channel_embeddings"] = use_channel_embs
+        kwargs["random_channel_embeddings"] = random_channel_embs
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Encoder kwargs: {kwargs}")
         return Encoder(**kwargs)
@@ -1853,7 +1864,10 @@ def save_token_norm_histograms(
     visualization_tokens_dict: dict[str, Tensor],
     block_idx: int,
     save_dir: str = "./token_norm_histograms",
-    bins: int = 50
+    bins: int = 50,
+    global_step: int = 0,
+    num_samples_to_record: int = 10,
+    # I need global step rank
 ) -> None:
     """Save histograms of token norms for visualization.
 
@@ -1882,7 +1896,7 @@ def save_token_norm_histograms(
         return
 
     # Process each sample in the batch
-    for b in range(batch_size):
+    for b in range(min(num_samples_to_record, batch_size)):
         # Collect all token norms across modalities for this sample
         all_token_norms = []
         per_modality_norms = {}
@@ -1958,12 +1972,19 @@ def save_token_norm_histograms(
         # Hide unused subplots
         for idx in range(n_modalities + 1, len(axes)):
             axes[idx].set_visible(False)
-
         plt.tight_layout()
 
+        # Create global step directory
+        step_dir = os.path.join(save_dir, f"step_{global_step}")
+        os.makedirs(step_dir, exist_ok=True)
+
+        # Create per-sample directory under step directory
+        sample_dir = os.path.join(step_dir, f"sample_{b}")
+        os.makedirs(sample_dir, exist_ok=True)
+
         # Save the figure
-        filename = f"token_norms_block_{block_idx}_sample_{b}.png"
-        filepath = os.path.join(save_dir, filename)
+        filename = f"token_norms_block_{block_idx}.png"
+        filepath = os.path.join(sample_dir, filename)
         plt.savefig(filepath, dpi=300, bbox_inches='tight')
         plt.close()
 

@@ -88,7 +88,8 @@ def build_encoder_config(separate_attention: bool = False) -> Config:
         "mlp_ratio": MLP_RATIO,
         "drop_path": 0.1,
         "max_sequence_length": MAX_SEQUENCE_LENGTH,
-        "learnable_channel_embeddings": True,
+        "use_channel_embs": True,
+        "random_channel_embs": False,
     }
     if separate_attention:
         return STEncoderConfig(**kwargs)
