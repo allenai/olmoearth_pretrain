@@ -94,7 +94,8 @@ def build_train_module_config(
                 "encode_ratio": 0.1,
                 "decode_ratio": 0.75,
                 "allow_encoding_decoding_same_bandset": True,
-                "min_encoded_bandsets": 2
+                "min_encoded_bandsets": 2,
+                "min_decoded_bandsets": 6,
             }
         ),
         loss_config=LossConfig(

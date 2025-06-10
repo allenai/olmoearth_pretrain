@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from class_registry import ClassRegistry
 from einops import rearrange, repeat
+import time
 from olmo_core.config import Config
 
 from helios.data.constants import MISSING_VALUE, Modality, ModalitySpec
@@ -823,11 +824,12 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 decoded_bandset_idxs = set([present_modalities_bandsets_for_sample[1]])
             # If there are more than two modalities, we randomly select some to encode and the rest to decode
             else:
+                num_present_modalities = len(present_modalities_bandsets_for_sample)
                 max_encoded_bandsets = min(
-                    self.max_encoded_bandsets, len(present_modalities_bandsets_for_sample)
-                ) if self.max_encoded_bandsets is not None else len(present_modalities_bandsets_for_sample)
+                    self.max_encoded_bandsets, num_present_modalities
+                ) if self.max_encoded_bandsets is not None else num_present_modalities
                 num_encoded_bandsets = np.random.randint(
-                    self.min_encoded_bandsets, max_encoded_bandsets
+                    self.min_encoded_bandsets, max_encoded_bandsets + 1
                 )
                 encoded_idxs = np.random.choice(
                     len(present_modalities_bandsets_for_sample),
@@ -840,10 +842,23 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 # If not allow overlapping bandsets, we make encoded and decoded bandsets disjoint
                 # Otherwise we allow them to overlap
                 if self.allow_encoding_decoding_same_bandset:
-                    if self.min_decoded_bandsets is not None and self.max_decoded_bandsets is not None:
-                        num_decoded_bandsets = np.random.randint(
-                            self.min_decoded_bandsets, self.max_decoded_bandsets
-                        )
+                    if self.min_decoded_bandsets is not None or self.max_decoded_bandsets is not None:
+                        if self.min_decoded_bandsets is None:
+                            min_decoded_bandsets = 1
+                        else:
+                            min_decoded_bandsets = self.min_decoded_bandsets
+                        if self.max_decoded_bandsets is None:
+                            max_decoded_bandsets = num_present_modalities
+                        else:
+                            max_decoded_bandsets = min(
+                                self.max_decoded_bandsets, num_present_modalities
+                            )
+                        if self.min_decoded_bandsets >= num_present_modalities:
+                            num_decoded_bandsets = num_present_modalities
+                        else:
+                            num_decoded_bandsets = np.random.randint(
+                                self.min_decoded_bandsets, max_decoded_bandsets + 1
+                            )
                     else:
                         # pick all bandsets to decode if there is no min or max
                         num_decoded_bandsets = len(present_modalities_bandsets_for_sample)
@@ -866,8 +881,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                             if i not in encoded_idxs
                         ]
                     )
-            logger.info(f"Encoded bandsets: {encoded_bandset_idxs}")
-            logger.info(f"Decoded bandsets: {decoded_bandset_idxs}")
             encoded_decoded_bandsets.append(
                 (encoded_bandset_idxs, decoded_bandset_idxs)
             )
@@ -884,6 +897,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         encoded_decoded_bandsets: list[
             tuple[set[tuple[str, int]], set[tuple[str, int]]]
         ],
+        present_modalities_bandsets: list[list[tuple[str, int]]],
     ) -> MaskedHeliosSample:
         """Allow encoding of encoded bandsets and decoding of decoded bandsets."""
         masked_batch_dict = masked_batch.as_dict(return_none=False)
@@ -899,11 +913,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 encoded_bandset_idxs, decoded_bandset_idxs = encoded_decoded_bandsets[
                     sample_idx
                 ]
-
-                # Get the modalities that are present for the sample
-                available_modalities = set([i[0] for i in encoded_bandset_idxs])
-                available_modalities.update([i[0] for i in decoded_bandset_idxs])
-
+                available_modalities = [modality_bandset[0] for modality_bandset in present_modalities_bandsets[sample_idx]]
                 if modality not in available_modalities:
                     logger.debug(
                         f"Modality {modality} not present for sample {sample_idx}"
@@ -969,16 +979,14 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
     ) -> MaskedHeliosSample:
         """Apply space masking to the input data."""
         masked_sample = self.strategy.apply_mask(batch, patch_size, **kwargs)
-
         present_modalities_bandsets = self.get_sample_present_modalities_bandsets(
             masked_sample
         )
         encoded_decoded_bandsets = self.select_encoded_decoded_bandsets(
             present_modalities_bandsets
         )
-
         masked_sample = self.apply_bandset_mask_rules(
-            masked_sample, encoded_decoded_bandsets
+            masked_sample, encoded_decoded_bandsets, present_modalities_bandsets
         )
         return masked_sample
 
