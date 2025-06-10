@@ -88,7 +88,7 @@ def build_encoder_config(separate_attention: bool = False) -> Config:
         "mlp_ratio": MLP_RATIO,
         "drop_path": 0.1,
         "max_sequence_length": MAX_SEQUENCE_LENGTH,
-        "use_channel_embs": True,
+        "learnable_channel_embs": True,
     }
     if separate_attention:
         return STEncoderConfig(**kwargs)
@@ -106,7 +106,7 @@ def build_decoder_config(separate_attention: bool = False) -> Config:
         "num_heads": DECODER_NUM_HEADS,
         "max_sequence_length": MAX_SEQUENCE_LENGTH,
         "supported_modality_names": TRAINING_MODALITIES,
-        "learnable_channel_embeddings": True,
+        "learnable_channel_embs": True,
     }
     if separate_attention:
         return STPredictorConfig(**kwargs)

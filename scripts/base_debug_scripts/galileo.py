@@ -68,7 +68,6 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
         mlp_ratio=MLP_RATIO,
         drop_path=0.1,
         max_sequence_length=MAX_SEQUENCE_LENGTH,
-        use_channel_embs=True,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
@@ -78,7 +77,6 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
         num_heads=DECODER_NUM_HEADS,
         max_sequence_length=MAX_SEQUENCE_LENGTH,
         supported_modality_names=common.training_modalities,
-        learnable_channel_embeddings=True,
     )
     model_config = GalileoConfig(
         encoder_config=encoder_config,

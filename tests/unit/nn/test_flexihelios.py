@@ -39,8 +39,7 @@ class TestFlexiHeliosCompositeEncodings:
                 Modality.WORLDCOVER,
             ],
             max_sequence_length=12,
-            use_channel_embs=True,
-            random_channel_embs=True,
+            random_channel_embeddings=True,
         )
         return flexi_helios_composite_encodings
 
@@ -141,7 +140,6 @@ class TestFlexiHeliosBase:
             drop_path=0.1,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
-            use_channel_embs=True,
         )
         return flexi_helios_base
 
@@ -224,7 +222,6 @@ class TestEncoder:
             drop_path=0.1,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
-            use_channel_embs=True,
         )
 
     def test_create_token_exit_ids_normal_usage(self, encoder: Encoder) -> None:
@@ -352,7 +349,6 @@ class TestPredictor:
             num_heads=2,
             max_sequence_length=12,
             drop_path=0.1,
-            learnable_channel_embeddings=True,
             output_embedding_size=8,
         )
 
