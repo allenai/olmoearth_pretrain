@@ -160,7 +160,7 @@ def build_model_config_builder(
 def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig:
     """Build the train module config for an experiment."""
     LR = 0.0001
-    RANK_MICROBATCH_SIZE = 32
+    RANK_MICROBATCH_SIZE = 64
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
     WD = 0.02
@@ -219,7 +219,11 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
             f"All modalities must be in token_exit_cfg_a: {TRAINING_MODALITIES}"
         )
     token_exit_cfg_zero = {modality: 0 for modality in TRAINING_MODALITIES}
-    dp_config = DataParallelConfig(name=DataParallelType.fsdp)
+    dp_config = DataParallelConfig(
+        name=DataParallelType.fsdp,
+        param_dtype=DType.bfloat16,
+        reduce_dtype=DType.float32,
+    )
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
     scheduler = CosWithWarmup()
@@ -227,7 +231,7 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
         return GalileoTrainModuleConfig(
             # TODO: change name to optim config
             optim_config=optim_config,
-            warmup_duration=Duration.epochs(WARMUP_EPOCHS),
+            warmup_duration=Duration.steps(8000),
             masking_config_a=masking_config,
             masking_config_b=masking_config_b,
             loss_config_a=loss_config,
@@ -328,12 +332,12 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(300)
+    MAX_DURATION = Duration.epochs(75)
     METRICS_COLLECT_INTERVAL = 1
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "v0-sweep"
+    WANDB_PROJECT = "v0.2_sweep"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
 
@@ -354,17 +358,17 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(5),
+            eval_interval=Duration.steps(4000),
         ),
-        "pastis_sentinel2": DownstreamTaskConfig(
+        "pastis": DownstreamTaskConfig(
             dataset="pastis",
             embedding_batch_size=32,
             probe_batch_size=8,
-            num_workers=2,
+            num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(50),
+            eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
         ),
