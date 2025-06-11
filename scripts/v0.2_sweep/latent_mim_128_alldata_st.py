@@ -10,7 +10,7 @@ from latent_mim_128 import (
     build_visualize_config,
 )
 from olmo_core.optim.scheduler import (
-    ConstantScheduler,
+    ConstantWithWarmup,
     LinearWithWarmup,
     SequentialScheduler,
 )
@@ -61,7 +61,7 @@ def my_build_train_module_config(
     train_module_config = build_train_module_config(common)
     train_module_config.scheduler = SequentialScheduler(
         schedulers=[
-            ConstantScheduler(warmup_steps=2000),
+            ConstantWithWarmup(warmup_steps=2000),
             LinearWithWarmup(alpha_f=0.25, warmup_steps=0),
             LinearWithWarmup(alpha_f=0.25, warmup_steps=0),
             LinearWithWarmup(alpha_f=0.25, warmup_steps=0),
