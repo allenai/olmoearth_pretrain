@@ -12,7 +12,7 @@ from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
 
-from helios.data.constants import Modality, ModalitySpec, NUM_WORLDCOVER_CLASSES
+from helios.data.constants import NUM_WORLDCOVER_CLASSES, Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.nn.attention import Block
 from helios.nn.encodings import (
@@ -1105,7 +1105,8 @@ class Encoder(FlexiHeliosBase):
                     multiplier = 1
                 for idx, band_set in enumerate(modality.band_sets):
                     self.probes[f"{modality_name}_{idx}"] = nn.Linear(
-                        self.embedding_size, output_hw * len(band_set.bands) * multiplier
+                        self.embedding_size,
+                        output_hw * len(band_set.bands) * multiplier,
                     )
 
     def create_token_exit_ids(

@@ -222,7 +222,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
 
                 if modality == Modality.WORLDCOVER.name:
                     modality_bandset[modality_bandset == 95] = 110
-                    modality_bandset = (modality_bandset / 10).long()  # now we should be to classes
+                    modality_bandset = (
+                        modality_bandset / 10
+                    ).long()  # now we should be to classes
 
         raise NotImplementedError
 
