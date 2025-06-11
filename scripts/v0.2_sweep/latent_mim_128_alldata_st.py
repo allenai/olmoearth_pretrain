@@ -88,7 +88,7 @@ def build_train_module_config(
                 "decode_ratio": 0.75,
             }
         ),
-        warmup_duration=Duration.epochs(2),
+        warmup_duration=Duration.steps(8000),
         loss_config=LossConfig(
             loss_config={
                 "type": "patch_discrimination_new",
@@ -103,6 +103,7 @@ def build_train_module_config(
                 "weight": 0.1,
             }
         ),
+        ema_decay=(1.0, 1.0),
         max_grad_norm=1.0,
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
