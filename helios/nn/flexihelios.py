@@ -356,6 +356,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         x[x == 95] = (
             110  # == NUM_WORLDCOVER_CLASSES / 10, so that its cleanly divisible by 10
         )
+        # TODO: remove this assert if we have some runs where it passes.
         assert torch.isin(
             x,
             torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, MISSING_VALUE]),
