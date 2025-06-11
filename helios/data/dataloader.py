@@ -296,7 +296,8 @@ class HeliosDataLoader(DataLoaderBase):
             mock_sentinel1 = rng.random((256, 256, 12, 2), dtype=np.float32)
             output_dict[Modality.SENTINEL1.name] = mock_sentinel1
         if Modality.WORLDCOVER.name in self.dataset.training_modalities:
-            mock_worldcover = rng.random((256, 256, 1, 1), dtype=np.float32)
+            # pretend they're worldcover classes
+            mock_worldcover = np.ones((256, 256, 1, 1), dtype=np.float32) * 10
             output_dict["worldcover"] = mock_worldcover
         if Modality.LATLON.name in self.dataset.training_modalities:
             mock_latlon = rng.random((2,), dtype=np.float32)
