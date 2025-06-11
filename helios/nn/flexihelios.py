@@ -344,6 +344,20 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                 }
             )
 
+    @staticmethod
+    def worldcover_to_one_hot(x: torch.Tensor) -> torch.Tensor:
+        """Transform worldcover from ints to one hot."""
+        x[x == 95] = (
+            110  # == NUM_WORLDCOVER_CLASSES / 10, so that its cleanly divisible by 10
+        )
+        return (
+            one_hot(
+                torch.clamp((x / 10).long(), min=1), num_classes=NUM_WORLDCOVER_CLASSES
+            )
+            .squeeze(-2)
+            .float()
+        )
+
     def apply_embedding_to_modality(
         self, modality: str, input_data: MaskedHeliosSample, patch_size: int
     ) -> tuple[Tensor, Tensor]:
@@ -369,9 +383,8 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             patchified_data = modality_data[..., channel_set_indices]
             if modality == Modality.WORLDCOVER.name:
                 # one hot encode the patchified data
-                patchified_data = one_hot(
-                    patchified_data.long(), num_classes=NUM_WORLDCOVER_CLASSES
-                )
+                patchified_data = self.worldcover_to_one_hot(patchified_data)
+
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
             ]

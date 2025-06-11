@@ -809,6 +809,8 @@ class HeliosDataset(Dataset):
             for modality_name in sample_dict.keys():
                 if modality_name == "timestamps":
                     continue
+                if modality_name == Modality.WORLDCOVER.name:
+                    continue
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality_name in missing_modalities:
                     logger.info(
