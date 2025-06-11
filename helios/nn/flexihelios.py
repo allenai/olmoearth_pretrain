@@ -1314,7 +1314,9 @@ class Encoder(FlexiHeliosBase):
             )  # spatial tokens has shape B, PH, PW, T, D
             output_dict["mask"] = spatial_mask
             for probe_name, probe in self.probes.items():
-                probe_output = probe(spatial_tokens)  # B, Ph, PW, T, H * W * len(bandsets)
+                probe_output = probe(
+                    spatial_tokens
+                )  # B, Ph, PW, T, H * W * len(bandsets)
                 # TODO rearrange
                 # probe_output = rearrange(
                 #         probe_output,

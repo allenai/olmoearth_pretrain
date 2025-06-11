@@ -15,7 +15,7 @@ from olmo_core.train.train_module.transformer import (
     TransformerActivationCheckpointingConfig,
 )
 
-from helios.data.constants import Modality, MISSING_VALUE
+from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
@@ -204,16 +204,21 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         self,
         supervisory_modalities: dict[str, torch.Tensor],
         probe_outputs: dict[str, torch.Tensor],
-        loss: torch.Tensor
+        loss: torch.Tensor,
     ) -> torch.Tensor:
         """Compute the supervisory losses."""
-
-        spatial_mask = probe_outputs["mask"]  # TODO: this is required; is it okay to be a normal dict key?
+        spatial_mask = probe_outputs[
+            "mask"
+        ]  # TODO: this is required; is it okay to be a normal dict key?
         for modality, modality_tensor in supervisory_modalities.items():
             modality_spec = Modality.get(modality)
             for idx, bands in enumerate(modality_spec.bandsets_as_indices):
-                modality_bandset = modality_tensor[:, :, :, :, bands]  # B, H, W, T, Bandsets
-                probe_output = probe_outputs[f"{modality}_{idx}"]  # B, H, W, T, Bandsets
+                modality_bandset = modality_tensor[
+                    :, :, :, :, bands
+                ]  # B, H, W, T, Bandsets
+                probe_output = probe_outputs[
+                    f"{modality}_{idx}"
+                ]  # B, H, W, T, Bandsets
         raise NotImplementedError
 
     def train_batch(
@@ -264,7 +269,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         get_local_tensor(reg_term.detach()) / num_microbatches
                     )
 
-                loss = self.supervisory_losses(supervisory_modalities, probe_outputs, loss)
+                loss = self.supervisory_losses(
+                    supervisory_modalities, probe_outputs, loss
+                )
                 # Scale loss by number of microbatches
                 loss = loss / num_microbatches
 
