@@ -1311,10 +1311,20 @@ class Encoder(FlexiHeliosBase):
             # TODO: Should this be configurable? In Galileo experiments, MEAN did better than MAX
             spatial_tokens, spatial_mask = x.spatial_pool_with_mask(
                 pooling_type=PoolingType.MEAN
-            )
+            )  # spatial tokens has shape B, PH, PW, T, D
             output_dict["mask"] = spatial_mask
             for probe_name, probe in self.probes.items():
-                output_dict[probe_name] = probe(spatial_tokens)
+                probe_output = probe(spatial_tokens)  # B, Ph, PW, T, H * W * len(bandsets)
+                # TODO rearrange
+                # probe_output = rearrange(
+                #         probe_output,
+                #         "b h w (c i j) -> b c (h i) (w j)",
+                #         h=spatial_patches_per_dim,
+                #         w=spatial_patches_per_dim,
+                #         c=num_classes,
+                #         i=patch_size,
+                #         j=patch_size,
+                #     )
             return output_dict
 
     # TODO: we want to have a single API for the encoder and decoder
