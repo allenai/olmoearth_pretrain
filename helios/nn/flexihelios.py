@@ -350,6 +350,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         x[x == 95] = (
             110  # == NUM_WORLDCOVER_CLASSES / 10, so that its cleanly divisible by 10
         )
+        logger.debug("worldcover values: ", x.unique())
         return (
             one_hot(
                 torch.clamp((x / 10).long(), min=1), num_classes=NUM_WORLDCOVER_CLASSES
