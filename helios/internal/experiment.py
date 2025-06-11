@@ -20,6 +20,7 @@ from olmo_core.train.callbacks import ConfigSaverCallback, WandBCallback
 from olmo_core.utils import get_default_device, prepare_cli_environment, seed_all
 
 from helios.data.constants import Modality
+from helios.analysis.token_norm_analysis import analyze_token_norms
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig, collate_helios
 from helios.data.visualize import visualize_sample
@@ -91,6 +92,16 @@ class HeliosVisualizeConfig(Config):
 
 
 @dataclass
+class HeliosTokenNormAnalysisConfig(Config):
+    """Configuration for analyzing the token norms."""
+
+    output_dir: str
+    load_path: str
+    hw_p: int = 16  # hw in patches
+    patch_size: int = 4  # patch size
+    num_samples: int | None = None
+
+@dataclass
 class HeliosExperimentConfig(Config):
     """Configuration for a Helios experiment."""
 
@@ -102,6 +113,7 @@ class HeliosExperimentConfig(Config):
     train_module: HeliosTrainModuleConfig
     trainer: TrainerConfig
     visualize: HeliosVisualizeConfig | None = None
+    token_norm_analysis: HeliosTokenNormAnalysisConfig | None = None
     init_seed: int = 12536
 
 
@@ -241,6 +253,23 @@ def launch_prep(config: HeliosExperimentConfig) -> None:
     config.launch.launch(follow=True, torchrun=False)
 
 
+def analyze_token_norms(config: HeliosExperimentConfig) -> None:
+    """Analyze the token norms."""
+    logger.info("Analyzing the token norms")
+    if config.token_norm_analysis is None:
+        raise ValueError("token_norm_analysis is not set")
+    logger.info(config.token_norm_analysis)
+    dataset = config.dataset.build()
+    model = config.model.build()
+    device = get_default_device()
+    model = model.to(device)
+    num_samples = len(dataset)
+    for sample_index in range(num_samples):
+        sample = dataset[sample_index]
+        token_norms = analyze_token_norms(sample, model)
+
+
+
 class SubCmd(StrEnum):
     """Subcommands for Helios experiments.
 
@@ -254,6 +283,7 @@ class SubCmd(StrEnum):
     launch_prep = "launch_prep"
     dry_run = "dry_run"
     visualize = "visualize"
+    analyze_token_norms = "analyze_token_norms"
 
     def prepare_environment(self) -> None:
         """Prepare the environment for the given subcommand."""
@@ -267,7 +297,7 @@ class SubCmd(StrEnum):
             prepare_cli_environment()
         elif self == SubCmd.train:
             prepare_training_environment()
-        elif self == SubCmd.train_single:
+        elif self == SubCmd.train_single or self == SubCmd.analyze_token_norms:
             prepare_training_environment(backend=None)
         else:
             raise NotImplementedError(self)
@@ -290,6 +320,9 @@ class SubCmd(StrEnum):
         elif self == SubCmd.visualize:
             seed_all(config.init_seed)
             visualize(config)
+        elif self == SubCmd.analyze_token_norms:
+            seed_all(config.init_seed)
+            analyze_token_norms(config)
         elif self == SubCmd.train:
             try:
                 train(config)
