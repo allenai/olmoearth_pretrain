@@ -433,6 +433,7 @@ class HeliosTrainModule(TrainModule):
                     self.trainer.global_step,
                     self.trainer.max_steps,
                 )
+                logger.info(f"New LR: {new_lr}")
 
                 if isinstance(
                     current_lr := group.get(self.scheduler.lr_field), torch.Tensor
