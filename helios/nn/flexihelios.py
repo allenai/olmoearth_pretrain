@@ -13,7 +13,12 @@ from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
 from torch.nn.functional import one_hot
 
-from helios.data.constants import NUM_WORLDCOVER_CLASSES, Modality, ModalitySpec
+from helios.data.constants import (
+    MISSING_VALUE,
+    NUM_WORLDCOVER_CLASSES,
+    Modality,
+    ModalitySpec,
+)
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.nn.attention import Block
 from helios.nn.encodings import (
@@ -351,6 +356,10 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         x[x == 95] = (
             110  # == NUM_WORLDCOVER_CLASSES / 10, so that its cleanly divisible by 10
         )
+        assert torch.isin(
+            x,
+            torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, MISSING_VALUE]),
+        ).all()
         logger.debug("worldcover values: ", x.unique())
         return (
             one_hot(
