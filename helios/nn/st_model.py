@@ -786,6 +786,7 @@ class STEncoder(STBase):
         random_channel_embeddings: bool = False,
         num_projection_layers: int = 1,
         aggregate_then_project: bool = True,
+        pool_layers: int | None = None,
     ):
         """Initialize the encoder.
 
@@ -804,6 +805,10 @@ class STEncoder(STBase):
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             num_projection_layers: Number of projection layers
             aggregate_then_project: Whether to aggregate then project
+            pool_layers: experiment where we do spatial attention for the first portion of the
+                model, then do full attention for this many layers, and then on the last layer
+                we do temporal attention and copy the first token embedding at each spatial patch
+                to all the other patches (in effect pooling them).
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -820,6 +825,7 @@ class STEncoder(STBase):
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
+        self.pool_layers = pool_layers
         self.patch_embeddings = FlexiHeliosPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -952,6 +958,40 @@ class STEncoder(STBase):
             exit_ids_seq = None
         return exit_ids_seq
 
+    def copy_first_unmasked_token(
+        self, tokens: torch.Tensor, mask: torch.Tensor
+    ) -> torch.Tensor:
+        """For each batch, find the first unmasked token and copy it to all unmasked positions.
+
+        Args:
+            tokens (torch.Tensor): Tensor of shape [B, T, D] with token embeddings.
+            mask (torch.Tensor): Tensor of shape [B, T] with 1 for unmasked and 0 for masked tokens.
+
+        Returns:
+            torch.Tensor: Updated tokens of shape [B, T, D].
+        """
+        B, T, D = tokens.shape
+
+        # Get indices of the first unmasked token for each batch
+        first_unmasked_idx = (mask == 1).float().cumsum(dim=1)
+        first_unmasked_idx[first_unmasked_idx != 1] = (
+            0  # only keep the first occurrence
+        )
+        first_unmasked_idx[first_unmasked_idx == 1] = 1
+        idx = first_unmasked_idx.argmax(dim=1)  # shape: [B]
+
+        # Gather the first unmasked tokens
+        idx_expanded = idx.view(B, 1, 1).expand(-1, 1, D)  # shape: [B, 1, D]
+        first_tokens = torch.gather(tokens, dim=1, index=idx_expanded).squeeze(
+            1
+        )  # shape: [B, D]
+
+        # Expand to [B, T, D] and mask
+        output = tokens.clone()
+        output[mask == 1] = first_tokens.unsqueeze(1).expand(-1, T, -1)[mask == 1]
+
+        return output
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -1002,13 +1042,27 @@ class STEncoder(STBase):
             # On even blocks, do temporal attention.
             # On odd blocks, do spatial attention.
             # Unless windowed attention is configured.
+            perform_pooling_within_each_batch = False
             if self.windowed_attention_size is not None:
                 attention_mode = AttentionMode.WINDOWED
+            elif self.pool_layers is not None:
+                # With pool_layers:
+                # First portion: do spatial attention.
+                # For pool_layers: do full attention.
+                # Last layer: do temporal attention and pool tokens at each spatial patch.
+                if i_blk < len(self.blocks) - self.pool_layers - 1:
+                    attention_mode = AttentionMode.SPATIAL
+                elif i_blk < len(self.blocks) - 1:
+                    attention_mode = AttentionMode.FULL
+                else:
+                    attention_mode = AttentionMode.TEMPORAL
+                    perform_pooling_within_each_batch = True
             elif i_blk % 2 == 0:
                 attention_mode = AttentionMode.TEMPORAL
             else:
                 attention_mode = AttentionMode.SPATIAL
 
+            logger.debug(f"Layer {i_blk} applying attention mode {attention_mode}")
             x, mask = self.collapse_and_combine(x, attention_mode, i_blk)
             bool_mask = mask == MaskValue.ONLINE_ENCODER.value
             tokens, indices, new_mask = self.remove_masked_tokens(x, bool_mask)
@@ -1017,6 +1071,14 @@ class STEncoder(STBase):
             # Apply normalization on last block.
             if i_blk == len(self.blocks) - 1:
                 tokens = self.norm(tokens)
+
+            if perform_pooling_within_each_batch:
+                # This means we want to copy the first unmasked token for each
+                # attention batch to the remainder of the unmasked ones.
+                # With temporal pooling, in effect this "pools" the tokens at each
+                # spatial patch.
+                logger.debug(f"Layer {i_blk} performing pooling within each batch")
+                tokens = self.copy_first_unmasked_token(tokens, new_mask)
 
             tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
             x = self.split_and_expand_per_modality(
@@ -1430,6 +1492,7 @@ class STEncoderConfig(Config):
     drop_path: float = 0.1
     max_sequence_length: int = 12
     windowed_attention_size: int | None = None
+    pool_layers: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
