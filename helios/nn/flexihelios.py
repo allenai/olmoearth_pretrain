@@ -359,7 +359,11 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         # TODO: remove this assert if we have some runs where it passes.
         assert torch.isin(
             x,
-            torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, MISSING_VALUE]),
+            torch.tensor(
+                [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, MISSING_VALUE],
+                device=x.device,
+                dtype=x.dtype,
+            ),
         ).all()
         logger.debug("worldcover values: ", x.unique())
         return (
