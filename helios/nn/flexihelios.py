@@ -1724,8 +1724,8 @@ class EncoderConfig(Config):
     depth: int = 2
     drop_path: float = 0.1
     max_sequence_length: int = 12
-    learnable_channel_embeddings: bool = True
-    random_channel_embeddings: bool = False
+    use_channel_embs: bool = True
+    random_channel_embs: bool = False
     num_projection_layers: int = 1
     aggregate_then_project: bool = True
     use_flash_attn: bool = False
@@ -1751,6 +1751,10 @@ class EncoderConfig(Config):
         kwargs = self.as_dict(exclude_none=True, recurse=False)
         # supported_modality_names is replaced by supported_modalities
         kwargs.pop("supported_modality_names")
+        use_channel_embs = kwargs.pop("use_channel_embs")
+        random_channel_embs = kwargs.pop("random_channel_embs")
+        kwargs["learnable_channel_embeddings"] = use_channel_embs
+        kwargs["random_channel_embeddings"] = random_channel_embs
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Encoder kwargs: {kwargs}")
         return Encoder(**kwargs)
