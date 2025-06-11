@@ -370,7 +370,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             if modality == Modality.WORLDCOVER.name:
                 # one hot encode the patchified data
                 patchified_data = one_hot(
-                    patchified_data, num_classes=NUM_WORLDCOVER_CLASSES
+                    patchified_data.long(), num_classes=NUM_WORLDCOVER_CLASSES
                 )
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
