@@ -364,7 +364,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                 device=x.device,
                 dtype=x.dtype,
             ),
-        ).all()
+        ).all(), f"Got {x.unique()} values in world cover"
         logger.debug("worldcover values: ", x.unique())
         return (
             one_hot(
