@@ -128,6 +128,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
+        supervisory_bandsets: list[str] | None = None,
     ):
         """Initialize the training module.
 
@@ -154,6 +155,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             mae_loss_config: Optional loss config for masked auto-encoding.
             warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
+            supervisory_bandsets: Which band sets to use as supervision
         """
         super().__init__(
             model=model,
@@ -187,6 +189,12 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
+
+        self.supervisory_bandsets = supervisory_bandsets
+        if self.supervisory_bandsets is None:
+            logger.warning(
+                "supervisory_bandsets is None. This is equivalent to normal Latent MIM"
+            )
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -271,7 +279,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
     ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, _, reconstructed = self.model(batch, patch_size)
+            latent, decoded, _, reconstructed, probe_outputs = self.model(
+                batch, patch_size
+            )
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 target_output, _ = self.model.target_encoder.forward(

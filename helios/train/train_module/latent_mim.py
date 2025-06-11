@@ -267,7 +267,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
     ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, _, reconstructed = self.model(batch, patch_size)
+            latent, decoded, _, reconstructed, _ = self.model(batch, patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 target_output, _ = self.model.target_encoder.forward(

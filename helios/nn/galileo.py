@@ -58,7 +58,7 @@ class Galileo(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
+        latent, latent_projected_and_pooled, _ = self.encoder(x, patch_size=patch_size)
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
@@ -77,7 +77,7 @@ class Galileo(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
+        latent, latent_projected_and_pooled, _ = self.encoder(x, patch_size=patch_size)
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)

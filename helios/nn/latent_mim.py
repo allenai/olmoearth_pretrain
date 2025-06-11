@@ -47,7 +47,13 @@ class LatentMIM(nn.Module, DistributedMixins):
 
     def forward(
         self, x: MaskedHeliosSample, patch_size: int
-    ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
+    ) -> tuple[
+        TokensAndMasks,
+        TokensAndMasks,
+        torch.Tensor,
+        TokensAndMasks | None,
+        dict[str, torch.Tensor],
+    ]:
         """Forward pass for the Latent MIM Style.
 
         Returns:
@@ -57,12 +63,20 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
+        latent, latent_projected_and_pooled, probe_outputs = self.encoder(
+            x, patch_size=patch_size
+        )
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
         decoded = self.decoder(latent, timestamps=x.timestamps, patch_size=patch_size)
-        return latent, decoded, latent_projected_and_pooled, reconstructed
+        return (
+            latent,
+            decoded,
+            latent_projected_and_pooled,
+            reconstructed,
+            probe_outputs,
+        )
 
     def apply_fsdp(
         self,
