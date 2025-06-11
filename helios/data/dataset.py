@@ -284,6 +284,36 @@ class HeliosSample(NamedTuple):
             raise ValueError("patch_size too small for this sample and budget")
         return min(floor(max_t_within_budget), self.time)
 
+    def _create_cropped_data_dict(
+        self, start_h: int, start_w: int, sampled_hw: int, start_t: int, max_t: int
+    ) -> dict[str, ArrayTensor]:
+        """Create a new data dictionary with cropped modalities based on sampling parameters."""
+        new_data_dict: dict[str, ArrayTensor] = {}
+
+        for attribute, modality in self.as_dict(ignore_nones=True).items():
+            assert modality is not None
+            if attribute == "timestamps":
+                new_data_dict[attribute] = modality[start_t : start_t + max_t]
+                continue
+            modality_spec = Modality.get(attribute)
+            if modality_spec.is_spacetime_varying:
+                # for now, lets assume fixed resolution
+                new_data_dict[attribute] = modality[
+                    start_h : start_h + sampled_hw,
+                    start_w : start_w + sampled_hw,
+                    start_t : start_t + max_t,
+                ]
+            elif modality_spec.is_space_only_varying:
+                # for now, lets assume fixed resolution
+                new_data_dict[attribute] = modality[
+                    start_h : start_h + sampled_hw, start_w : start_w + sampled_hw
+                ]
+            elif modality_spec.is_time_only_varying:
+                new_data_dict[attribute] = modality[start_t : start_t + max_t]
+            elif modality_spec.is_static_in_space_and_time:
+                new_data_dict[attribute] = modality
+        return new_data_dict
+
     def subset(
         self,
         patch_size: int,
@@ -327,30 +357,7 @@ class HeliosSample(NamedTuple):
         else:
             start_t = 0
 
-        new_data_dict: dict[str, ArrayTensor] = {}
-
-        for attribute, modality in self.as_dict(ignore_nones=True).items():
-            assert modality is not None
-            if attribute == "timestamps":
-                new_data_dict[attribute] = modality[start_t : start_t + max_t]
-                continue
-            modality_spec = Modality.get(attribute)
-            if modality_spec.is_spacetime_varying:
-                # for now, lets assume fixed resolution
-                new_data_dict[attribute] = modality[
-                    start_h : start_h + sampled_hw,
-                    start_w : start_w + sampled_hw,
-                    start_t : start_t + max_t,
-                ]
-            elif modality_spec.is_space_only_varying:
-                # for now, lets assume fixed resolution
-                new_data_dict[attribute] = modality[
-                    start_h : start_h + sampled_hw, start_w : start_w + sampled_hw
-                ]
-            elif modality_spec.is_time_only_varying:
-                new_data_dict[attribute] = modality[start_t : start_t + max_t]
-            elif modality_spec.is_static_in_space_and_time:
-                new_data_dict[attribute] = modality
+        new_data_dict = self._create_cropped_data_dict(start_h, start_w, sampled_hw, start_t, max_t)
         return HeliosSample(**new_data_dict)
 
 

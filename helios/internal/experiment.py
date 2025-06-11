@@ -94,9 +94,6 @@ class HeliosVisualizeConfig(Config):
 @dataclass
 class HeliosTokenNormAnalysisConfig(Config):
     """Configuration for analyzing the token norms."""
-
-    output_dir: str
-    load_path: str
     hw_p: int = 16  # hw in patches
     patch_size: int = 4  # patch size
     num_samples: int | None = None
@@ -159,6 +156,7 @@ def build_config(
     visualize_config = (
         visualize_config_builder(common) if visualize_config_builder else None
     )
+    token_norm_analysis_config = HeliosTokenNormAnalysisConfig()
     config = HeliosExperimentConfig(
         run_name=common.run_name,
         model=model_config,
@@ -167,6 +165,7 @@ def build_config(
         train_module=train_module_config,
         trainer=trainer_config,
         visualize=visualize_config,
+        token_norm_analysis=token_norm_analysis_config,
         launch=common.launch,
     )
     logger.info("Overrides: %s", overrides)
@@ -253,20 +252,25 @@ def launch_prep(config: HeliosExperimentConfig) -> None:
     config.launch.launch(follow=True, torchrun=False)
 
 
-def analyze_token_norms(config: HeliosExperimentConfig) -> None:
+def analyze(config: HeliosExperimentConfig) -> None:
     """Analyze the token norms."""
     logger.info("Analyzing the token norms")
     if config.token_norm_analysis is None:
         raise ValueError("token_norm_analysis is not set")
-    logger.info(config.token_norm_analysis)
-    dataset = config.dataset.build()
     model = config.model.build()
     device = get_default_device()
     model = model.to(device)
+    train_module = config.train_module.build(model)
+    dataset = config.dataset.build()
+    # TODO: akward harcoding of the collator here
+    data_loader = config.data_loader.build(
+        dataset, collator=collate_helios, dp_process_group=train_module.dp_process_group
+    )
+    trainer = config.trainer.build(train_module, data_loader)
+    # basically ignore the trainer and the data_loader and just use the model
     num_samples = len(dataset)
     for sample_index in range(num_samples):
-        sample = dataset[sample_index]
-        token_norms = analyze_token_norms(sample, model)
+        token_norms = analyze_token_norms(dataset, train_module.model, config.token_norm_analysis.patch_size, config.token_norm_analysis.hw_p)
 
 
 
@@ -283,7 +287,7 @@ class SubCmd(StrEnum):
     launch_prep = "launch_prep"
     dry_run = "dry_run"
     visualize = "visualize"
-    analyze_token_norms = "analyze_token_norms"
+    analyze = "analyze"
 
     def prepare_environment(self) -> None:
         """Prepare the environment for the given subcommand."""
@@ -295,9 +299,9 @@ class SubCmd(StrEnum):
             SubCmd.visualize,
         ):
             prepare_cli_environment()
-        elif self == SubCmd.train:
+        elif self == SubCmd.train or self == SubCmd.analyze:
             prepare_training_environment()
-        elif self == SubCmd.train_single or self == SubCmd.analyze_token_norms:
+        elif self == SubCmd.train_single:
             prepare_training_environment(backend=None)
         else:
             raise NotImplementedError(self)
@@ -320,9 +324,9 @@ class SubCmd(StrEnum):
         elif self == SubCmd.visualize:
             seed_all(config.init_seed)
             visualize(config)
-        elif self == SubCmd.analyze_token_norms:
+        elif self == SubCmd.analyze:
             seed_all(config.init_seed)
-            analyze_token_norms(config)
+            analyze(config)
         elif self == SubCmd.train:
             try:
                 train(config)

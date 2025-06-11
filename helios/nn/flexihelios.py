@@ -1268,6 +1268,10 @@ class Encoder(FlexiHeliosBase):
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
+            # log tokens shape
+            logger.info(f"Tokens shape: {tokens.shape}")
+            # number of masked tokens
+            logger.info(f"Number of masked tokens: {new_mask.sum()}")
             tokens = blk(
                 x=tokens,
                 cu_seqlens=cu_seqlens,
@@ -1283,8 +1287,7 @@ class Encoder(FlexiHeliosBase):
             if token_exit_cfg is None:
                 num_samples_to_record = 10
                 with torch.no_grad():
-                    if self.training:
-                        visualization_tokens = tokens.clone().detach()
+                    visualization_tokens = tokens.clone().detach()
                     visualization_tokens, _ = self.add_removed_tokens(visualization_tokens, indices, new_mask)
                     visualization_tokens_dict = self.split_and_expand_per_modality(visualization_tokens, modalities_to_dims_dict)
                     visualization_tokens_dict.update(original_masks_dict)
@@ -1293,33 +1296,33 @@ class Encoder(FlexiHeliosBase):
                     save_token_norm_histograms(
                         visualization_tokens_dict=visualization_tokens_dict,
                         block_idx=i_blk,
-                        save_dir="./token_norm_histograms",
+                        save_dir="./new_token_norm_histograms",
                         bins=75,
                         global_step=self.global_step,
                         num_samples_to_record=num_samples_to_record,
                     )
 
-                    # Keep the logging for immediate feedback
-                    logger.info(f"Visualization token Norms for block {i_blk}")
-                    for modality, data in visualization_tokens_dict.items():
-                        if modality.endswith("_mask"):
-                            continue
-                        logger.info(f"Modality: {modality}")
-                        # I want all the tokens to be present that are not missing
-                        modality_mask = visualization_tokens_dict[modality + "_mask"]
-                        present_mask = modality_mask == MaskValue.ONLINE_ENCODER.value
-                        logger.info(f"Present mask total: {present_mask.sum()}")
+                    # # Keep the logging for immediate feedback
+                    # logger.info(f"Visualization token Norms for block {i_blk}")
+                    # for modality, data in visualization_tokens_dict.items():
+                    #     if modality.endswith("_mask"):
+                    #         continue
+                    #     logger.info(f"Modality: {modality}")
+                    #     # I want all the tokens to be present that are not missing
+                    #     modality_mask = visualization_tokens_dict[modality + "_mask"]
+                    #     present_mask = modality_mask == MaskValue.ONLINE_ENCODER.value
+                    #     logger.info(f"Present mask total: {present_mask.sum()}")
 
-                        for b in range(min(num_samples_to_record, data.shape[0])):
-                            sample_data = data[b]
-                            sample_present_mask = present_mask[b]
-                            encoded_data = sample_data[sample_present_mask]
-                            if encoded_data.shape[0] < 1:
-                                logger.info(f"No present tokens for sample {b} modality {modality}")
-                                continue
+                    #     for b in range(min(num_samples_to_record, data.shape[0])):
+                    #         sample_data = data[b]
+                    #         sample_present_mask = present_mask[b]
+                    #         encoded_data = sample_data[sample_present_mask]
+                    #         if encoded_data.shape[0] < 1:
+                    #             logger.info(f"No present tokens for sample {b} modality {modality}")
+                    #             continue
 
-                            token_norms = encoded_data.norm(dim=-1)
-                            logger.info(f"Sample {b} - Min: {token_norms.min():.3f}, Max: {token_norms.max():.3f}, Mean: {token_norms.mean():.3f}, Std: {token_norms.std():.3f}")
+                    #         token_norms = encoded_data.norm(dim=-1)
+                    #         logger.info(f"Sample {b} - Min: {token_norms.min():.3f}, Max: {token_norms.max():.3f}, Mean: {token_norms.mean():.3f}, Std: {token_norms.std():.3f}")
 
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
@@ -1863,7 +1866,7 @@ class PredictorConfig(Config):
 def save_token_norm_histograms(
     visualization_tokens_dict: dict[str, Tensor],
     block_idx: int,
-    save_dir: str = "./token_norm_histograms",
+    save_dir: str = "./new_token_norm_histograms",
     bins: int = 50,
     global_step: int = 0,
     num_samples_to_record: int = 10,
