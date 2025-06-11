@@ -347,6 +347,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
     @staticmethod
     def worldcover_to_one_hot(x: torch.Tensor) -> torch.Tensor:
         """Transform worldcover from ints to one hot."""
+        org_dtype = x.dtype
         x[x == 95] = (
             110  # == NUM_WORLDCOVER_CLASSES / 10, so that its cleanly divisible by 10
         )
@@ -356,7 +357,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                 torch.clamp((x / 10).long(), min=1), num_classes=NUM_WORLDCOVER_CLASSES
             )
             .squeeze(-2)
-            .float()
+            .to(dtype=org_dtype)
         )
 
     def apply_embedding_to_modality(
