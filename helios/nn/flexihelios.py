@@ -1037,6 +1037,7 @@ class Encoder(FlexiHeliosBase):
         num_projection_layers: int = 1,
         aggregate_then_project: bool = True,
         frozen_patch_embeddings: bool = False,
+        probe_modalities: list[str] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1058,6 +1059,8 @@ class Encoder(FlexiHeliosBase):
                 the projection. If False, we will apply the projection first.
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
+            probe_modalities: a list of modalities for which we will output linear probe predictions
+                per spatial patch.
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1089,6 +1092,17 @@ class Encoder(FlexiHeliosBase):
         if frozen_patch_embeddings:
             for p in self.patch_embeddings.parameters():
                 p.requires_grad = False
+
+        self.probes: dict[str, nn.Module] = {}
+        if probe_modalities is not None:
+            # TODO - right now this assumes a resolution factor of 1. Needs to be fixed to handle (e.g.) NAIP
+            output_hw = self.max_patch_size**2
+            for modality_name in probe_modalities:
+                modality = Modality.get(modality_name)
+                for idx, band_set in enumerate(modality.band_sets):
+                    self.probes[f"{modality_name}_{idx}"] = nn.Linear(
+                        self.embedding_size, output_hw * len(band_set.bands)
+                    )
 
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
@@ -1288,6 +1302,21 @@ class Encoder(FlexiHeliosBase):
         tokens_per_modality_dict.update(original_masks_dict)
         return tokens_per_modality_dict
 
+    def apply_probes(self, x: TokensAndMasks) -> dict[str, torch.Tensor]:
+        """Apply linear probes for supervised learning."""
+        if len(self.probes) == 0:
+            return {}
+        else:
+            output_dict = {}
+            # TODO: Should this be configurable? In Galileo experiments, MEAN did better than MAX
+            spatial_tokens, spatial_mask = x.spatial_pool_with_mask(
+                pooling_type=PoolingType.MEAN
+            )
+            output_dict["mask"] = spatial_mask
+            for probe_name, probe in self.probes.items():
+                output_dict[probe_name] = probe(spatial_tokens)
+            return output_dict
+
     # TODO: we want to have a single API for the encoder and decoder
     def forward(
         self,
@@ -1295,7 +1324,7 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
-    ) -> tuple[TokensAndMasks, torch.Tensor]:
+    ) -> tuple[TokensAndMasks, torch.Tensor, dict[str, torch.Tensor]]:
         """Process masked input samples into token representations.
 
         Args:
@@ -1320,7 +1349,7 @@ class Encoder(FlexiHeliosBase):
                 token_exit_cfg=token_exit_cfg,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        return output, self.project_and_aggregate(output)
+        return output, self.project_and_aggregate(output), self.apply_probes(output)
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
