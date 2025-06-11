@@ -23,6 +23,7 @@ from upath import UPath
 
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
+from helios.optim.scheduler import LinearDecay
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
@@ -84,11 +85,10 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    scheuler = WSD(
-        warmup_steps=1,  # minimal warmup
-        warmup_min_lr=0.0001,
-        decay_min_lr=0.0,
+    scheduler = LinearDecay(
         decay_steps=50000,
+        min_lr=0.0,
+        start_step=250000,
     )
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
