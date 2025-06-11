@@ -68,7 +68,7 @@ def my_build_train_module_config(
             LinearWithWarmup(alpha_f=0.25, warmup_steps=0),
             LinearWithWarmup(alpha_f=0.1, warmup_steps=0),
         ],
-        schedulers_max_steps=[80000, 80000, 80000, 80000],
+        schedulers_max_steps=[80000, 80000, 80000, 80000, 80000],
     )
     train_module_config.rank_microbatch_size = 16
     return train_module_config
