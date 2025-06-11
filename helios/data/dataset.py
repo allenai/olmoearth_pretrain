@@ -810,6 +810,10 @@ class HeliosDataset(Dataset):
                 if modality_name == "timestamps":
                     continue
                 if modality_name == Modality.WORLDCOVER.name:
+                    # don't normalize world cover, since we will  one hot encode it
+                    logger.info(
+                        f"Skipping normalization for {modality_name} because it is worldcover"
+                    )
                     continue
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality_name in missing_modalities:
