@@ -809,20 +809,21 @@ class HeliosDataset(Dataset):
             for modality_name in sample_dict.keys():
                 if modality_name == "timestamps":
                     continue
-                if modality_name == Modality.WORLDCOVER.name:
-                    # don't normalize world cover, since we will  one hot encode it
-                    logger.info(
-                        f"Skipping normalization for {modality_name} because it is worldcover"
-                    )
-                    continue
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality_name in missing_modalities:
                     logger.info(
                         f"Skipping normalization for {modality_name} because it is in missing_modalities"
                     )
                     continue
-                logger.info(f"Normalizing {modality_name}")
                 modality_data = sample_dict[modality_name]
+                if modality_name == Modality.WORLDCOVER.name:
+                    # don't normalize world cover, since we will  one hot encode it
+                    logger.info(
+                        f"Skipping normalization for {modality_name} because it is worldcover"
+                    )
+                    sample_dict[modality_name] = modality_data.astype(self.dtype)
+                    continue
+                logger.info(f"Normalizing {modality_name}")
                 missing_mask = modality_data == MISSING_VALUE
                 normalized_data = self.normalize_image(
                     Modality.get(modality_name), modality_data
