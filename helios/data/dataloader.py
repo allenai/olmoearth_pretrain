@@ -294,7 +294,7 @@ class HeliosDataLoader(DataLoaderBase):
             output_dict["sentinel2_l2a"] = mock_sentinel2_l2a
         if Modality.SENTINEL1.name in self.dataset.training_modalities:
             mock_sentinel1 = rng.random((256, 256, 12, 2), dtype=np.float32)
-            output_dict["sentinel1"] = mock_sentinel1
+            output_dict[Modality.SENTINEL1.name] = mock_sentinel1
         if Modality.WORLDCOVER.name in self.dataset.training_modalities:
             mock_worldcover = rng.random((256, 256, 1, 1), dtype=np.float32)
             output_dict["worldcover"] = mock_worldcover
@@ -326,7 +326,10 @@ class HeliosDataLoader(DataLoaderBase):
                 (
                     patch_size,
                     HeliosSample(**output_dict).subset(
-                        patch_size, max_tokens_per_instance=1500, sampled_hw_p=6
+                        patch_size,
+                        max_tokens_per_instance=1500,
+                        sampled_hw_p=6,
+                        current_length=12,
                     ),
                 )
             ]

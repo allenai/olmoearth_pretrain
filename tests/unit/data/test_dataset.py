@@ -49,11 +49,13 @@ class TestHeliosSample:
         sampled_hw_p = 4
         patch_size = 2
         max_tokens_per_instance = 100
+        current_length = 12
         sample: HeliosSample = samples_with_missing_modalities[1][1]
         subset_sample = sample.subset(
             patch_size=patch_size,
             max_tokens_per_instance=max_tokens_per_instance,
             sampled_hw_p=sampled_hw_p,
+            current_length=current_length,
         )
 
         # Check that the shapes are correct
@@ -143,9 +145,8 @@ class TestHeliosDataset:
         data = np.random.randn(h, w, t, c).astype(np.float32)
         max_sequence_length = 5
 
-        # Create timestamps array with max_sequence_length
-        timestamps = np.zeros((max_sequence_length, 3), dtype=np.int32)
-        timestamps[:3] = np.array([[1, 1, 2023], [2, 1, 2023], [3, 1, 2023]])
+        # Create timestamps
+        timestamps = np.array([[1, 1, 2023], [2, 1, 2023], [3, 1, 2023]])
 
         sample_dict = {
             "sentinel2_l2a": data,
@@ -158,9 +159,11 @@ class TestHeliosDataset:
             training_modalities=["sentinel2_l2a", "sentinel1"],
             dtype=np.float32,
             max_sequence_length=max_sequence_length,
-            use_modalities_with_missing_timesteps=True,
             normalize=False,  # Disable normalization for testing
         )
+
+        # Pad timestamps
+        sample_dict, current_length = dataset._pad_timestamps(sample_dict)
 
         # Fill missing values
         sample, missing_modalities = dataset.fill_sample_with_missing_values(
@@ -169,6 +172,9 @@ class TestHeliosDataset:
 
         # Check that sentinel1 is in missing_modalities
         assert "sentinel1" in missing_modalities
+
+        # Check if timestamps are padded correctly
+        assert sample.time == max_sequence_length
 
         # Check that sentinel2_l2a has been filled correctly
         assert sample.sentinel2_l2a is not None

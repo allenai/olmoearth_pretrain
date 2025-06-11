@@ -88,7 +88,7 @@ def build_encoder_config(separate_attention: bool = False) -> Config:
         "mlp_ratio": MLP_RATIO,
         "drop_path": 0.1,
         "max_sequence_length": MAX_SEQUENCE_LENGTH,
-        "use_channel_embs": True,
+        "learnable_channel_embs": True,
     }
     if separate_attention:
         return STEncoderConfig(**kwargs)
@@ -106,7 +106,7 @@ def build_decoder_config(separate_attention: bool = False) -> Config:
         "num_heads": DECODER_NUM_HEADS,
         "max_sequence_length": MAX_SEQUENCE_LENGTH,
         "supported_modality_names": TRAINING_MODALITIES,
-        "learnable_channel_embeddings": True,
+        "learnable_channel_embs": True,
     }
     if separate_attention:
         return STPredictorConfig(**kwargs)
@@ -162,9 +162,9 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
     LR = 0.0001
     RANK_MICROBATCH_SIZE = 32
     ENCODE_RATIO = 0.1
-    DECODE_RATIO = 0.9
+    DECODE_RATIO = 0.75
     WD = 0.02
-    WARMUP_EPOCHS = 5
+    WARMUP_EPOCHS = 10
 
     optim_config = AdamWConfig(lr=LR, weight_decay=WD)
     masking_config = MaskingConfig(
@@ -329,25 +329,25 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
             cache_dir="/helios_cache/osm_sampling",
         ),
         # osmbig
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/",
-            training_modalities=TRAINING_MODALITIES,
-            # use_samples_with_missing_supported_modalities=False,
-            dtype=DType.float32,
-            cache_dir="/helios_cache/osmbig",
-        ),
+        # HeliosDatasetConfig(
+        #    h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/",
+        #    training_modalities=TRAINING_MODALITIES,
+        #    # use_samples_with_missing_supported_modalities=False,
+        #    dtype=DType.float32,
+        #    cache_dir="/helios_cache/osmbig",
+        # ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(200)
+    MAX_DURATION = Duration.epochs(300)
     METRICS_COLLECT_INTERVAL = 1
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "v0-sweep"
+    WANDB_PROJECT = "v0-sweep-evals"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
 
@@ -364,54 +364,40 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
-            batch_size=128,
+            embedding_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
-        "breizhcrops": DownstreamTaskConfig(
-            dataset="breizhcrops",
-            batch_size=128,
+        "m-bigearthnet": DownstreamTaskConfig(
+            dataset="m-bigearthnet",
+            embedding_batch_size=64,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(50),
-            patch_size=1,
+            eval_interval=Duration.epochs(5),
         ),
-        "pastis": DownstreamTaskConfig(
-            dataset="pastis",
-            batch_size=8,
-            num_workers=2,
+        "m-so2sat": DownstreamTaskConfig(
+            dataset="m-so2sat",
+            embedding_batch_size=128,
+            num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(50),
-            input_modalities=["sentinel2"],
+            eval_interval=Duration.epochs(5),
         ),
-        "sickle-sentinel1": DownstreamTaskConfig(
-            dataset="sickle",
-            batch_size=8,
-            num_workers=2,
+        "m-brick-kiln": DownstreamTaskConfig(
+            dataset="m-brick-kiln",
+            embedding_batch_size=128,
+            num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            probe_lr=0.01,
-            eval_interval=Duration.epochs(10),
-            input_modalities=["sentinel1"],
-        ),
-        "sickle-landsat": DownstreamTaskConfig(
-            dataset="sickle",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.01,
-            eval_interval=Duration.epochs(10),
-            input_modalities=["landsat8"],
+            eval_interval=Duration.epochs(5),
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
-            batch_size=128,
+            embedding_batch_size=128,
+            probe_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
@@ -420,12 +406,118 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "sen1floods11": DownstreamTaskConfig(
             dataset="sen1floods11",
-            batch_size=128,
+            embedding_batch_size=128,
+            probe_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
             eval_interval=Duration.epochs(10),
+        ),
+        "sickle_sentinel1": DownstreamTaskConfig(
+            dataset="sickle",
+            embedding_batch_size=32,
+            probe_batch_size=16,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(10),
+            input_modalities=[Modality.SENTINEL1.name],
+            epochs=50,
+        ),
+        "sickle_landsat": DownstreamTaskConfig(
+            dataset="sickle",
+            embedding_batch_size=32,
+            probe_batch_size=16,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(10),
+            input_modalities=[Modality.LANDSAT.name],
+            epochs=50,
+        ),
+        "sickle_sentinel1_landsat": DownstreamTaskConfig(
+            dataset="sickle",
+            embedding_batch_size=32,
+            probe_batch_size=16,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.002,
+            eval_interval=Duration.epochs(10),
+            input_modalities=[Modality.SENTINEL1.name, Modality.LANDSAT.name],
+            epochs=50,
+        ),
+        "m_sa_crop_type": DownstreamTaskConfig(
+            dataset="m-sa-crop-type",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(10),
+        ),
+        "m_cashew_plant": DownstreamTaskConfig(
+            dataset="m-cashew-plant",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(10),
+        ),
+        "pastis_sentinel2": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+        ),
+        "pastis_sentinel1": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=[Modality.SENTINEL1.name],
+            epochs=50,
+        ),
+        "pastis_sentinel1_sentinel2": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(20),
+            input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+            epochs=50,
+        ),
+        "breizhcrops": DownstreamTaskConfig(
+            dataset="breizhcrops",
+            embedding_batch_size=128,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(50),
+            patch_size=1,
+            eval_mode="linear_probe",
+            probe_lr=0.1,
+            epochs=50,
         ),
     }
     # Let us not use garbage collector fallback
@@ -447,6 +539,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
                 tasks=EVAL_TASKS,
+                eval_on_startup=False,
+                cancel_after_first_eval=False,
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)

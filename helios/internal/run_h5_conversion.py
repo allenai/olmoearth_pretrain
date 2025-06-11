@@ -26,7 +26,7 @@ def build_default_config() -> ConvertToH5pyConfig:
     return ConvertToH5pyConfig(
         tile_path="",
         supported_modality_names=[
-            Modality.NAIP_10.name,
+            # Modality.NAIP_10.name,
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.WORLDCOVER.name,

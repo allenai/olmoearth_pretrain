@@ -47,14 +47,14 @@ class STBase(nn.Module):
         self,
         embedding_size: int,
         max_sequence_length: int,
-        use_channel_embs: bool,
         num_heads: int,
         mlp_ratio: float,
         depth: int,
         drop_path: float,
         supported_modalities: list[ModalitySpec],
-        random_channel_embs: bool = False,
         windowed_attention_size: int | None = None,
+        learnable_channel_embeddings: bool = True,
+        random_channel_embeddings: bool = False,
     ) -> None:
         """Initialize the STBase class."""
         super().__init__()
@@ -65,9 +65,9 @@ class STBase(nn.Module):
         logger.info(f"modalities being used by model: {self.supported_modality_names}")
 
         self.max_sequence_length = max_sequence_length
-        self.use_channel_embs = use_channel_embs
-        self.random_channel_embs = random_channel_embs
         self.windowed_attention_size = windowed_attention_size
+        self.learnable_channel_embeddings = learnable_channel_embeddings
+        self.random_channel_embeddings = random_channel_embeddings
 
         self.blocks = nn.ModuleList(
             [
@@ -88,8 +88,8 @@ class STBase(nn.Module):
             embedding_size,
             self.supported_modalities,
             max_sequence_length,
-            use_channel_embs,
-            random_channel_embs,
+            learnable_channel_embeddings,
+            random_channel_embeddings,
         )
         self.apply(self._init_weights)
 
@@ -781,9 +781,9 @@ class STEncoder(STBase):
         drop_path: float,
         supported_modalities: list[ModalitySpec],
         max_sequence_length: int,
-        use_channel_embs: bool = True,
-        random_channel_embs: bool = False,
         windowed_attention_size: int | None = None,
+        learnable_channel_embeddings: bool = True,
+        random_channel_embeddings: bool = False,
         num_projection_layers: int = 1,
         aggregate_then_project: bool = True,
     ):
@@ -799,9 +799,9 @@ class STEncoder(STBase):
             drop_path: Drop path rate
             supported_modalities: list documenting modalities used in a given model instantiation
             max_sequence_length: Maximum sequence length
-            use_channel_embs: Whether to use learnable channel embeddings
-            random_channel_embs: Initialize channel embeddings randomly (zeros if False)
             windowed_attention_size: Window size to do windowed attention instead of spatial/temporal attention.
+            learnable_channel_embeddings: Whether to use learnable channel embeddings
+            random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             num_projection_layers: Number of projection layers
             aggregate_then_project: Whether to aggregate then project
         """
@@ -811,11 +811,11 @@ class STEncoder(STBase):
             mlp_ratio=mlp_ratio,
             num_heads=num_heads,
             max_sequence_length=max_sequence_length,
-            use_channel_embs=use_channel_embs,
+            learnable_channel_embeddings=learnable_channel_embeddings,
             drop_path=drop_path,
             supported_modalities=supported_modalities,
-            random_channel_embs=random_channel_embs,
             windowed_attention_size=windowed_attention_size,
+            random_channel_embeddings=random_channel_embeddings,
         )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
@@ -1126,8 +1126,8 @@ class STPredictor(STBase):
             num_heads=num_heads,
             max_sequence_length=max_sequence_length,
             drop_path=drop_path,
-            use_channel_embs=learnable_channel_embeddings,
-            random_channel_embs=random_channel_embeddings,
+            learnable_channel_embeddings=learnable_channel_embeddings,
+            random_channel_embeddings=random_channel_embeddings,
             supported_modalities=supported_modalities,
             windowed_attention_size=windowed_attention_size,
         )
@@ -1429,9 +1429,9 @@ class STEncoderConfig(Config):
     depth: int = 2
     drop_path: float = 0.1
     max_sequence_length: int = 12
-    use_channel_embs: bool = True
-    random_channel_embs: bool = False
     windowed_attention_size: int | None = None
+    learnable_channel_embeddings: bool = True
+    random_channel_embeddings: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""

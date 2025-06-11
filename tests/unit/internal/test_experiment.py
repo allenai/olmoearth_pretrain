@@ -2,7 +2,6 @@
 
 import pytest
 from olmo_core.config import DType
-from olmo_core.launch.beaker import BeakerLaunchConfig
 from olmo_core.optim.adamw import AdamWConfig
 from olmo_core.train import TrainerConfig
 
@@ -11,6 +10,7 @@ from helios.data.dataset import HeliosDatasetConfig
 from helios.data.transform import TransformConfig
 from helios.internal.experiment import (
     CommonComponents,
+    HeliosBeakerLaunchConfig,
     HeliosExperimentConfig,
     HeliosVisualizeConfig,
     build_config,
@@ -30,7 +30,7 @@ def minimal_common_components() -> CommonComponents:
         run_name="test_run",
         save_folder="test_save_folder",
         training_modalities=["sentinel2", "sentinel1", "worldcover", "naip"],
-        launch=BeakerLaunchConfig(
+        launch=HeliosBeakerLaunchConfig(
             name="test_run",
             cmd=["dummy_cmd"],
             clusters=["dummy_cluster"],
@@ -57,7 +57,6 @@ def minimal_model_config_builder(common: CommonComponents) -> LatentMIMConfig:
         mlp_ratio=MLP_RATIO,
         drop_path=0.1,
         max_sequence_length=12,
-        use_channel_embs=True,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
@@ -67,7 +66,6 @@ def minimal_model_config_builder(common: CommonComponents) -> LatentMIMConfig:
         num_heads=DECODER_NUM_HEADS,
         max_sequence_length=12,
         supported_modality_names=common.training_modalities,
-        learnable_channel_embeddings=True,
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,

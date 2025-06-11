@@ -8,8 +8,6 @@ from logging import getLogger
 from typing import Any, cast
 
 import torch
-from torch import nn
-from torch.distributed.tensor import DTensor
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.config import Config, DType
@@ -20,7 +18,7 @@ from olmo_core.distributed.parallel import (
     get_dp_mesh,
     get_dp_process_group,
 )
-from olmo_core.distributed.utils import get_full_tensor, get_world_size
+from olmo_core.distributed.utils import get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
@@ -30,9 +28,10 @@ from olmo_core.train.train_module.transformer import (
     TransformerActivationCheckpointingConfig,
 )
 from olmo_core.utils import gc_cuda, get_default_device
+from torch import nn
 from torch.distributed.checkpoint.metadata import Metadata
 from torch.distributed.fsdp import FSDPModule
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.tensor import DTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
 
@@ -161,7 +160,7 @@ class HeliosTrainModule(TrainModule):
         dp_config: DataParallelConfig | None = None,
         ac_config: TransformerActivationCheckpointingConfig | None = None,
         compile_loss: bool = False,
-        find_unused_parameters: bool = False,
+        find_unused_parameters: bool = True,
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
         scheduler: Scheduler | None = None,
@@ -408,7 +407,6 @@ class HeliosTrainModule(TrainModule):
             if isinstance(self.optimizer, SkipStepOptimizer):
                 self.optimizer.latest_grad_norm = grad_norm
 
-
         # Maybe adjust learning rate.
         if self.scheduler is not None:
             for group_idx, group in enumerate(self.optimizer.param_groups):
@@ -473,7 +471,9 @@ class HeliosTrainModule(TrainModule):
             yield
 
     @contextlib.contextmanager
-    def _model_forward_context(self, no_sync: bool = False) -> Generator[None, None, None]:
+    def _model_forward_context(
+        self, no_sync: bool = False
+    ) -> Generator[None, None, None]:
         with contextlib.ExitStack() as stack:
             if self.autocast_precision is not None:
                 stack.enter_context(
@@ -534,7 +534,6 @@ class HeliosTrainModule(TrainModule):
         total_norm = nn.utils.get_total_norm(
             grads, norm_type=norm_type, error_if_nonfinite=False, foreach=foreach
         )
-        logger.info(f"Total norm dtype: {total_norm.dtype}")
 
         # If total_norm is a DTensor, the placements must be `torch.distributed._tensor.ops.math_ops._NormPartial`.
         # We can simply reduce the DTensor to get the total norm in this tensor's process group
@@ -545,12 +544,11 @@ class HeliosTrainModule(TrainModule):
         if isinstance(total_norm, DTensor):
             # Will reach here if any non-PP parallelism is used.
             # If only using PP, total_norm will be a local tensor.
-            logger.info(f"Total norm is a DTensor {total_norm}")
             total_norm = total_norm.full_tensor()
-            logger.info(f"Total norm is a local tensor {total_norm}")
 
-
-        torch.nn.utils.clip_grads_with_norm_(parameters, max_grad_norm, total_norm, foreach=foreach)
+        torch.nn.utils.clip_grads_with_norm_(
+            parameters, max_grad_norm, total_norm, foreach=foreach
+        )
         return total_norm
 
     def update_target_encoder(self) -> None:
@@ -568,12 +566,19 @@ class HeliosTrainModule(TrainModule):
                 cur_ema_value,
                 ReduceType.mean,
             )
-            for param, target_param in zip(
+            for p, tp in zip(
                 self.model.encoder.parameters(), self.model.target_encoder.parameters()
             ):
-                get_full_tensor(target_param.data).mul_(cur_ema_value).add_(
-                    get_full_tensor(param.data), alpha=(1 - cur_ema_value)
-                )
+                if isinstance(p.data, DTensor):
+                    # get the local shard, update it in place
+                    p_local = p.data.to_local()
+                    tp_local = tp.data.to_local()
+                    tp_local.mul_(cur_ema_value).add_(
+                        p_local, alpha=(1 - cur_ema_value)
+                    )
+                else:
+                    # fallback for any plain Tensor
+                    tp.data.mul_(cur_ema_value).add_(p.data, alpha=(1 - cur_ema_value))
 
     def eval_batch(
         self, batch: dict[str, Any], labels: torch.Tensor | None = None

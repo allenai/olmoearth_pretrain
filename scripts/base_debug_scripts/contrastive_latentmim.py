@@ -19,6 +19,7 @@ from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
+from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
@@ -61,7 +62,6 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         mlp_ratio=MLP_RATIO,
         drop_path=0.1,
         max_sequence_length=12,
-        use_channel_embs=True,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
@@ -71,7 +71,6 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         num_heads=DECODER_NUM_HEADS,
         max_sequence_length=12,
         supported_modality_names=common.training_modalities,
-        learnable_channel_embeddings=True,
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
@@ -151,13 +150,12 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    # NOTE: Change this directory based on the supported modalities
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data_gzip_1/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
     return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
-        use_samples_with_missing_supported_modalities=True,
+        h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
         training_modalities=common.training_modalities,
-        dtype=DType.float32,
+        dtype="float32",
+        # cache_dir="/helios_cache/osm_sampling",
+        # samples_per_sec=4 / NUM_WORKERS,  # 2/ GBS
     )
 
 
@@ -181,15 +179,104 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
-            batch_size=128,
+            embedding_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
+        "breizhcrops": DownstreamTaskConfig(
+            dataset="breizhcrops",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(50),
+            patch_size=1,
+        ),
+        "pastis": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+        ),
+        "pastis_sentinel1": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            probe_batch_size=16,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=[Modality.SENTINEL1.name],
+            epochs=50,
+        ),
+        "sickle_sentinel1": DownstreamTaskConfig(
+            dataset="sickle",
+            embedding_batch_size=32,
+            probe_batch_size=16,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.0004,
+            eval_interval=Duration.epochs(10),
+            input_modalities=[Modality.SENTINEL1.name],
+            epochs=50,
+        ),
+        "sickle_landsat": DownstreamTaskConfig(
+            dataset="sickle",
+            embedding_batch_size=32,
+            probe_batch_size=16,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(10),
+            input_modalities=[Modality.LANDSAT.name],
+            epochs=50,
+        ),
+        "pastis_r": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            probe_batch_size=128,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(20),
+            input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+            epochs=50,
+        ),
+        "mados": DownstreamTaskConfig(
+            dataset="mados",
+            embedding_batch_size=128,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(10),
+        ),
+        "sen1floods11": DownstreamTaskConfig(
+            dataset="sen1floods11",
+            embedding_batch_size=128,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(10),
+        ),
         "m-bigearthnet": DownstreamTaskConfig(
             dataset="m-bigearthnet",
-            batch_size=64,
+            embedding_batch_size=64,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
@@ -197,7 +284,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "m-brick-kiln": DownstreamTaskConfig(
             dataset="m-brick-kiln",
-            batch_size=128,
+            embedding_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
@@ -205,55 +292,10 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "m-so2sat": DownstreamTaskConfig(
             dataset="m-so2sat",
-            batch_size=128,
+            embedding_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(20),
-        ),
-        "breizhcrops": DownstreamTaskConfig(
-            dataset="breizhcrops",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(20),
-            patch_size=1,
-        ),
-        "mados": DownstreamTaskConfig(
-            dataset="mados",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-        ),
-        "sen1floods11": DownstreamTaskConfig(
-            dataset="sen1floods11",
-            batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-        ),
-        "pastis": DownstreamTaskConfig(
-            dataset="pastis",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
-        ),
-        "pastis-r": DownstreamTaskConfig(
-            dataset="pastis-r",
-            batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
             eval_interval=Duration.epochs(20),
         ),
     }

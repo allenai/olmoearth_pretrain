@@ -17,7 +17,11 @@ IMAGE_TILE_SIZE = 256
 
 PROJECTION_CRS = "EPSG:4326"
 
+# Default missing value for raster data.
 MISSING_VALUE = -99999
+
+# Default maximum sequence length.
+MAX_SEQUENCE_LENGTH = 12
 
 
 def get_resolution(resolution_factor: int) -> float | int:

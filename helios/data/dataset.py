@@ -23,6 +23,7 @@ from torch.utils.data import Dataset
 from upath import UPath
 
 from helios.data.constants import (
+    MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
     TIMESTAMPS,
     Modality,
@@ -128,16 +129,6 @@ class HeliosSample(NamedTuple):
         """
         return [modality for modality in self.as_dict(ignore_nones=True).keys()]
 
-    @property
-    def missing_modalities(self) -> list[str]:
-        """Get the modalities missing from the sample."""
-        # TODO: THis does nto apply to sentinel values so maybe should be removed
-        return [
-            modality
-            for modality in self.as_dict(ignore_nones=True).keys()
-            if self.as_dict(ignore_nones=True)[modality] is None
-        ]
-
     def to_device(self, device: torch.device) -> "HeliosSample":
         """Move all tensors to the specified device.
 
@@ -223,6 +214,26 @@ class HeliosSample(NamedTuple):
             raise ValueError("Timestamps are not present in the sample")
         return self.timestamps.shape[-2]
 
+    @property
+    def valid_time(self) -> int:
+        """Get the minimum number of valid time steps in a batch.
+
+        Note that the timestamps are edge padded by repeating the last timestamp.
+        """
+        min_valid_time = MAX_SEQUENCE_LENGTH
+        if self.timestamps is None:
+            raise ValueError("Timestamps are not present in the sample")
+        if len(self.timestamps.shape) != 3:
+            raise ValueError("Valid time is only defined for a batch of samples")
+        for i in range(self.timestamps.shape[0]):
+            unique_timesteps = torch.unique(self.timestamps[i], dim=0)
+            min_valid_time = min(min_valid_time, unique_timesteps.shape[0])
+        if min_valid_time < self.time:
+            logger.debug(
+                f"valid_time is smaller than time: {min_valid_time} < {self.time}"
+            )
+        return min_valid_time
+
     def get_expected_shape(self, attribute: str) -> tuple[int, ...]:
         """Get the expected shape of an attribute."""
         modality_spec = Modality.get(attribute)
@@ -278,6 +289,7 @@ class HeliosSample(NamedTuple):
         patch_size: int,
         max_tokens_per_instance: int,
         sampled_hw_p: int,
+        current_length: int,
     ) -> "HeliosSample":
         """Subset a HelioSample that is unbatched ie no batch dimension.
 
@@ -287,6 +299,10 @@ class HeliosSample(NamedTuple):
                 to determine the maximum number of timesteps possible for a given
                 height and width.
             sampled_hw_p: The number of tokens in the height and width dimensions.
+            current_length: The current maximum sequence length of the sample.
+
+        We apply current_length here to ensure that the subset focuses on the valid timesteps
+        instead of the padded timesteps.
 
         The returned sample will have shape:
             height = hw_t * patch_size
@@ -304,8 +320,15 @@ class HeliosSample(NamedTuple):
         sampled_hw = sampled_hw_p * patch_size
         start_h = np.random.choice(self.height - sampled_hw + 1)
         start_w = np.random.choice(self.width - sampled_hw + 1)
-        start_t = np.random.choice(self.time - max_t + 1)
+
+        # The timestamps are edge padded and we always want to start from a valid timestep
+        if current_length > max_t:
+            start_t = np.random.choice(current_length - max_t + 1)
+        else:
+            start_t = 0
+
         new_data_dict: dict[str, ArrayTensor] = {}
+
         for attribute, modality in self.as_dict(ignore_nones=True).items():
             assert modality is not None
             if attribute == "timestamps":
@@ -371,8 +394,7 @@ class HeliosDataset(Dataset):
         h5py_dir: UPath,
         training_modalities: list[str],
         dtype: np.dtype,
-        use_modalities_with_missing_timesteps: bool = True,
-        max_sequence_length: int = 12,
+        max_sequence_length: int = MAX_SEQUENCE_LENGTH,
         normalize: bool = True,
         cache_dir: UPath | None = None,
         samples_per_sec: float | None = None,
@@ -390,8 +412,6 @@ class HeliosDataset(Dataset):
             h5py_dir: The path to the h5py directory containing preprocessed data.
             training_modalities: The modalities to use for training.
             dtype: The dtype of the data.
-            use_modalities_with_missing_timesteps: If True, use modalities that have missing timesteps.
-                Otherwise treat modalities with missing timesteps as entirely missing.
             max_sequence_length: The maximum sequence length that we pad all time dimensions to.
             normalize: If True, apply normalization to the data, if False, do not apply
                 normalization.
@@ -411,9 +431,6 @@ class HeliosDataset(Dataset):
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.training_modalities = training_modalities
-        self.use_modalities_with_missing_timesteps = (
-            use_modalities_with_missing_timesteps
-        )
 
         self.dtype = dtype
         self.normalize = normalize
@@ -631,6 +648,7 @@ class HeliosDataset(Dataset):
         missing_modalities = []
         sample = HeliosSample(**sample_dict)
         for modality in self.training_modalities:
+            # If one modality is completely missing, we need to fill it all with missing values
             if modality not in sample_dict.keys():
                 logger.debug(f"Filling {modality} with missing values")
                 sample_dict[modality] = self._fill_missing_modality(sample, modality)
@@ -645,45 +663,54 @@ class HeliosDataset(Dataset):
                 # cast to appropriate dtype to prevent overflow from missing values
                 modality_data = modality_data.astype(self.dtype)
 
-                # If we have any missing timesteps
+                # As long as the #timesteps is less than the max_sequence_length, we will impute by missing value
                 has_missing_timesteps = (
                     not np.all(mask) or len(mask) < self.max_sequence_length
                 )
                 if has_missing_timesteps:
-                    if self.use_modalities_with_missing_timesteps:
-                        modality_data = self._fill_missing_timesteps(
-                            modality_data, mask
-                        )
-                    else:
-                        # Treat a modality with missing timesteps as entirely missing
-                        modality_data = self._fill_missing_modality(sample, modality)
+                    # By default, we will fill missing timesteps with the missing value
+                    modality_data = self._fill_missing_timesteps(modality_data, mask)
                 # Update the sample dictionary with the potentially imputed data
                 sample_dict[modality] = modality_data
         return HeliosSample(**sample_dict), missing_modalities
 
-    def _pad_timestamps(self, sample_dict: dict[str, Any]) -> dict[str, Any]:
+    def _pad_timestamps(
+        self, sample_dict: dict[str, Any]
+    ) -> tuple[dict[str, Any], int]:
         """Pad the timestamps to the max_sequence_length."""
         timestamps_data = sample_dict["timestamps"]
         current_length = timestamps_data.shape[0]
         if current_length < self.max_sequence_length:
             pad_width = ((0, self.max_sequence_length - current_length), (0, 0))
+            # We pad at the end with copies of the last timestep
             padded_timestamps = np.pad(
                 timestamps_data, pad_width=pad_width, mode="edge"
             )
             sample_dict["timestamps"] = padded_timestamps
-        return sample_dict
+        return sample_dict, current_length
 
     def apply_subset(
         self,
         sample: HeliosSample,
         args: GetItemArgs,
+        current_length: int,
     ) -> HeliosSample:
-        """Apply the subset to the sample."""
+        """Apply the subset to the sample.
+
+        Args:
+            sample: The sample to apply the subset to.
+            args: The arguments to apply the subset.
+            current_length: The current maximum sequence length of the sample.
+
+        Returns:
+            The subset of the sample.
+        """
         if args.token_budget is not None:
             sample_subset = sample.subset(
                 patch_size=args.patch_size,
                 max_tokens_per_instance=args.token_budget,
                 sampled_hw_p=args.sampled_hw_p,
+                current_length=current_length,
             )
         else:
             sample_subset = sample
@@ -768,13 +795,13 @@ class HeliosDataset(Dataset):
         h5_file_path = self._get_h5_file_path(index)
 
         sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
-        sample_dict = self._pad_timestamps(sample_dict)
+        sample_dict, current_length = self._pad_timestamps(sample_dict)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
             sample_dict, missing_timesteps_masks
         )
 
-        subset_sample = self.apply_subset(sample, args)
+        subset_sample = self.apply_subset(sample, args, current_length)
 
         sample_dict = subset_sample.as_dict(ignore_nones=True)
 
@@ -809,7 +836,6 @@ class HeliosDatasetConfig(Config):
     h5py_dir: str
     training_modalities: list[str]
     dtype: str = "float32"
-    use_modalities_with_missing_timesteps: bool = True
     normalize: bool = True
     cache_dir: str | None = None
     samples_per_sec: float | None = None

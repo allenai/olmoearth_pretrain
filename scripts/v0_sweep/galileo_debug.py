@@ -22,6 +22,7 @@ from shared import (
 )
 
 from helios.data.concat import HeliosConcatDatasetConfig
+from helios.data.constants import Modality
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, main
@@ -128,7 +129,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             probe_lr=0.01,
             eval_interval=Duration.epochs(10),
-            input_modalities=["landsat8"],
+            input_modalities=[Modality.LANDSAT.name],
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",

@@ -4,6 +4,25 @@ import torch
 from torch.distributed import DeviceMesh
 
 
+def get_cumulative_sequence_lengths(seq_lengths: torch.Tensor) -> torch.Tensor:
+    """Get the cumulative sequence lengths of a tensor.
+
+    Args:
+        seq_lengths (torch.Tensor): The sequence lengths of a tensor.
+
+    Returns:
+        torch.Tensor: The cumulative sequence lengths of a tensor.
+    """
+    return torch.cat(
+        [
+            torch.tensor([0], dtype=torch.int32, device=seq_lengths.device),
+            torch.cumsum(
+                seq_lengths.masked_select(seq_lengths != 0), 0, dtype=torch.int32
+            ),
+        ]
+    )
+
+
 # TODO: maybe this should just be functional or something
 class DistributedMixins:
     """Mixin for distributed training."""
@@ -13,7 +32,7 @@ class DistributedMixins:
         dp_mesh: DeviceMesh | None = None,
         compile_enabled: bool = False,
         autograd_compile_enabled: bool = False,
-        find_unused_parameters: bool = False,
+        find_unused_parameters: bool = True,
     ) -> None:
         """Apply DDP to the model.
 
@@ -38,5 +57,5 @@ class DistributedMixins:
             self,
             device_mesh=dp_mesh,
             bucket_cap_mb=100,
-            find_unused_parameters=find_unused_parameters,  # find_unused_parameters,
+            find_unused_parameters=find_unused_parameters,
         )

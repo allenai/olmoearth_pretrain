@@ -39,8 +39,7 @@ class TestFlexiHeliosCompositeEncodings:
                 Modality.WORLDCOVER,
             ],
             max_sequence_length=12,
-            use_channel_embs=True,
-            random_channel_embs=True,
+            random_channel_embeddings=True,
         )
         return flexi_helios_composite_encodings
 
@@ -141,7 +140,6 @@ class TestFlexiHeliosBase:
             drop_path=0.1,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
-            use_channel_embs=True,
         )
         return flexi_helios_base
 
@@ -224,7 +222,6 @@ class TestEncoder:
             drop_path=0.1,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
-            use_channel_embs=True,
         )
 
     def test_create_token_exit_ids_normal_usage(self, encoder: Encoder) -> None:
@@ -283,12 +280,16 @@ class TestEncoder:
         num_tokens_to_keep = torch.sum(mask)
         expected_indices = torch.tensor([[1, 0, 2], [0, 2, 1]])
         expected_updated_mask = torch.tensor([[1, 0], [1, 1]]).bool()
-        tokens, indices, updated_mask = Encoder.remove_masked_tokens(x, mask)
+        tokens, indices, updated_mask, seqlens, max_length = (
+            Encoder.remove_masked_tokens(x, mask)
+        )
         kept_unmasked_tokens = torch.sum(updated_mask)
         assert torch.equal(tokens, expected_tokens)
         assert torch.equal(indices, expected_indices)
         assert torch.equal(updated_mask, expected_updated_mask)
         assert kept_unmasked_tokens == num_tokens_to_keep
+        assert seqlens.shape == (2,)
+        assert max_length == 2
 
     def test_add_removed_tokens(self) -> None:
         """Test adding removed tokens back into tensor."""
@@ -352,7 +353,6 @@ class TestPredictor:
             num_heads=2,
             max_sequence_length=12,
             drop_path=0.1,
-            learnable_channel_embeddings=True,
             output_embedding_size=8,
         )
 
@@ -449,8 +449,11 @@ class TestPredictor:
             tokens_to_decode_mask,
             unmasked_tokens_mask,
             indices,
+            seqlens_tokens_to_decode,
+            seqlens_unmasked_tokens,
+            max_length_of_decoded_tokens,
+            max_length_of_unmasked_tokens,
         ) = Predictor.split_x_y(tokens, mask)
-
         # Check shapes
         assert unmasked_tokens.shape == (2, 6, 1)
         assert tokens_to_decode.shape == (2, 3, 1)
@@ -466,6 +469,10 @@ class TestPredictor:
         expected_tokens_to_decode = torch.tensor([[7, 8, 9], [17, 18, 11]])
         assert torch.equal(tokens_to_decode.squeeze(-1), expected_tokens_to_decode)
         assert torch.equal(tokens_to_decode_mask, torch.tensor([[1, 1, 1], [1, 1, 0]]))
+        assert torch.equal(seqlens_tokens_to_decode, torch.tensor([3, 2]))
+        assert torch.equal(seqlens_unmasked_tokens, torch.tensor([5, 6]))
+        assert max_length_of_decoded_tokens == 3
+        assert max_length_of_unmasked_tokens == 6
 
     def test_split_and_recombine_with_missing_tokens(self) -> None:
         """Test splitting the tokens into decoded, unmasked, and missing groups with missing tokens."""
@@ -515,6 +522,10 @@ class TestPredictor:
             tokens_to_decode_mask,
             unmasked_tokens_mask,
             indices,
+            _,
+            _,
+            _,
+            _,
         ) = Predictor.split_x_y(tokens, mask)
 
         # Check shapes
@@ -598,6 +609,10 @@ class TestPredictor:
             tokens_to_decode_mask,
             unmasked_tokens_mask,
             indices,
+            _,
+            _,
+            _,
+            _,
         ) = Predictor.split_x_y(tokens, mask)
 
         combined_tokens = Predictor.combine_x_y(
