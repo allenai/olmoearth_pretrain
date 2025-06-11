@@ -5,15 +5,21 @@ from latent_mim_128 import (
     MIN_PATCH_SIZE,
     build_common_components,
     build_dataloader_config,
-    build_train_module_config,
     build_trainer_config,
     build_visualize_config,
 )
+from olmo_core.config import DType
+from olmo_core.distributed.parallel.data_parallel import (
+    DataParallelConfig,
+    DataParallelType,
+)
+from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import (
     ConstantWithWarmup,
     LinearWithWarmup,
     SequentialScheduler,
 )
+from olmo_core.train.common import Duration
 
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.dataset import HeliosDatasetConfig
@@ -21,7 +27,11 @@ from helios.internal.experiment import CommonComponents, main
 from helios.internal.utils import MODEL_SIZE_ARGS
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.nn.st_model import STEncoderConfig, STPredictorConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from helios.train.loss import LossConfig
+from helios.train.masking import MaskingConfig
+from helios.train.train_module.contrastive_latentmim import (
+    ContrastiveLatentMIMTrainModuleConfig,
+)
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -54,12 +64,11 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     return model_config
 
 
-def my_build_train_module_config(
+def build_train_module_config(
     common: CommonComponents,
-) -> LatentMIMTrainModuleConfig:
+) -> ContrastiveLatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    train_module_config = build_train_module_config(common)
-    train_module_config.scheduler = SequentialScheduler(
+    scheduler = SequentialScheduler(
         schedulers=[
             ConstantWithWarmup(warmup_steps=2000),
             LinearWithWarmup(alpha_f=0.25, warmup_steps=0),
@@ -70,8 +79,38 @@ def my_build_train_module_config(
         ],
         schedulers_max_steps=[80000, 80000, 80000, 80000, 80000],
     )
-    train_module_config.rank_microbatch_size = 16
-    return train_module_config
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
+        masking_config=MaskingConfig(
+            strategy_config={
+                "type": "random",
+                "encode_ratio": 0.1,
+                "decode_ratio": 0.75,
+            }
+        ),
+        warmup_duration=Duration.epochs(2),
+        loss_config=LossConfig(
+            loss_config={
+                "type": "patch_discrimination_new",
+            }
+        ),
+        rank_microbatch_size=16,
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        autocast_precision=DType.bfloat16,
+        contrastive_config=LossConfig(
+            loss_config={
+                "type": "InfoNCE",
+                "weight": 0.1,
+            }
+        ),
+        max_grad_norm=1.0,
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+        scheduler=scheduler,
+    )
 
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
@@ -110,7 +149,7 @@ if __name__ == "__main__":
     main(
         common_components_builder=build_common_components,
         model_config_builder=build_model_config,
-        train_module_config_builder=my_build_train_module_config,
+        train_module_config_builder=build_train_module_config,
         dataset_config_builder=build_dataset_config,
         dataloader_config_builder=build_dataloader_config,
         trainer_config_builder=build_trainer_config,
