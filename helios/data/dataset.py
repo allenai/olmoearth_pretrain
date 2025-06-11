@@ -353,6 +353,21 @@ class HeliosSample(NamedTuple):
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
 
+    def pop(
+        self, modalities: list[str] | None
+    ) -> tuple["HeliosSample", dict[str, ArrayTensor]]:
+        """Pop off the given modalities - returns the HeliosSample and the removed modalities."""
+        if modalities is None:
+            return self, {}
+        new_sample = {}
+        popped_modalities = {}
+        for modality_name, modality in self.as_dict(ignore_nones=True).items():
+            if modality_name in modalities:
+                popped_modalities[modality_name] = modality
+            else:
+                new_sample[modality_name] = modality
+        return HeliosSample(**new_sample), popped_modalities
+
 
 def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSample]:
     """Collate function that automatically handles any modalities present in the samples."""

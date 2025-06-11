@@ -55,7 +55,7 @@ class SupervisedLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
 
-    supervisory_bandsets: list[str] | None = None
+    supervisory_modalities: list[str] | None = None
 
     def build(
         self,
@@ -102,7 +102,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         state_dict_load_opts: Override state dict options for loading.
         token_exit_cfg: The token exit configuration for the model.
         warmup_duration: The warmup duration for the model.
-        supervisory_bandsets: bandsets which should only be used for supervision
+        supervisory_modalities: bandsets which should only be used for supervision
     """
 
     def __init__(
@@ -128,7 +128,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
-        supervisory_bandsets: list[str] | None = None,
+        supervisory_modalities: list[str] | None = None,
     ):
         """Initialize the training module.
 
@@ -155,7 +155,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             mae_loss_config: Optional loss config for masked auto-encoding.
             warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
-            supervisory_bandsets: Which band sets to use as supervision
+            supervisory_modalities: Which modalities to use as supervision
         """
         super().__init__(
             model=model,
@@ -190,15 +190,23 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
-        self.supervisory_bandsets = supervisory_bandsets
-        if self.supervisory_bandsets is None:
+        self.supervisory_modalities = supervisory_modalities
+        if self.supervisory_modalities is None:
             logger.warning(
-                "supervisory_bandsets is None. This is equivalent to normal Latent MIM"
+                "supervisory_modalities is None. This is equivalent to normal Latent MIM"
             )
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
+
+    def supervisory_losses(
+        self,
+        supervisory_modalities: dict[str, torch.Tensor],
+        probe_outputs: dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        """Compute the supervisory losses."""
+        raise NotImplementedError
 
     def train_batch(
         self, batch: tuple[int, HeliosSample], dry_run: bool = False
@@ -229,14 +237,17 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
+                microbatch, supervisory_modalities = microbatch.pop(
+                    self.supervisory_modalities
+                )
                 # TODO - mark supervisory bandsets as missing, and store the original mask
                 microbatch = self.transform.apply(microbatch).to_device(self.device)
                 masked_batch = self.masking_strategy.apply_mask(
                     microbatch, patch_size=patch_size
                 )
                 # Run Encoder and decoder on the augmented input
-                loss, latent, decoded, target_output = self.model_forward(
-                    masked_batch, patch_size, self.token_exit_cfg
+                loss, latent, decoded, target_output, probe_outputs = (
+                    self.model_forward(masked_batch, patch_size, self.token_exit_cfg)
                 )
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
@@ -244,6 +255,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     total_batch_reg += (
                         get_local_tensor(reg_term.detach()) / num_microbatches
                     )
+
+                loss += self.supervisory_losses(supervisory_modalities, probe_outputs)
                 # Scale loss by number of microbatches
                 loss = loss / num_microbatches
 
@@ -276,7 +289,13 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
 
     def model_forward(
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
-    ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
+    ) -> tuple[
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        dict[str, torch.Tensor],
+    ]:
         """Run a forward pass."""
         with self._model_forward_context():
             latent, decoded, _, reconstructed, probe_outputs = self.model(
@@ -292,4 +311,4 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output
+            return loss, latent, decoded, target_output, probe_outputs
