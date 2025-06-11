@@ -218,7 +218,12 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 ]  # B, H, W, T, Bandsets
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
-                ]  # B, H, W, T, Bandsets
+                ]  # B, H, W, T, Bandsets or 11 if its worldcover
+
+                if modality == Modality.WORLDCOVER.name:
+                    modality_bandset[modality_bandset == 95] = 110
+                    modality_bandset = (modality_bandset / 10).long()  # now we should be to classes
+
         raise NotImplementedError
 
     def train_batch(

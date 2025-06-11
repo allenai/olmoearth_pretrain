@@ -23,6 +23,9 @@ MISSING_VALUE = -99999
 # Default maximum sequence length.
 MAX_SEQUENCE_LENGTH = 12
 
+# hacky
+NUM_WORLDCOVER_CLASSES = 11
+
 
 def get_resolution(resolution_factor: int) -> float | int:
     """Compute the resolution.
