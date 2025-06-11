@@ -8,7 +8,6 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import CosWithWarmup, WSD
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -23,7 +22,6 @@ from upath import UPath
 
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
-from helios.optim.scheduler import LinearDecay
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
@@ -35,6 +33,7 @@ from helios.nn.flexihelios import (
     PredictorConfig,
 )
 from helios.nn.latent_mim import LatentMIMConfig
+from helios.optim.scheduler import LinearDecay
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -206,7 +205,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.steps(20000),
+            eval_interval=Duration.steps(5000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
         ),
