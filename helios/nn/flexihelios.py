@@ -354,7 +354,8 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         logger.debug("worldcover values: ", x.unique())
         return (
             one_hot(
-                torch.clamp((x / 10).long(), min=1), num_classes=NUM_WORLDCOVER_CLASSES
+                torch.clamp((x / 10).long() - 1, min=0),
+                num_classes=NUM_WORLDCOVER_CLASSES,
             )
             .squeeze(-2)
             .to(dtype=org_dtype)
