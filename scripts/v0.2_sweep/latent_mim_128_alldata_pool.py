@@ -27,7 +27,7 @@ from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["base"]
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
     encoder_config = STEncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
         num_heads=model_size["encoder_num_heads"],
