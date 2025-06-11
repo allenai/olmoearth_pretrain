@@ -8,7 +8,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import CosWithWarmup
+from olmo_core.optim.scheduler import WSD
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -84,6 +84,8 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
+    # Forever stable learning rate so I can try decaying from different checkpoints
+    scheduler = WSD(decay_min_lr=0.0001)
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
         warmup_duration=Duration.steps(8000),
@@ -102,7 +104,7 @@ def build_train_module_config(
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        scheduler=CosWithWarmup(),
+        scheduler=scheduler,
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
