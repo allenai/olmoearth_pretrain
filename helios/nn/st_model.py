@@ -789,6 +789,8 @@ class STEncoder(STBase):
         num_projection_layers: int = 1,
         aggregate_then_project: bool = True,
         fuse_layers: int | None = None,
+        layer_attention_modes: list[AttentionMode] | None = None,
+        fuse_using_cross_attn: bool = True,
     ):
         """Initialize the encoder.
 
@@ -810,6 +812,10 @@ class STEncoder(STBase):
             fuse_layers: do spatial attention for the first portion of the model, then do full
                 attention for this many layers, and then on the last layer we do cross attention
                 to compute a fused representation for each spatial patch.
+            layer_attention_modes: directly specify the attention mode to use at each layer.
+            fuse_using_cross_attn: fuse using cross attention. If disabled, we perform self-attention and then
+                arbitrarily pick one unmasked token at each spatial patch to copy to all the other tokens at
+                that patch.
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -822,12 +828,14 @@ class STEncoder(STBase):
             supported_modalities=supported_modalities,
             windowed_attention_size=windowed_attention_size,
             random_channel_embeddings=random_channel_embeddings,
-            last_layer_cross_attn=fuse_layers is not None,
+            last_layer_cross_attn=fuse_layers is not None and fuse_using_cross_attn,
         )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
         self.fuse_layers = fuse_layers
+        self.layer_attention_modes = layer_attention_modes
+        self.fuse_using_cross_attn = fuse_using_cross_attn
         self.patch_embeddings = FlexiHeliosPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -964,6 +972,40 @@ class STEncoder(STBase):
             exit_ids_seq = None
         return exit_ids_seq
 
+    def copy_first_unmasked_token(
+        self, tokens: torch.Tensor, mask: torch.Tensor
+    ) -> torch.Tensor:
+        """For each batch, find the first unmasked token and copy it to all unmasked positions.
+
+        Args:
+            tokens (torch.Tensor): Tensor of shape [B, T, D] with token embeddings.
+            mask (torch.Tensor): Tensor of shape [B, T] with 1 for unmasked and 0 for masked tokens.
+
+        Returns:
+            torch.Tensor: Updated tokens of shape [B, T, D].
+        """
+        B, T, D = tokens.shape
+
+        # Get indices of the first unmasked token for each batch
+        first_unmasked_idx = (mask == 1).float().cumsum(dim=1)
+        first_unmasked_idx[first_unmasked_idx != 1] = (
+            0  # only keep the first occurrence
+        )
+        first_unmasked_idx[first_unmasked_idx == 1] = 1
+        idx = first_unmasked_idx.argmax(dim=1)  # shape: [B]
+
+        # Gather the first unmasked tokens
+        idx_expanded = idx.view(B, 1, 1).expand(-1, 1, D)  # shape: [B, 1, D]
+        first_tokens = torch.gather(tokens, dim=1, index=idx_expanded).squeeze(
+            1
+        )  # shape: [B, D]
+
+        # Expand to [B, T, D] and mask
+        output = tokens.clone()
+        output[mask == 1] = first_tokens.unsqueeze(1).expand(-1, T, -1)[mask == 1]
+
+        return output
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -1014,7 +1056,17 @@ class STEncoder(STBase):
             # On even blocks, do temporal attention.
             # On odd blocks, do spatial attention.
             # Unless windowed attention is configured.
-            if self.windowed_attention_size is not None:
+            do_token_fusing = False
+            if self.layer_attention_modes:
+                attention_mode = self.layer_attention_modes[i_blk]
+                # With fusing, the last layer must be temporal attention.
+                if self.fuse_layers is not None and i_blk == len(self.blocks) - 1:
+                    if attention_mode != AttentionMode.TEMPORAL:
+                        raise ValueError(
+                            f"with fusing enabled, the last layer must be temporal attention but got {attention_mode}"
+                        )
+                    do_token_fusing = True
+            elif self.windowed_attention_size is not None:
                 attention_mode = AttentionMode.WINDOWED
             elif self.fuse_layers is not None:
                 # With fuse_layers:
@@ -1027,6 +1079,7 @@ class STEncoder(STBase):
                     attention_mode = AttentionMode.FULL
                 else:
                     attention_mode = AttentionMode.TEMPORAL
+                    do_token_fusing = True
             elif i_blk % 2 == 0:
                 attention_mode = AttentionMode.TEMPORAL
             else:
@@ -1038,9 +1091,10 @@ class STEncoder(STBase):
             bool_mask = mask == MaskValue.ONLINE_ENCODER.value
             tokens, indices, new_mask = self.remove_masked_tokens(x, bool_mask)
 
-            if self.fuse_layers is not None and i_blk == len(self.blocks) - 1:
+            if do_token_fusing and self.fuse_using_cross_attn:
                 # Last layer with fusing enabled, that means we do cross attention to compute
                 # per-spatial-patch tokens.
+                logger.debug(f"Layer {i_blk} fusing tokens using cross attention")
                 attention_batch_size = tokens.shape[0]
                 attention_seq_len = tokens.shape[1]
                 fuse_x = (
@@ -1060,6 +1114,14 @@ class STEncoder(STBase):
             # Apply normalization on last block.
             if i_blk == len(self.blocks) - 1:
                 tokens = self.norm(tokens)
+
+            if do_token_fusing and not self.fuse_using_cross_attn:
+                # In this case we arbitrarily pick one of the tokens in each temporal attention batch
+                # to replicate to all the other unmasked tokens.
+                logger.debug(
+                    f"Layer {i_blk} fusing tokens by replicating the first unmasked token"
+                )
+                tokens = self.copy_first_unmasked_token(tokens, new_mask)
 
             tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
             x = self.split_and_expand_per_modality(
@@ -1144,6 +1206,7 @@ class STPredictor(STBase):
         random_channel_embeddings: bool = False,
         output_embedding_size: int | None = None,
         windowed_attention_size: int | None = None,
+        layer_attention_modes: list[AttentionMode] | None = None,
     ):
         """Initialize the predictor.
 
@@ -1161,6 +1224,7 @@ class STPredictor(STBase):
             output_embedding_size: Size of output embeddings
             windowed_attention_size: the size for windowed attention. If set, we do
                 windowed attention instead of spatial/temporal attention.
+            layer_attention_modes: directly specify the attention mode to use at each layer.
         """
         super().__init__(
             embedding_size=decoder_embedding_size,
@@ -1178,6 +1242,7 @@ class STPredictor(STBase):
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.encoder_embedding_size = encoder_embedding_size
+        self.layer_attention_modes = layer_attention_modes
         self.encoder_to_decoder_embed = nn.Linear(
             encoder_embedding_size, decoder_embedding_size, bias=True
         )
@@ -1357,7 +1422,9 @@ class STPredictor(STBase):
             # On even blocks, do temporal attention.
             # On odd blocks, do spatial attention.
             # Unless windowed attention is configured.
-            if self.windowed_attention_size is not None:
+            if self.layer_attention_modes is not None:
+                attention_mode = self.layer_attention_modes[i_blk]
+            elif self.windowed_attention_size is not None:
                 attention_mode = AttentionMode.WINDOWED
             elif i_blk % 2 == 0:
                 attention_mode = AttentionMode.TEMPORAL
@@ -1476,6 +1543,8 @@ class STEncoderConfig(Config):
     fuse_layers: int | None = None
     learnable_channel_embeddings: bool = True
     random_channel_embeddings: bool = False
+    layer_attention_modes: list[str] | None = None
+    fuse_using_cross_attn: bool = True
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1485,6 +1554,15 @@ class STEncoderConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+
+        if self.layer_attention_modes is not None:
+            if len(self.layer_attention_modes) != self.depth:
+                raise ValueError(
+                    f"got {len(self.layer_attention_modes)} layer attention modes but depth is {self.depth}"
+                )
+            for mode in self.layer_attention_modes:
+                if mode not in AttentionMode.__members__:
+                    raise ValueError(f"Invalid attention mode {mode}")
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -1498,6 +1576,11 @@ class STEncoderConfig(Config):
         # supported_modality_names is replaced by supported_modalities
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
+        kwargs["layer_attention_modes"] = (
+            [AttentionMode[mode] for mode in self.layer_attention_modes]
+            if self.layer_attention_modes
+            else None
+        )
         logger.info(f"Encoder kwargs: {kwargs}")
         return STEncoder(**kwargs)
 
@@ -1518,6 +1601,7 @@ class STPredictorConfig(Config):
     random_channel_embeddings: bool = False
     output_embedding_size: int | None = None
     windowed_attention_size: int | None = None
+    layer_attention_modes: list[str] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1527,6 +1611,15 @@ class STPredictorConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+
+        if self.layer_attention_modes is not None:
+            if len(self.layer_attention_modes) != self.depth:
+                raise ValueError(
+                    f"got {len(self.layer_attention_modes)} layer attention modes but depth is {self.depth}"
+                )
+            for mode in self.layer_attention_modes:
+                if mode not in AttentionMode.__members__:
+                    raise ValueError(f"Invalid attention mode {mode}")
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -1540,5 +1633,10 @@ class STPredictorConfig(Config):
         # supported_modality_names is replaced by supported_modalities
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
+        kwargs["layer_attention_modes"] = (
+            [AttentionMode[mode] for mode in self.layer_attention_modes]
+            if self.layer_attention_modes
+            else None
+        )
         logger.info(f"Predictor kwargs: {kwargs}")
         return STPredictor(**kwargs)
