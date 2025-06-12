@@ -260,6 +260,7 @@ def analyze(config: HeliosExperimentConfig) -> None:
     model = config.model.build()
     device = get_default_device()
     model = model.to(device)
+    config.train_module.dp_config = None
     train_module = config.train_module.build(model)
     dataset = config.dataset.build()
     # TODO: akward harcoding of the collator here
