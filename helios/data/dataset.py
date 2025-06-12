@@ -129,7 +129,7 @@ class HeliosSample(NamedTuple):
         """
         return [modality for modality in self.as_dict(ignore_nones=True).keys()]
 
-    def to_device(self, device: torch.device) -> "HeliosSample":
+    def to_device(self, device: torch.device, non_blocking: bool = False) -> "HeliosSample":
         """Move all tensors to the specified device.
 
         Args:
@@ -140,7 +140,7 @@ class HeliosSample(NamedTuple):
         """
         return HeliosSample(
             **{
-                key: val.to(device)
+                key: val.to(device, non_blocking=non_blocking)
                 for key, val in self.as_dict(ignore_nones=True).items()
                 if val is not None
             }

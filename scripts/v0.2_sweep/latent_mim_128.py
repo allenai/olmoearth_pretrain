@@ -112,6 +112,7 @@ def build_train_module_config(
             reduce_dtype=DType.float32,
         ),
         data_parallel_wrapping_strategy=DataParellelWrappingStrategy.blocks,
+        prefetch_factor=2,
     )
 
 
