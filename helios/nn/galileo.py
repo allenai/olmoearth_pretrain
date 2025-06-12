@@ -15,7 +15,7 @@ from torch.distributed.fsdp import (
 )
 
 from helios.nn.flexihelios import TokensAndMasks
-from helios.nn.utils import DistributedMixins
+from helios.nn.utils import DistributedMixins, DataParellelWrappingStrategy
 from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
@@ -101,19 +101,47 @@ class Galileo(nn.Module, DistributedMixins):
         param_dtype: torch.dtype | None = None,
         reduce_dtype: torch.dtype = torch.float32,
         prefetch_factor: int = 0,
+        data_parallel_wrapping_strategy: DataParellelWrappingStrategy = DataParellelWrappingStrategy.blocks,
     ) -> None:
         """Apply FSDP to the model."""
         mp_policy = MixedPrecisionPolicy(
             param_dtype=param_dtype, reduce_dtype=reduce_dtype
         )
         fsdp_config = dict(mesh=dp_mesh, mp_policy=mp_policy)
-
-        self.encoder.apply_fsdp(**fsdp_config)
-        self.decoder_a.apply_fsdp(**fsdp_config)
-        self.decoder_b.apply_fsdp(**fsdp_config)
-        self.target_encoder.apply_fsdp(**fsdp_config)
-        if self.reconstructor:
-            self.reconstructor.apply_fsdp(**fsdp_config)
+        if data_parallel_wrapping_strategy == DataParellelWrappingStrategy.blocks:
+            self.encoder.apply_fsdp(
+                prefetch_factor=prefetch_factor,
+                data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+                **fsdp_config,
+            )
+            self.decoder_a.apply_fsdp(
+                prefetch_factor=prefetch_factor,
+                data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+                **fsdp_config,
+            )
+            self.decoder_b.apply_fsdp(
+                prefetch_factor=prefetch_factor,
+                data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+                **fsdp_config,
+            )
+            self.target_encoder.apply_fsdp(
+                prefetch_factor=prefetch_factor,
+                data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+                **fsdp_config,
+            )
+            if self.reconstructor:
+                self.reconstructor.apply_fsdp(
+                    prefetch_factor=prefetch_factor,
+                    data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+                    **fsdp_config,
+                )
+        elif data_parallel_wrapping_strategy == DataParellelWrappingStrategy.encoder_decoder:
+            fully_shard(self.encoder, **fsdp_config)
+            fully_shard(self.decoder_a, **fsdp_config)
+            fully_shard(self.decoder_b, **fsdp_config)
+            fully_shard(self.target_encoder, **fsdp_config)
+            if self.reconstructor:
+                fully_shard(self.reconstructor, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")

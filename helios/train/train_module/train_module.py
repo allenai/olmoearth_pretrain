@@ -37,6 +37,7 @@ from torch.optim import Optimizer
 
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
+from helios.nn.utils import DataParellelWrappingStrategy
 from helios.train.loss import LossConfig
 
 logger = getLogger(__name__)
@@ -156,6 +157,7 @@ class HeliosTrainModule(TrainModule):
         transform_config: TransformConfig,
         rank_microbatch_size: int,
         warmup_duration: Duration | None = None,
+        data_parallel_wrapping_strategy: DataParellelWrappingStrategy = DataParellelWrappingStrategy.blocks,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
         ac_config: TransformerActivationCheckpointingConfig | None = None,
@@ -247,11 +249,11 @@ class HeliosTrainModule(TrainModule):
                     if dp_config.param_dtype is not None
                     else None
                 )
-                # TODO: MIXED PRecision is not yet supported
                 self.model.apply_fsdp(
                     dp_mesh=dp_mesh,
                     param_dtype=param_dtype,
                     reduce_dtype=dp_config.reduce_dtype.as_pt(),
+                    data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
                 )
                 logger.info("Applied FSDP to the model")
             elif dp_config.name == DataParallelType.ddp:

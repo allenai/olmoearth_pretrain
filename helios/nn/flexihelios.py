@@ -21,7 +21,10 @@ from helios.nn.encodings import (
     get_month_encoding_table,
 )
 from helios.nn.flexi_patch_embed import FlexiPatchEmbed, FlexiPatchReconstruction
-from helios.nn.utils import get_cumulative_sequence_lengths
+from helios.nn.utils import (
+    get_cumulative_sequence_lengths,
+    DataParellelWrappingStrategy,
+)
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
@@ -439,9 +442,18 @@ class Reconstructor(nn.Module):
         """Apply torch.compile to the model."""
         self.decoder.apply_compile()
 
-    def apply_fsdp(self, prefetch_factor: int = 0, **fsdp_kwargs: Any) -> None:
+    def apply_fsdp(
+        self,
+        prefetch_factor: int = 0,
+        data_parallel_wrapping_strategy: DataParellelWrappingStrategy = DataParellelWrappingStrategy.blocks,
+        **fsdp_kwargs: Any,
+    ) -> None:
         """Apply FSDP to the model."""
-        self.decoder.apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_kwargs)
+        self.decoder.apply_fsdp(
+            prefetch_factor=prefetch_factor,
+            data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+            **fsdp_kwargs,
+        )
 
     @staticmethod
     def _get_reconstruction_module_name(modality: str, idx: int) -> str:
@@ -982,10 +994,19 @@ class FlexiHeliosBase(nn.Module):
         tokens = tokens_new.reshape(og_shape[0], og_shape[1], -1)
         return tokens
 
-    def apply_fsdp(self, prefetch_factor: int = 0, **fsdp_kwargs: Any) -> None:
+    def apply_fsdp(
+        self,
+        prefetch_factor: int = 0,
+        data_parallel_wrapping_strategy: DataParellelWrappingStrategy = DataParellelWrappingStrategy.blocks,
+        **fsdp_kwargs: Any,
+    ) -> None:
         """Apply FSDP to the model."""
         for block in self.blocks:
-            block.apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_kwargs)
+            block.apply_fsdp(
+                prefetch_factor=prefetch_factor,
+                data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+                **fsdp_kwargs,
+            )
 
         if prefetch_factor > 0:
             for i in range(len(self.blocks)):
@@ -1554,9 +1575,9 @@ class Predictor(FlexiHeliosBase):
         tokens[:, -unmasked_tokens.shape[1] :] = (
             unmasked_tokens * unmasked_tokens_mask.unsqueeze(-1)
         )
-        tokens[:, : tokens_to_decode.shape[1]] += (
-            tokens_to_decode * tokens_to_decode_mask.unsqueeze(-1)
-        )
+        tokens[
+            :, : tokens_to_decode.shape[1]
+        ] += tokens_to_decode * tokens_to_decode_mask.unsqueeze(-1)
         tokens = tokens.scatter(1, indices[:, :, None].expand_as(tokens), tokens)
         return tokens
 
@@ -1712,9 +1733,18 @@ class Predictor(FlexiHeliosBase):
             output_dict[masked_modality_name] = modality_mask
         return TokensAndMasks(**output_dict)
 
-    def apply_fsdp(self, prefetch_factor: int = 0, **fsdp_kwargs: Any) -> None:
+    def apply_fsdp(
+        self,
+        prefetch_factor: int = 0,
+        data_parallel_wrapping_strategy: DataParellelWrappingStrategy = DataParellelWrappingStrategy.blocks,
+        **fsdp_kwargs: Any,
+    ) -> None:
         """Apply FSDP to the model."""
-        super().apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_kwargs)
+        super().apply_fsdp(
+            prefetch_factor=prefetch_factor,
+            data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+            **fsdp_kwargs,
+        )
         fully_shard(self, prefetch_factor=prefetch_factor, **fsdp_kwargs)
 
 

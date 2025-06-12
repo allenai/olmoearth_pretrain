@@ -15,7 +15,7 @@ from torch.distributed.fsdp import (
 )
 
 from helios.nn.flexihelios import TokensAndMasks
-from helios.nn.utils import DistributedMixins
+from helios.nn.utils import DistributedMixins, DataParellelWrappingStrategy
 from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         param_dtype: torch.dtype | None = None,
         reduce_dtype: torch.dtype = torch.float32,
         prefetch_factor: int = 0,
+        data_parallel_wrapping_strategy: DataParellelWrappingStrategy = DataParellelWrappingStrategy.blocks,
     ) -> None:
         """Apply FSDP to the model."""
         mp_policy = MixedPrecisionPolicy(
@@ -77,12 +78,21 @@ class LatentMIM(nn.Module, DistributedMixins):
         )
         fsdp_config = dict(mesh=dp_mesh, mp_policy=mp_policy)
 
-        self.encoder.apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_config)
-        self.decoder.apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_config)
-        self.target_encoder.apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_config)
+        self.encoder.apply_fsdp(
+            prefetch_factor=prefetch_factor,
+            data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+            **fsdp_config,
+        )
+        self.decoder.apply_fsdp(
+            prefetch_factor=prefetch_factor,
+            data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+            **fsdp_config,
+        )
         if self.reconstructor:
             self.reconstructor.apply_fsdp(
-                prefetch_factor=prefetch_factor, **fsdp_config
+                prefetch_factor=prefetch_factor,
+                data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+                **fsdp_config,
             )
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)

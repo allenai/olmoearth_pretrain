@@ -2,6 +2,7 @@
 
 import torch
 from torch.distributed import DeviceMesh
+from olmo_core.config import StrEnum
 
 
 def get_cumulative_sequence_lengths(seq_lengths: torch.Tensor) -> torch.Tensor:
@@ -21,6 +22,18 @@ def get_cumulative_sequence_lengths(seq_lengths: torch.Tensor) -> torch.Tensor:
             ),
         ]
     )
+
+
+class DataParellelWrappingStrategy(StrEnum):
+    """Strategy for data parallel wrapping."""
+
+    full_model = "full_model"
+    """Wrap the full model in one communication group,
+    this should effectively be DDP with a reduce scatter instead of allreduce"""
+    encoder_decoder = "encoder_decoder"
+    """Wrap the encoder and decoder separately"""
+    blocks = "blocks"
+    """Wrap the transformer blocks separately, this is useful for models with a large number of parameters"""
 
 
 # TODO: maybe this should just be functional or something
