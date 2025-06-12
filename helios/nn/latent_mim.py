@@ -78,22 +78,35 @@ class LatentMIM(nn.Module, DistributedMixins):
         )
         fsdp_config = dict(mesh=dp_mesh, mp_policy=mp_policy)
 
-        self.encoder.apply_fsdp(
-            prefetch_factor=prefetch_factor,
-            data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
-            **fsdp_config,
-        )
-        self.decoder.apply_fsdp(
-            prefetch_factor=prefetch_factor,
-            data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
-            **fsdp_config,
-        )
-        if self.reconstructor:
-            self.reconstructor.apply_fsdp(
+        if data_parallel_wrapping_strategy == DataParellelWrappingStrategy.blocks:
+            self.encoder.apply_fsdp(
                 prefetch_factor=prefetch_factor,
                 data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
                 **fsdp_config,
             )
+            self.decoder.apply_fsdp(
+                prefetch_factor=prefetch_factor,
+                data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+                **fsdp_config,
+            )
+            self.target_encoder.apply_fsdp(
+                prefetch_factor=prefetch_factor,
+                data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+                **fsdp_config,
+            )
+            if self.reconstructor:
+                self.reconstructor.apply_fsdp(
+                    prefetch_factor=prefetch_factor,
+                    data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+                    **fsdp_config,
+                )
+        elif data_parallel_wrapping_strategy == DataParellelWrappingStrategy.encoder_decoder:
+            fully_shard(self.encoder, **fsdp_config)
+            fully_shard(self.decoder_a, **fsdp_config)
+            fully_shard(self.decoder_b, **fsdp_config)
+            fully_shard(self.target_encoder, **fsdp_config)
+            if self.reconstructor:
+                fully_shard(self.reconstructor, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")

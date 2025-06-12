@@ -15,6 +15,7 @@ from olmo_core.train.callbacks import (
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
+    ProfilerCallback,
 )
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
@@ -33,6 +34,7 @@ from helios.nn.flexihelios import (
     PoolingType,
     PredictorConfig,
 )
+from helios.nn.utils import DataParellelWrappingStrategy
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -85,7 +87,7 @@ def build_train_module_config(
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     return LatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         warmup_duration=Duration.steps(8000),
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
@@ -109,6 +111,7 @@ def build_train_module_config(
             param_dtype=DType.bfloat16,
             reduce_dtype=DType.float32,
         ),
+        data_parallel_wrapping_strategy=DataParellelWrappingStrategy.blocks,
     )
 
 
@@ -216,6 +219,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                 ephemeral_save_interval=EPHERMERAL_SAVE_INTERVAL,
             ),
         )
+        .with_callback("profiler", ProfilerCallback(wait=5, active=5))
     )
     return trainer_config
 

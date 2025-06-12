@@ -9,6 +9,9 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
+from helios.nn.utils import (
+    DataParellelWrappingStrategy,
+)
 
 try:
     import flash_attn
@@ -550,7 +553,7 @@ class Block(nn.Module):
         x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
         return x
 
-    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+    def apply_fsdp(self, prefetch_factor: int = 0, data_parallel_wrapping_strategy: DataParellelWrappingStrategy = DataParellelWrappingStrategy.blocks, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         fully_shard(self, **fsdp_kwargs)
 

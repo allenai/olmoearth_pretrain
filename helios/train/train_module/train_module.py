@@ -76,12 +76,15 @@ class HeliosTrainModuleConfig(Config):
     ac_config: TransformerActivationCheckpointingConfig | None = (
         None  # UNTESTED for helios
     )
-
+    data_parallel_wrapping_strategy: DataParellelWrappingStrategy = (
+        DataParellelWrappingStrategy.blocks
+    )
+    prefetch_factor: int = 0
     # Loss function settings
     compile_loss: bool = False
 
     # Training settings
-    autocast_precision: DType | None = None  # UNTESTED for helios
+    autocast_precision: DType | None = None
     max_grad_norm: float | None = None
     scheduler: Scheduler | None = None
 
@@ -167,6 +170,7 @@ class HeliosTrainModule(TrainModule):
         max_grad_norm: float | None = None,
         scheduler: Scheduler | None = None,
         device: torch.device | None = None,
+        prefetch_factor: int = 0,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
     ):
@@ -251,11 +255,12 @@ class HeliosTrainModule(TrainModule):
                 )
                 self.model.apply_fsdp(
                     dp_mesh=dp_mesh,
+                    prefetch_factor=prefetch_factor,
                     param_dtype=param_dtype,
                     reduce_dtype=dp_config.reduce_dtype.as_pt(),
                     data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
                 )
-                logger.info("Applied FSDP to the model")
+                logger.info(f"Applied FSDP to the model {self.model}")
             elif dp_config.name == DataParallelType.ddp:
                 self.model.apply_ddp(
                     dp_mesh=dp_mesh,

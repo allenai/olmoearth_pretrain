@@ -21,6 +21,7 @@ from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.latent_mim import LatentMIM
 from helios.train.loss import LossConfig
+from helios.nn.utils import DataParellelWrappingStrategy
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
 from helios.train.train_module.train_module import (
     HeliosTrainModule,
@@ -125,6 +126,10 @@ class LatentMIMTrainModule(HeliosTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
+        data_parallel_wrapping_strategy: DataParellelWrappingStrategy = (
+            DataParellelWrappingStrategy.blocks
+        ),
+        prefetch_factor: int = 0,
     ):
         """Initialize the training module.
 
@@ -168,6 +173,8 @@ class LatentMIMTrainModule(HeliosTrainModule):
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
             warmup_duration=warmup_duration,
+            data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+            prefetch_factor=prefetch_factor,
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg = token_exit_cfg

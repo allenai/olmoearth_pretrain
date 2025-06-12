@@ -1354,9 +1354,9 @@ class Encoder(FlexiHeliosBase):
         output = TokensAndMasks(**patchified_tokens_and_masks)
         return output, self.project_and_aggregate(output)
 
-    def apply_fsdp(self, prefetch_factor: int = 0, **fsdp_kwargs: Any) -> None:
+    def apply_fsdp(self, prefetch_factor: int = 0,data_parallel_wrapping_strategy: DataParellelWrappingStrategy = DataParellelWrappingStrategy.blocks, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
-        super().apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_kwargs)
+        super().apply_fsdp(prefetch_factor=prefetch_factor, data_parallel_wrapping_strategy=data_parallel_wrapping_strategy, **fsdp_kwargs)
         # Don't Shard the small layers
         # fully_shard(self.patch_embeddings, **fsdp_kwargs)
         # register_fsdp_forward_method(self.patch_embeddings, "forward")
@@ -1745,7 +1745,7 @@ class Predictor(FlexiHeliosBase):
             data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
             **fsdp_kwargs,
         )
-        fully_shard(self, prefetch_factor=prefetch_factor, **fsdp_kwargs)
+        fully_shard(self, **fsdp_kwargs)
 
 
 @dataclass
