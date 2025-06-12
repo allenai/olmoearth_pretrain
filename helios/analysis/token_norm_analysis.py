@@ -33,7 +33,7 @@ class TokenNormAnalysisHook:
 
     def __init__(
         self,
-        save_dir: str = "./token_norm_histograms",
+        save_dir: str = "./new_token_norm_histograms",
         bins: int = 75,
         num_samples_to_record: int = 10,
         enabled: bool = True,
