@@ -222,6 +222,10 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 masked_batch = self.masking_strategy.apply_mask(
                     microbatch, patch_size=patch_size
                 )
+                if masked_batch.worldcover is not None:
+                    logger.info(
+                        f"Worldcover values: {masked_batch.worldcover.unique()}"
+                    )
                 # Run Encoder and decoder on the augmented input
                 loss, latent, decoded, target_output = self.model_forward(
                     masked_batch, patch_size, self.token_exit_cfg
