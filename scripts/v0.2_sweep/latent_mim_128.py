@@ -15,7 +15,6 @@ from olmo_core.train.callbacks import (
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
-    ProfilerCallback,
 )
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
@@ -34,8 +33,8 @@ from helios.nn.flexihelios import (
     PoolingType,
     PredictorConfig,
 )
-from helios.nn.utils import DataParellelWrappingStrategy
 from helios.nn.latent_mim import LatentMIMConfig
+from helios.nn.utils import DataParellelWrappingStrategy
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -111,7 +110,7 @@ def build_train_module_config(
             param_dtype=DType.bfloat16,
             reduce_dtype=DType.float32,
         ),
-        data_parallel_wrapping_strategy=DataParellelWrappingStrategy.encoder_decoder,
+        data_parallel_wrapping_strategy=DataParellelWrappingStrategy.full_model,
         prefetch_factor=0,
     )
 
