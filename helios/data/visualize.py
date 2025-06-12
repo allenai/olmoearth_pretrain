@@ -14,7 +14,7 @@ from matplotlib.figure import Figure
 from upath import UPath
 
 from helios.data.constants import Modality
-from helios.data.dataset import GetItemArgs, HeliosDataset
+from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
 from helios.data.utils import convert_to_db
 
 logger = logging.getLogger(__name__)
@@ -34,41 +34,34 @@ WORLDCOVER_LEGEND = {
 }
 
 
-def visualize_sample(
-    dataset: HeliosDataset,
-    sample_index: int,
-    out_dir: str | Path | UPath,
+def create_visualization(
+    sample: HeliosSample,
+    timestep: int = 0,
 ) -> Figure:
-    """Visualize a sample from the Helios Dataset in a grid format.
+    """Create visualization for a Helios sample.
 
-    - Each modality is placed on its own row.
-    - Each band of that modality is shown in columns of that row.
-    - If the modality is LATLON, plot the coordinate on a base map.
-    - If the modality is WORLDCOVER, use a discrete colormap and show a legend.
-    Saves the resulting figure to a .png file.
+    Args:
+        sample: The sample data to visualize
+        modalities: List of modality names
+        max_bands: Maximum number of bands across modalities
+        wc_cmap: WorldCover colormap
+        wc_norm: WorldCover normalization
+        wc_classes_sorted: Sorted list of WorldCover class values
+
+    Returns:
+        The created matplotlib figure
     """
-    wc_classes_sorted = sorted(WORLDCOVER_LEGEND.keys())  # [10, 20, 30, ...]
+    wc_classes_sorted = sorted(WORLDCOVER_LEGEND.keys())
     wc_colors = [WORLDCOVER_LEGEND[val][0] for val in wc_classes_sorted]
-    # Construct a discrete colormap and corresponding norm
     wc_cmap = mcolors.ListedColormap(wc_colors)
-    wc_bounds = wc_classes_sorted + [
-        wc_classes_sorted[-1] + 1
-    ]  # e.g., up to 101 if last is 100
+    wc_bounds = wc_classes_sorted + [wc_classes_sorted[-1] + 1]
     wc_norm = mcolors.BoundaryNorm(wc_bounds, wc_cmap.N)
-    logger.info(f"Visualizing sample index: {sample_index}")
-
-    args = GetItemArgs(
-        idx=sample_index,
-        patch_size=1,
-        sampled_hw_p=256,
-    )
-    _, sample = dataset[args]
     modalities = sample.modalities
     if not modalities:
         logger.warning("No modalities found in this sample.")
-        return
-    total_rows = len(modalities)
-    # At least 1 column, but also handle the largest band_order among the modalities
+        return None
+
+    # Calculate max bands needed
     max_bands = 1
     for modality_name in modalities:
         if modality_name == "timestamps":
@@ -76,7 +69,9 @@ def visualize_sample(
         modality_spec = Modality.get(modality_name)
         if modality_spec != Modality.LATLON:
             max_bands = max(max_bands, len(modality_spec.band_order))
+    total_rows = len(modalities)
 
+    # Create figure and axes
     fig, axes = plt.subplots(
         nrows=total_rows + 1,
         ncols=max_bands,
@@ -84,7 +79,7 @@ def visualize_sample(
         squeeze=False,
     )
 
-    # Load lat/lon data, e.g. [lat, lon]
+    # Plot lat/lon map
     assert sample.latlon is not None
     latlon_data = sample.latlon
     lat = float(latlon_data[0])
@@ -92,7 +87,6 @@ def visualize_sample(
 
     # Remove old Axes & re-add Cartopy
     fig.delaxes(axes[0, 0])
-
     axes[0, 0] = fig.add_subplot(
         total_rows,
         max_bands,
@@ -114,6 +108,8 @@ def visualize_sample(
     # Hide unused columns
     for empty_col in range(max_bands - 1, 0, -1):
         axes[0, empty_col].axis("off")
+
+    # Plot modalities
     sample_dict = sample.as_dict()
     for row_idx, (modality_name, modality_data) in enumerate(
         sample_dict.items(), start=1
@@ -123,16 +119,17 @@ def visualize_sample(
             continue
         logger.info(f"Plotting modality: {modality_name}")
         modality_spec = Modality.get(modality_name)
-        # 4B. Plot other modalities
+
+        # Convert Sentinel1 to dB
         if modality_spec == Modality.SENTINEL1:
             modality_data = convert_to_db(modality_data)
         logger.info(f"Modality data shape (loaded): {modality_data.shape}")
 
         # If temporal [H, W, T, C], take first time step
         if modality_spec.is_spatial:
-            modality_data = modality_data[:, :, 0]
+            modality_data = modality_data[:, :, timestep]
             logger.info(
-                f"Modality data shape after first time step: {modality_data.shape}"
+                f"Modality data shape after {timestep} time step: {modality_data.shape}"
             )
 
         # Rearrange to [C, H, W]
@@ -143,7 +140,7 @@ def visualize_sample(
             ax = axes[row_idx, band_i]
             channel_data = modality_data[band_i]  # shape [H, W]
 
-            # 4B(i). If WorldCover, use discrete colormap & legend
+            # Plot WorldCover with discrete colormap & legend
             if modality_spec == Modality.WORLDCOVER:
                 _ = ax.imshow(channel_data, cmap=wc_cmap, norm=wc_norm)
                 ax.set_title(f"{modality_spec.name.upper()} - {band_name}")
@@ -155,11 +152,11 @@ def visualize_sample(
                     patch = mpatches.Patch(color=color_hex, label=label_txt)
                     patches.append(patch)
 
-                # Place legend to the right of the axes (outside the main image area)
+                # Place legend to the right of the axes
                 ax.legend(
                     handles=patches,
                     loc="center left",
-                    bbox_to_anchor=(1, 0.5),  # Adjust as needed, e.g. (1.05, 0.5)
+                    bbox_to_anchor=(1, 0.5),
                     borderaxespad=0.0,
                     fontsize=8,
                 )
@@ -175,10 +172,44 @@ def visualize_sample(
         for empty_col in range(used_cols, max_bands):
             axes[row_idx, empty_col].axis("off")
 
+    # Adjust layout
     plt.tight_layout()
     fig.subplots_adjust(
         wspace=0.3, hspace=0.3, left=0.05, right=0.95, top=0.95, bottom=0.05
     )
+
+    return fig
+
+def visualize_sample(
+    dataset: HeliosDataset,
+    sample_index: int,
+    out_dir: str | Path | UPath,
+) -> Figure:
+    """Visualize a sample from the Helios Dataset in a grid format.
+
+    - Each modality is placed on its own row.
+    - Each band of that modality is shown in columns of that row.
+    - If the modality is LATLON, plot the coordinate on a base map.
+    - If the modality is WORLDCOVER, use a discrete colormap and show a legend.
+    Saves the resulting figure to a .png file.
+    """
+
+    logger.info(f"Visualizing sample index: {sample_index}")
+
+    # Get sample data
+    args = GetItemArgs(
+        idx=sample_index,
+        patch_size=1,
+        sampled_hw_p=256,
+    )
+    _, sample = dataset[args]
+
+    # Create visualization
+    fig = create_visualization(
+        sample=sample, out_dir=out_dir
+    )
+
+    # Save figure
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"sample_{sample_index}.png")
     fig.savefig(out_path)

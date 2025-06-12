@@ -269,9 +269,7 @@ def analyze(config: HeliosExperimentConfig) -> None:
     )
     trainer = config.trainer.build(train_module, data_loader)
     # basically ignore the trainer and the data_loader and just use the model
-    num_samples = len(dataset)
-    for sample_index in range(num_samples):
-        token_norms = analyze_token_norms(dataset, train_module.model, config.token_norm_analysis.patch_size, config.token_norm_analysis.hw_p)
+    token_norms = analyze_token_norms(dataset, train_module.model, config.token_norm_analysis.patch_size, config.token_norm_analysis.hw_p)
 
 
 

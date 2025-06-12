@@ -15,7 +15,7 @@ from helios.data.constants import Modality
 from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample, collate_helios
 from helios.train.masking import MaskingConfig, MaskValue
 from helios.nn.flexihelios import Encoder, save_token_norm_histograms
-
+from helios.data.visualize import create_visualization
 # Add matplotlib imports for visualization
 try:
     import matplotlib.pyplot as plt
@@ -113,9 +113,6 @@ class TokenNormAnalysisHook:
         """Increment the sample counter."""
         self.sample_count += 1
 
-    # reset context
-    def reset_context(self):
-        self.context = {}
 
 
 def register_token_norm_hooks(
@@ -197,10 +194,13 @@ def analyze_token_norms_with_hooks(
         device = get_default_device()
         logger.info(f"Default device: {device}")
 
+        sample_count = 0
         for sample_index in range(num_samples):
             # Get sample
             args = GetItemArgs(idx=sample_index, patch_size=patch_size, sampled_hw_p=hw_p)
             patch_sample = dataset[args]
+            # save the visualization before cropping
+            visual_sample = patch_sample[1]
             sampled_hw = hw_p * patch_size
 
             # Log modality information
@@ -214,6 +214,21 @@ def analyze_token_norms_with_hooks(
                 start_h=0, start_w=0, sampled_hw=sampled_hw, start_t=0, max_t=12
             ))
             patch_sample = (patch_sample[0], batch)
+
+            # save a visualization of the sample
+            for timestep in range(12):
+                fig = create_visualization(
+                    sample=visual_sample,
+                    timestep=timestep,
+                )
+                step_dir = os.path.join(save_dir, f"step_{sample_count}")
+                os.makedirs(step_dir, exist_ok=True)
+                out_path = os.path.join(step_dir, f"visualization_{timestep}.png")
+                fig.savefig(out_path)
+                logger.info(f"Saved visualization to {out_path}")
+                plt.close(fig)
+                logger.warning("only saving one timestep for now")
+                break
 
             # Prepare MaskedHeliosSample
             _, batch = collate_helios([patch_sample])
@@ -234,7 +249,7 @@ def analyze_token_norms_with_hooks(
 
             # Increment step after processing sample
             hook.increment_step()
-
+            sample_count += 1
     finally:
         # Clean up hooks
         for handle in handles:
