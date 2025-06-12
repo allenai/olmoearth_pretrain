@@ -439,7 +439,7 @@ class Reconstructor(nn.Module):
         """Apply torch.compile to the model."""
         self.decoder.apply_compile()
 
-    def apply_fsdp(self, prefetch_factor: int, **fsdp_kwargs: Any) -> None:
+    def apply_fsdp(self, prefetch_factor: int = 0, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         self.decoder.apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_kwargs)
 
@@ -982,7 +982,7 @@ class FlexiHeliosBase(nn.Module):
         tokens = tokens_new.reshape(og_shape[0], og_shape[1], -1)
         return tokens
 
-    def apply_fsdp(self, prefetch_factor: int, **fsdp_kwargs: Any) -> None:
+    def apply_fsdp(self, prefetch_factor: int = 0, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         for block in self.blocks:
             block.apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_kwargs)
@@ -1333,7 +1333,7 @@ class Encoder(FlexiHeliosBase):
         output = TokensAndMasks(**patchified_tokens_and_masks)
         return output, self.project_and_aggregate(output)
 
-    def apply_fsdp(self, prefetch_factor: int, **fsdp_kwargs: Any) -> None:
+    def apply_fsdp(self, prefetch_factor: int = 0, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         super().apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_kwargs)
         # Don't Shard the small layers
@@ -1712,7 +1712,7 @@ class Predictor(FlexiHeliosBase):
             output_dict[masked_modality_name] = modality_mask
         return TokensAndMasks(**output_dict)
 
-    def apply_fsdp(self, prefetch_factor: int, **fsdp_kwargs: Any) -> None:
+    def apply_fsdp(self, prefetch_factor: int = 0, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         super().apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_kwargs)
         fully_shard(self, prefetch_factor=prefetch_factor, **fsdp_kwargs)
