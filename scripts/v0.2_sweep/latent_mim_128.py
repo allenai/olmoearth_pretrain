@@ -220,7 +220,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                 ephemeral_save_interval=EPHERMERAL_SAVE_INTERVAL,
             ),
         )
-        .with_callback("profiler", ProfilerCallback(wait=5, active=5))
+        # .with_callback("profiler", ProfilerCallback(wait=5, active=5))
     )
     return trainer_config
 
