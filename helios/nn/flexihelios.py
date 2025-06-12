@@ -717,29 +717,30 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             )
         else:
             raise ValueError(f"Unsupported tokens shape: {modality_tokens.shape}")
-
+        dtype = modality_tokens.dtype
         device = modality_tokens.device
-        modality_embed = torch.zeros(modality_tokens.shape, device=device)
+        modality_embed = torch.zeros(modality_tokens.shape, device=device, dtype=dtype)
         n = self.embedding_dim_per_embedding_type
 
         # Channel embeddings
         channel_embed = self.per_modality_channel_embeddings[modality.name]
-        channel_embed = repeat(channel_embed, f"b_s d -> {ein_string}", **ein_dict).to(
-            device
-        )
+        channel_embed = repeat(channel_embed, f"b_s d -> {ein_string}", **ein_dict).to(device)
         modality_embed[..., :n] += channel_embed
 
         if modality.is_multitemporal:
             # Time position encodings
             time_embed = repeat(self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict)
-            modality_embed[..., n : n * 2] += time_embed.to(device)
+            time_embed = time_embed.to(device)
+            modality_embed[..., n : n * 2] += time_embed
 
             # Month encodings
             assert timestamps is not None
             months = timestamps[:, :, 1]
             month_embed = self.month_embed(months)
             month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
-            modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
+            month_embed = month_embed.to(device)
+            modality_embed[..., n * 2 : n * 3] += month_embed
+
         if modality.is_spatial:
             # Spatial encodings
             assert input_res is not None
@@ -747,15 +748,14 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
             spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
                 grid_size=h,
-                res=torch.ones(b, device=device) * gsd_ratio,
+                res=torch.ones(b, device=device, dtype=dtype) * gsd_ratio,
                 encoding_dim=self.embedding_dim_per_embedding_type,
                 device=device,
             )
             spatial_embed = rearrange(spatial_embed, "b (h w) d -> b h w d", h=h, w=w)
-            spatial_embed = repeat(
-                spatial_embed, f"b h w d -> {ein_string}", **ein_dict
-            )
+            spatial_embed = repeat(spatial_embed, f"b h w d -> {ein_string}", **ein_dict)
             modality_embed[..., n * 3 : n * 4] += spatial_embed
+
         return modality_tokens + modality_embed
 
     def forward(
@@ -1248,7 +1248,6 @@ class Encoder(FlexiHeliosBase):
         )
         tokens_dict.update(original_masks_dict)
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
-
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
 
         tokens, indices, new_mask, seq_lengths, max_seqlen = self.remove_masked_tokens(

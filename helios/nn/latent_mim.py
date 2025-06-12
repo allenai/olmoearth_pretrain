@@ -107,6 +107,9 @@ class LatentMIM(nn.Module, DistributedMixins):
             fully_shard(self.target_encoder, **fsdp_config)
             if self.reconstructor:
                 fully_shard(self.reconstructor, **fsdp_config)
+        elif data_parallel_wrapping_strategy == DataParellelWrappingStrategy.full_model:
+            # alwasys shard target encoder seperately because it is not part of model forward so won't be hooked in otherwise
+            fully_shard(self.target_encoder, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
