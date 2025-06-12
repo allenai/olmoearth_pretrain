@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import h5py
+import hdf5plugin
 import numpy as np
 import pandas as pd
 from einops import rearrange
@@ -15,7 +16,7 @@ from olmo_core.config import Config
 from tqdm import tqdm
 from upath import UPath
 
-from helios.data.constants import Modality, ModalitySpec, TimeSpan
+from helios.data.constants import IMAGE_TILE_SIZE, Modality, ModalitySpec, TimeSpan
 from helios.data.utils import convert_to_db
 from helios.dataset.parse import parse_helios_dataset
 from helios.dataset.sample import (
@@ -42,6 +43,10 @@ class ConvertToH5pyConfig(Config):
     compression: str | None = None  # Compression algorithm
     compression_opts: int | None = None  # Compression level (0-9 for gzip)
     shuffle: bool | None = None  # Enable shuffle filter (only used with compression)
+    chunk_options: tuple | None = (
+        None  # Chunking configuration. None: disabled. True: auto (data_item.shape). tuple: specific shape.
+    )
+    tile_size: int = IMAGE_TILE_SIZE
 
     def build(self) -> "ConvertToH5py":
         """Build the ConvertToH5py object."""
@@ -54,6 +59,8 @@ class ConvertToH5pyConfig(Config):
             compression=self.compression,
             compression_opts=self.compression_opts,
             shuffle=self.shuffle,
+            chunk_options=self.chunk_options,
+            tile_size=self.tile_size,
         )
 
 
@@ -75,6 +82,8 @@ class ConvertToH5py:
         compression: str | None = None,
         compression_opts: int | None = None,
         shuffle: bool | None = None,
+        chunk_options: tuple | bool | None = None,
+        tile_size: int = IMAGE_TILE_SIZE,
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -85,6 +94,12 @@ class ConvertToH5py:
             compression: Compression algorithm to use (None, "gzip", "lzf", "szip")
             compression_opts: Compression level (0-9 for gzip), only used with gzip compression
             shuffle: Enable shuffle filter, only used with compression
+            chunk_options: Chunking configuration.
+                         None: chunking disabled.
+                         True: auto-chunk (chunks will match dataset shape).
+                         tuple: specify a chunk shape. If tuple rank differs from data rank,
+                                it's adjusted (padded with full dimension sizes or truncated).
+            tile_size: The size of the tile to split the image into.
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
@@ -93,7 +108,16 @@ class ConvertToH5py:
         self.compression = compression
         self.compression_opts = compression_opts
         self.shuffle = shuffle
+        self.chunk_options = chunk_options
         self.h5py_dir: UPath | None = None
+        if IMAGE_TILE_SIZE % tile_size != 0:
+            raise ValueError(
+                f"Tile size {tile_size} must be a factor of {IMAGE_TILE_SIZE}"
+            )
+        self.tile_size = tile_size
+        # Tile_size_split_factor is the factor by which the tile size is split into subtiles
+        self.num_subtiles_per_dim = IMAGE_TILE_SIZE // tile_size
+        self.num_subtiles = self.num_subtiles_per_dim**2
 
     @property
     def compression_settings_suffix(self) -> str:
@@ -110,6 +134,11 @@ class ConvertToH5py:
             compression_str += "_shuffle"
         return compression_str
 
+    @property
+    def image_tile_size_suffix(self) -> str:
+        """String representation of the image tile size."""
+        return f"_{self.tile_size}_x_{self.num_subtiles}"
+
     def _get_samples(self) -> list[SampleInformation]:
         """Get the samples from the raw dataset (image tile directory)."""
         tiles = parse_helios_dataset(self.tile_path, self.supported_modalities)
@@ -120,16 +149,16 @@ class ConvertToH5py:
         return samples
 
     def process_sample_into_h5(
-        self, index_sample_tuple: tuple[int, SampleInformation]
+        self, index_sample_tuple: tuple[int, tuple[int, SampleInformation]]
     ) -> None:
         """Process a sample into an h5 file."""
-        i, sample = index_sample_tuple
+        i, (sublock_index, sample) = index_sample_tuple
         h5_file_path = self._get_h5_file_path(i)
         if h5_file_path.exists():
             return
-        self._create_h5_file(sample, h5_file_path)
+        self._create_h5_file(sample, h5_file_path, sublock_index)
 
-    def create_h5_dataset(self, samples: list[SampleInformation]) -> None:
+    def create_h5_dataset(self, samples: list[tuple[int, SampleInformation]]) -> None:
         """Create a dataset of the samples in h5 format in a shared weka directory under the given fingerprint."""
         total_sample_indices = len(samples)
 
@@ -146,11 +175,13 @@ class ConvertToH5py:
                     )
                 )
         else:
-            for i, sample in enumerate(samples):
+            for i, (sublock_index, sample) in enumerate(samples):
                 logger.info(f"Processing sample {i}")
-                self.process_sample_into_h5((i, sample))
+                self.process_sample_into_h5((i, (sublock_index, sample)))
 
-    def save_sample_metadata(self, samples: list[SampleInformation]) -> None:
+    def save_sample_metadata(
+        self, samples: list[tuple[int, SampleInformation]]
+    ) -> None:
         """Save metadata about which samples contain which modalities."""
         if self.h5py_dir is None:
             raise ValueError("h5py_dir is not set")
@@ -167,7 +198,7 @@ class ConvertToH5py:
             metadata_dict[modality.name] = []
 
         # Populate the DataFrame with metadata from each sample
-        for i, sample in enumerate(samples):
+        for i, (_, sample) in enumerate(samples):
             metadata_dict["sample_index"].append(i)
 
             # Set modality presence (1 if present, 0 if not)
@@ -193,10 +224,12 @@ class ConvertToH5py:
             raise ValueError("h5py_dir is not set")
         return self.h5py_dir / self.latlon_distribution_fname
 
-    def save_latlon_distribution(self, samples: list[SampleInformation]) -> None:
+    def save_latlon_distribution(
+        self, samples: list[tuple[int, SampleInformation]]
+    ) -> None:
         """Save the latlon distribution to a file."""
         logger.info(f"Saving latlon distribution to {self.latlon_distribution_path}")
-        latlons = np.array([sample.get_latlon() for sample in samples])
+        latlons = np.array([sample.get_latlon() for _, sample in samples])
         with self.latlon_distribution_path.open("wb") as f:
             np.save(f, latlons)
 
@@ -234,7 +267,7 @@ class ConvertToH5py:
         return missing_timesteps_masks_data
 
     def _create_h5_file(
-        self, sample: SampleInformation, h5_file_path: UPath
+        self, sample: SampleInformation, h5_file_path: UPath, sublock_index: int
     ) -> dict[str, Any]:
         """Create the h5 file."""
         sample_dict = {}
@@ -257,6 +290,17 @@ class ConvertToH5py:
             # Convert Sentinel1 data to dB
             if modality == Modality.SENTINEL1:
                 image = convert_to_db(image)
+
+            if modality.is_spatial:
+                # Calculate row and column indices for grid
+                row = (sublock_index // self.num_subtiles_per_dim) * self.tile_size
+                col = (sublock_index % self.num_subtiles_per_dim) * self.tile_size
+                logger.info(f"Sublock index: {sublock_index}, row: {row}, col: {col}")
+                logger.info(f"Image shape: {image.shape}")
+                image = image[
+                    row : row + self.tile_size, col : col + self.tile_size, ...
+                ]
+                logger.info(f"Image shape after slicing: {image.shape}")
             sample_dict[modality.name] = image
 
         # w+b as sometimes metadata needs to be read as well for different chunking/compression settings
@@ -269,17 +313,58 @@ class ConvertToH5py:
                     )
                     # Create dataset with optional compression
                     create_kwargs: dict[str, Any] = {}
+                    # Maybe want to move this into a seperate class for ease of use
                     if self.compression is not None:
-                        create_kwargs["compression"] = self.compression
-                        if (
-                            self.compression == "gzip"
-                            and self.compression_opts is not None
-                        ):
-                            create_kwargs["compression_opts"] = self.compression_opts
-                        if (
-                            self.shuffle is not None
-                        ):  # Shuffle is typically used with compression
-                            create_kwargs["shuffle"] = self.shuffle
+                        # Gzip is natively supported by h5py
+                        if self.compression == "gzip":
+                            create_kwargs["compression"] = self.compression
+                            if self.compression_opts is not None:
+                                create_kwargs["compression_opts"] = (
+                                    self.compression_opts
+                                )
+                            if self.shuffle is not None:
+                                create_kwargs["shuffle"] = self.shuffle
+                        # For other compression algorithms, we switch to hdf5plugin
+                        elif self.compression == "zstd":
+                            create_kwargs["compression"] = hdf5plugin.Zstd(
+                                clevel=self.compression_opts
+                            )
+                        elif self.compression == "lz4":
+                            create_kwargs["compression"] = hdf5plugin.LZ4(nbytes=0)
+                        else:
+                            raise ValueError(
+                                f"Unsupported compression: {self.compression}"
+                            )
+
+                        # Apply chunking based on self.chunk_options
+                        if self.chunk_options is True:  # auto-chunk
+                            create_kwargs["chunks"] = True  # need to configure
+                        elif (
+                            isinstance(self.chunk_options, tuple)
+                            and self.chunk_options is not None
+                        ):  # Specific chunk shape
+                            num_data_dims = len(data_item.shape)
+                            final_chunks_list = []
+                            for i in range(num_data_dims):
+                                if i < len(self.chunk_options):
+                                    final_chunks_list.append(self.chunk_options[i])
+                                else:
+                                    # If chunk_options is shorter, pad with full data dimension size
+                                    final_chunks_list.append(data_item.shape[i])
+                            logger.info(f"Final chunks list: {final_chunks_list}")
+                            create_kwargs["chunks"] = tuple(final_chunks_list)
+                        else:
+                            logger.info(
+                                f"Chunk options: using chunk size {data_item.shape}"
+                            )
+                            create_kwargs["chunks"] = (
+                                data_item.shape
+                            )  # use the dataset item shape as the chunk so it effectively does no chunking
+
+                    # Create the dataset per item
+                    logger.info(
+                        f"Creating dataset for {item_name} with kwargs: {create_kwargs}"
+                    )
                     h5file.create_dataset(item_name, data=data_item, **create_kwargs)
 
                 # Store missing timesteps masks in a dedicated group
@@ -343,7 +428,7 @@ class ConvertToH5py:
 
         h5py_dir = (
             self.tile_path
-            / f"{self.h5py_folder}{self.compression_settings_suffix}"
+            / f"{self.h5py_folder}{self.compression_settings_suffix}{self.image_tile_size_suffix}"
             / "_".join(
                 sorted([modality.name for modality in self.supported_modalities])
             )
@@ -436,12 +521,16 @@ class ConvertToH5py:
 
     def prepare_h5_dataset(self, samples: list[SampleInformation]) -> None:
         """Prepare the h5 dataset."""
-        self.set_h5py_dir(len(samples))
+        tuples = []
+        for sample in samples:
+            for j in range(self.num_subtiles):
+                tuples.append((j, sample))
+        self.set_h5py_dir(len(tuples))
         self.save_compression_settings()  # Save settings before creating data
-        self.save_sample_metadata(samples)
-        self.save_latlon_distribution(samples)
+        self.save_sample_metadata(tuples)
+        self.save_latlon_distribution(tuples)
         logger.info("Attempting to create H5 files may take some time...")
-        self.create_h5_dataset(samples)
+        self.create_h5_dataset(tuples)
 
     def run(self) -> None:
         """Run the conversion."""

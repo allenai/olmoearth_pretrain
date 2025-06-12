@@ -53,6 +53,13 @@ Be sure your session creation has included the following args
  - `  --secret-env WANDB_API_KEY=<your_beaker_username>_WANDB_API_KEY
     --secret-env BEAKER_TOKEN=<your_beaker_username>__BEAKER_TOKEN `
 
+Note: In order to use flash attention in a session, use `"beaker://petew/olmo-core-tch270cu128"` as your base beaker image.
+Then, set up a conda environment so you can use the flash attention code saved in the base image.
+1. `conda init`
+2. `exec bash`
+3. `conda shell.bash activate base`
+4. `pip install -e '.[all]'`
+
 When launching runs in Sessions for debugging, use the following command,
 
 `torchrun scripts/base_debug_scripts/latent_mim.py train test_run local`
