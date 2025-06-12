@@ -246,13 +246,13 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
 
-                # Skip bad batches
-                if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
-                    )
-                    del latent, decoded, target_output
-                    break
+                # # Skip bad batches
+                # if torch.isnan(loss).any() or torch.isinf(loss).any():
+                #     logger.warning(
+                #         f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+                #     )
+                #     del latent, decoded, target_output
+                #     break
 
                 del latent, decoded, target_output
                 loss.backward()
@@ -283,7 +283,14 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+            start_event.record()
             loss = self.loss_fn(decoded, target_output)
+            end_event.record()
+            torch.cuda.synchronize()
+            loss_time = start_event.elapsed_time(end_event)
+            logger.info(f"Loss compute time: {loss_time} ms")
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output
