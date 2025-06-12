@@ -38,7 +38,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,
-        pool_layers=3,
+        fuse_layers=3,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
