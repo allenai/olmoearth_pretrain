@@ -253,6 +253,10 @@ class HeliosTrainModule(TrainModule):
                     if dp_config.param_dtype is not None
                     else None
                 )
+                if prefetch_factor > 0:
+                    if not data_parallel_wrapping_strategy == DataParellelWrappingStrategy.blocks:
+                        logger.warning("prefetch_factor > 0 is not supported for data_parallel_wrapping_strategy != blocks, setting to 0")
+                        prefetch_factor = 0
                 self.model.apply_fsdp(
                     dp_mesh=dp_mesh,
                     prefetch_factor=prefetch_factor,
