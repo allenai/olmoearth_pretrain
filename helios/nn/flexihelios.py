@@ -317,7 +317,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
 
         channel_set_multiplier = 1
         if modality == Modality.WORLDCOVER.name:
-            channel_set_multiplier = NUM_WORLDCOVER_CLASSES
+            channel_set_multiplier = NUM_WORLDCOVER_CLASSES + 1
 
         # I likely will need to know about what the embedding strategy is in the forward as well
         # Static modality
