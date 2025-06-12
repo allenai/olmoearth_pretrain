@@ -1033,6 +1033,7 @@ class STEncoder(STBase):
                 attention_mode = AttentionMode.SPATIAL
 
             logger.debug(f"Layer {i_blk} applying attention mode {attention_mode}")
+            logger.warning(f"Layer {i_blk} applying attention mode {attention_mode}")
             x, mask = self.collapse_and_combine(x, attention_mode, i_blk)
             bool_mask = mask == MaskValue.ONLINE_ENCODER.value
             tokens, indices, new_mask = self.remove_masked_tokens(x, bool_mask)
@@ -1052,7 +1053,7 @@ class STEncoder(STBase):
                 # Now expand the tokens to [B, T, D].
                 # This is to keep consistent with the expected output format.
                 tokens = tokens.expand(-1, attention_seq_len, -1)
-                print("did the token fusing")
+                logger.warning("did the token fusing")
             else:
                 tokens = blk(x=tokens, y=None, attn_mask=new_mask)
 
