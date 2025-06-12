@@ -58,7 +58,7 @@ def test_mae_with_loss(
         * MaskValue.ONLINE_ENCODER.value
     )
 
-    worldcover = torch.randn(B, H, W, 1, 1)
+    worldcover = torch.ones(B, H, W, 1, 1) * 10
     worldcover_mask = (
         torch.ones(B, H, W, 1, 1, dtype=torch.float32) * MaskValue.DECODER.value
     )
