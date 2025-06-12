@@ -22,8 +22,8 @@ from helios.nn.encodings import (
 )
 from helios.nn.flexi_patch_embed import FlexiPatchEmbed, FlexiPatchReconstruction
 from helios.nn.utils import (
-    get_cumulative_sequence_lengths,
     DataParellelWrappingStrategy,
+    get_cumulative_sequence_lengths,
 )
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
@@ -724,7 +724,9 @@ class FlexiHeliosCompositeEncodings(nn.Module):
 
         # Channel embeddings
         channel_embed = self.per_modality_channel_embeddings[modality.name]
-        channel_embed = repeat(channel_embed, f"b_s d -> {ein_string}", **ein_dict).to(device)
+        channel_embed = repeat(channel_embed, f"b_s d -> {ein_string}", **ein_dict).to(
+            device
+        )
         modality_embed[..., :n] += channel_embed
 
         if modality.is_multitemporal:
@@ -753,7 +755,9 @@ class FlexiHeliosCompositeEncodings(nn.Module):
                 device=device,
             )
             spatial_embed = rearrange(spatial_embed, "b (h w) d -> b h w d", h=h, w=w)
-            spatial_embed = repeat(spatial_embed, f"b h w d -> {ein_string}", **ein_dict)
+            spatial_embed = repeat(
+                spatial_embed, f"b h w d -> {ein_string}", **ein_dict
+            )
             modality_embed[..., n * 3 : n * 4] += spatial_embed
 
         return modality_tokens + modality_embed
@@ -809,6 +813,7 @@ class FlexiHeliosBase(nn.Module):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         use_flash_attn: bool = False,
+        qk_norm: bool = False,
     ) -> None:
         """Initialize the FlexiHeliosBase class."""
         super().__init__()
@@ -829,11 +834,12 @@ class FlexiHeliosBase(nn.Module):
                     embedding_size,
                     num_heads,
                     mlp_ratio,
-                    qkv_bias=True,
+                    qkv_bias=False,
                     norm_layer=nn.LayerNorm,  # TODO: This should be configurable
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
+                    qk_norm=qk_norm,
                 )
                 for _ in range(depth)
             ]
@@ -1044,6 +1050,7 @@ class Encoder(FlexiHeliosBase):
         aggregate_then_project: bool = True,
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
+        qk_norm: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1066,6 +1073,7 @@ class Encoder(FlexiHeliosBase):
             use_flash_attn: Whether to use flash attention
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
+            qk_norm: If True, we will normalize the query and key in the attention layer
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1078,6 +1086,7 @@ class Encoder(FlexiHeliosBase):
             supported_modalities=supported_modalities,
             use_flash_attn=use_flash_attn,
             random_channel_embeddings=random_channel_embeddings,
+            qk_norm=qk_norm,
         )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
@@ -1353,9 +1362,18 @@ class Encoder(FlexiHeliosBase):
         output = TokensAndMasks(**patchified_tokens_and_masks)
         return output, self.project_and_aggregate(output)
 
-    def apply_fsdp(self, prefetch_factor: int = 0,data_parallel_wrapping_strategy: DataParellelWrappingStrategy = DataParellelWrappingStrategy.blocks, **fsdp_kwargs: Any) -> None:
+    def apply_fsdp(
+        self,
+        prefetch_factor: int = 0,
+        data_parallel_wrapping_strategy: DataParellelWrappingStrategy = DataParellelWrappingStrategy.blocks,
+        **fsdp_kwargs: Any,
+    ) -> None:
         """Apply FSDP to the model."""
-        super().apply_fsdp(prefetch_factor=prefetch_factor, data_parallel_wrapping_strategy=data_parallel_wrapping_strategy, **fsdp_kwargs)
+        super().apply_fsdp(
+            prefetch_factor=prefetch_factor,
+            data_parallel_wrapping_strategy=data_parallel_wrapping_strategy,
+            **fsdp_kwargs,
+        )
         # Don't Shard the small layers
         # fully_shard(self.patch_embeddings, **fsdp_kwargs)
         # register_fsdp_forward_method(self.patch_embeddings, "forward")
@@ -1383,6 +1401,7 @@ class Predictor(FlexiHeliosBase):
         random_channel_embeddings: bool = False,
         output_embedding_size: int | None = None,
         use_flash_attn: bool = False,
+        qk_norm: bool = False,
     ):
         """Initialize the predictor.
 
@@ -1411,6 +1430,7 @@ class Predictor(FlexiHeliosBase):
             random_channel_embeddings=random_channel_embeddings,
             supported_modalities=supported_modalities,
             use_flash_attn=use_flash_attn,
+            qk_norm=qk_norm,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -1574,9 +1594,9 @@ class Predictor(FlexiHeliosBase):
         tokens[:, -unmasked_tokens.shape[1] :] = (
             unmasked_tokens * unmasked_tokens_mask.unsqueeze(-1)
         )
-        tokens[
-            :, : tokens_to_decode.shape[1]
-        ] += tokens_to_decode * tokens_to_decode_mask.unsqueeze(-1)
+        tokens[:, : tokens_to_decode.shape[1]] += (
+            tokens_to_decode * tokens_to_decode_mask.unsqueeze(-1)
+        )
         tokens = tokens.scatter(1, indices[:, :, None].expand_as(tokens), tokens)
         return tokens
 
@@ -1767,6 +1787,7 @@ class EncoderConfig(Config):
     aggregate_then_project: bool = True
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
+    qk_norm: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1809,6 +1830,7 @@ class PredictorConfig(Config):
     random_channel_embeddings: bool = False
     output_embedding_size: int | None = None
     use_flash_attn: bool = False
+    qk_norm: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
