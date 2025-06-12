@@ -102,8 +102,7 @@ class LatentMIM(nn.Module, DistributedMixins):
                 )
         elif data_parallel_wrapping_strategy == DataParellelWrappingStrategy.encoder_decoder:
             fully_shard(self.encoder, **fsdp_config)
-            fully_shard(self.decoder_a, **fsdp_config)
-            fully_shard(self.decoder_b, **fsdp_config)
+            fully_shard(self.decoder, **fsdp_config)
             fully_shard(self.target_encoder, **fsdp_config)
             if self.reconstructor:
                 fully_shard(self.reconstructor, **fsdp_config)

@@ -534,8 +534,6 @@ class Block(nn.Module):
         Returns:
             Output tensor of shape (B, N, C)
         """
-        # log dtype of layer norm
-        logger.info(f"norm1 dtype: {self.norm1.weight.dtype}")
         x = x + self.drop_path(
             self.ls1(
                 self.attn(
