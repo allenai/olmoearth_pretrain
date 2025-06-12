@@ -1052,6 +1052,7 @@ class STEncoder(STBase):
                 # Now expand the tokens to [B, T, D].
                 # This is to keep consistent with the expected output format.
                 tokens = tokens.expand(-1, attention_seq_len, -1)
+                print("did the token fusing")
             else:
                 tokens = blk(x=tokens, y=None, attn_mask=new_mask)
 
