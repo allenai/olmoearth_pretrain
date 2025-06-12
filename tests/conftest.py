@@ -54,11 +54,15 @@ def create_geotiff(
     resolution: float,
     crs: str,
     num_bands: int,
+    val: int | None = None,
 ) -> None:
     """Create a GeoTIFF file with specified resolution and size."""
-    generator = np.random.default_rng(42)
     transform = from_origin(0, 0, resolution, resolution)
-    data = generator.integers(0, 255, (num_bands, height, width), dtype=np.uint8)
+    if val is None:
+        generator = np.random.default_rng(42)
+        data = generator.integers(0, 255, (num_bands, height, width), dtype=np.uint8)
+    else:
+        data = np.ones((num_bands, height, width), dtype=np.uint8) * val
     with rasterio.open(
         file_path,
         "w",
@@ -98,8 +102,8 @@ def prepare_samples_and_supported_modalities() -> (
         create_geotiff(sentinel2_l2a_40m_path, 64, 64, 40, crs, 2 * 12)
         # Create one S1 tile
         create_geotiff(sentinel1_10m_path, 256, 256, 10, crs, 2 * 12)
-        # Create one WorldCover tile
-        create_geotiff(worldcover_path, 256, 256, 10, crs, 1 * 1)
+        # Create one WorldCover tile, with a value of 10 (not random inputs)
+        create_geotiff(worldcover_path, 256, 256, 10, crs, 1 * 1, val=10)
         # Create one OpenStreetMap tile
         create_geotiff(openstreetmap_path, 1024, 1024, 2.5, crs, 1 * 30)
 
@@ -260,7 +264,7 @@ def masked_sample_dict(
     latlon_mask = torch.full(
         (B, latlon_num_bands), fill_value=MaskValue.DECODER.value, dtype=torch.float32
     )
-    worldcover = torch.randn(B, H, W, 1, 1, requires_grad=True)
+    worldcover = torch.ones(B, H, W, 1, 1, requires_grad=True) * 10
     worldcover_mask = torch.full(
         (B, H, W, 1, 1), fill_value=MaskValue.DECODER.value, dtype=torch.float32
     )
