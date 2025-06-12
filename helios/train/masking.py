@@ -540,13 +540,13 @@ class SpaceMaskingStrategy(MaskingStrategy):
             modality = Modality.get(modality_name)
             shape = instance.shape
             if not modality.is_spatial:
-                logger.warning(
+                logger.debug(
                     f"Modality {modality.name} is not spatial, random masking strategy will be applied"
                 )
                 mask = self._create_random_mask(modality, shape, patch_size, device)
             else:
                 if spatial_mask is None:
-                    logger.info(f"Creating spatial mask for modality {modality.name}")
+                    logger.debug(f"Creating spatial mask for modality {modality.name}")
                     spatial_mask = self._create_spatial_mask(
                         modality, shape, patch_size, device
                     )
