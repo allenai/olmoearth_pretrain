@@ -14,6 +14,7 @@ from torch.distributed.fsdp import fully_shard
 from torch.nn.functional import one_hot
 
 from helios.data.constants import (
+    MISSING_VALUE,
     NUM_WORLDCOVER_CLASSES,
     Modality,
     ModalitySpec,
@@ -360,7 +361,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             x,
             torch.tensor(
                 # TODO: why do we have 0?
-                [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110],
+                [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, MISSING_VALUE],
                 device=x.device,
                 dtype=x.dtype,
             ),
