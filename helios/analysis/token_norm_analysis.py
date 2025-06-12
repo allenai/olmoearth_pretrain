@@ -53,36 +53,12 @@ class TokenNormAnalysisHook:
         self.global_step = 0
         self.sample_count = 0
 
-        # Storage for context needed by the hook
-        self.context = {}
-
         # Create save directory
         if self.enabled:
             os.makedirs(self.save_dir, exist_ok=True)
 
-    def set_context(
-        self,
-        indices: torch.Tensor,
-        new_mask: torch.Tensor,
-        modalities_to_dims_dict: Dict[str, Tuple],
-        original_masks_dict: Dict[str, torch.Tensor],
-    ):
-        """Set the context needed for token analysis.
 
-        Args:
-            indices: Indices for restoring original token ordering
-            new_mask: Mask for tokens
-            modalities_to_dims_dict: Dictionary mapping modalities to their dimensions
-            original_masks_dict: Dictionary of original masks per modality
-        """
-        self.context = {
-            'indices': indices,
-            'new_mask': new_mask,
-            'modalities_to_dims_dict': modalities_to_dims_dict,
-            'original_masks_dict': original_masks_dict,
-        }
-
-    def __call__(self, module: nn.Module, input: Tuple[torch.Tensor, ...], output: torch.Tensor) -> None:
+    def __call__(self, module: nn.Module, input_args: Tuple[torch.Tensor, ...], input_kwargs: Dict[str, Any], output: torch.Tensor) -> None:
         """Forward hook function called after each block.
 
         Args:
@@ -95,10 +71,7 @@ class TokenNormAnalysisHook:
 
         if self.sample_count >= self.num_samples_to_record:
             return
-
-        if not self.context:
-            logger.warning("Context not set for TokenNormAnalysisHook")
-            return
+        context = input_kwargs['unwrap_context']
 
         # Get block index from the module name or use a counter
         block_idx = getattr(module, '_hook_block_idx', 0)
@@ -110,16 +83,16 @@ class TokenNormAnalysisHook:
             # Add removed tokens back using the Encoder's static method
             visualization_tokens, _ = Encoder.add_removed_tokens(
                 visualization_tokens,
-                self.context['indices'],
-                self.context['new_mask']
+                context['indices'],
+                context['new_mask']
             )
 
             # Split and expand per modality using the Encoder's static method
             visualization_tokens_dict = Encoder.split_and_expand_per_modality(
                 visualization_tokens,
-                self.context['modalities_to_dims_dict']
+                context['modalities_to_dims_dict']
             )
-            visualization_tokens_dict.update(self.context['original_masks_dict'])
+            visualization_tokens_dict.update(context['original_masks_dict'])
 
             # Save histograms using the existing function
             save_token_norm_histograms(
@@ -170,7 +143,7 @@ def register_token_norm_hooks(
             module._hook_block_idx = block_idx
 
             # Register the hook
-            handle = module.register_forward_hook(hook)
+            handle = module.register_forward_hook(hook, with_kwargs=True)
             handles.append(handle)
             logger.info(f"Registered hook on {name} (block {block_idx})")
 
@@ -220,6 +193,7 @@ def analyze_token_norms_with_hooks(
 
         logger.info(f"Analyzing {num_samples} samples with hooks")
         model.eval()
+        model.encoder.pass_unwrap_context = True
         device = get_default_device()
         logger.info(f"Default device: {device}")
 

@@ -514,6 +514,7 @@ class Block(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        unwrap_context: dict | None = None
     ) -> torch.Tensor:
         """Forward pass.
 

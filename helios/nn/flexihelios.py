@@ -1007,6 +1007,7 @@ class Encoder(FlexiHeliosBase):
     """Encoder module that processes masked input samples into token representations."""
 
     cross_attn: bool = False
+    pass_unwrap_context: bool = False
 
     def __init__(
         self,
@@ -1278,6 +1279,12 @@ class Encoder(FlexiHeliosBase):
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
                 attn_mask=new_mask if self.training else None,
+                unwrap_context={
+                    "indices": indices,
+                    "new_mask": new_mask,
+                    "modalities_to_dims_dict": modalities_to_dims_dict,
+                    "original_masks_dict": original_masks_dict,
+                } if self.pass_unwrap_context else None,
             )
             # I want to during training add the removed tokens back and split and expand them after every block
             # First I just want the per modality and across all modalities token norms histograms so I can see what the range of values is like
