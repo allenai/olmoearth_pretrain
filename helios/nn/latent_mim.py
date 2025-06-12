@@ -77,11 +77,13 @@ class LatentMIM(nn.Module, DistributedMixins):
         )
         fsdp_config = dict(mesh=dp_mesh, mp_policy=mp_policy)
 
-        self.encoder.apply_fsdp(**fsdp_config)
-        self.decoder.apply_fsdp(**fsdp_config)
-        self.target_encoder.apply_fsdp(**fsdp_config)
+        self.encoder.apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_config)
+        self.decoder.apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_config)
+        self.target_encoder.apply_fsdp(prefetch_factor=prefetch_factor, **fsdp_config)
         if self.reconstructor:
-            self.reconstructor.apply_fsdp(**fsdp_config)
+            self.reconstructor.apply_fsdp(
+                prefetch_factor=prefetch_factor, **fsdp_config
+            )
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
