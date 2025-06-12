@@ -1473,7 +1473,6 @@ class STEncoderConfig(Config):
     drop_path: float = 0.1
     max_sequence_length: int = 12
     windowed_attention_size: int | None = None
-    pool_layers: int | None = None
     fuse_layers: int | None = None
     learnable_channel_embeddings: bool = True
     random_channel_embeddings: bool = False
