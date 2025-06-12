@@ -92,7 +92,7 @@ def build_train_module_config(
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.002, weight_decay=0.02),
         warmup_duration=Duration.steps(8000),
-        rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
+        rank_microbatch_size=128,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "space_time",
