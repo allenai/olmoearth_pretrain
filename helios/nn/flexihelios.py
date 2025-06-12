@@ -318,7 +318,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
 
         channel_set_multiplier = 1
         if modality == Modality.WORLDCOVER.name:
-            channel_set_multiplier = NUM_WORLDCOVER_CLASSES + 1
+            channel_set_multiplier = NUM_WORLDCOVER_CLASSES
 
         # I likely will need to know about what the embedding strategy is in the forward as well
         # Static modality
@@ -360,8 +360,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         assert torch.isin(
             x,
             torch.tensor(
-                # TODO: why do we have 0?
-                [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, MISSING_VALUE],
+                [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, MISSING_VALUE],
                 device=x.device,
                 dtype=x.dtype,
             ),
@@ -369,8 +368,8 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         logger.debug("worldcover values: ", x.unique())
         return (
             one_hot(
-                torch.clamp((x / 10).long(), min=0),
-                num_classes=NUM_WORLDCOVER_CLASSES + 1,
+                torch.clamp((x / 10).long() - 1, min=0),
+                num_classes=NUM_WORLDCOVER_CLASSES,
             )
             .squeeze(-2)
             .to(dtype=org_dtype)

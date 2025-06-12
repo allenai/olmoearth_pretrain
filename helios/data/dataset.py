@@ -821,6 +821,9 @@ class HeliosDataset(Dataset):
                     logger.info(
                         f"Skipping normalization for {modality_name} because it is worldcover"
                     )
+                    # replace masked values with "permanant water", since this is commonly
+                    # where they occur.
+                    modality_data[modality_data == 0] = 80
                     sample_dict[modality_name] = modality_data.astype(self.dtype)
                     continue
                 logger.info(f"Normalizing {modality_name}")
