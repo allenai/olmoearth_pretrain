@@ -1915,7 +1915,7 @@ def save_token_norm_histograms(
 
         # Save per modality norms as separate npy files
         for modality, norms in per_modality_norms.items():
-            npy_path = os.path.join(step_dir, f"sample_{b}_{modality}_norms.npy")
+            npy_path = os.path.join(step_dir, f"sample_{b}_{modality}_block_{block_idx}_norms.npy")
             np.save(npy_path, norms)
         if not all_token_norms:
             logger.info(f"No tokens to visualize for sample {b}")
