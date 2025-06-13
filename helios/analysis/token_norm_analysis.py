@@ -10,7 +10,7 @@ import re
 import torch.nn as nn
 from einops import rearrange
 from olmo_core.utils import get_default_device
-
+from tqdm import tqdm
 from helios.data.constants import Modality
 from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample, collate_helios
 from helios.train.masking import MaskingConfig, MaskValue
@@ -195,7 +195,7 @@ def analyze_token_norms_with_hooks(
         logger.info(f"Default device: {device}")
 
         sample_count = 0
-        for sample_index in range(num_samples):
+        for sample_index in tqdm(range(num_samples), desc="Analyzing samples"):
             # Get sample
             args = GetItemArgs(idx=sample_index, patch_size=patch_size, sampled_hw_p=hw_p)
             patch_sample = dataset[args]
