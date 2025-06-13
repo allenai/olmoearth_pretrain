@@ -825,6 +825,12 @@ class HeliosDataset(Dataset):
                 logger.info(f"Normalizing {modality_name}")
                 modality_data = sample_dict[modality_name]
                 missing_mask = modality_data == MISSING_VALUE
+
+                # Print value range and unique values for worldcover modality
+                if modality_name == Modality.WORLDCOVER.name:
+                    # I want to disable norm for visualization only
+                    continue
+
                 normalized_data = self.normalize_image(
                     Modality.get(modality_name), modality_data
                 )

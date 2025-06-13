@@ -60,12 +60,12 @@ MAX_SEQUENCE_LENGTH = 12
 
 TRAINING_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
-    Modality.SENTINEL1.name,
-    Modality.WORLDCOVER.name,
-    Modality.SRTM.name,
-    Modality.LATLON.name,
-    Modality.LANDSAT.name,
-    Modality.OPENSTREETMAP_RASTER.name,
+    # Modality.SENTINEL1.name,
+    # Modality.WORLDCOVER.name,
+    # Modality.SRTM.name,
+    # Modality.LATLON.name,
+    # Modality.LANDSAT.name,
+    # Modality.OPENSTREETMAP_RASTER.name,
 ]
 
 ENCODER_EMBEDDING_SIZE = 768

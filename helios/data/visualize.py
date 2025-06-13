@@ -126,8 +126,13 @@ def create_visualization(
         logger.info(f"Modality data shape (loaded): {modality_data.shape}")
 
         # If temporal [H, W, T, C], take first time step
-        if modality_spec.is_spatial:
+        if modality_spec.is_spatial and modality_spec.is_multitemporal:
             modality_data = modality_data[:, :, timestep]
+            logger.info(
+                f"Modality data shape after {timestep} time step: {modality_data.shape}"
+            )
+        elif modality_spec.is_spatial and not modality_spec.is_multitemporal:
+            modality_data = modality_data[:, :, 0]
             logger.info(
                 f"Modality data shape after {timestep} time step: {modality_data.shape}"
             )

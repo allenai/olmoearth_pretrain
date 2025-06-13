@@ -9,12 +9,13 @@ import torch
 import re
 import torch.nn as nn
 from einops import rearrange
+from torch import Tensor
+from helios.nn.flexihelios import Encoder
 from olmo_core.utils import get_default_device
 from tqdm import tqdm
 from helios.data.constants import Modality
 from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample, collate_helios
-from helios.train.masking import MaskingConfig, MaskValue
-from helios.nn.flexihelios import Encoder, save_token_norm_histograms
+from helios.train.masking import MaskingConfig, MaskValue, MaskedHeliosSample
 from helios.data.visualize import create_visualization
 # Add matplotlib imports for visualization
 try:
@@ -109,9 +110,12 @@ class TokenNormAnalysisHook:
         self.global_step += 1
         self.sample_count = 0
 
-    def increment_sample(self):
+    def increment_sample(self, sample_count: int | None = None):
         """Increment the sample counter."""
-        self.sample_count += 1
+        if sample_count is None:
+            self.sample_count += 1
+        else:
+            self.sample_count = sample_count
 
 
 
@@ -153,9 +157,10 @@ def analyze_token_norms_with_hooks(
     patch_size: int,
     hw_p: int,
     num_samples: int | None = None,
-    save_dir: str = "./token_norm_histograms",
+    save_dir: str = "./new_token_norm_histograms",
     bins: int = 75,
     num_samples_to_record: int = 10,
+    modality_names: list[str] = [Modality.SENTINEL2_L2A.name],
 ) -> None:
     """Analyze the token norms using forward hooks.
 
@@ -194,8 +199,9 @@ def analyze_token_norms_with_hooks(
         device = get_default_device()
         logger.info(f"Default device: {device}")
 
-        sample_count = 0
         for sample_index in tqdm(range(num_samples), desc="Analyzing samples"):
+            sample_index = 35
+            hook.increment_sample(sample_count=sample_index)
             # Get sample
             args = GetItemArgs(idx=sample_index, patch_size=patch_size, sampled_hw_p=hw_p)
             patch_sample = dataset[args]
@@ -208,7 +214,6 @@ def analyze_token_norms_with_hooks(
                 logger.info(f"Modality: {modality}")
                 logger.info(f"Shape: {getattr(patch_sample[1], modality).shape}")
                 logger.info(f"Type: {getattr(patch_sample[1], modality).dtype}")
-
             # Create batch
             batch = HeliosSample(**patch_sample[1]._create_cropped_data_dict(
                 start_h=0, start_w=0, sampled_hw=sampled_hw, start_t=0, max_t=12
@@ -221,7 +226,7 @@ def analyze_token_norms_with_hooks(
                     sample=visual_sample,
                     timestep=timestep,
                 )
-                step_dir = os.path.join(save_dir, f"step_{sample_count}")
+                step_dir = os.path.join(save_dir, f"step_{sample_index}")
                 os.makedirs(step_dir, exist_ok=True)
                 out_path = os.path.join(step_dir, f"visualization_{timestep}.png")
                 fig.savefig(out_path)
@@ -229,13 +234,27 @@ def analyze_token_norms_with_hooks(
                 plt.close(fig)
                 logger.warning("only saving one timestep for now")
                 break
-
             # Prepare MaskedHeliosSample
             _, batch = collate_helios([patch_sample])
 
             with torch.no_grad():
                 batch = batch.to_device(device)
                 masked_batch = masking_strategy.apply_mask(batch, patch_size=patch_size)
+                # # for every modality that is not in the modality_names, set the mask to MaskValue.MISSING
+                # remasked_dict = {}
+                # for modality in batch.modalities:
+                #     remasked_dict[modality] = getattr(masked_batch, modality)
+                #     if modality == "timestamps":
+                #         continue
+                #     if modality not in modality_names:
+                #         logger.info(f"Setting mask to MISSING for modality: {modality}")
+                #         modality_mask = f"{modality}_mask"
+                #         mask_data = getattr(masked_batch, modality_mask)
+                #         mask_data[:] = MaskValue.MISSING.value
+                #         remasked_dict[modality_mask] = mask_data
+                #     else:
+                #         logger.info(f"Not setting mask to MISSING for modality: {modality}")
+                # masked_batch = MaskedHeliosSample(**remasked_dict)
                 unmasked_batch = masked_batch.unmask()
 
 
@@ -245,11 +264,10 @@ def analyze_token_norms_with_hooks(
                 latent, decoded, _, reconstructed = model(unmasked_batch, patch_size)
 
                 # Increment sample counter
-                hook.increment_sample()
+                raise ValueError("Stop here")
 
             # Increment step after processing sample
             hook.increment_step()
-            sample_count += 1
     finally:
         # Clean up hooks
         for handle in handles:
@@ -273,3 +291,140 @@ def analyze_token_norms(
         hw_p=hw_p,
         num_samples=num_samples,
     )
+
+
+
+# Add this function after the imports and before the existing functions
+def save_token_norm_histograms(
+    visualization_tokens_dict: dict,
+    block_idx: int,
+    save_dir: str = "./new_token_norm_histograms",
+    bins: int = 50,
+    global_step: int = 0,
+    num_samples_to_record: int = 10,
+    # I need global step rank
+) -> None:
+    """Save histograms of token norms for visualization.
+
+    Args:
+        visualization_tokens_dict: Dictionary containing tokens and masks for each modality
+        block_idx: Current transformer block index
+        save_dir: Directory to save histogram plots
+        bins: Number of bins for histograms
+    """
+    if not MATPLOTLIB_AVAILABLE:
+        logger.warning("Matplotlib not available, skipping histogram generation")
+        return
+
+    # Create save directory if it doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
+    # Create global step directory
+    step_dir = os.path.join(save_dir, f"step_{global_step}")
+    os.makedirs(step_dir, exist_ok=True)
+    # Get batch size
+    batch_size = None
+    for modality, data in visualization_tokens_dict.items():
+        if not modality.endswith("_mask"):
+            batch_size = data.shape[0]
+            break
+
+    if batch_size is None:
+        logger.warning("No data found for histogram generation")
+        return
+
+    # Process each sample in the batch
+    for b in range(min(num_samples_to_record, batch_size)):
+        # Collect all token norms across modalities for this sample
+        all_token_norms = []
+        per_modality_norms = {}
+
+        for modality, data in visualization_tokens_dict.items():
+            if modality.endswith("_mask"):
+                continue
+
+            # Get the mask for this modality
+            modality_mask = visualization_tokens_dict[modality + "_mask"]
+            present_mask = modality_mask == MaskValue.ONLINE_ENCODER.value
+
+            if present_mask[b].sum() < 1:
+                logger.info(f"No present tokens for sample {b} modality {modality}")
+                continue
+
+            # Extract present tokens for this sample
+            sample_data = data[b]
+            sample_present_mask = present_mask[b]
+            encoded_data = sample_data[sample_present_mask]
+
+            # Calculate token norms
+            token_norms = encoded_data.norm(dim=-1).cpu().numpy().flatten()
+            per_modality_norms[modality] = token_norms
+            all_token_norms.extend(token_norms)
+
+        # Save per modality norms as separate npy files
+        for modality, norms in per_modality_norms.items():
+            npy_path = os.path.join(step_dir, f"sample_{b}_{modality}_block_{block_idx}_norms.npy")
+            np.save(npy_path, norms)
+        if not all_token_norms:
+            logger.info(f"No tokens to visualize for sample {b}")
+            continue
+
+        # Create figure with subplots
+        n_modalities = len(per_modality_norms)
+        fig, axes = plt.subplots(2, max(2, (n_modalities + 1) // 2), figsize=(15, 8))
+        fig.suptitle(f'Token Norm Histograms - Block {block_idx}, Sample {b}', fontsize=16)
+
+        # Flatten axes for easier indexing
+        axes = axes.flatten()
+
+        # Plot histogram for all modalities combined
+        axes[0].hist(all_token_norms, bins=bins, alpha=0.7, color='blue', edgecolor='black')
+        axes[0].set_title('All Modalities Combined')
+        axes[0].set_xlabel('Token Norm')
+        axes[0].set_ylabel('Frequency')
+        axes[0].grid(True, alpha=0.3)
+
+        # Add statistics text
+        stats_text = f'Min: {np.min(all_token_norms):.3f}\n'
+        stats_text += f'Max: {np.max(all_token_norms):.3f}\n'
+        stats_text += f'Mean: {np.mean(all_token_norms):.3f}\n'
+        stats_text += f'Std: {np.std(all_token_norms):.3f}'
+        axes[0].text(0.02, 0.98, stats_text, transform=axes[0].transAxes,
+                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+        # Plot histogram for each modality
+        colors = plt.cm.Set3(np.linspace(0, 1, n_modalities))
+        for idx, (modality, norms) in enumerate(per_modality_norms.items()):
+            ax_idx = idx + 1
+            if ax_idx < len(axes):
+                axes[ax_idx].hist(norms, bins=bins, alpha=0.7, color=colors[idx], edgecolor='black')
+                axes[ax_idx].set_title(f'{modality}')
+                axes[ax_idx].set_xlabel('Token Norm')
+                axes[ax_idx].set_ylabel('Frequency')
+                axes[ax_idx].grid(True, alpha=0.3)
+
+                # Add statistics text for this modality
+                mod_stats_text = f'Min: {np.min(norms):.3f}\n'
+                mod_stats_text += f'Max: {np.max(norms):.3f}\n'
+                mod_stats_text += f'Mean: {np.mean(norms):.3f}\n'
+                mod_stats_text += f'Std: {np.std(norms):.3f}'
+                axes[ax_idx].text(0.02, 0.98, mod_stats_text, transform=axes[ax_idx].transAxes,
+                                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+        # Hide unused subplots
+        for idx in range(n_modalities + 1, len(axes)):
+            axes[idx].set_visible(False)
+        plt.tight_layout()
+
+        os.makedirs(step_dir, exist_ok=True)
+
+        # Create per-sample directory under step directory
+        sample_dir = os.path.join(step_dir, f"sample_{b}")
+        os.makedirs(sample_dir, exist_ok=True)
+
+        # Save the figure
+        filename = f"token_norms_block_{block_idx}.png"
+        filepath = os.path.join(sample_dir, filename)
+        plt.savefig(filepath, dpi=300, bbox_inches='tight')
+        plt.close()
+
+        logger.info(f"Saved histogram: {filepath}")
