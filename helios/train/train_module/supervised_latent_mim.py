@@ -215,23 +215,25 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         for modality, modality_tensor in supervisory_modalities.items():
             modality_spec = Modality.get(modality)
             for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
-                modality_bandset = rearrange(
-                    modality_tensor[:, :, :, 0, bands], "b h w c -> b c h w"
-                ).float()  # B, H, W, T, Bandsets
+                modality_bandset = modality_tensor[:, :, :, 0, bands]
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
 
                 if probe_output.shape[-3] != modality_bandset.shape[-2]:
-                    modality_bandset = F.interpolate(
-                        modality_bandset.float(),
-                        size=(probe_output.shape[-3], probe_output.shape[-2]),
-                        # we should only ever be upsampling, so I think nearest is ok here
-                        # it preserves categories
-                        mode="nearest",
-                    )  # (bsz, H, W, num_classes)
+                    probe_output = rearrange(
+                        F.interpolate(
+                            rearrange(probe_output, "b h w c -> b c h w"),
+                            size=(
+                                modality_bandset.shape[-3],
+                                modality_bandset.shape[-2],
+                            ),
+                            mode="bilinear",
+                            align_corners=True,
+                        ),
+                        "b c h w -> b h w c",
+                    )
 
-                modality_bandset = rearrange(modality_bandset, "b c h w -> b h w c")
                 if modality == Modality.WORLDCOVER.name:
                     modality_bandset[modality_bandset == 95] = 110
                     modality_bandset = (
@@ -239,9 +241,14 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     )  # now we should be to classes
                 modality_bandset = modality_bandset.long()
                 modality_bandset[spatial_mask.bool()] = MISSING_VALUE
-                loss += loss_fn(
+                modality_loss = loss_fn(
                     probe_output.flatten(end_dim=-2), modality_bandset.flatten()
                 )
+                if torch.isnan(modality_loss).any():
+                    logger.warning(f"NaN in unsupervised loss for {modality}")
+                else:
+                    loss += modality_loss
+                assert False
             return loss
 
     def train_batch(
@@ -341,7 +348,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             )
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
-                target_output, _ = self.model.target_encoder.forward(
+                target_output, _, _ = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,

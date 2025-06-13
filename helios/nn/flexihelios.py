@@ -250,7 +250,6 @@ class TokensAndMasks(NamedTuple):
         )
         mask_to_return = spatial_mask_t.max(dim=-1).values
         spatial_tokens_t = torch.concat(spatial_tokens, dim=-2)
-
         expanded_mask = repeat(
             spatial_mask_t,
             "b ph pw ba -> b ph pw ba d",
@@ -262,7 +261,7 @@ class TokensAndMasks(NamedTuple):
             spatial_tokens_t = (spatial_tokens_t * expanded_mask) + (
                 ~expanded_mask * fill_value
             )
-            return spatial_tokens_t.max(dim=-2).values, mask_to_return
+            return spatial_tokens_t.max(dim=-2).values, ~mask_to_return
         else:
             zeroed_spatial_tokens = spatial_tokens_t * expanded_mask
             num_tokens_per_spatial_patch = repeat(
@@ -272,7 +271,7 @@ class TokensAndMasks(NamedTuple):
             )
             return zeroed_spatial_tokens.sum(
                 dim=-2
-            ) / num_tokens_per_spatial_patch, mask_to_return
+            ) / num_tokens_per_spatial_patch, ~mask_to_return
 
 
 class ProjectAndAggregate(nn.Module):
@@ -1368,7 +1367,9 @@ class Encoder(FlexiHeliosBase):
         tokens_per_modality_dict.update(original_masks_dict)
         return tokens_per_modality_dict
 
-    def apply_probes(self, x: TokensAndMasks) -> dict[str, torch.Tensor]:
+    def apply_probes(
+        self, x: TokensAndMasks, patch_size: int
+    ) -> dict[str, torch.Tensor]:
         """Apply linear probes for supervised learning."""
         if len(self.probes) == 0:
             return {}
@@ -1378,7 +1379,10 @@ class Encoder(FlexiHeliosBase):
             spatial_tokens, spatial_mask = x.spatial_pool_with_mask(
                 pooling_type=PoolingType.MEAN
             )  # spatial tokens has shape B, PH, PW, T, D
-            output_dict["mask"] = spatial_mask
+            # mask is now the same shape as the raw input
+            output_dict["mask"] = repeat(
+                spatial_mask, "b h w -> b (h p1) (w p2)", p1=patch_size, p2=patch_size
+            )
             for probe_name, probe in self.probes.items():
                 probe_output = probe(
                     spatial_tokens
@@ -1391,6 +1395,7 @@ class Encoder(FlexiHeliosBase):
                     j=self.max_patch_size,
                     c=num_classes,
                 )
+                output_dict[probe_name] = probe_output
             return output_dict
 
     # TODO: we want to have a single API for the encoder and decoder
@@ -1425,7 +1430,11 @@ class Encoder(FlexiHeliosBase):
                 token_exit_cfg=token_exit_cfg,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        return output, self.project_and_aggregate(output), self.apply_probes(output)
+        return (
+            output,
+            self.project_and_aggregate(output),
+            self.apply_probes(output, patch_size),
+        )
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
@@ -1762,7 +1771,7 @@ class Predictor(FlexiHeliosBase):
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
         """
-        decoder_emedded_dict = x._asdict()
+        decoder_emedded_dict = x.as_dict(return_none=False)
         # Apply Input Norms and encoder to decoder embeds to each modality
         available_modalities = x.modalities
         modalities_to_process = get_modalities_to_process(
@@ -1832,6 +1841,7 @@ class EncoderConfig(Config):
     aggregate_then_project: bool = True
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
+    probe_modalities: list[str] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
