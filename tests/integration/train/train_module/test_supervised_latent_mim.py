@@ -179,33 +179,33 @@ def test_train_batch_without_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(1.9),
+            torch.tensor(4.4),
             atol=1e-1,
         )
 
 
-# def test_train_batch_with_missing_modalities(
-#     samples_with_missing_modalities: list[tuple[int, HeliosSample]],
-#     latent_mim_model: LatentMIM,
-#     train_module_config: LatentMIMTrainModuleConfig,
-#     set_random_seeds: None,
-# ) -> None:
-#     """Test train batch with missing modalities."""
-#     # Create a collated batch
-#     batch = collate_helios(samples_with_missing_modalities)
-#     train_module = train_module_config.build(latent_mim_model, device="cpu")
-#     with patch("helios.train.train_module.train_module.build_world_mesh"):
-#         # Mock the trainer property
-#         mock_trainer = MockTrainer()
-#         # Create a MagicMock for on_attach
-#         on_attach_mock = MagicMock(return_value=None)
-#         # Patch the on_attach method
-#         train_module.on_attach = on_attach_mock  # type: ignore
-#         train_module._attach_trainer(mock_trainer)
-#         train_module.train_batch(batch)
-#         logger.info(mock_trainer._metrics)
-#         assert torch.allclose(
-#             mock_trainer._metrics["train/PatchDisc"],
-#             torch.tensor(1.88),
-#             atol=1e-1,
-#         )
+def test_train_batch_with_missing_modalities(
+    samples_with_missing_modalities: list[tuple[int, HeliosSample]],
+    latent_mim_model: LatentMIM,
+    train_module_config: SupervisedLatentMIMTrainModuleConfig,
+    set_random_seeds: None,
+) -> None:
+    """Test train batch with missing modalities."""
+    # Create a collated batch
+    batch = collate_helios(samples_with_missing_modalities)
+    train_module = train_module_config.build(latent_mim_model, device="cpu")
+    with patch("helios.train.train_module.train_module.build_world_mesh"):
+        # Mock the trainer property
+        mock_trainer = MockTrainer()
+        # Create a MagicMock for on_attach
+        on_attach_mock = MagicMock(return_value=None)
+        # Patch the on_attach method
+        train_module.on_attach = on_attach_mock  # type: ignore
+        train_module._attach_trainer(mock_trainer)
+        train_module.train_batch(batch)
+        logger.info(mock_trainer._metrics)
+        assert torch.allclose(
+            mock_trainer._metrics["train/PatchDisc"],
+            torch.tensor(4.4),
+            atol=1e-1,
+        )

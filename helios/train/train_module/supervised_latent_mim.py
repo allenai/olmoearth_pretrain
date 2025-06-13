@@ -239,6 +239,10 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     modality_bandset = (
                         modality_bandset / 10
                     )  # now we should be to classes
+                    # keep missing values
+                    modality_bandset[modality_bandset == MISSING_VALUE / 10] = (
+                        MISSING_VALUE
+                    )
                 modality_bandset = modality_bandset.long()
                 modality_bandset[spatial_mask.bool()] = MISSING_VALUE
                 modality_loss = loss_fn(
@@ -248,7 +252,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     logger.warning(f"NaN in unsupervised loss for {modality}")
                 else:
                     loss += modality_loss
-                assert False
             return loss
 
     def train_batch(

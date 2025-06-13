@@ -347,7 +347,6 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
-
     batch = [(1, sample1), (1, sample2), (1, sample_3)]
     return batch
 
