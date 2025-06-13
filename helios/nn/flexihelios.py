@@ -1130,8 +1130,8 @@ class Encoder(FlexiHeliosBase):
             for p in self.patch_embeddings.parameters():
                 p.requires_grad = False
 
-        self.probes: dict[str, nn.Module] = {}
         if probe_modalities is not None:
+            probes: dict[str, nn.Module] = {}
             # TODO - right now this assumes a resolution factor of 1. Needs to be fixed to handle (e.g.) NAIP
             output_hw = self.max_patch_size**2
             for modality_name in probe_modalities:
@@ -1141,10 +1141,13 @@ class Encoder(FlexiHeliosBase):
                 else:
                     multiplier = 1
                 for idx, band_set in enumerate(modality.band_sets):
-                    self.probes[f"{modality_name}_{idx}"] = nn.Linear(
+                    probes[f"{modality_name}_{idx}"] = nn.Linear(
                         self.embedding_size,
                         output_hw * len(band_set.bands) * multiplier,
                     )
+            self.probes = nn.ModuleDict(probes)
+        else:
+            self.probes = {}
 
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
