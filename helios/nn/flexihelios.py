@@ -1871,7 +1871,9 @@ def save_token_norm_histograms(
 
     # Create save directory if it doesn't exist
     os.makedirs(save_dir, exist_ok=True)
-
+    # Create global step directory
+    step_dir = os.path.join(save_dir, f"step_{global_step}")
+    os.makedirs(step_dir, exist_ok=True)
     # Get batch size
     batch_size = None
     for modality, data in visualization_tokens_dict.items():
@@ -1911,6 +1913,10 @@ def save_token_norm_histograms(
             per_modality_norms[modality] = token_norms
             all_token_norms.extend(token_norms)
 
+        # Save per modality norms as separate npy files
+        for modality, norms in per_modality_norms.items():
+            npy_path = os.path.join(step_dir, f"sample_{b}_{modality}_norms.npy")
+            np.save(npy_path, norms)
         if not all_token_norms:
             logger.info(f"No tokens to visualize for sample {b}")
             continue
@@ -1962,8 +1968,6 @@ def save_token_norm_histograms(
             axes[idx].set_visible(False)
         plt.tight_layout()
 
-        # Create global step directory
-        step_dir = os.path.join(save_dir, f"step_{global_step}")
         os.makedirs(step_dir, exist_ok=True)
 
         # Create per-sample directory under step directory
