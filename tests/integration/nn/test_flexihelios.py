@@ -238,7 +238,7 @@ class TestEncoder:
         input_res = 1
 
         # No early exit configuration is provided.
-        output, _ = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output, _, _ = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
 
         # After patchification the spatial dimensions reduce.
         expected_H = H // patch_size
@@ -340,7 +340,7 @@ class TestEncoder:
 
         token_exit_cfg = {"sentinel2_l2a": 2, "latlon": 0}
 
-        output, _ = encoder.forward(
+        output, _, _ = encoder.forward(
             x,
             patch_size,
             input_res,
@@ -439,7 +439,7 @@ class TestEncoder:
         patch_size = 4
         input_res = 1
 
-        output, _ = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output, _, _ = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
 
         # After patchification the spatial dimensions reduce.
         expected_H = H // patch_size
@@ -757,7 +757,7 @@ def test_end_to_end_with_exit_config(
         max_sequence_length=MAX_SEQ_LENGTH,
         drop_path=DROP_PATH,
     )
-    output, _ = encoder.forward(
+    output, _, _ = encoder.forward(
         x,
         patch_size,
         input_res,
