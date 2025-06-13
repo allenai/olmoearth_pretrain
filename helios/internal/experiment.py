@@ -268,6 +268,8 @@ def analyze(config: HeliosExperimentConfig) -> None:
         dataset, collator=collate_helios, dp_process_group=train_module.dp_process_group
     )
     trainer = config.trainer.build(train_module, data_loader)
+    if trainer.load_path is not None:
+        trainer.load_checkpoint(trainer.load_path)
     # basically ignore the trainer and the data_loader and just use the model
     token_norms = analyze_token_norms(dataset, train_module.model, config.token_norm_analysis.patch_size, config.token_norm_analysis.hw_p)
 

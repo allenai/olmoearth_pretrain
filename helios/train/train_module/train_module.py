@@ -264,10 +264,6 @@ class HeliosTrainModule(TrainModule):
             else:
                 raise NotImplementedError(dp_config.name)
 
-        # Materialize and init parameters.
-        logger.info("Initializing model weights...")
-        # model.init_weights(max_seq_len=max_sequence_length, device=self.device)
-
         # Build optimizer(s).
         logger.info("Building optimizer(s)...")
         self.optimizer: Optimizer = optim_config.build(
