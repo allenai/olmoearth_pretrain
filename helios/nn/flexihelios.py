@@ -1387,6 +1387,7 @@ class Encoder(FlexiHeliosBase):
                 spatial_mask, "b h w -> b (h p1) (w p2)", p1=patch_size, p2=patch_size
             )
             for probe_name, probe in self.probes.items():
+                print(spatial_tokens.device, probe.weight.device)
                 probe_output = probe(
                     spatial_tokens
                 )  # B, Ph, PW, T, H * W * len(bandsets)
