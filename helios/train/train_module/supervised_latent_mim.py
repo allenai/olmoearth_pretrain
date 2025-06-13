@@ -5,8 +5,8 @@ from logging import getLogger
 from typing import Any
 
 import torch
-from torch.nn import functional as F
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
+from einops import rearrange
 from olmo_core.distributed.parallel import DataParallelConfig
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
@@ -15,8 +15,9 @@ from olmo_core.train.common import Duration, ReduceType
 from olmo_core.train.train_module.transformer import (
     TransformerActivationCheckpointingConfig,
 )
-from einops import rearrange
-from helios.data.constants import Modality, MISSING_VALUE
+from torch.nn import functional as F
+
+from helios.data.constants import MISSING_VALUE, Modality
 from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
@@ -209,15 +210,14 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
     ) -> torch.Tensor:
         """Compute the supervisory losses."""
         loss_fn = torch.nn.CrossEntropyLoss(ignore_index=MISSING_VALUE)
-         # TODO: this is required; is it okay to be a normal dict key?
+        # TODO: this is required; is it okay to be a normal dict key?
         spatial_mask = probe_outputs["mask"]
-        print(spatial_mask)
         for modality, modality_tensor in supervisory_modalities.items():
             modality_spec = Modality.get(modality)
             for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
-                modality_bandset = rearrange(modality_tensor[
-                    :, :, :, 0, bands
-                ], "b h w c -> b c h w").float()  # B, H, W, T, Bandsets
+                modality_bandset = rearrange(
+                    modality_tensor[:, :, :, 0, bands], "b h w c -> b c h w"
+                ).float()  # B, H, W, T, Bandsets
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
@@ -229,7 +229,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         # we should only ever be upsampling, so I think nearest is ok here
                         # it preserves categories
                         mode="nearest",
-                        # align_corners=True,
                     )  # (bsz, H, W, num_classes)
 
                 modality_bandset = rearrange(modality_bandset, "b c h w -> b h w c")
@@ -240,7 +239,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     )  # now we should be to classes
                 modality_bandset = modality_bandset.long()
                 modality_bandset[spatial_mask.bool()] = MISSING_VALUE
-                loss += loss_fn(probe_output.flatten(end_dim=-2), modality_bandset.flatten())
+                loss += loss_fn(
+                    probe_output.flatten(end_dim=-2), modality_bandset.flatten()
+                )
             return loss
 
     def train_batch(
