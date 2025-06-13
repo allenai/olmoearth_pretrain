@@ -1383,16 +1383,14 @@ class Encoder(FlexiHeliosBase):
                 probe_output = probe(
                     spatial_tokens
                 )  # B, Ph, PW, T, H * W * len(bandsets)
-                # TODO rearrange
-                # probe_output = rearrange(
-                #         probe_output,
-                #         "b h w (c i j) -> b c (h i) (w j)",
-                #         h=spatial_patches_per_dim,
-                #         w=spatial_patches_per_dim,
-                #         c=num_classes,
-                #         i=patch_size,
-                #         j=patch_size,
-                #     )
+                num_classes = probe_output.shape[-1] // (self.max_patch_size**2)
+                probe_output = rearrange(
+                    probe_output,
+                    "b h w (c i j) -> b (h i) (w j) c",
+                    i=self.max_patch_size,
+                    j=self.max_patch_size,
+                    c=num_classes,
+                )
             return output_dict
 
     # TODO: we want to have a single API for the encoder and decoder
