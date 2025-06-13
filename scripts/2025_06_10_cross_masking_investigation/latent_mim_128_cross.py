@@ -85,7 +85,7 @@ def build_train_module_config(
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     scheduler = WSD(
-        decay_steps=50000,
+        decay_steps=100000,
         decay_fraction=None,
     )
     return LatentMIMTrainModuleConfig(
@@ -102,6 +102,8 @@ def build_train_module_config(
                 "only_decode_modalities": [
                     Modality.OPENSTREETMAP_RASTER.name,
                     Modality.WORLDCOVER.name,
+                    Modality.LANDSAT.name,
+                    Modality.SRTM.name,
                 ],
             }
         ),
