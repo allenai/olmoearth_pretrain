@@ -6,7 +6,6 @@ from olmo_core.internal.common import get_beaker_username
 from olmo_core.launch.beaker import (
     BeakerEnvSecret,
     BeakerEnvVar,
-    BeakerLaunchConfig,
     BeakerPriority,
     BeakerWekaBucket,
     OLMoCoreBeakerImage,
@@ -15,7 +14,12 @@ from olmo_core.utils import generate_uuid
 from upath import UPath
 
 from helios.data.constants import Modality
-from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, SubCmd
+from helios.internal.experiment import (
+    CommonComponents,
+    HeliosBeakerLaunchConfig,
+    HeliosVisualizeConfig,
+    SubCmd,
+)
 
 logger = logging.getLogger(__name__)
 BUDGET = "ai2/d5"
@@ -73,7 +77,7 @@ def build_launch_config(
     workspace: str = WORKSPACE,
     budget: str = BUDGET,
     nccl_debug: bool = False,
-) -> BeakerLaunchConfig:
+) -> HeliosBeakerLaunchConfig:
     """Build a launch config for a helios experiment.
 
     THis will be the default setup, any changes that are temporary should be overriden
@@ -103,7 +107,7 @@ def build_launch_config(
             # pytorch_upgrade = "pip install --upgrade --pre --no-cache-dir torch==2.8.0.dev20250528+cu128 torchvision==0.22.0.dev20250528+cu128 --index-url https://download.pytorch.org/whl/nightly/cu128"
 
     beaker_user = get_beaker_username()
-    return BeakerLaunchConfig(
+    return HeliosBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",
         budget=budget,
         cmd=cmd,

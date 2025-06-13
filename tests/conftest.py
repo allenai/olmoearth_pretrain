@@ -13,6 +13,7 @@ import pytest
 import rasterio
 import torch
 from rasterio.transform import from_origin
+from upath import UPath
 
 from helios.data.constants import MISSING_VALUE, BandSet, Modality, ModalitySpec
 from helios.data.dataset import HeliosSample
@@ -217,7 +218,7 @@ def prepare_samples_and_supported_modalities() -> (
 @pytest.fixture
 def setup_h5py_dir(
     tmp_path: Path, prepare_samples_and_supported_modalities: tuple
-) -> Path:
+) -> UPath:
     """Setup the h5py directory."""
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
     prepared_samples = prepare_samples(tmp_path)
@@ -230,12 +231,8 @@ def setup_h5py_dir(
     supported_modalities = [
         m.name for m in supported_modalities if m != Modality.LATLON
     ]
-    return (
-        tmp_path
-        / ConvertToH5py.h5py_folder
-        / "_".join(sorted(supported_modalities))
-        / "1"
-    )
+    assert convert_to_h5py is not None
+    return convert_to_h5py.h5py_dir
 
 
 @pytest.fixture

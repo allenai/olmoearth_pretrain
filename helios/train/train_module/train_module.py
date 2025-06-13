@@ -534,7 +534,6 @@ class HeliosTrainModule(TrainModule):
         total_norm = nn.utils.get_total_norm(
             grads, norm_type=norm_type, error_if_nonfinite=False, foreach=foreach
         )
-        logger.info(f"Total norm dtype: {total_norm.dtype}")
 
         # If total_norm is a DTensor, the placements must be `torch.distributed._tensor.ops.math_ops._NormPartial`.
         # We can simply reduce the DTensor to get the total norm in this tensor's process group
@@ -545,9 +544,7 @@ class HeliosTrainModule(TrainModule):
         if isinstance(total_norm, DTensor):
             # Will reach here if any non-PP parallelism is used.
             # If only using PP, total_norm will be a local tensor.
-            logger.info(f"Total norm is a DTensor {total_norm}")
             total_norm = total_norm.full_tensor()
-            logger.info(f"Total norm is a local tensor {total_norm}")
 
         torch.nn.utils.clip_grads_with_norm_(
             parameters, max_grad_norm, total_norm, foreach=foreach
