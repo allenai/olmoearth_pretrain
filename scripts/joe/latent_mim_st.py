@@ -30,9 +30,10 @@ from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, 
 from helios.internal.utils import MODEL_SIZE_ARGS
 from helios.nn.flexihelios import (
     PoolingType,
+    PredictorConfig,
 )
 from helios.nn.latent_mim import LatentMIMConfig
-from helios.nn.st_model import STEncoderConfig, STPredictorConfig
+from helios.nn.st_model import STEncoderConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -51,7 +52,7 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
-model_size = MODEL_SIZE_ARGS["large"]
+model_size = MODEL_SIZE_ARGS["large_shallow_decoder"]
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -67,7 +68,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
             drop_path=0.1,
             max_sequence_length=12,
         ),
-        decoder_config=STPredictorConfig(
+        decoder_config=PredictorConfig(
             encoder_embedding_size=model_size["encoder_embedding_size"],
             decoder_embedding_size=model_size["decoder_embedding_size"],
             depth=model_size["decoder_depth"],
