@@ -5,6 +5,7 @@ from logging import getLogger
 from typing import Any
 
 import torch
+from torch.nn import functional as F
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
 from olmo_core.distributed.utils import get_local_tensor
@@ -14,8 +15,8 @@ from olmo_core.train.common import Duration, ReduceType
 from olmo_core.train.train_module.transformer import (
     TransformerActivationCheckpointingConfig,
 )
-
-from helios.data.constants import Modality
+from einops import rearrange
+from helios.data.constants import Modality, MISSING_VALUE
 from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
@@ -200,33 +201,47 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
 
+    @staticmethod
     def supervisory_losses(
-        self,
         supervisory_modalities: dict[str, torch.Tensor],
         probe_outputs: dict[str, torch.Tensor],
         loss: torch.Tensor,
     ) -> torch.Tensor:
         """Compute the supervisory losses."""
-        spatial_mask = probe_outputs[
-            "mask"
-        ]  # TODO: this is required; is it okay to be a normal dict key?
+        loss_fn = torch.nn.CrossEntropyLoss(ignore_index=MISSING_VALUE)
+         # TODO: this is required; is it okay to be a normal dict key?
+        spatial_mask = probe_outputs["mask"]
+        print(spatial_mask)
         for modality, modality_tensor in supervisory_modalities.items():
             modality_spec = Modality.get(modality)
-            for idx, bands in enumerate(modality_spec.bandsets_as_indices):
-                modality_bandset = modality_tensor[
-                    :, :, :, :, bands
-                ]  # B, H, W, T, Bandsets
+            for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
+                modality_bandset = rearrange(modality_tensor[
+                    :, :, :, 0, bands
+                ], "b h w c -> b c h w").float()  # B, H, W, T, Bandsets
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
 
+                if probe_output.shape[-3] != modality_bandset.shape[-2]:
+                    modality_bandset = F.interpolate(
+                        modality_bandset.float(),
+                        size=(probe_output.shape[-3], probe_output.shape[-2]),
+                        # we should only ever be upsampling, so I think nearest is ok here
+                        # it preserves categories
+                        mode="nearest",
+                        # align_corners=True,
+                    )  # (bsz, H, W, num_classes)
+
+                modality_bandset = rearrange(modality_bandset, "b c h w -> b h w c")
                 if modality == Modality.WORLDCOVER.name:
                     modality_bandset[modality_bandset == 95] = 110
                     modality_bandset = (
                         modality_bandset / 10
-                    ).long()  # now we should be to classes
-
-        raise NotImplementedError
+                    )  # now we should be to classes
+                modality_bandset = modality_bandset.long()
+                modality_bandset[spatial_mask.bool()] = MISSING_VALUE
+                loss += loss_fn(probe_output.flatten(end_dim=-2), modality_bandset.flatten())
+            return loss
 
     def train_batch(
         self, batch: tuple[int, HeliosSample], dry_run: bool = False
