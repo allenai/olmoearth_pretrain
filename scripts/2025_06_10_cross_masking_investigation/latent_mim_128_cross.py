@@ -104,6 +104,7 @@ def build_train_module_config(
                     Modality.WORLDCOVER.name,
                     Modality.LANDSAT.name,
                     Modality.SRTM.name,
+                    Modality.SENTINEL1.name,
                 ],
             }
         ),
