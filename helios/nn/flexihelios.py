@@ -197,7 +197,7 @@ class TokensAndMasks(NamedTuple):
                     masked_attr = getattr(self, mask_attr_name)
                     if masked_attr is None:
                         continue
-                    if (masked_attr != MaskValue.ONLINE_ENCODER.value).all():
+                    if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
                         attr = getattr(self, attr_name)
                         # pool across time and bandset dimensions
                         if pooling_type == PoolingType.MEAN:

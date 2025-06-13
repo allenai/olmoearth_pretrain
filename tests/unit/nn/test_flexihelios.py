@@ -730,7 +730,6 @@ class TestTokensAndMasks:
             sentinel1=sentinel_1_mean,
             sentinel1_mask=sentinel_1_mask_mean,
         )
-
         # Test mean pooling
         pooled_mean = t_and_m_mean.pool_unmasked_tokens(
             PoolingType.MEAN, spatial_pooling=True
@@ -784,18 +783,24 @@ class TestTokensAndMasks:
         b, h, w, t, b_s, d = 1, 2, 2, 3, 3, 128
 
         # Setup for max pooling
-        sentinel_2_max = torch.ones((b, h, w, t, b_s, d))
+        sentinel_2 = repeat(
+            torch.tensor([[1.0, 3.0], [1.0, 1.0]], requires_grad=True),
+            "h w -> b h w t b_s d",
+            b=b,
+            t=t,
+            b_s=b_s,
+            d=d,
+        )
         sentinel_2_mask_max = torch.zeros((b, h, w, t, b_s)).long()
         # top corner of sentinel 2 is masked
         sentinel_2_mask_max[:, 0, 0, :, :] = 1
         sentinel_2_mask_max[:, 0, 1, :, :] = 1
-        sentinel_2_max[:, 0, 1, :, :] = 3
         # s1 should be ignored since its masked
         sentinel_1_max = torch.ones((b, h, w, t, b_s, d)) * 2
         sentinel_1_mask_max = torch.ones((b, h, w, t, b_s)).long()
         sentinel_1_mask_max[:, 0, 1, :, :] = 0
         t_and_m_max = TokensAndMasks(
-            sentinel2_l2a=sentinel_2_max,
+            sentinel2_l2a=sentinel_2,
             sentinel2_l2a_mask=sentinel_2_mask_max,
             sentinel1=sentinel_1_max,
             sentinel1_mask=sentinel_1_mask_max,
@@ -824,18 +829,28 @@ class TestTokensAndMasks:
                     assert (
                         pooled_max[:, h, w] == 1
                     ).all()  # check the 3 tokens have been ignored
+        sentinel_2.retain_grad()
+        pooled_max.sum().backward()
+        assert sentinel_2.grad is not None
 
     def test_spatial_pool_with_mask_mean(self) -> None:
         """Test TokensAndMasks.spatial_pool_with_mask."""
         b, h, w, t, b_s, d = 1, 2, 2, 3, 3, 128
 
         # Setup for max pooling
-        sentinel_2 = torch.ones((b, h, w, t, b_s, d))
+        # also test the gradients flow back
+        sentinel_2 = repeat(
+            torch.tensor([[1.0, 3.0], [1.0, 1.0]], requires_grad=True),
+            "h w -> b h w t b_s d",
+            b=b,
+            t=t,
+            b_s=b_s,
+            d=d,
+        )
         sentinel_2_mask = torch.zeros((b, h, w, t, b_s)).long()
         # top corner of sentinel 2 is masked
         sentinel_2_mask[:, 0, 0, :, :] = 1
         sentinel_2_mask[:, 0, 1, :, :] = 1
-        sentinel_2[:, 0, 1, :, :] = 3
         # s1 should be ignored since its masked
         sentinel_1 = torch.ones((b, h, w, t, b_s, d)) * 2
         sentinel_1_mask = torch.ones((b, h, w, t, b_s)).long()
@@ -860,7 +875,6 @@ class TestTokensAndMasks:
                     assert mask[:, h, w] == 0
 
         for h in range(pooled.shape[1]):
-            print(h)
             for w in range(pooled.shape[2]):
                 if h == 0 and w == 0:
                     # skip
@@ -874,6 +888,9 @@ class TestTokensAndMasks:
                     assert (
                         pooled[:, h, w] == 1
                     ).all()  # check the 3 tokens have been ignored
+        sentinel_2.retain_grad()
+        pooled.sum().backward()
+        assert sentinel_2.grad is not None
 
 
 class TestProjectionAndAggregation:
