@@ -897,6 +897,3 @@ class TestProjectionAndAggregation:
                 )
                 # for now, lets just check it all runs properly
                 _ = layer(t_and_m)
-
-
-# TODO: write a unit test for the FlexiPatchEmbeddings
