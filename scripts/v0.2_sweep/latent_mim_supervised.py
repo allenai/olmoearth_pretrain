@@ -67,7 +67,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,
-        probe_modalities=[SUPERVISED_MODALITIES],
+        probe_modalities=SUPERVISED_MODALITIES,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -114,7 +114,7 @@ def build_train_module_config(
             param_dtype=DType.bfloat16,
             reduce_dtype=DType.float32,
         ),
-        supervisory_modalities=[SUPERVISED_MODALITIES],
+        supervisory_modalities=SUPERVISED_MODALITIES,
     )
 
 
