@@ -246,7 +246,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 modality_bandset = modality_bandset.long()
                 modality_bandset[spatial_mask.bool()] = MISSING_VALUE
                 modality_loss = loss_fn(
-                    probe_output.flatten(end_dim=-2), modality_bandset.flatten()
+                    probe_output.flatten(end_dim=-2),
+                    modality_bandset.flatten().to(probe_output.device),
                 )
                 if torch.isnan(modality_loss).any():
                     logger.warning(f"NaN in unsupervised loss for {modality}")
