@@ -331,7 +331,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 )
                 # Scale loss by number of microbatches
                 loss = loss / num_microbatches
-                total_batch_acc = total_batch_acc / num_microbatches
 
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
@@ -359,7 +358,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         )
         self.trainer.record_metric(
             f"train/supervisory_accuracy_{'_'.join(self.supervisory_modalities)}",
-            total_batch_acc,
+            # scale by number of microbatches
+            total_batch_acc / num_microbatches,
             ReduceType.mean,
         )
         self.log_regularization(total_batch_reg)
