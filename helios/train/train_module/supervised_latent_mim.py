@@ -263,12 +263,14 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 else:
                     loss += modality_loss
                     total_batch_sup += get_local_tensor(modality_loss.detach())
-                    total_batch_acc += get_local_tensor(
+                    batch_acc = get_local_tensor(
                         cls.accuracy_score(
                             probe_output.flatten(end_dim=-2),
                             modality_bandset.flatten().to(probe_output.device),
                         )
                     )
+                    print(batch_acc)
+                    total_batch_acc += batch_acc
         return loss, total_batch_sup, total_batch_acc
 
     def train_batch(
