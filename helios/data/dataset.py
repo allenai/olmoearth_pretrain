@@ -655,6 +655,15 @@ class HeliosDataset(Dataset):
                 missing_modalities.append(modality)
                 continue
 
+            if modality == Modality.SENTINEL1.name:
+                # - 100 is the missing value for sentinel 1
+                modality_data = sample_dict[modality]
+                # cast to appropriate dtype to prevent overflow from missing values
+                modality_data = modality_data.astype(self.dtype)
+                # replace -100 with MISSING_VALUE
+                modality_data = np.where(modality_data == -100, MISSING_VALUE, modality_data)
+                sample_dict[modality] = modality_data
+
             # For multi-temporal modalities, we need to handle missing timesteps
             # The missing_timesteps_masks indicates which timesteps are present (True) or missing (False)
             if modality in missing_timesteps_masks:
