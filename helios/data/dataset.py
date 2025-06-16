@@ -660,8 +660,12 @@ class HeliosDataset(Dataset):
                 modality_data = sample_dict[modality]
                 # cast to appropriate dtype to prevent overflow from missing values
                 modality_data = modality_data.astype(self.dtype)
-                # replace -100 with MISSING_VALUE
-                modality_data = np.where(modality_data == -100, MISSING_VALUE, modality_data)
+                if np.any(modality_data == -100):
+                    # fill all data with missing value
+                    modality_data = np.full_like(modality_data, MISSING_VALUE)
+                # else:
+                #     # replace -100 with MISSING_VALUE
+                #     modality_data = np.where(modality_data == -100, MISSING_VALUE, modality_data)
                 sample_dict[modality] = modality_data
 
             # For multi-temporal modalities, we need to handle missing timesteps
