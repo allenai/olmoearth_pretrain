@@ -1073,6 +1073,7 @@ class Encoder(FlexiHeliosBase):
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
         probe_modalities: list[str] | None = None,
+        probe_dim: int = 2048,
     ):
         """Initialize the encoder.
 
@@ -1097,6 +1098,7 @@ class Encoder(FlexiHeliosBase):
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             probe_modalities: a list of modalities for which we will output linear probe predictions
                 per spatial patch.
+            probe_dim: the hidden dimension to use for the probe
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1141,9 +1143,14 @@ class Encoder(FlexiHeliosBase):
                 else:
                     multiplier = 1
                 for idx, band_set in enumerate(modality.band_sets):
-                    probes[f"{modality_name}_{idx}"] = nn.Linear(
-                        self.embedding_size,
-                        output_hw * len(band_set.bands) * multiplier,
+                    probes[f"{modality_name}_{idx}"] = nn.Sequential(
+                        nn.BatchNorm1d(self.embedding_size),
+                        nn.Linear(self.embedding_size, probe_dim),
+                        nn.GELU(),
+                        nn.Linear(
+                            probe_dim,
+                            output_hw * len(band_set.bands) * multiplier,
+                        ),
                     )
             self.probes = nn.ModuleDict(probes)
         else:
