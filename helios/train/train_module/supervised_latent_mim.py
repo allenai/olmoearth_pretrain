@@ -130,7 +130,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
-        supervisory_modalities: list[str] | None = None,
+        supervisory_modalities: list[str] = [Modality.WORLDCOVER.name],
     ):
         """Initialize the training module.
 
@@ -193,10 +193,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
         self.supervisory_modalities = supervisory_modalities
-        if self.supervisory_modalities is None:
-            logger.warning(
-                "supervisory_modalities is None. This is equivalent to normal Latent MIM"
-            )
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -207,7 +203,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         supervisory_modalities: dict[str, torch.Tensor],
         probe_outputs: dict[str, torch.Tensor],
         loss: torch.Tensor,
-    ) -> torch.Tensor:
+        total_batch_sup: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute the supervisory losses."""
         loss_fn = torch.nn.CrossEntropyLoss(ignore_index=MISSING_VALUE)
         # TODO: this is required; is it okay to be a normal dict key?
@@ -253,7 +250,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     logger.warning(f"NaN in unsupervised loss for {modality}")
                 else:
                     loss += modality_loss
-            return loss
+                    total_batch_sup += get_local_tensor(modality_loss.detach())
+        return loss, total_batch_sup
 
     def train_batch(
         self, batch: tuple[int, HeliosSample], dry_run: bool = False
@@ -275,6 +273,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
+        total_batch_sup = torch.zeros([], device=self.device)
         patch_size, batch_data = batch
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
@@ -303,8 +302,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         get_local_tensor(reg_term.detach()) / num_microbatches
                     )
 
-                loss = self.supervisory_losses(
-                    supervisory_modalities, probe_outputs, loss
+                loss, total_batch_sup = self.supervisory_losses(
+                    supervisory_modalities, probe_outputs, loss, total_batch_sup
                 )
                 # Scale loss by number of microbatches
                 loss = loss / num_microbatches
@@ -326,6 +325,11 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
             total_batch_loss,
+            ReduceType.mean,
+        )
+        self.trainer.record_metric(
+            f"train/supervisory_loss_{'_'.join(self.supervisory_modalities)}",
+            total_batch_sup,
             ReduceType.mean,
         )
         self.log_regularization(total_batch_reg)
