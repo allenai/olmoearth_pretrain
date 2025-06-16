@@ -330,6 +330,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 )
                 # Scale loss by number of microbatches
                 loss = loss / num_microbatches
+                total_batch_acc = total_batch_acc / num_microbatches
 
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
