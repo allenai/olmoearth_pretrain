@@ -200,7 +200,7 @@ def analyze_token_norms_with_hooks(
         logger.info(f"Default device: {device}")
 
         for sample_index in tqdm(range(num_samples), desc="Analyzing samples"):
-            sample_index = 35
+            sample_index = 484
             hook.increment_sample(sample_count=sample_index)
             # Get sample
             args = GetItemArgs(idx=sample_index, patch_size=patch_size, sampled_hw_p=hw_p)
@@ -233,7 +233,6 @@ def analyze_token_norms_with_hooks(
                 logger.info(f"Saved visualization to {out_path}")
                 plt.close(fig)
                 logger.warning("only saving one timestep for now")
-                break
             # Prepare MaskedHeliosSample
             _, batch = collate_helios([patch_sample])
 
