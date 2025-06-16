@@ -150,31 +150,22 @@ class PatchDiscriminationLossNew(Loss):
         )
         all_targets = targets.flatten_tokens_and_masks()[0]
 
+        # create a dict of per modality masks where it is 1 if it is part of the modality and 0 otherwise
+        # we want the masks to be the same shape as all masks
+        modality_masks = {}
+        for modality_name, (start, end) in modality_token_ranges.items():
+            modality_masks[modality_name] = torch.zeros_like(all_masks)
+            modality_masks[modality_name][:, start:end] = 1
+        # The masked part is where we get flattened
         # Get decoder mask and filter predictions/targets
         decoder_mask = all_masks == MaskValue.DECODER.value
         pred = all_preds[decoder_mask].unsqueeze(dim=0)
         target = all_targets[decoder_mask].unsqueeze(dim=0)
-
-        # Create mapping from original token indices to decoder-only indices
-        decoder_indices = torch.nonzero(decoder_mask).squeeze(-1)
-        original_to_decoder = {
-            orig: dec for dec, orig in enumerate(decoder_indices.tolist())
-        }
-
-        # Update modality ranges to map to decoder-only indices
-        decoder_modality_ranges = {}
-        for modality_name, (start, end) in modality_token_ranges.items():
-            # Find which tokens in this range are decoder tokens
-            decoder_tokens = [
-                original_to_decoder[i]
-                for i in range(start, end)
-                if i in original_to_decoder
-            ]
-            if decoder_tokens:
-                decoder_modality_ranges[modality_name] = (
-                    min(decoder_tokens),
-                    max(decoder_tokens) + 1,
-                )
+        # Get number of decoded tokens per modality Assuming we always loop modality in same order
+        for modality_name, modality_mask in modality_masks.items():
+            # segment the modality mask to the ones that are decoded
+            decoded_tokens_per_modality_count = (modality_mask & decoder_mask).sum(dim=-1)
+            modality_masks[modality_name] = decoded_tokens_per_modality_count
 
         if self.pred2unit:
             pred_mu = pred.mean(1, keepdims=True)
@@ -184,12 +175,12 @@ class PatchDiscriminationLossNew(Loss):
         pred = F.normalize(pred, p=2, dim=-1)
         target = F.normalize(target, p=2, dim=-1)
 
-        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+        count = (decoder_mask).sum(dim=-1)
+
         losses = []
         modality_losses = {}
         start = 0
-
-        for c in count:
+        for i,c in enumerate(count):
             end = start + c
             if c == 0:
                 logger.warning("No decoded values for this sample")
@@ -208,20 +199,15 @@ class PatchDiscriminationLossNew(Loss):
                 labels.flatten(0, 1),
                 reduction="none",
             ) * (self.tau * 2)
-
-            # Compute per-modality losses for this sample
+            losses.append(loss.mean())
+            # # Compute per-modality losses for this sample
             sample_modality_losses = {}
-            for modality_name, (mod_start, mod_end) in decoder_modality_ranges.items():
-                if (
-                    mod_start < end and mod_end > start
-                ):  # Check if modality overlaps with this sample
-                    # Get the relevant indices for this modality within this sample
-                    mod_indices = [
-                        i for i in range(max(start, mod_start), min(end, mod_end))
-                    ]
-                    if mod_indices:
-                        mod_loss = loss[mod_indices].mean()
-                        sample_modality_losses[modality_name] = mod_loss
+            last_idx = 0
+            for modality_name, decoded_tokens_per_modality_count in modality_masks.items():
+                sample_decoded_tokens_per_modality_count = decoded_tokens_per_modality_count[i]
+                mod_loss = loss[last_idx:last_idx+sample_decoded_tokens_per_modality_count].mean()
+                sample_modality_losses[modality_name] = mod_loss
+                last_idx += sample_decoded_tokens_per_modality_count
 
             # Aggregate modality losses
             for modality_name, mod_loss in sample_modality_losses.items():
@@ -229,7 +215,6 @@ class PatchDiscriminationLossNew(Loss):
                     modality_losses[modality_name] = []
                 modality_losses[modality_name].append(mod_loss)
 
-            losses.append(loss.mean())
             start = end
 
         # Average the per-modality losses across samples
@@ -240,7 +225,7 @@ class PatchDiscriminationLossNew(Loss):
 
         # Compute overall loss
         overall_loss = torch.stack(losses).mean()
-
+        logger.info(f"Modality losses: {modality_losses} {overall_loss}")
         return {"loss": overall_loss, "modality_losses": modality_losses}
 
 

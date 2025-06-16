@@ -190,7 +190,7 @@ class TokensAndMasks(NamedTuple):
                 s2 tokens would have the same mask.)
         """
         if not spatial_pooling:
-            x, mask = self.flatten_tokens_and_masks()
+            x, mask, _ = self.flatten_tokens_and_masks()
             # 1s for online encoder, 0s elsewhere
             mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
             x_for_pooling = x * mask.unsqueeze(-1)
