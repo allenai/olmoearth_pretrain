@@ -145,14 +145,36 @@ class PatchDiscriminationLossNew(Loss):
         Returns:
             The computed loss value.
         """
-        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_preds, all_masks, modality_token_ranges = (
+            predictions.flatten_tokens_and_masks()
+        )
         all_targets = targets.flatten_tokens_and_masks()[0]
 
-        # Samples may have different number of tokens
-        # TODO: Skip unqueeze and the for loop when mask_other_samples is True
-        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        bs, nt, _ = pred.shape
+        # Get decoder mask and filter predictions/targets
+        decoder_mask = all_masks == MaskValue.DECODER.value
+        pred = all_preds[decoder_mask].unsqueeze(dim=0)
+        target = all_targets[decoder_mask].unsqueeze(dim=0)
+
+        # Create mapping from original token indices to decoder-only indices
+        decoder_indices = torch.nonzero(decoder_mask).squeeze(-1)
+        original_to_decoder = {
+            orig: dec for dec, orig in enumerate(decoder_indices.tolist())
+        }
+
+        # Update modality ranges to map to decoder-only indices
+        decoder_modality_ranges = {}
+        for modality_name, (start, end) in modality_token_ranges.items():
+            # Find which tokens in this range are decoder tokens
+            decoder_tokens = [
+                original_to_decoder[i]
+                for i in range(start, end)
+                if i in original_to_decoder
+            ]
+            if decoder_tokens:
+                decoder_modality_ranges[modality_name] = (
+                    min(decoder_tokens),
+                    max(decoder_tokens) + 1,
+                )
 
         if self.pred2unit:
             pred_mu = pred.mean(1, keepdims=True)
@@ -164,29 +186,62 @@ class PatchDiscriminationLossNew(Loss):
 
         count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
         losses = []
+        modality_losses = {}
         start = 0
+
         for c in count:
             end = start + c
             if c == 0:
-                # we will occasionally get a sample with no decoded values due to missing data this will let us skip it
                 logger.warning("No decoded values for this sample")
                 continue
+
             pred_sample = pred[:, start:end, :]
             target_sample = target[:, start:end, :]
             score_sample = (
                 torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
             )
             labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
+
+            # Compute loss for this sample
             loss = F.cross_entropy(
                 score_sample.flatten(0, 1),
                 labels.flatten(0, 1),
                 reduction="none",
             ) * (self.tau * 2)
-            loss = loss.mean()
-            losses.append(loss)
+
+            # Compute per-modality losses for this sample
+            sample_modality_losses = {}
+            for modality_name, (mod_start, mod_end) in decoder_modality_ranges.items():
+                if (
+                    mod_start < end and mod_end > start
+                ):  # Check if modality overlaps with this sample
+                    # Get the relevant indices for this modality within this sample
+                    mod_indices = [
+                        i for i in range(max(start, mod_start), min(end, mod_end))
+                    ]
+                    if mod_indices:
+                        mod_loss = loss[mod_indices].mean()
+                        sample_modality_losses[modality_name] = mod_loss
+
+            # Aggregate modality losses
+            for modality_name, mod_loss in sample_modality_losses.items():
+                if modality_name not in modality_losses:
+                    modality_losses[modality_name] = []
+                modality_losses[modality_name].append(mod_loss)
+
+            losses.append(loss.mean())
             start = end
-        loss = torch.stack(losses).mean()
-        return self.weight * loss
+
+        # Average the per-modality losses across samples
+        for modality_name in modality_losses:
+            modality_losses[modality_name] = torch.stack(
+                modality_losses[modality_name]
+            ).mean()
+
+        # Compute overall loss
+        overall_loss = torch.stack(losses).mean()
+
+        return {"loss": overall_loss, "modality_losses": modality_losses}
 
 
 @LOSS_REGISTRY.register("patch_discrimination")

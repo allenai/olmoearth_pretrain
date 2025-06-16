@@ -147,6 +147,9 @@ class TokensAndMasks(NamedTuple):
         Tokens will have shape [B, T, D] and masks will have shape [B, T]
         """
         flattened_x, flattened_masks = [], []
+        modality_token_ranges = {}  # Track start/end indices for each modality's tokens
+        current_idx = 0
+
         for attr_name in self.modalities:
             mask_attr_name = self.get_masked_modality_name(attr_name)
             attr = getattr(self, attr_name)
@@ -157,12 +160,23 @@ class TokensAndMasks(NamedTuple):
                         f"Can't have present {attr_name} but None {mask_attr_name}"
                     )
                 masked_attr = masked_attr.unsqueeze(dim=-1)
-                flattened_x.append(self._flatten(attr))
-                flattened_masks.append(self._flatten(masked_attr))
+                flattened_attr = self._flatten(attr)
+                flattened_mask = self._flatten(masked_attr)
+
+                # Record token range for this modality
+                num_tokens = flattened_attr.shape[1]
+                modality_token_ranges[attr_name] = (
+                    current_idx,
+                    current_idx + num_tokens,
+                )
+                current_idx += num_tokens
+
+                flattened_x.append(flattened_attr)
+                flattened_masks.append(flattened_mask)
 
         x = torch.cat(flattened_x, dim=1)
         masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
-        return x, masks
+        return x, masks, modality_token_ranges
 
     def pool_unmasked_tokens(
         self, pooling_type: PoolingType = PoolingType.MAX, spatial_pooling: bool = False
