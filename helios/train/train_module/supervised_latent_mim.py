@@ -205,7 +205,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         """Compute accuracy score with missing values."""
         argmax_pred = pred.argmax(dim=-1)
         matches = (argmax_pred == targets)[targets != ignore_index]  # flattens
-        print(matches)
         return sum(matches) / len(matches)
 
     @classmethod
@@ -300,6 +299,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
         num_microbatches = len(microbatches)
         for microbatch_idx, microbatch in enumerate(microbatches):
+            print(microbatch_idx, num_microbatches)
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
