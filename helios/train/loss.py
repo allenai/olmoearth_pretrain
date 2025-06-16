@@ -203,22 +203,35 @@ class PatchDiscriminationLossNew(Loss):
             # # Compute per-modality losses for this sample
             sample_modality_losses = {}
             last_idx = 0
+            total_count_across_modalities = 0
             for modality_name, decoded_tokens_per_modality_count in modality_masks.items():
                 sample_decoded_tokens_per_modality_count = decoded_tokens_per_modality_count[i]
-                mod_loss = loss[last_idx:last_idx+sample_decoded_tokens_per_modality_count].mean()
-                sample_modality_losses[modality_name] = mod_loss
-                last_idx += sample_decoded_tokens_per_modality_count
+                total_count_across_modalities += sample_decoded_tokens_per_modality_count
+                if sample_decoded_tokens_per_modality_count != 0:
+                    mod_loss = loss[last_idx:last_idx+sample_decoded_tokens_per_modality_count].mean()
+                    sample_modality_losses[modality_name] = mod_loss
+                    last_idx += sample_decoded_tokens_per_modality_count
+                else:
+                    logger.warning(f"Modality {modality_name} has no decoded tokens")
+                    mod_loss = -10
+            assert total_count_across_modalities == c, f"Total count across modalities {total_count_across_modalities} does not match count {c}"
 
             # Aggregate modality losses
             for modality_name, mod_loss in sample_modality_losses.items():
                 if modality_name not in modality_losses:
                     modality_losses[modality_name] = []
-                modality_losses[modality_name].append(mod_loss)
+                if mod_loss != -10:
+                    modality_losses[modality_name].append(mod_loss)
+                else:
+                    logger.warning(f"Modality {modality_name} has no decoded tokens")
 
             start = end
 
         # Average the per-modality losses across samples
         for modality_name in modality_losses:
+            modality_specific_loss = modality_losses[modality_name]
+            # log the number of samples that have this modality
+            logger.info(f"Modality {modality_name} has {len(modality_specific_loss)} samples")
             modality_losses[modality_name] = torch.stack(
                 modality_losses[modality_name]
             ).mean()
