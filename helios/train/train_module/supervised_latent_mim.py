@@ -205,6 +205,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         """Compute accuracy score with missing values."""
         argmax_pred = pred.argmax(dim=-1)
         matches = (argmax_pred == targets)[targets != ignore_index]  # flattens
+        print(matches)
         return sum(matches) / len(matches)
 
     @classmethod
