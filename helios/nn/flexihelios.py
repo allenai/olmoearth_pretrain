@@ -1144,7 +1144,6 @@ class Encoder(FlexiHeliosBase):
                     multiplier = 1
                 for idx, band_set in enumerate(modality.band_sets):
                     probes[f"{modality_name}_{idx}"] = nn.Sequential(
-                        nn.BatchNorm1d(self.embedding_size),
                         nn.Linear(self.embedding_size, probe_dim),
                         nn.GELU(),
                         nn.Linear(
