@@ -49,7 +49,9 @@ class TestSupervisedLatentMIMUnit:
             ),
         }
         org_loss = torch.tensor(0).float()
-        loss = SupervisedLatentMIMTrainModule.supervisory_losses(
-            supervisory_modalities, probe_outputs, org_loss
+        org_supervisory_loss = torch.tensor(0).float()
+        loss, org_supervisory_loss = SupervisedLatentMIMTrainModule.supervisory_losses(
+            supervisory_modalities, probe_outputs, org_loss, org_supervisory_loss
         )
         assert loss == 0
+        assert org_supervisory_loss == 0
