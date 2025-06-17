@@ -261,7 +261,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 flat_modality_bandset = modality_bandset.flatten().to(
                     probe_output.device
                 )
-                target_mask = flat_modality_bandset == MISSING_VALUE
+                target_mask = flat_modality_bandset != MISSING_VALUE
                 modality_loss = loss_fn(
                     probe_output.flatten(end_dim=-2)[target_mask, :],
                     flat_modality_bandset[target_mask],
