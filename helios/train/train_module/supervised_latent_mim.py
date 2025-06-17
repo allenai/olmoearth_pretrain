@@ -224,7 +224,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             modality_spec = Modality.get(modality)
             for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
                 modality_bandset = modality_tensor[:, :, :, 0, bands]
-                if len(bands) > 0:
+                if len(bands) > 1:
                     # then we need to turn it into indices
                     modality_bandset = torch.argmax(modality_bandset, dim=-1)
                 probe_output = probe_outputs[
