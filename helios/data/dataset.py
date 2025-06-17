@@ -16,7 +16,7 @@ import hdf5plugin  # noqa: F401
 import numpy as np
 import pandas as pd
 import torch
-from olmo_core.config import Config
+from olmo_core.config import Config, DType
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
 from torch.utils.data import Dataset
@@ -52,7 +52,9 @@ class HeliosSample(NamedTuple):
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
     # Unsure what the shapes should be for this one
+    # TODO: Should this be called naip_10??
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
+    naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
@@ -80,20 +82,7 @@ class HeliosSample(NamedTuple):
                 # timestamps is a special case which is not in Modality
                 raise ValueError("Timestamps are not maskable")
         else:
-            attribute_shape = []
-            if Modality.get(attribute).get_tile_resolution() > 0:
-                # Add batch size (if has), height, width
-                attribute_shape += [self.height, self.width]
-            if Modality.get(attribute).is_multitemporal:
-                # Add number of timesteps
-                attribute_shape += [self.time]
-            if not mask:
-                # Add number of bands
-                attribute_shape += [Modality.get(attribute).num_bands]
-            else:
-                # Add number of band sets
-                attribute_shape += [Modality.get(attribute).num_band_sets]
-            return attribute_shape
+            return self.get_expected_shape(attribute, mask)
 
     @staticmethod
     def num_bands(attribute: str) -> int:
@@ -169,7 +158,7 @@ class HeliosSample(NamedTuple):
 
     @property
     def height(self) -> int:
-        """Get the height of the data."""
+        """Get the height of the data at resolution_factor == 16."""
         for modality in self.modalities:
             if modality == "timestamps":
                 continue
@@ -179,17 +168,17 @@ class HeliosSample(NamedTuple):
             x = getattr(self, modality)
             if x is not None:
                 if len(x.shape) == 5:
-                    return x.shape[1]
+                    return x.shape[1] // modality_spec.image_tile_size_factor
                 else:
                     # no batch dimension
                     if len(x.shape) != 4:
                         raise ValueError(f"Unexpected shape {x.shape} for {modality}")
-                    return x.shape[0]
+                    return x.shape[0] // modality_spec.image_tile_size_factor
         raise ValueError("No modality with height or width present")
 
     @property
     def width(self) -> int:
-        """Get the height of the data."""
+        """Get the width of the data at resolution_factor == 16."""
         for modality in self.modalities:
             if modality == "timestamps":
                 continue
@@ -199,12 +188,12 @@ class HeliosSample(NamedTuple):
             x = getattr(self, modality)
             if x is not None:
                 if len(x.shape) == 5:
-                    return x.shape[2]
+                    return x.shape[2] // modality_spec.image_tile_size_factor
                 else:
                     # no batch dimension
                     if len(x.shape) != 4:
                         raise ValueError(f"Unexpected shape {x.shape} for {modality}")
-                    return x.shape[1]
+                    return x.shape[1] // modality_spec.image_tile_size_factor
         raise ValueError("No modality with height or width present")
 
     @property
@@ -234,17 +223,32 @@ class HeliosSample(NamedTuple):
             )
         return min_valid_time
 
-    def get_expected_shape(self, attribute: str) -> tuple[int, ...]:
+    def get_expected_shape(self, attribute: str, mask: bool = False) -> tuple[int, ...]:
         """Get the expected shape of an attribute."""
         modality_spec = Modality.get(attribute)
-        if modality_spec.is_spacetime_varying:
-            return (self.height, self.width, self.time, modality_spec.num_bands)
-        elif modality_spec.is_space_only_varying:
-            return (self.height, self.width, 1, modality_spec.num_bands)
-        elif modality_spec.is_time_only_varying:
-            return (1, 1, self.time, modality_spec.num_bands)
+        if mask:
+            num_bands = modality_spec.num_band_sets
         else:
-            return (1, 1, 1, modality_spec.num_bands)
+            num_bands = modality_spec.num_bands
+
+        if modality_spec.is_spacetime_varying:
+            return (
+                self.height * modality_spec.image_tile_size_factor,
+                self.width * modality_spec.image_tile_size_factor,
+                self.time,
+                num_bands,
+            )
+        elif modality_spec.is_space_only_varying:
+            return (
+                self.height * modality_spec.image_tile_size_factor,
+                self.width * modality_spec.image_tile_size_factor,
+                1,
+                num_bands,
+            )
+        elif modality_spec.is_time_only_varying:
+            return (1, 1, self.time, num_bands)
+        else:
+            return (1, 1, 1, num_bands)
 
     def _get_max_t_within_token_budget(
         self, h_w_p: int, max_tokens_per_instance: int
@@ -282,6 +286,7 @@ class HeliosSample(NamedTuple):
         max_t_within_budget = remaining_tokens / time_multiply_tokens
         if max_t_within_budget < 1:
             raise ValueError("patch_size too small for this sample and budget")
+
         return min(floor(max_t_within_budget), self.time)
 
     def subset(
@@ -336,16 +341,27 @@ class HeliosSample(NamedTuple):
                 continue
             modality_spec = Modality.get(attribute)
             if modality_spec.is_spacetime_varying:
-                # for now, lets assume fixed resolution
                 new_data_dict[attribute] = modality[
-                    start_h : start_h + sampled_hw,
-                    start_w : start_w + sampled_hw,
+                    start_h * modality_spec.image_tile_size_factor : (
+                        start_h + sampled_hw
+                    )
+                    * modality_spec.image_tile_size_factor,
+                    start_w * modality_spec.image_tile_size_factor : (
+                        start_w + sampled_hw
+                    )
+                    * modality_spec.image_tile_size_factor,
                     start_t : start_t + max_t,
                 ]
             elif modality_spec.is_space_only_varying:
-                # for now, lets assume fixed resolution
                 new_data_dict[attribute] = modality[
-                    start_h : start_h + sampled_hw, start_w : start_w + sampled_hw
+                    start_h * modality_spec.image_tile_size_factor : (
+                        start_h + sampled_hw
+                    )
+                    * modality_spec.image_tile_size_factor,
+                    start_w * modality_spec.image_tile_size_factor : (
+                        start_w + sampled_hw
+                    )
+                    * modality_spec.image_tile_size_factor,
                 ]
             elif modality_spec.is_time_only_varying:
                 new_data_dict[attribute] = modality[start_t : start_t + max_t]
@@ -353,26 +369,66 @@ class HeliosSample(NamedTuple):
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
 
+    @property
+    def dtype(self) -> DType:
+        """Dtype of the ArrayTensors in this sample."""
+        cast(ArrayTensor, next(iter(self.as_dict().items()))[1]).dtype
+
+    def get_attribute_including_missing(
+        self, modality: str, min_timestamps: int
+    ) -> ArrayTensor:
+        """Return the modality if it exists, or an array of missing values if it doesn't."""
+        if getattr(self, modality) is not None:
+            value = getattr(self, modality)
+        else:
+            value = np.full(
+                self.get_expected_shape(modality),
+                fill_value=MISSING_VALUE,
+                dtype=self.dtype,
+            )
+        if modality == "latlon":
+            return value
+        else:
+            return value[..., :min_timestamps, :]
+
 
 def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSample]:
     """Collate function that automatically handles any modalities present in the samples."""
 
     # Stack tensors while handling None values
-    def stack_or_none(attr: str) -> torch.Tensor | None:
+    def stack_or_none(attr: str, min_timestamps: int) -> torch.Tensor | None:
         """Stack the tensors while handling None values."""
-        # For partially missing samples we use MISSING_VALUE so we only check the first sample
-        if getattr(batch[0][1], attr) is None:
+        all_nones: bool = True
+        for sample in batch:
+            if getattr(sample[1], attr) is not None:
+                all_nones = False
+                break
+        if all_nones:
             return None
-        stacked_tensor = torch.stack(
-            [torch.from_numpy(getattr(sample, attr)) for _, sample in batch], dim=0
-        )
+        else:
+            try:
+                stacked_tensor = torch.stack(
+                    [
+                        torch.from_numpy(
+                            sample.get_attribute_including_missing(attr, min_timestamps)
+                        )
+                        for _, sample in batch
+                    ],
+                    dim=0,
+                )
+            except RuntimeError as e:
+                timestamps = [cast(np.ndarray, b[1].timestamps).shape for b in batch]
+                raise RuntimeError(f"{e} for {attr}, {timestamps}")
         return stacked_tensor
 
     patch_size, batch_zero = batch[0]
-    sample_fields = batch_zero.modalities
+    sample_fields = batch_zero._fields
+    min_timestamps = min([s[1].time for s in batch])
 
     # Create a dictionary of stacked tensors for each field
-    collated_dict = {field: stack_or_none(field) for field in sample_fields}
+    collated_dict = {
+        field: stack_or_none(field, min_timestamps) for field in sample_fields
+    }
     return patch_size, HeliosSample(**collated_dict)
 
 

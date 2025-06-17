@@ -351,8 +351,14 @@ def test_create_spatial_mask_with_patch_size() -> None:
     )
 
     # Call the _create_spatial_mask function directly
+    patch_mask = strategy._create_patch_spatial_mask(
+        modality=Modality.SENTINEL2_L2A, shape=shape, patch_size_at_16=patch_size
+    )
     mask = strategy._create_spatial_mask(
-        modality=Modality.SENTINEL2_L2A, shape=shape, patch_size=patch_size
+        patch_mask,
+        modality=Modality.SENTINEL2_L2A,
+        shape=shape,
+        patch_size_at_16=patch_size,
     )
 
     # Check that the mask has the right shape

@@ -89,7 +89,7 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> GalileoTrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 0.002
+    LR = 0.0001
     RANK_MICROBATCH_SIZE = 64
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
@@ -123,6 +123,7 @@ def build_train_module_config(
         Modality.SENTINEL2_L2A.name: int(tiny_model_args["encoder_depth"]),
         Modality.LATLON.name: int(tiny_model_args["encoder_depth"]),
         Modality.SENTINEL1.name: int(tiny_model_args["encoder_depth"]),
+        Modality.NAIP_10.name: int(tiny_model_args["encoder_depth"]),
         Modality.WORLDCOVER.name: 0,
         Modality.SRTM.name: int(tiny_model_args["encoder_depth"] // 2),
         Modality.OPENSTREETMAP_RASTER.name: 0,
@@ -163,7 +164,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # TODO: Include collate function here
 
     NUM_WORKERS = 8
-    GLOBAL_BATCH_SIZE = 128
+    GLOBAL_BATCH_SIZE = 512
     PREFETCH_FACTOR = 4
     TOKEN_BUDGET = 1500
     SAMPLE_HW_P_LIST = list(range(5, 13))
@@ -220,7 +221,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(5),
+            eval_interval=Duration.epochs(1),
         ),
         "breizhcrops": DownstreamTaskConfig(
             dataset="breizhcrops",
