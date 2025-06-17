@@ -217,7 +217,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         total_batch_acc: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute the supervisory losses."""
-        loss_fn = torch.nn.CrossEntropyLoss(ignore_index=MISSING_VALUE)
+        loss_fn = torch.nn.CrossEntropyLoss()
         # TODO: this is required; is it okay to be a normal dict key?
         spatial_mask = probe_outputs["mask"]
         for modality, modality_tensor in supervisory_modalities.items():
@@ -257,15 +257,11 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     )
                 modality_bandset = modality_bandset.long()
                 modality_bandset[spatial_mask.bool()] = MISSING_VALUE
-                print(
-                    modality,
-                    probe_output.flatten(end_dim=-2).shape,
-                    modality_bandset.min(),
-                    modality_bandset.max(),
-                )
                 modality_loss = loss_fn(
-                    probe_output.flatten(end_dim=-2),
-                    modality_bandset.flatten().to(probe_output.device),
+                    probe_output.flatten(end_dim=-2)[spatial_mask.bool(), :],
+                    modality_bandset.flatten()[spatial_mask.bool()].to(
+                        probe_output.device
+                    ),
                 )
                 if torch.isnan(modality_loss).any():
                     logger.warning(f"NaN in unsupervised loss for {modality}")
