@@ -199,12 +199,10 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         return self.base_loss.compute(pred, targets)
 
     @staticmethod
-    def accuracy_score(
-        pred: torch.Tensor, targets: torch.Tensor, ignore_index: int = MISSING_VALUE
-    ) -> torch.Tensor:
+    def accuracy_score(pred: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """Compute accuracy score with missing values."""
         argmax_pred = pred.argmax(dim=-1)
-        matches = (argmax_pred == targets)[targets != ignore_index]  # flattens
+        matches = argmax_pred == targets
         return sum(matches) / len(matches)
 
     @classmethod
@@ -263,9 +261,10 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 )
                 target_mask = flat_modality_bandset != MISSING_VALUE
                 filtered_modality_bandset = flat_modality_bandset[target_mask]
+                filtered_targets = probe_output.flatten(end_dim=-2)[target_mask, :]
                 if len(filtered_modality_bandset) > 0:
                     modality_loss = loss_fn(
-                        probe_output.flatten(end_dim=-2)[target_mask, :],
+                        filtered_targets,
                         filtered_modality_bandset,
                     )
                     if torch.isnan(modality_loss).any():
@@ -275,7 +274,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         total_batch_sup += get_local_tensor(modality_loss.detach())
                         batch_acc = get_local_tensor(
                             cls.accuracy_score(
-                                probe_output.flatten(end_dim=-2)[target_mask, :],
+                                filtered_targets,
                                 filtered_modality_bandset,
                             )
                         )
