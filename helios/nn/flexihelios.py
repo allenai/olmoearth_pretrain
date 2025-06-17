@@ -225,7 +225,7 @@ class TokensAndMasks(NamedTuple):
 
         Returns:
         output: tensor of shape [B, P_W, P_H, D]
-        mask: tensor fo shape [B, P_W, P_H] describing which elements in output contain tokens.
+        mask: tensor of shape [B, P_W, P_H] describing which elements in output contain tokens.
             1s indicate the token is present, 0s indicate it is missing.
         """
         spatial_tokens = []
