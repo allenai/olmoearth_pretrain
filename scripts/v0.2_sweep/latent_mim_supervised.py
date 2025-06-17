@@ -51,9 +51,7 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
-SUPERVISED_MODALITIES = [
-    Modality.WORLDCOVER.name
-]  # , Modality.OPENSTREETMAP_RASTER.name]
+SUPERVISED_MODALITIES = [Modality.WORLDCOVER.name, Modality.OPENSTREETMAP_RASTER.name]
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
