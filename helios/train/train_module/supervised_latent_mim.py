@@ -244,22 +244,11 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         "b c h w -> b h w c",
                     )
 
-                if modality == Modality.WORLDCOVER.name:
-                    modality_bandset[modality_bandset == 95] = 110
-                    modality_bandset = (
-                        modality_bandset / 10
-                    )  # now we should be to classes
-                    # keep missing values
-                    modality_bandset[modality_bandset == MISSING_VALUE / 10] = (
-                        MISSING_VALUE
-                    )
                 modality_bandset = modality_bandset.long()
-                modality_bandset[~spatial_mask.bool()] = MISSING_VALUE
-
                 flat_modality_bandset = modality_bandset.flatten().to(
                     probe_output.device
                 )
-                target_mask = flat_modality_bandset != MISSING_VALUE
+                target_mask = (~spatial_mask) & (flat_modality_bandset != MISSING_VALUE)
                 filtered_modality_bandset = flat_modality_bandset[target_mask]
                 filtered_targets = probe_output.flatten(end_dim=-2)[target_mask, :]
                 if len(filtered_modality_bandset) > 0:

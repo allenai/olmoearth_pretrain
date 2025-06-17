@@ -841,6 +841,10 @@ class HeliosDataset(Dataset):
                     # where they occur (e.g. in the line below). This lead to worse results, but was
                     # not extensively tested
                     # modality_data[modality_data == 0] = 80
+                    modality_data[modality_data == 95] = 110
+                    modality_data = modality_data / 10  # now we should be to classes
+                    # keep missing values
+                    modality_data[modality_data == MISSING_VALUE / 10] = MISSING_VALUE
                     sample_dict[modality_name] = modality_data.astype(self.dtype)
                     continue
                 logger.info(f"Normalizing {modality_name}")
