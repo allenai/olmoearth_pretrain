@@ -225,9 +225,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
                 modality_bandset = modality_tensor[:, :, :, 0, bands]
                 if len(bands) > 1:
-                    print(
-                        f"argmaxing {modality} from {modality_bandset.shape} to {torch.argmax(modality_bandset, dim=-1).shape}"
-                    )
                     # then we need to turn it into indices
                     modality_bandset = torch.argmax(
                         modality_bandset, dim=-1, keepdim=True
