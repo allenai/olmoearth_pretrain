@@ -821,8 +821,6 @@ class HeliosDataset(Dataset):
 
     def __getitem__(self, args: GetItemArgs) -> tuple[int, HeliosSample]:
         """Get the sample at the given index."""
-        args = GetItemArgs(idx=313865, patch_size=4, sampled_hw_p=12, token_budget=1500)
-
         if hasattr(self, "sample_indices") and self.sample_indices is not None:
             index = self.sample_indices[args.idx]
         else:
@@ -836,11 +834,6 @@ class HeliosDataset(Dataset):
             sample_dict, missing_timesteps_masks
         )
 
-        data = [sample.sentinel1, sample.sentinel2_l2a, sample.worldcover]
-        data = np.concatenate([d.flatten() for d in data])
-        if (data == MISSING_VALUE).all():
-            raise ValueError(f"missing everything: {h5_file_path}")
-
         subset_sample = self.apply_subset(
             sample, args, current_length, missing_timesteps_masks
         )
@@ -851,7 +844,6 @@ class HeliosDataset(Dataset):
             subset_sample.worldcover,
         ]
         data = np.concatenate([d.flatten() for d in data])
-        logger.warning(data)
         if (data == MISSING_VALUE).all():
             raise ValueError(f"missing everything: {h5_file_path} args: {args}")
 
@@ -878,14 +870,6 @@ class HeliosDataset(Dataset):
                     missing_mask, modality_data, normalized_data
                 ).astype(self.dtype)
 
-        data = [
-            sample_dict["sentinel1"],
-            sample_dict["sentinel2_l2a"],
-            sample_dict["worldcover"],
-        ]
-        data = np.concatenate([d.flatten() for d in data])
-        if (data == MISSING_VALUE).all():
-            raise ValueError(f"missing everything: {h5_file_path} args: {args}")
 
         return args.patch_size, HeliosSample(**sample_dict)
 
