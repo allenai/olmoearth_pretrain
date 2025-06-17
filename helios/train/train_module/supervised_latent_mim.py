@@ -214,7 +214,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         probe_outputs: dict[str, torch.Tensor],
         loss: torch.Tensor,
         total_batch_sup: torch.Tensor,
-        total_batch_acc: torch.Tensor,
+        total_batch_acc: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute the supervisory losses."""
         loss_fn = torch.nn.CrossEntropyLoss(ignore_index=MISSING_VALUE)
@@ -224,6 +224,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             modality_spec = Modality.get(modality)
             for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
                 modality_bandset = modality_tensor[:, :, :, 0, bands]
+                if len(bands) > 0:
+                    # then we need to turn it into indices
+                    modality_bandset = torch.argmax(modality_bandset, dim=-1)
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
@@ -268,8 +271,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                             modality_bandset.flatten().to(probe_output.device),
                         )
                     )
-                    print(batch_acc)
-                    total_batch_acc += batch_acc
+                    total_batch_acc[f"{modality}_{idx}"] += batch_acc
         return loss, total_batch_sup, total_batch_acc
 
     def train_batch(
@@ -293,7 +295,12 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_sup = torch.zeros([], device=self.device)
-        total_batch_acc = torch.zeros([], device=self.device)
+        total_batch_acc = {}
+        for modality in self.supervisory_modalities:
+            for idx in range(len(Modality.get(modality).band_sets)):
+                total_batch_acc[f"{modality}_{idx}"] = torch.zeros(
+                    [], device=self.device
+                )
         patch_size, batch_data = batch
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
@@ -356,12 +363,13 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             total_batch_sup,
             ReduceType.mean,
         )
-        self.trainer.record_metric(
-            f"train/supervisory_accuracy_{'_'.join(self.supervisory_modalities)}",
-            # scale by number of microbatches
-            total_batch_acc / num_microbatches,
-            ReduceType.mean,
-        )
+        for modality_idx, modality_accuracy in total_batch_acc.items():
+            self.trainer.record_metric(
+                f"train/supervisory_accuracy_{modality_idx}",
+                # scale by number of microbatches
+                modality_accuracy / num_microbatches,
+                ReduceType.mean,
+            )
         self.log_regularization(total_batch_reg)
 
         if dry_run:
