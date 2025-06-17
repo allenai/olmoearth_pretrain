@@ -832,6 +832,18 @@ class HeliosDataset(Dataset):
                     continue
                 logger.info(f"Normalizing {modality_name}")
                 modality_data = sample_dict[modality_name]
+                if modality_name == Modality.WORLDCOVER.name:
+                    # don't normalize world cover, since we will  one hot encode it
+                    logger.info(
+                        f"Skipping normalization for {modality_name} because it is worldcover"
+                    )
+                    # We tried replacing masked values with "permanant water", since this is commonly
+                    # where they occur (e.g. in the line below). This lead to worse results, but was
+                    # not extensively tested
+                    # modality_data[modality_data == 0] = 80
+                    sample_dict[modality_name] = modality_data.astype(self.dtype)
+                    continue
+                logger.info(f"Normalizing {modality_name}")
                 missing_mask = modality_data == MISSING_VALUE
                 normalized_data = self.normalize_image(
                     Modality.get(modality_name), modality_data
