@@ -58,6 +58,7 @@ class SupervisedLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     max_grad_norm: float = 1.0
 
     supervisory_modalities: list[str] | None = None
+    compute_accuracies: bool = False
 
     def build(
         self,
@@ -131,6 +132,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
         supervisory_modalities: list[str] = [Modality.WORLDCOVER.name],
+        compute_accuracies: bool = False,
     ):
         """Initialize the training module.
 
@@ -158,6 +160,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
             supervisory_modalities: Which modalities to use as supervision
+            compute_accuracies: Whether to compute accuracies too
         """
         super().__init__(
             model=model,
@@ -193,6 +196,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
         self.supervisory_modalities = supervisory_modalities
+        self.compute_accuracies = compute_accuracies
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -212,7 +216,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         probe_outputs: dict[str, torch.Tensor],
         loss: torch.Tensor,
         total_batch_sup: torch.Tensor,
-        total_batch_acc: dict[str, torch.Tensor],
+        total_batch_acc: dict[str, torch.Tensor] | None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute the supervisory losses."""
         loss_fn = torch.nn.CrossEntropyLoss()
@@ -263,13 +267,14 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     else:
                         loss += modality_loss
                         total_batch_sup += get_local_tensor(modality_loss.detach())
-                        batch_acc = get_local_tensor(
-                            cls.accuracy_score(
-                                filtered_targets,
-                                filtered_modality_bandset,
+                        if total_batch_acc is not None:
+                            batch_acc = get_local_tensor(
+                                cls.accuracy_score(
+                                    filtered_targets,
+                                    filtered_modality_bandset,
+                                )
                             )
-                        )
-                        total_batch_acc[f"{modality}_{idx}"] += batch_acc
+                            total_batch_acc[f"{modality}_{idx}"] += batch_acc
                 else:
                     logger.info(f"All values missing for {modality}")
         return loss, total_batch_sup, total_batch_acc
@@ -295,12 +300,15 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_sup = torch.zeros([], device=self.device)
-        total_batch_acc = {}
-        for modality in self.supervisory_modalities:
-            for idx in range(len(Modality.get(modality).band_sets)):
-                total_batch_acc[f"{modality}_{idx}"] = torch.zeros(
-                    [], device=self.device
-                )
+        if self.compute_accuracies:
+            total_batch_acc = {}
+            for modality in self.supervisory_modalities:
+                for idx in range(len(Modality.get(modality).band_sets)):
+                    total_batch_acc[f"{modality}_{idx}"] = torch.zeros(
+                        [], device=self.device
+                    )
+        else:
+            total_batch_acc = None
         patch_size, batch_data = batch
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
@@ -363,13 +371,14 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             total_batch_sup,
             ReduceType.mean,
         )
-        for modality_idx, modality_accuracy in total_batch_acc.items():
-            self.trainer.record_metric(
-                f"train/supervisory_accuracy_{modality_idx}",
-                # scale by number of microbatches
-                modality_accuracy / num_microbatches,
-                ReduceType.mean,
-            )
+        if total_batch_acc is not None:
+            for modality_idx, modality_accuracy in total_batch_acc.items():
+                self.trainer.record_metric(
+                    f"train/supervisory_accuracy_{modality_idx}",
+                    # scale by number of microbatches
+                    modality_accuracy / num_microbatches,
+                    ReduceType.mean,
+                )
         self.log_regularization(total_batch_reg)
 
         if dry_run:
