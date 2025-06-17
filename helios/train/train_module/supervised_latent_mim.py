@@ -257,21 +257,14 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     )
                 modality_bandset = modality_bandset.long()
                 modality_bandset[~spatial_mask.bool()] = MISSING_VALUE
-                spatial_mask_flat = spatial_mask.bool().flatten()
-                print(
-                    modality,
-                    modality_bandset.flatten()
-                    .to(probe_output.device)[spatial_mask_flat]
-                    .min(),
-                    modality_bandset.flatten()
-                    .to(probe_output.device)[spatial_mask_flat]
-                    .max(),
+
+                flat_modality_bandset = modality_bandset.flatten().to(
+                    probe_output.device
                 )
+                target_mask = flat_modality_bandset == MISSING_VALUE
                 modality_loss = loss_fn(
-                    probe_output.flatten(end_dim=-2)[spatial_mask_flat, :],
-                    modality_bandset.flatten().to(probe_output.device)[
-                        spatial_mask_flat
-                    ],
+                    probe_output.flatten(end_dim=-2)[target_mask, :],
+                    flat_modality_bandset[target_mask],
                 )
                 if torch.isnan(modality_loss).any():
                     logger.warning(f"NaN in unsupervised loss for {modality}")
@@ -281,7 +274,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     batch_acc = get_local_tensor(
                         cls.accuracy_score(
                             probe_output.flatten(end_dim=-2),
-                            modality_bandset.flatten().to(probe_output.device),
+                            flat_modality_bandset,
                         )
                     )
                     total_batch_acc[f"{modality}_{idx}"] += batch_acc
