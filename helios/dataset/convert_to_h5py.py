@@ -293,13 +293,18 @@ class ConvertToH5py:
 
             if modality.is_spatial:
                 # Calculate row and column indices for grid
-                row = (sublock_index // self.num_subtiles_per_dim) * self.tile_size
-                col = (sublock_index % self.num_subtiles_per_dim) * self.tile_size
+                if image.shape[0] != image.shape[1]:
+                    raise ValueError("Expected image width to match image height")
+                if image.shape[0] % self.num_subtiles_per_dim != 0:
+                    raise ValueError(
+                        f"Got image size {image.shape[0]} which is not multiple of subtile count {self.num_subtiles_per_dim}"
+                    )
+                tile_size = image.shape[0] // self.num_subtiles_per_dim
+                row = (sublock_index // self.num_subtiles_per_dim) * tile_size
+                col = (sublock_index % self.num_subtiles_per_dim) * tile_size
                 logger.info(f"Sublock index: {sublock_index}, row: {row}, col: {col}")
                 logger.info(f"Image shape: {image.shape}")
-                image = image[
-                    row : row + self.tile_size, col : col + self.tile_size, ...
-                ]
+                image = image[row : row + tile_size, col : col + tile_size, ...]
                 logger.info(f"Image shape after slicing: {image.shape}")
             sample_dict[modality.name] = image
 
