@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
-model_size = MODEL_SIZE_ARGS["large_shallow_decoder"]
+model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
 
 def build_model_config(common: CommonComponents) -> Config:
