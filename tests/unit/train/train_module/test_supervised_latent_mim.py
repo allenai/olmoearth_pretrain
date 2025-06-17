@@ -32,8 +32,9 @@ class TestSupervisedLatentMIMUnit:
         # 1s where the value is present
         probe_outputs = {
             # the mask has the INPUT size, not the OUTPUT size
+            # it is 1 where the tokens are *present*
             "mask": repeat(
-                torch.tensor([[1, 0], [0, 1]]),
+                torch.tensor([[0, 1], [1, 0]]),
                 "h w -> b (h p1) (w p2)",
                 b=b,
                 p1=batch_patch_size,
@@ -62,4 +63,4 @@ class TestSupervisedLatentMIMUnit:
         )
         assert loss == 0
         assert org_sup_loss == 0
-        assert org_sup_acc == 1
+        assert org_sup_acc["worldcover_0"] == 1
