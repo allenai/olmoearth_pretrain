@@ -300,6 +300,10 @@ class GalileoTrainModule(HeliosTrainModule):
                             f"rank: {self.local_rank}, epoch: {self.trainer.epoch}, "
                             f"step: {self.trainer.global_step}"
                         )
+                        # logging the pooled_a and pooled_b
+                        logger.info(f"pooled_a: {pooled_a}")
+                        logger.info(f"pooled_b: {pooled_b}")
+                        exit(0)
                     else:
                         loss += contrastive_loss
                         total_batch_con += (

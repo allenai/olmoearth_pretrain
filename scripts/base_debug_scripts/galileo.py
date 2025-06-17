@@ -109,6 +109,12 @@ def build_train_module_config(
             "decode_ratio": DECODE_RATIO,
         }
     )
+    contrastive_config = LossConfig(
+        loss_config={
+            "type": "InfoNCE",
+            "weight": 0.1,
+        }
+    )
     loss_config_a = LossConfig(
         loss_config={
             "type": "patch_discrimination_new",
@@ -153,6 +159,7 @@ def build_train_module_config(
         max_grad_norm=1.0,
         dp_config=dp_config,
         scheduler=scheduler,
+        contrastive_config=contrastive_config,
     )
     return train_module_config
 
@@ -187,7 +194,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     return HeliosDatasetConfig(
-        h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
+        h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892/",
         training_modalities=common.training_modalities,
         dtype="float32",
         # cache_dir="/helios_cache/osm_sampling",
@@ -346,6 +353,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
             checkpointer=checkpointer_config,
+            # load_path="/weka/dfive-default/helios/checkpoints/joer/galileo_large_repro_fewer_modalities/step2250",
         )
         .with_callback("wandb", wandb_callback)
         .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
