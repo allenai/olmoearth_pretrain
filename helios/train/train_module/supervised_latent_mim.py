@@ -262,27 +262,31 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     probe_output.device
                 )
                 target_mask = flat_modality_bandset != MISSING_VALUE
-                print(
-                    modality,
-                    flat_modality_bandset[target_mask].min(),
-                    flat_modality_bandset[target_mask].max(),
-                )
-                modality_loss = loss_fn(
-                    probe_output.flatten(end_dim=-2)[target_mask, :],
-                    flat_modality_bandset[target_mask],
-                )
-                if torch.isnan(modality_loss).any():
-                    logger.warning(f"NaN in unsupervised loss for {modality}")
-                else:
-                    loss += modality_loss
-                    total_batch_sup += get_local_tensor(modality_loss.detach())
-                    batch_acc = get_local_tensor(
-                        cls.accuracy_score(
-                            probe_output.flatten(end_dim=-2),
-                            flat_modality_bandset,
-                        )
+                filtered_modality_bandset = flat_modality_bandset[target_mask]
+                if len(filtered_modality_bandset) > 0:
+                    print(
+                        modality,
+                        flat_modality_bandset[target_mask].min(),
+                        flat_modality_bandset[target_mask].max(),
                     )
-                    total_batch_acc[f"{modality}_{idx}"] += batch_acc
+                    modality_loss = loss_fn(
+                        probe_output.flatten(end_dim=-2)[target_mask, :],
+                        flat_modality_bandset[target_mask],
+                    )
+                    if torch.isnan(modality_loss).any():
+                        logger.warning(f"NaN in unsupervised loss for {modality}")
+                    else:
+                        loss += modality_loss
+                        total_batch_sup += get_local_tensor(modality_loss.detach())
+                        batch_acc = get_local_tensor(
+                            cls.accuracy_score(
+                                probe_output.flatten(end_dim=-2),
+                                flat_modality_bandset,
+                            )
+                        )
+                        total_batch_acc[f"{modality}_{idx}"] += batch_acc
+                else:
+                    logger.info(f"All values missing for {modality}")
         return loss, total_batch_sup, total_batch_acc
 
     def train_batch(
