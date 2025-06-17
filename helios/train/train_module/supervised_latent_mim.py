@@ -229,11 +229,12 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         f"argmaxing {modality} from {modality_bandset.shape} to {torch.argmax(modality_bandset, dim=-1).shape}"
                     )
                     # then we need to turn it into indices
-                    modality_bandset = torch.argmax(modality_bandset, dim=-1)
+                    modality_bandset = torch.argmax(
+                        modality_bandset, dim=-1, keepdim=True
+                    )
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
-                print(f"{modality} probe output: {probe_output.shape}")
                 if probe_output.shape[-3] != modality_bandset.shape[-2]:
                     probe_output = rearrange(
                         F.interpolate(
@@ -259,11 +260,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     )
                 modality_bandset = modality_bandset.long()
                 modality_bandset[spatial_mask.bool()] = MISSING_VALUE
-                print(
-                    modality,
-                    probe_output.flatten(end_dim=-2).shape,
-                    modality_bandset.flatten().shape,
-                )
                 modality_loss = loss_fn(
                     probe_output.flatten(end_dim=-2),
                     modality_bandset.flatten().to(probe_output.device),
