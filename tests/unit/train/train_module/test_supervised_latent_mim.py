@@ -15,12 +15,11 @@ class TestSupervisedLatentMIMUnit:
     def test_supervised_loss(self) -> None:
         """Test the supervised loss."""
         max_patch_size = 12
-        batch_patch_size = 3
+        batch_patch_size = 2
         b = 1
         supervisory_modalities = {
-            # 95 will be assigned class 11
             "worldcover": repeat(
-                torch.tensor([[95, 95], [95, 70]]),
+                torch.tensor([[1, 2], [3, 4]]),
                 "h w -> b (h p1) (w p2) t d",
                 b=b,
                 p1=batch_patch_size,
@@ -34,7 +33,7 @@ class TestSupervisedLatentMIMUnit:
             # the mask has the INPUT size, not the OUTPUT size
             # it is 1 where the tokens are *present*
             "mask": repeat(
-                torch.tensor([[0, 1], [1, 0]]),
+                torch.tensor([[0, 1], [1, 0]], dtype=torch.bool),
                 "h w -> b (h p1) (w p2)",
                 b=b,
                 p1=batch_patch_size,
@@ -42,13 +41,14 @@ class TestSupervisedLatentMIMUnit:
             ),
             "worldcover_0": repeat(
                 # times 100 since this is unnormalized from the perspective of the ce loss
-                one_hot(torch.tensor([[4, 11], [11, 7]]), num_classes=12).float() * 100,
+                one_hot(torch.tensor([[5, 2], [3, 6]]), num_classes=12).float() * 100,
                 "h w d -> b (h p1) (w p2) d",
                 b=b,
                 p1=max_patch_size,
                 p2=max_patch_size,
             ),
         }
+        print(probe_outputs["mask"])
         org_loss = torch.tensor(0).float()
         org_sup_loss = torch.tensor(0).float()
         org_sup_acc = {"worldcover_0": torch.tensor(0).float()}

@@ -294,7 +294,7 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
 
     example_s2_data = np.random.randn(s2_H, s2_W, s2_T, s2_C)
     example_s1_data = np.random.randn(s1_H, s1_W, s1_T, s1_C)
-    example_wc_data = np.random.randn(wc_H, wc_W, wc_T, wc_C)
+    example_wc_data = np.ones((wc_H, wc_W, wc_T, wc_C)).astype(np.float32)
     example_latlon_data = np.random.randn(2)
     timestamps = np.array(
         [
@@ -315,7 +315,7 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
     )
     missing_s1_data = np.random.randn(s1_H, s1_W, s1_T, s1_C)
     missing_s1_data[:] = MISSING_VALUE
-    missing_wc_data = np.random.randn(wc_H, wc_W, wc_T, wc_C)
+    missing_wc_data = np.ones((wc_H, wc_W, wc_T, wc_C)) * 10
     missing_wc_data[:] = MISSING_VALUE
     example_s2_data = example_s2_data.astype(np.float32)
     example_s1_data = example_s1_data.astype(np.float32)
@@ -361,7 +361,7 @@ def samples_without_missing_modalities(
     wc_H, wc_W, wc_T, wc_C = 8, 8, 1, 10
     example_s2_data = np.random.randn(s2_H, s2_W, s2_T, s2_C).astype(np.float32)
     example_s1_data = np.random.randn(s1_H, s1_W, s1_T, s1_C).astype(np.float32)
-    example_wc_data = np.random.randn(wc_H, wc_W, wc_T, wc_C).astype(np.float32)
+    example_wc_data = np.ones((wc_H, wc_W, wc_T, wc_C)).astype(np.float32) * 10
     example_latlon_data = np.random.randn(2).astype(np.float32)
     timestamps = np.array(
         [

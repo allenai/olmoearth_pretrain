@@ -248,7 +248,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 flat_modality_bandset = modality_bandset.flatten().to(
                     probe_output.device
                 )
-                target_mask = (~spatial_mask) & (flat_modality_bandset != MISSING_VALUE)
+                target_mask = torch.logical_and(
+                    spatial_mask.flatten(), (flat_modality_bandset != MISSING_VALUE)
+                )
                 filtered_modality_bandset = flat_modality_bandset[target_mask]
                 filtered_targets = probe_output.flatten(end_dim=-2)[target_mask, :]
                 if len(filtered_modality_bandset) > 0:
