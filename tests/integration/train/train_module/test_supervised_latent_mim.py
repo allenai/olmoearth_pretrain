@@ -118,6 +118,7 @@ def train_module_config(
         max_grad_norm=1.0,
         transform_config=transform_cfg,
         supervisory_modalities=[Modality.WORLDCOVER.name],
+        supervisory_weight=1.0,
     )
     return config
 

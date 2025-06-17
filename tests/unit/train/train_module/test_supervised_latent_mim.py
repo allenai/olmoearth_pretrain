@@ -59,6 +59,7 @@ class TestSupervisedLatentMIMUnit:
                 org_loss,
                 org_sup_loss,
                 org_sup_acc,
+                supervisory_weight=1.0,
             )
         )
         assert loss == 0
