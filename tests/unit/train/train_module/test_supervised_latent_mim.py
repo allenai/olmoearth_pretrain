@@ -50,7 +50,7 @@ class TestSupervisedLatentMIMUnit:
         }
         org_loss = torch.tensor(0).float()
         org_sup_loss = torch.tensor(0).float()
-        org_sup_acc = torch.tensor(0).float()
+        org_sup_acc = {"worldcover_0": torch.tensor(0).float()}
         loss, org_sup_loss, org_sup_acc = (
             SupervisedLatentMIMTrainModule.supervisory_losses(
                 supervisory_modalities,
