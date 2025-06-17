@@ -233,7 +233,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
-
+                print(f"{modality} probe output: {probe_output.shape}")
                 if probe_output.shape[-3] != modality_bandset.shape[-2]:
                     probe_output = rearrange(
                         F.interpolate(
