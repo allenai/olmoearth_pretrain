@@ -1396,6 +1396,57 @@ class SelectableRandomRangeModalityMaskingStrategy(MaskingStrategy):
         return masked_sample
 
 
+class FixedModalityMaskingStrategy(MaskingStrategy):
+    """Abstract class for masking strategies always mask certain modalities on top of another masking strategy."""
+
+    def __init__(
+        self,
+        strategy: MaskingStrategy,
+        decoded_modalities: list[str],
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+    ) -> None:
+        """Initialize the masking strategy."""
+        self._encode_ratio = encode_ratio
+        self._decode_ratio = decode_ratio
+        self.strategy = strategy
+        self.decoded_modalities = decoded_modalities
+
+    def apply_mask(
+        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedHeliosSample:
+        """Apply masking to the input data."""
+        # Apply other strategy first.
+        masked_sample = self.strategy.apply_mask(batch, patch_size, **kwargs)
+
+        # Now mark the decoded_modalities for decoding, similar to SelectableModalityMaskingStrategy.
+        for modality in self.decoded_modalities:
+            getattr(
+                masked_sample, MaskedHeliosSample.get_masked_modality_name(modality)
+            )[:] = MaskValue.DECODER.value
+
+        return masked_sample
+
+
+@MASKING_STRATEGY_REGISTRY.register("random_fixed_modality")
+class RandomFixedModalityMaskingStrategy(FixedModalityMaskingStrategy):
+    """Fixed modality masking + random masking."""
+
+    def __init__(
+        self,
+        decoded_modalities: list[str],
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+    ) -> None:
+        """Initialize the masking strategy."""
+        super().__init__(
+            strategy=RandomMaskingStrategy(encode_ratio, decode_ratio),
+            decoded_modalities=decoded_modalities,
+            encode_ratio=encode_ratio,
+            decode_ratio=decode_ratio,
+        )
+
+
 @dataclass
 class MaskingConfig(Config):
     """Configuration for masking strategies.

@@ -198,7 +198,7 @@ class Modality:
         band_sets=[BandSet(["R", "G", "B", "IR"], 1)],
         is_multitemporal=False,
         ignore_when_parsing=False,
-        image_tile_size_factor=16,
+        image_tile_size_factor=4,
     )
 
     SENTINEL1 = ModalitySpec(
