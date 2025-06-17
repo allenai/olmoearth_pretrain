@@ -277,13 +277,15 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 )
             loss_dict = self.loss_fn(decoded, target_output)
             modality_losses = loss_dict["modality_losses"]
+            loss = torch.stack(list(modality_losses.values())).mean()
             for modality_name, modality_loss in modality_losses.items():
                 self.trainer.record_metric(
                     f"train/{modality_name}_{self.total_loss_name}",
                     get_local_tensor(modality_loss.detach()),
                     ReduceType.mean,
                 )
-            loss = loss_dict["loss"]
+            # loss = loss_dict["loss"]
+            # average the modality losses looping thro
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output
