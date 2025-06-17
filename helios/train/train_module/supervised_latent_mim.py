@@ -258,8 +258,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 modality_bandset = modality_bandset.long()
                 modality_bandset[spatial_mask.bool()] = MISSING_VALUE
                 modality_loss = loss_fn(
-                    probe_output.flatten(end_dim=-2)[spatial_mask.bool(), :],
-                    modality_bandset.flatten()[spatial_mask.bool()].to(
+                    probe_output.flatten(end_dim=-2)[spatial_mask.bool().flatten(), :],
+                    modality_bandset.flatten()[spatial_mask.bool().flatten()].to(
                         probe_output.device
                     ),
                 )
