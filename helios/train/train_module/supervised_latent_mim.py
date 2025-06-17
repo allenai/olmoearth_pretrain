@@ -59,6 +59,7 @@ class SupervisedLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
 
     supervisory_modalities: list[str] | None = None
     compute_accuracies: bool = False
+    supervisory_weight: float = 0.1
 
     def build(
         self,
@@ -106,6 +107,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         token_exit_cfg: The token exit configuration for the model.
         warmup_duration: The warmup duration for the model.
         supervisory_modalities: bandsets which should only be used for supervision
+        supervisory_weight: weight to apply to the supervisory losses
+        compute_accuracies: Whether to compute accuracies too
     """
 
     def __init__(
@@ -132,6 +135,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
         supervisory_modalities: list[str] = [Modality.WORLDCOVER.name],
+        supervisory_weight: float = 0.1,
         compute_accuracies: bool = False,
     ):
         """Initialize the training module.
@@ -160,6 +164,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
             supervisory_modalities: Which modalities to use as supervision
+            supervisory_weight: weight to apply to the supervisory losses
             compute_accuracies: Whether to compute accuracies too
         """
         super().__init__(
@@ -197,6 +202,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
 
         self.supervisory_modalities = supervisory_modalities
         self.compute_accuracies = compute_accuracies
+        self.supervisory_weight = supervisory_weight
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -217,6 +223,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         loss: torch.Tensor,
         total_batch_sup: torch.Tensor,
         total_batch_acc: dict[str, torch.Tensor] | None,
+        supervisory_weight: float,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute the supervisory losses."""
         loss_fn = torch.nn.CrossEntropyLoss()
@@ -265,8 +272,11 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     if torch.isnan(modality_loss).any():
                         logger.warning(f"NaN in unsupervised loss for {modality}")
                     else:
-                        loss += modality_loss
-                        total_batch_sup += get_local_tensor(modality_loss.detach())
+                        loss += supervisory_weight * modality_loss
+                        total_batch_sup += (
+                            get_local_tensor(modality_loss.detach())
+                            * supervisory_weight
+                        )
                         if total_batch_acc is not None:
                             batch_acc = get_local_tensor(
                                 cls.accuracy_score(
@@ -343,6 +353,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     loss,
                     total_batch_sup,
                     total_batch_acc,
+                    self.supervisory_weight,
                 )
                 # Scale loss by number of microbatches
                 loss = loss / num_microbatches
@@ -368,7 +379,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         )
         self.trainer.record_metric(
             f"train/supervisory_loss_{'_'.join(self.supervisory_modalities)}",
-            total_batch_sup,
+            total_batch_sup / num_microbatches,
             ReduceType.mean,
         )
         if total_batch_acc is not None:
