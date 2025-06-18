@@ -1517,6 +1517,9 @@ class STPredictor(STBase):
                 per_modality_output_tokens.append(output_data)
             output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
             output_dict[masked_modality_name] = modality_mask
+
+        print("is it naip?", "naip_10" in output_dict)
+
         return TokensAndMasks(**output_dict)
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
