@@ -694,6 +694,14 @@ class HeliosDataset(Dataset):
         """Pad the timestamps to the max_sequence_length."""
         timestamps_data = sample_dict["timestamps"]
         current_length = timestamps_data.shape[0]
+        for modality_name in sample_dict:
+            modality = Modality.get(modality_name)
+            if modality.is_multitemporal:
+                length = sample_dict[modality_name].shape[-2]
+                if length < current_length:
+                    logger.warning(sample_dict)
+                    current_length = length
+                    sample_dict["timestamps"] = timestamps_data[:current_length]
         if current_length < self.max_sequence_length:
             pad_width = ((0, self.max_sequence_length - current_length), (0, 0))
             # We pad at the end with copies of the last timestep
@@ -794,8 +802,13 @@ class HeliosDataset(Dataset):
                         if k in self.training_modalities
                     }
                 else:
-                    # To preserve backwards compatibility, we set missing_timesteps_masks to an empty dict if it doesn't exist in file
                     missing_timesteps_masks = {}
+                    # To preserve backwards compatibility, we set missing_timesteps_masks to an empty dict if it doesn't exist in file
+                    for modality_name in sample_dict:
+                        modality = Modality.get(modality_name)
+                        if modality.is_multitemporal:
+                            missing_timesteps_masks[modality_name] = [True]*sample_dict[modality_name].shape[-2]
+                            
         return sample_dict, missing_timesteps_masks
 
     def _get_h5_file_path(self, index: int) -> UPath:
