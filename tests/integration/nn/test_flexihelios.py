@@ -141,6 +141,7 @@ class TestEncoder:
             drop_path=0.1,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
+            probe_dims=[2048],
         )
 
     def test_apply_attn(
