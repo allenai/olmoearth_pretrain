@@ -1421,9 +1421,12 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
 
         # Now mark the decoded_modalities for decoding, similar to SelectableModalityMaskingStrategy.
         for modality in self.decoded_modalities:
-            getattr(
+            mask = getattr(
                 masked_sample, MaskedHeliosSample.get_masked_modality_name(modality)
-            )[:] = MaskValue.DECODER.value
+            )
+            if mask is None:
+                continue
+            mask[:] = MaskValue.DECODER.value
 
         return masked_sample
 
