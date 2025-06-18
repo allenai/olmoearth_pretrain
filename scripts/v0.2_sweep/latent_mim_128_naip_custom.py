@@ -170,21 +170,25 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover_required_naip_10/20020",
             training_modalities=common.training_modalities,
+            cache_dir="/helios_cache_dir/presto",
         ),
         # osm_sampling
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover_required_naip_10/199692",
             training_modalities=common.training_modalities,
+            cache_dir="/helios_cache_dir/osm_sampling",
         ),
         # osmbig
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover_required_naip_10/227980",
             training_modalities=common.training_modalities,
+            cache_dir="/helios_cache_dir/osmbig",
         ),
         # presto_neighbor
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover_required_naip_10/155796",
             training_modalities=common.training_modalities,
+            cache_dir="/helios_cache_dir/presto_neighbor",
         ),
         # worldcover_sampling
         # HeliosDatasetConfig(
