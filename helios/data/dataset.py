@@ -296,11 +296,14 @@ class HeliosSample(NamedTuple):
             else:
                 start_ts = set()
                 for modality in missing_timesteps:
+                    logger.warning(f"modality: {modality}")
                     # all non missing timesteps where we could start from and add max_t timesteps and still be within the
                     valid_timesteps = np.flatnonzero(missing_timesteps[modality])
+                    logger.warning(f"valid_timesteps: {valid_timesteps}")
                     valid_timesteps = valid_timesteps[
                         valid_timesteps + max_t <= current_length
                     ]
+                    logger.warning(f"valid_timesteps post filter: {valid_timesteps}")
                     start_ts.update(valid_timesteps)
                 valid_start_ts = list(start_ts)
         else:
@@ -823,15 +826,16 @@ class HeliosDataset(Dataset):
         return self.h5py_dir / ConvertToH5py.sample_file_pattern.format(index=index)
 
     @staticmethod
-    def _crop_timestamps(
+    def _crop_timestamps_and_masks(
         timestamps: np.ndarray, missing_timesteps_masks: dict[str, Any]
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, dict[str, Any]]:
         """Crop the timestamps to the first and last valid timestep."""
         # get first present timestep
         if not missing_timesteps_masks:
             first_valid_timestep = 0
             last_valid_timestep = MAX_SEQUENCE_LENGTH
         else:
+            # Timestep masks are the same length as the timestamps
             first_valid_timestep = MAX_SEQUENCE_LENGTH
             last_valid_timestep = 0
             for timestep_mask in missing_timesteps_masks.values():
@@ -840,7 +844,11 @@ class HeliosDataset(Dataset):
                     first_valid_timestep = min(first_valid_timestep, valid_timesteps[0])
                     last_valid_timestep = max(last_valid_timestep, valid_timesteps[-1])
         timestamps = timestamps[first_valid_timestep : last_valid_timestep + 1]
-        return timestamps
+        for modality, timestep_mask in missing_timesteps_masks.items():
+            missing_timesteps_masks[modality] = timestep_mask[
+                first_valid_timestep : last_valid_timestep + 1
+            ]
+        return timestamps, missing_timesteps_masks
 
     def __getitem__(self, args: GetItemArgs) -> tuple[int, HeliosSample]:
         """Get the sample at the given index."""
@@ -852,9 +860,10 @@ class HeliosDataset(Dataset):
 
         sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
         # if the longest modality is not present we will need to crop timestamps
-        sample_dict["timestamps"] = self._crop_timestamps(
+        timestamps, missing_timesteps_masks = self._crop_timestamps_and_masks(
             sample_dict["timestamps"], missing_timesteps_masks
         )
+        sample_dict["timestamps"] = timestamps
         sample_dict, current_length = self._pad_timestamps(sample_dict)
         # current length is not zero indexed
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
