@@ -284,18 +284,11 @@ class HeliosSample(NamedTuple):
             raise ValueError("patch_size too small for this sample and budget")
         return min(floor(max_t_within_budget), self.time)
 
-    def _get_start_t(self, missing_timesteps: dict[str, Any]) -> int:
-        start_t = MAX_SEQUENCE_LENGTH
-
-        for modality in missing_timesteps:
-            start_t = min(start_t, missing_timesteps[modality].index(True))
-
-        if start_t == MAX_SEQUENCE_LENGTH:
-            raise ValueError("Can't find good start_t")
-        return start_t
-
     def _get_start_ts(self, missing_timesteps: dict[str, Any], max_t: int) -> int:
         start_ts = set()
+        if len(missing_timesteps) == 0:
+            start_ts = range(0, MAX_SEQUENCE_LENGTH)
+        logger.warning(missing_timesteps)
         for modality in missing_timesteps:
             valid_timesteps = np.flatnonzero(missing_timesteps[modality])
             for t in valid_timesteps:
@@ -345,11 +338,11 @@ class HeliosSample(NamedTuple):
         start_ts = self._get_start_ts(missing_timesteps_mask, max_t)
         if current_length > max_t:
             valid = [i for i in start_ts if i < current_length - max_t + 1]
-            # logger.warning(valid)
+            logger.warning(valid)
             start_t = np.random.choice(valid)
         else:
             start_t = 0
-        # logger.warning(start_t)
+        logger.warning(start_t)
 
         new_data_dict: dict[str, ArrayTensor] = {}
 
@@ -821,15 +814,22 @@ class HeliosDataset(Dataset):
         h5_file_path = self._get_h5_file_path(index)
 
         sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
+        print (sample_dict)
+        print ([sample_dict[m].shape for m in sample_dict])
         sample_dict, current_length = self._pad_timestamps(sample_dict)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
             sample_dict, missing_timesteps_masks
         )
 
-        subset_sample = self.apply_subset(
-            sample, args, current_length, missing_timesteps_masks
-        )
+        try:
+            subset_sample = self.apply_subset(
+                sample, args, current_length, missing_timesteps_masks
+            )
+        except:
+            logger.warning(h5_file_path)
+            raise ValueError(f"missing everything: {h5_file_path} args: {args}")
+
 
         data = [
             subset_sample.sentinel1,
