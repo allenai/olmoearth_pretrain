@@ -51,8 +51,8 @@ from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
-MAX_PATCH_SIZE = 8
-MIN_PATCH_SIZE = 1
+MAX_PATCH_SIZE = 4
+MIN_PATCH_SIZE = 4
 
 
 def my_build_common_components(
@@ -118,9 +118,15 @@ def build_train_module_config(
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "space_time",
-                "encode_ratio": 0.1,
+                "type": "random_fixed_modality",
+                "encode_ratio": 0.25,
                 "decode_ratio": 0.75,
+                "decoded_modalities": [
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    Modality.NAIP_10.name,
+                ],
             }
         ),
         loss_config=LossConfig(
