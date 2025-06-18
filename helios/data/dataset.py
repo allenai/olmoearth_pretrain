@@ -307,6 +307,11 @@ class HeliosSample(NamedTuple):
             else:
                 # Assumes that at least 1 modality has the first timestep as valid
                 valid_start_ts = [0]
+        if len(valid_start_ts) == 0:
+            logger.warning(
+                f"No valid start timesteps found for {missing_timesteps} with max_t {max_t} and current_length {current_length}"
+            )
+            raise ValueError("No valid start timesteps found")
         return sorted(valid_start_ts)
 
     def subset(
