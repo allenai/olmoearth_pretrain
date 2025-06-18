@@ -288,13 +288,10 @@ class HeliosSample(NamedTuple):
         self, missing_timesteps: dict[str, Any], max_t: int, current_length: int
     ) -> list[int]:
         # case 1: no missing timesteps mask that means every timestep is valid
-        valid_start_ts = []
-        if not missing_timesteps:
-            valid_start_ts = list(range(current_length - max_t + 1))
-        else:
-            # case 2: we have missing timesteps mask that means we need to get a list of valid timesteps given current_length and max_t
-            # case 2a max_t is greater than current_length
-            if current_length > max_t:
+        if current_length > max_t:
+            if not missing_timesteps:
+                valid_start_ts = list(range(current_length - max_t + 1))
+            else:
                 start_ts = set()
                 for modality in missing_timesteps:
                     # all non missing timesteps where we could start from and add max_t timesteps and still be within the
@@ -304,9 +301,9 @@ class HeliosSample(NamedTuple):
                     ]
                     start_ts.update(valid_timesteps)
                 valid_start_ts = list(start_ts)
-            else:
-                # Assumes that at least 1 modality has the first timestep as valid
-                valid_start_ts = [0]
+        else:
+            # Assumes that at least 1 modality has the first timestep as valid
+            valid_start_ts = [0]
         if len(valid_start_ts) == 0:
             logger.warning(
                 f"No valid start timesteps found for {missing_timesteps} with max_t {max_t} and current_length {current_length}"
