@@ -571,27 +571,9 @@ class HeliosDataset(Dataset):
         metadata_df = pd.read_csv(self.sample_metadata_path)
         logger.info(f"Metadata CSV has {len(metadata_df)} samples")
         logger.info(f"columns: {metadata_df.columns}")
-        # For now we want to filter out any samples that have NAIP DATA or don't have any of the training modalities
-        # Get the indices of samples that have NAIP data
-        naip_modalities = [Modality.NAIP_10, Modality.NAIP]
-        naip_indices = np.array([])
-        if all(
-            modality.name not in self.training_modalities
-            for modality in naip_modalities
-        ):
-            for naip_modality in naip_modalities:
-                if naip_modality.name not in metadata_df.columns:
-                    continue
-                naip_indices = np.concatenate(
-                    [
-                        naip_indices,
-                        metadata_df[(metadata_df[naip_modality.name] == 1)].index,
-                    ]
-                )
-        self.naip_indices = naip_indices
 
         # Get the indices of samples that don't have any training modalities that are
-        # multi-temporal.
+        # multi-temporal. We want to remove these samples.
         multitemporal_training_modalities = [
             modality
             for modality in self.training_modalities
@@ -604,19 +586,14 @@ class HeliosDataset(Dataset):
         ].index
 
         # Filter these indices out
-        logger.info(f"Filtering out {len(self.naip_indices)} samples with NAIP data")
-        self.sample_indices = np.setdiff1d(self.sample_indices, self.naip_indices)
         logger.info(
             f"Filtering out {len(no_multitemporal_indices)} samples without any training modalities"
         )
         self.sample_indices = np.setdiff1d(
             self.sample_indices, no_multitemporal_indices
         )
-        # raise an error if any of the naip indices are still in the sample indices
-        if any(index in self.naip_indices for index in self.sample_indices):
-            raise ValueError("Some NAIP indices are still in the sample indices")
         logger.info(
-            f"Filtered {len(self.naip_indices) + len(no_multitemporal_indices)} samples to {self.sample_indices.shape} samples"
+            f"Filtered {len(no_multitemporal_indices)} samples to {self.sample_indices.shape} samples"
         )
 
     def prepare(self) -> None:
