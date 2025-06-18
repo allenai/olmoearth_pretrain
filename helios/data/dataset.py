@@ -292,7 +292,7 @@ class HeliosSample(NamedTuple):
             valid_timesteps = np.flatnonzero(missing_timesteps[modality])
             for t in valid_timesteps:
                 start_ts.update(range(max(0, t - max_t + 1), t + 1))
-
+        print (max_t,start_ts)
         return sorted(list(start_ts))
 
     def subset(
@@ -336,6 +336,7 @@ class HeliosSample(NamedTuple):
         # The timestamps are edge padded and we always want to start from a valid timestep
         start_ts = self._get_start_ts(missing_timesteps_mask, max_t)
         if current_length > max_t:
+            print(current_length, max_t, current_length - max_t + 1)
             valid = [i for i in start_ts if i < current_length - max_t + 1]
             start_t = np.random.choice(valid)
         else:
@@ -692,23 +693,23 @@ class HeliosDataset(Dataset):
         self, sample_dict: dict[str, Any]
     ) -> tuple[dict[str, Any], int]:
         """Pad the timestamps to the max_sequence_length."""
-        timestamps_data = sample_dict["timestamps"]
-        current_length = timestamps_data.shape[0]
+        current_length = sample_dict["timestamps"].shape[0]
         for modality_name in sample_dict:
-            modality = Modality.get(modality_name)
+            try:
+                modality = Modality.get(modality_name)
+            except:
+                continue
             if modality.is_multitemporal:
                 length = sample_dict[modality_name].shape[-2]
                 if length < current_length:
-                    logger.warning(sample_dict)
                     current_length = length
-                    sample_dict["timestamps"] = timestamps_data[:current_length]
+                    sample_dict["timestamps"] = sample_dict["timestamps"][:current_length]
         if current_length < self.max_sequence_length:
             pad_width = ((0, self.max_sequence_length - current_length), (0, 0))
             # We pad at the end with copies of the last timestep
-            padded_timestamps = np.pad(
-                timestamps_data, pad_width=pad_width, mode="edge"
+            sample_dict["timestamps"] = np.pad(
+                sample_dict["timestamps"], pad_width=pad_width, mode="edge"
             )
-            sample_dict["timestamps"] = padded_timestamps
         return sample_dict, current_length
 
     def apply_subset(
@@ -805,7 +806,10 @@ class HeliosDataset(Dataset):
                     missing_timesteps_masks = {}
                     # To preserve backwards compatibility, we set missing_timesteps_masks to an empty dict if it doesn't exist in file
                     for modality_name in sample_dict:
-                        modality = Modality.get(modality_name)
+                        try:
+                            modality = Modality.get(modality_name)
+                        except:
+                            continue
                         if modality.is_multitemporal:
                             missing_timesteps_masks[modality_name] = [True]*sample_dict[modality_name].shape[-2]
                             
@@ -822,8 +826,12 @@ class HeliosDataset(Dataset):
         else:
             index = args.idx
         h5_file_path = self._get_h5_file_path(index)
+        h5_file_path = UPath('/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152/sample_1133699.h5')
+        print(h5_file_path)
 
         sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
+        print(sample_dict, missing_timesteps_masks)
+        print({m:sample_dict[m].shape} for m in sample_dict)
         sample_dict, current_length = self._pad_timestamps(sample_dict)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
