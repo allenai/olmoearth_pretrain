@@ -30,9 +30,9 @@ def build_default_config() -> ConvertToH5pyConfig:
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.WORLDCOVER.name,
-            Modality.SRTM.name,
-            Modality.LANDSAT.name,
-            Modality.OPENSTREETMAP_RASTER.name,
+            # Modality.SRTM.name,
+            # Modality.LANDSAT.name,
+            # Modality.OPENSTREETMAP_RASTER.name,
         ],
         multiprocessed_h5_creation=True,
     )

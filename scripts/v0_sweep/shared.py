@@ -194,7 +194,7 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
     contrastive_config = LossConfig(
         loss_config={
             "type": "InfoNCE",
-            "weight": 0.05,
+            "weight": 0.1,
         }
     )
     mae_loss_config = LossConfig(
@@ -205,15 +205,7 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
             "weight": 0.1,
         }
     )
-    token_exit_cfg_galileo = {
-        Modality.SENTINEL2_L2A.name: ENCODER_DEPTH,
-        Modality.LATLON.name: ENCODER_DEPTH,
-        Modality.SENTINEL1.name: ENCODER_DEPTH,
-        Modality.WORLDCOVER.name: 0,
-        Modality.SRTM.name: int(ENCODER_DEPTH / 2),
-        Modality.OPENSTREETMAP_RASTER.name: 0,
-        Modality.LANDSAT.name: ENCODER_DEPTH,
-    }
+    token_exit_cfg_galileo = {modality: 0 for modality in TRAINING_MODALITIES}
     if any(modality not in token_exit_cfg_galileo for modality in TRAINING_MODALITIES):
         raise ValueError(
             f"All modalities must be in token_exit_cfg_a: {TRAINING_MODALITIES}"
@@ -318,12 +310,12 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     dataset_configs = [
         # presto
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892",
+            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/sentinel1_sentinel2_l2a_worldcover/469884/",
             training_modalities=common.training_modalities,
         ),
         # osm_sampling
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/sentinel1_sentinel2_l2a_worldcover/1141148/",
             training_modalities=common.training_modalities,
         ),
     ]
