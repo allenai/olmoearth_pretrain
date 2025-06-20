@@ -1863,6 +1863,7 @@ class EncoderConfig(Config):
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
     probe_modalities: list[str] | None = None
+    probe_dims: list[int] = []
 
     def validate(self) -> None:
         """Validate the configuration."""
