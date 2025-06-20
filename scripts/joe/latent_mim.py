@@ -47,7 +47,7 @@ from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
-MIN_PATCH_SIZE = 8
+MIN_PATCH_SIZE = 1
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -92,8 +92,8 @@ def build_train_module_config(
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "space_time",
-                "encode_ratio": 0.5,
-                "decode_ratio": 0.5,
+                "encode_ratio": 0.1,
+                "decode_ratio": 0.75,
             }
         ),
         loss_config=LossConfig(
@@ -157,7 +157,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             save_folder=common.save_folder,
             cancel_check_interval=1,
             metrics_collect_interval=1,
-            max_duration=Duration.epochs(30),
+            max_duration=Duration.epochs(100),
             checkpointer=CheckpointerConfig(work_dir=common.save_folder),
         )
         .with_callback(
