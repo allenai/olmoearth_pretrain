@@ -2,7 +2,7 @@
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, NamedTuple
 
@@ -115,13 +115,13 @@ class TokensAndMasks(NamedTuple):
             Dictionary representation of the namedtuple.
         """
         return_dict = {}
-        for field in self._fields:
-            val = getattr(self, field)
+        for field_name in self._fields:
+            val = getattr(self, field_name)
             if return_none:
-                return_dict[field] = val
+                return_dict[field_name] = val
             else:
                 if val is not None:
-                    return_dict[field] = val
+                    return_dict[field_name] = val
         return return_dict
 
     @property
@@ -1863,7 +1863,7 @@ class EncoderConfig(Config):
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
     probe_modalities: list[str] | None = None
-    probe_dims: list[int] = []
+    probe_dims: list[int] = field(default_factory=lambda: [])
 
     def validate(self) -> None:
         """Validate the configuration."""
