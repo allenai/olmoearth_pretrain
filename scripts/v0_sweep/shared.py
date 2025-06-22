@@ -393,7 +393,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
             checkpointer=checkpointer_config,
-            load_path="/weka/dfive-default/helios/checkpoints/yawenzzzz/v0.2_base_galileo_contrastive_random_x_cross_space_time_with_ema/step235750",
+            load_path="/weka/dfive-default/helios/checkpoints/yawenzzzz/v0.2_base_galileo_contrastive_random_x_cross_space_time_without_ema/step235750",
         )
         .with_callback("wandb", wandb_callback)
         .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
