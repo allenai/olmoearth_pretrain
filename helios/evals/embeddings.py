@@ -5,6 +5,7 @@ import logging
 import torch
 from torch.utils.data import DataLoader
 
+from helios.data.constants import Modality
 from helios.evals.datasets.configs import TaskType
 from helios.nn.flexihelios import Encoder, PoolingType, TokensAndMasks
 from helios.train.masking import MaskedHeliosSample
@@ -44,7 +45,9 @@ def get_embeddings(
                 # TODO: Model expects masked helios sample we need to pass empty masks
                 # Likely we want to have a flag that checks for eval mode and passes empty masks
                 batch_embeddings: TokensAndMasks = model(
-                    masked_helios_sample, patch_size=patch_size
+                    masked_helios_sample,
+                    patch_size=patch_size,
+                    token_exit_cfg={modality: 0 for modality in Modality.names()},
                 )[0]  # (bsz, dim)
 
             spatial_pool = True if task_type == TaskType.SEGMENTATION else False
