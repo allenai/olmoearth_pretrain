@@ -86,8 +86,8 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
 
         # Should we use this image for the frequent data for this window?
         if (
-            window.time_range[0] < time_range[1]
-            and time_range[0] < window.time_range[1]
+            window.time_range[0] < time_range[1]  # type: ignore
+            and time_range[0] < window.time_range[1]  # type: ignore
         ):
             two_week_image = image
             two_week_time_range = time_range
@@ -97,6 +97,11 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
             f"skipping window {window.name} because it only has {len(year_images)} images in {LAYER_NAME}"
         )
         return
+    else:
+        # In case there are more than 12 images, only use the first 12
+        year_images = year_images[:12]
+        year_time_ranges = year_time_ranges[:12]
+
     if two_week_image is None or two_week_time_range is None:
         logger.warning(
             f"skipping window {window.name} because it did not have an image intersecting the window time range"
@@ -137,8 +142,8 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
                     row=window_metadata.row,
                     tile_time=window_metadata.time.isoformat(),
                     image_idx=group_idx,
-                    start_time=time_range[0].isoformat(),
-                    end_time=time_range[1].isoformat(),
+                    start_time=time_range[0].isoformat(),  # type: ignore
+                    end_time=time_range[1].isoformat(),  # type: ignore
                 )
             )
 

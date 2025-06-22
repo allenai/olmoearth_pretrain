@@ -365,13 +365,11 @@ class Modality:
         band_sets=[
             BandSet(
                 [
-                    "snow-cover",
-                    "snow-depth",
-                    "soil-temperature-level-1",
+                    "2m-temperature",
+                    "2m-dewpoint-temperature",
+                    "surface-pressure",
                     "10m-u-component-of-wind",
                     "10m-v-component-of-wind",
-                    "2m-temperature",
-                    "skin-temperature",
                     "total-precipitation",
                 ],
                 256,
