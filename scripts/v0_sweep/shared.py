@@ -62,10 +62,10 @@ TRAINING_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
     Modality.SENTINEL1.name,
     Modality.WORLDCOVER.name,
-    # Modality.SRTM.name,
-    # Modality.LATLON.name,
-    # Modality.LANDSAT.name,
-    # Modality.OPENSTREETMAP_RASTER.name,
+    Modality.SRTM.name,
+    Modality.LATLON.name,
+    Modality.LANDSAT.name,
+    Modality.OPENSTREETMAP_RASTER.name,
 ]
 
 ENCODER_EMBEDDING_SIZE = 768
@@ -194,7 +194,7 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
     contrastive_config = LossConfig(
         loss_config={
             "type": "InfoNCE",
-            "weight": 0.1,
+            "weight": 0.05,
         }
     )
     mae_loss_config = LossConfig(
@@ -205,7 +205,15 @@ def build_train_module_config(model: str = "galileo") -> HeliosTrainModuleConfig
             "weight": 0.1,
         }
     )
-    token_exit_cfg_galileo = {modality: 0 for modality in TRAINING_MODALITIES}
+    token_exit_cfg_galileo = {
+        Modality.SENTINEL2_L2A.name: ENCODER_DEPTH,
+        Modality.LATLON.name: ENCODER_DEPTH,
+        Modality.SENTINEL1.name: ENCODER_DEPTH,
+        Modality.WORLDCOVER.name: 0,
+        Modality.SRTM.name: int(ENCODER_DEPTH / 2),
+        Modality.OPENSTREETMAP_RASTER.name: 0,
+        Modality.LANDSAT.name: ENCODER_DEPTH,
+    }
     if any(modality not in token_exit_cfg_galileo for modality in TRAINING_MODALITIES):
         raise ValueError(
             f"All modalities must be in token_exit_cfg_a: {TRAINING_MODALITIES}"
@@ -308,14 +316,24 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     dataset_configs = [
+        # # presto
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/sentinel1_sentinel2_l2a_worldcover/469884/",
+        #     training_modalities=common.training_modalities,
+        # ),
+        # # osm_sampling
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/sentinel1_sentinel2_l2a_worldcover/1141148/",
+        #     training_modalities=common.training_modalities,
+        # ),
         # presto
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/sentinel1_sentinel2_l2a_worldcover/469884/",
+            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892",
             training_modalities=common.training_modalities,
         ),
         # osm_sampling
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/sentinel1_sentinel2_l2a_worldcover/1141148/",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
             training_modalities=common.training_modalities,
         ),
     ]
@@ -375,6 +393,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
             checkpointer=checkpointer_config,
+            load_path="/weka/dfive-default/helios/checkpoints/yawenzzzz/v0.2_base_galileo_contrastive_random_x_cross_space_time_with_ema/step235950",
         )
         .with_callback("wandb", wandb_callback)
         .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
@@ -384,8 +403,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
                 tasks=EVAL_TASKS,
-                # eval_on_startup=True,
-                # cancel_after_first_eval=True,
+                eval_on_startup=True,
+                cancel_after_first_eval=True,
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
