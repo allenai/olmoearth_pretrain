@@ -93,6 +93,15 @@ MODEL_SIZE_ARGS = {
         "decoder_num_heads": 3,
         "mlp_ratio": 4.0,
     },
+    "small_shallow_decoder": {
+        "decoder_depth": 4,
+        "encoder_embedding_size": 384,
+        "decoder_embedding_size": 384,
+        "encoder_depth": 12,
+        "encoder_num_heads": 6,
+        "decoder_num_heads": 6,
+        "mlp_ratio": 4.0,
+    },
     "base_shallow_decoder": {
         "decoder_depth": 4,
         "encoder_embedding_size": 768,
