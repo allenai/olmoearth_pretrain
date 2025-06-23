@@ -182,7 +182,7 @@ class STBase(nn.Module):
         w: int | None = None
         for modality in modalities_to_process:
             x_modality = x[modality]
-            if len(x_modality.shape) not in [5, 6]:
+            if len(x_modality.shape) != 6:
                 continue
             cur_h = x_modality.shape[1]
             cur_w = x_modality.shape[2]
@@ -215,7 +215,7 @@ class STBase(nn.Module):
                     x_modality_mask, "b b_s -> (b h w) b_s", h=h, w=w
                 )
 
-            elif len(x_modality.shape) in [5, 6]:
+            elif len(x_modality.shape) == 6:
                 flattened_tokens = rearrange(
                     x_modality, "b h w ... d -> (b h w) (...) d"
                 )
@@ -260,7 +260,7 @@ class STBase(nn.Module):
         w: int | None = None
         for modality in modalities_to_process:
             x_modality = x[modality]
-            if len(x_modality.shape) not in [5, 6]:
+            if len(x_modality.shape) != 6:
                 continue
             cur_h = x_modality.shape[1]
             cur_w = x_modality.shape[2]
@@ -294,7 +294,7 @@ class STBase(nn.Module):
                     x_modality_mask, (0, amount_to_pad), value=MaskValue.MISSING.value
                 )
 
-            elif len(x_modality.shape) in [5, 6]:
+            elif len(x_modality.shape) == 6:
                 flattened_tokens = rearrange(
                     x_modality, "b h w ... d -> (b ...) (h w) d"
                 )
@@ -356,7 +356,7 @@ class STBase(nn.Module):
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
 
-            if len(x_modality.shape) in [5, 6]:
+            if len(x_modality.shape) == 6:
                 # First collapse the temporal and band set dimensions.
                 cur_tokens = rearrange(x_modality, "b h w ... d -> b (...) d h w")
                 cur_masks = rearrange(x_modality_mask, "b h w ... -> b (...) h w")
@@ -543,26 +543,6 @@ class STBase(nn.Module):
                 )
                 x_modality = torch.mean(modality_tokens, dim=1)
 
-            elif len(dims) == 5:
-                batch, h, w, b_s, _ = dims
-
-                # Extract tokens for this modality (b*h*w b_s d).
-                # Modalities are stacked on the temporal (token) axis.
-                num_tokens_for_modality = b_s
-                modality_tokens = x[
-                    :, tokens_reshaped : tokens_reshaped + num_tokens_for_modality, :
-                ]
-
-                # Reshape to original dimensions.
-                x_modality = rearrange(
-                    modality_tokens,
-                    "(b h w) b_s d -> b h w b_s d",
-                    b=batch,
-                    h=h,
-                    w=w,
-                    b_s=b_s,
-                )
-
             elif len(dims) == 6:
                 batch, h, w, t, b_s, _ = dims
 
@@ -622,21 +602,6 @@ class STBase(nn.Module):
                 ]
                 x_modality = modality_tokens[:, 0:b_s, :]
 
-            elif len(dims) == 5:
-                batch, h, w, b_s, _ = dims
-                num_tokens_for_modality = batch * b_s
-                modality_tokens = x[
-                    tokens_reshaped : tokens_reshaped + num_tokens_for_modality, :, :
-                ]
-                x_modality = rearrange(
-                    modality_tokens,
-                    "(b b_s) (h w) d -> b h w b_s d",
-                    b=batch,
-                    h=h,
-                    w=w,
-                    b_s=b_s,
-                )
-
             elif len(dims) == 6:
                 # Extract tokens for this modality (b*t*b_s h*w d).
                 # Modalities are stacked on the temporal axis, which is part of the batch
@@ -694,61 +659,34 @@ class STBase(nn.Module):
         tokens_only_dict = {}
         tokens_reshaped = 0
         for modality, dims in modalities_to_dims_dict.items():
-            if len(dims) == 5:
-                batch, h, w, b_s, _ = dims
-                hn = (h + offset_padding + window_size - 1) // window_size
-                wn = (w + offset_padding + window_size - 1) // window_size
-                # Extract tokens for this modality (b*hn*wn bs*hs*ws d).
-                # Modalities are stacked on the token axis.
-                num_tokens_for_modality = b_s * window_size * window_size
-                modality_tokens = x[
-                    :, tokens_reshaped : tokens_reshaped + num_tokens_for_modality, :
-                ]
-                # Rearrange to padded form.
-                modality_tokens = rearrange(
-                    modality_tokens,
-                    "(b hn wn) (bs hs ws) d -> b (hn hs) (wn ws) bs d",
-                    b=batch,
-                    hn=hn,
-                    wn=wn,
-                    hs=window_size,
-                    ws=window_size,
-                    bs=b_s,
-                )
-                # Remove beginning padding.
-                modality_tokens = modality_tokens[:, offset_padding:, offset_padding:]
-                # Remove end padding.
-                x_modality = modality_tokens[:, 0:h, 0:w]
-
-            elif len(dims) == 6:
-                batch, h, w, t, b_s, _ = dims
-                hn = (h + offset_padding + window_size - 1) // window_size
-                wn = (w + offset_padding + window_size - 1) // window_size
-                # Extract tokens for this modality (b*hn*wn t*bs*hs*ws d).
-                # Modalities are stacked on the token axis.
-                num_tokens_for_modality = t * b_s * window_size * window_size
-                modality_tokens = x[
-                    :, tokens_reshaped : tokens_reshaped + num_tokens_for_modality, :
-                ]
-                # Rearrange to padded form.
-                modality_tokens = rearrange(
-                    modality_tokens,
-                    "(b hn wn) (t bs hs ws) d -> b (hn hs) (wn ws) t bs d",
-                    b=batch,
-                    hn=hn,
-                    wn=wn,
-                    hs=window_size,
-                    ws=window_size,
-                    t=t,
-                    bs=b_s,
-                )
-                # Remove beginning padding.
-                modality_tokens = modality_tokens[:, offset_padding:, offset_padding:]
-                # Remove end padding.
-                x_modality = modality_tokens[:, 0:h, 0:w]
-
-            else:
+            if len(dims) != 6:
                 raise NotImplementedError(f"not implemented for {len(dims)} dimensions")
+
+            batch, h, w, t, b_s, _ = dims
+            hn = (h + offset_padding + window_size - 1) // window_size
+            wn = (w + offset_padding + window_size - 1) // window_size
+            # Extract tokens for this modality (b*hn*wn t*bs*hs*ws d).
+            # Modalities are stacked on the token axis.
+            num_tokens_for_modality = t * b_s * window_size * window_size
+            modality_tokens = x[
+                :, tokens_reshaped : tokens_reshaped + num_tokens_for_modality, :
+            ]
+            # Rearrange to padded form.
+            modality_tokens = rearrange(
+                modality_tokens,
+                "(b hn wn) (t bs hs ws) d -> b (hn hs) (wn ws) t bs d",
+                b=batch,
+                hn=hn,
+                wn=wn,
+                hs=window_size,
+                ws=window_size,
+                t=t,
+                bs=b_s,
+            )
+            # Remove beginning padding.
+            modality_tokens = modality_tokens[:, offset_padding:, offset_padding:]
+            # Remove end padding.
+            x_modality = modality_tokens[:, 0:h, 0:w]
 
             tokens_reshaped += num_tokens_for_modality
             tokens_only_dict[modality] = x_modality

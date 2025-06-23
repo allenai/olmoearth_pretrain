@@ -61,8 +61,8 @@ class TestSTBase:
         B, H, W, T, B_S, D = 2, 3, 3, 4, 2, 4
         sentinel2_l2a_tokens = torch.randn(B, H, W, T, B_S, D)
         sentinel2_l2a_mask = torch.randint(0, 2, (B, H, W, T, B_S)).float()
-        worldcover_tokens = torch.randn(B, H, W, B_S, D)
-        worldcover_mask = torch.randint(0, 2, (B, H, W, B_S)).float()
+        worldcover_tokens = torch.randn(B, H, W, 1, B_S, D)
+        worldcover_mask = torch.randint(0, 2, (B, H, W, 1, B_S)).float()
         latlon = torch.randn(B, 1, D)
         latlon_mask = torch.randint(0, 2, (B, 1)).float()
         x = {
@@ -98,8 +98,8 @@ class TestSTBase:
         B, H, W, T, B_S, D = 2, 3, 3, 4, 2, 4
         sentinel2_l2a_tokens = torch.randn(B, H, W, T, B_S, D)
         sentinel2_l2a_mask = torch.randint(0, 2, (B, H, W, T, B_S)).float()
-        worldcover_tokens = torch.randn(B, H, W, B_S, D)
-        worldcover_mask = torch.randint(0, 2, (B, H, W, B_S)).float()
+        worldcover_tokens = torch.randn(B, H, W, 1, B_S, D)
+        worldcover_mask = torch.randint(0, 2, (B, H, W, 1, B_S)).float()
         latlon = torch.randn(B, 1, D)
         latlon_mask = torch.randint(0, 2, (B, 1)).float()
         x = {
@@ -142,8 +142,8 @@ class TestSTBase:
         B, H, W, T, B_S, D = 2, 5, 5, 4, 2, 4
         sentinel2_l2a_tokens = torch.randn(B, H, W, T, B_S, D)
         sentinel2_l2a_mask = torch.randint(0, 2, (B, H, W, T, B_S)).float()
-        worldcover_tokens = torch.randn(B, H, W, B_S, D)
-        worldcover_mask = torch.randint(0, 2, (B, H, W, B_S)).float()
+        worldcover_tokens = torch.randn(B, H, W, 1, B_S, D)
+        worldcover_mask = torch.randint(0, 2, (B, H, W, 1, B_S)).float()
         x = {
             "sentinel2_l2a": sentinel2_l2a_tokens,
             "sentinel2_l2a_mask": sentinel2_l2a_mask,
