@@ -198,6 +198,9 @@ class Modality:
         band_sets=[BandSet(["R", "G", "B", "IR"], 1)],
         is_multitemporal=False,
         ignore_when_parsing=False,
+        # Currently this is set to 4x (2.5 m/pixel) so that it is more feasible to
+        # train with NAIP_10. This way we end up with 512x512 NAIP images in the
+        # 128x128 H5 files instead of 2048x2048, which slows down data loading.
         image_tile_size_factor=4,
     )
 
