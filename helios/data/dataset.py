@@ -16,7 +16,7 @@ import hdf5plugin  # noqa: F401
 import numpy as np
 import pandas as pd
 import torch
-from olmo_core.config import Config, DType
+from olmo_core.config import Config
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
 from torch.utils.data import Dataset
@@ -51,9 +51,9 @@ class HeliosSample(NamedTuple):
     openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
-    # Unsure what the shapes should be for this one
-    # TODO: Should this be called naip_10??
+    # naip with different tile resolution is currently not used in favor of naip_10.
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
+    # naip_10 is currently 4x the height/width of sentinel2_l2a.
     naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
 
     # TODO: Add unit tests for this
@@ -369,66 +369,26 @@ class HeliosSample(NamedTuple):
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
 
-    @property
-    def dtype(self) -> DType:
-        """Dtype of the ArrayTensors in this sample."""
-        cast(ArrayTensor, next(iter(self.as_dict().items()))[1]).dtype
-
-    def get_attribute_including_missing(
-        self, modality: str, min_timestamps: int
-    ) -> ArrayTensor:
-        """Return the modality if it exists, or an array of missing values if it doesn't."""
-        if getattr(self, modality) is not None:
-            value = getattr(self, modality)
-        else:
-            value = np.full(
-                self.get_expected_shape(modality),
-                fill_value=MISSING_VALUE,
-                dtype=self.dtype,
-            )
-        if modality == "latlon":
-            return value
-        else:
-            return value[..., :min_timestamps, :]
-
 
 def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSample]:
     """Collate function that automatically handles any modalities present in the samples."""
 
     # Stack tensors while handling None values
-    def stack_or_none(attr: str, min_timestamps: int) -> torch.Tensor | None:
+    def stack_or_none(attr: str) -> torch.Tensor | None:
         """Stack the tensors while handling None values."""
-        all_nones: bool = True
-        for sample in batch:
-            if getattr(sample[1], attr) is not None:
-                all_nones = False
-                break
-        if all_nones:
+        # For partially missing samples we use MISSING_VALUE so we only check the first sample
+        if getattr(batch[0][1], attr) is None:
             return None
-        else:
-            try:
-                stacked_tensor = torch.stack(
-                    [
-                        torch.from_numpy(
-                            sample.get_attribute_including_missing(attr, min_timestamps)
-                        )
-                        for _, sample in batch
-                    ],
-                    dim=0,
-                )
-            except RuntimeError as e:
-                timestamps = [cast(np.ndarray, b[1].timestamps).shape for b in batch]
-                raise RuntimeError(f"{e} for {attr}, {timestamps}")
+        stacked_tensor = torch.stack(
+            [torch.from_numpy(getattr(sample, attr)) for _, sample in batch], dim=0
+        )
         return stacked_tensor
 
     patch_size, batch_zero = batch[0]
-    sample_fields = batch_zero._fields
-    min_timestamps = min([s[1].time for s in batch])
+    sample_fields = batch_zero.modalities
 
     # Create a dictionary of stacked tensors for each field
-    collated_dict = {
-        field: stack_or_none(field, min_timestamps) for field in sample_fields
-    }
+    collated_dict = {field: stack_or_none(field) for field in sample_fields}
     return patch_size, HeliosSample(**collated_dict)
 
 
