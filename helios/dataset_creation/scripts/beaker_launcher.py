@@ -6,11 +6,11 @@ import uuid
 import tqdm
 from beaker import (
     Beaker,
-    Constraints,
-    DataMount,
-    DataSource,
-    ExperimentSpec,
-    Priority,
+    BeakerConstraints,
+    BeakerDataMount,
+    BeakerDataSource,
+    BeakerExperimentSpec,
+    BeakerJobPriority,
 )
 
 PLANETARY_COMPUTER_COMMAND = [
@@ -73,15 +73,14 @@ def launch_job(
             clusters must be set.
         hostname: optional Beaker host to constrain to.
     """
-    beaker = Beaker.from_env(default_workspace=BEAKER_WORKSPACE)
-    with beaker.session():
+    with Beaker.from_env(default_workspace=BEAKER_WORKSPACE) as beaker:
         # Add random string since experiment names must be unique.
         task_uuid = str(uuid.uuid4())[0:16]
         experiment_name = f"helios-{modality}-{task_uuid}"
 
         command = [arg.format(ds_path=ds_path) for arg in MODALITY_COMMANDS[modality]]
-        weka_mount = DataMount(
-            source=DataSource(weka="dfive-default"),
+        weka_mount = BeakerDataMount(
+            source=BeakerDataSource(weka="dfive-default"),
             mount_path="/weka/dfive-default",
         )
 
@@ -89,33 +88,33 @@ def launch_job(
         # hundreds of jobs scheduled on the same host.
         # Also we can only set cluster constraint if we do not specify hostname.
         resources: dict | None
-        constraints: Constraints
+        constraints: BeakerConstraints
         if hostname is None:
             if modality == "openstreetmap":
                 resources = {"gpuCount": 8}
             else:
                 resources = {"gpuCount": 1}
-            constraints = Constraints(
+            constraints = BeakerConstraints(
                 cluster=clusters,
             )
         else:
             resources = None
-            constraints = Constraints(
+            constraints = BeakerConstraints(
                 hostname=[hostname],
             )
 
-        experiment_spec = ExperimentSpec.new(
+        experiment_spec = BeakerExperimentSpec.new(
             budget=BEAKER_BUDGET,
             task_name=experiment_name,
             beaker_image=image,
-            priority=Priority.high,
+            priority=BeakerJobPriority.high,
             command=command,
             datasets=[weka_mount],
             resources=resources,
             preemptible=True,
             constraints=constraints,
         )
-        beaker.experiment.create(experiment_name, experiment_spec)
+        beaker.experiment.create(name=experiment_name, spec=experiment_spec)
 
 
 if __name__ == "__main__":
