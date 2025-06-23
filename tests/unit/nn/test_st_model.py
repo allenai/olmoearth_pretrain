@@ -61,8 +61,8 @@ class TestSTBase:
         B, H, W, T, B_S, D = 2, 3, 3, 4, 2, 4
         sentinel2_l2a_tokens = torch.randn(B, H, W, T, B_S, D)
         sentinel2_l2a_mask = torch.randint(0, 2, (B, H, W, T, B_S)).float()
-        worldcover_tokens = torch.randn(B, H, W, B_S, D)
-        worldcover_mask = torch.randint(0, 2, (B, H, W, B_S)).float()
+        worldcover_tokens = torch.randn(B, H, W, 1, B_S, D)
+        worldcover_mask = torch.randint(0, 2, (B, H, W, 1, B_S)).float()
         latlon = torch.randn(B, 1, D)
         latlon_mask = torch.randint(0, 2, (B, 1)).float()
         x = {
@@ -98,8 +98,8 @@ class TestSTBase:
         B, H, W, T, B_S, D = 2, 3, 3, 4, 2, 4
         sentinel2_l2a_tokens = torch.randn(B, H, W, T, B_S, D)
         sentinel2_l2a_mask = torch.randint(0, 2, (B, H, W, T, B_S)).float()
-        worldcover_tokens = torch.randn(B, H, W, B_S, D)
-        worldcover_mask = torch.randint(0, 2, (B, H, W, B_S)).float()
+        worldcover_tokens = torch.randn(B, H, W, 1, B_S, D)
+        worldcover_mask = torch.randint(0, 2, (B, H, W, 1, B_S)).float()
         latlon = torch.randn(B, 1, D)
         latlon_mask = torch.randint(0, 2, (B, 1)).float()
         x = {
@@ -128,3 +128,38 @@ class TestSTBase:
         # Use approximate here since we perform mean pooling which can change the value
         # slightly.
         assert ((modality_tokens_dict["latlon"] - x["latlon"]).abs() < 1e-6).all()
+
+    @pytest.mark.parametrize("block_idx", [0, 1])
+    @pytest.mark.parametrize("window_size", [2, 3])
+    def test_collapse_and_split_windowed(
+        self,
+        st_base: STBase,
+        block_idx: int,
+        window_size: int,
+    ) -> None:
+        """Test collapsing and re-splitting tokens for temporal attention."""
+        st_base.windowed_attention_size = window_size
+        B, H, W, T, B_S, D = 2, 5, 5, 4, 2, 4
+        sentinel2_l2a_tokens = torch.randn(B, H, W, T, B_S, D)
+        sentinel2_l2a_mask = torch.randint(0, 2, (B, H, W, T, B_S)).float()
+        worldcover_tokens = torch.randn(B, H, W, 1, B_S, D)
+        worldcover_mask = torch.randint(0, 2, (B, H, W, 1, B_S)).float()
+        x = {
+            "sentinel2_l2a": sentinel2_l2a_tokens,
+            "sentinel2_l2a_mask": sentinel2_l2a_mask,
+            "worldcover": worldcover_tokens,
+            "worldcover_mask": worldcover_mask,
+        }
+        modalities_to_process = get_modalities_to_process(
+            return_modalities_from_dict(x), st_base.supported_modality_names
+        )
+        modalities_to_dims_dict = {
+            modality: x[modality].shape for modality in modalities_to_process
+        }
+        tokens, _ = st_base.collapse_and_combine_windowed(x, block_idx)
+
+        modality_tokens_dict = st_base.split_and_expand_per_modality_windowed(
+            tokens, modalities_to_dims_dict, window_size, block_idx
+        )
+        assert (modality_tokens_dict["sentinel2_l2a"] == x["sentinel2_l2a"]).all()
+        assert (modality_tokens_dict["worldcover"] == x["worldcover"]).all()

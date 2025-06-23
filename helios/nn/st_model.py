@@ -35,6 +35,7 @@ class AttentionMode(Enum):
     FULL = 0
     SPATIAL = 1
     TEMPORAL = 2
+    WINDOWED = 3
 
 
 class STBase(nn.Module):
@@ -51,6 +52,7 @@ class STBase(nn.Module):
         depth: int,
         drop_path: float,
         supported_modalities: list[ModalitySpec],
+        windowed_attention_size: int | None = None,
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
     ) -> None:
@@ -63,6 +65,7 @@ class STBase(nn.Module):
         logger.info(f"modalities being used by model: {self.supported_modality_names}")
 
         self.max_sequence_length = max_sequence_length
+        self.windowed_attention_size = windowed_attention_size
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
 
@@ -114,15 +117,23 @@ class STBase(nn.Module):
         return modality_data.shape[1:-2] if modality_data.ndim > 3 else ()
 
     def collapse_and_combine(
-        self, x: dict[str, Tensor], mode: AttentionMode
+        self, x: dict[str, Tensor], mode: AttentionMode, block_idx: int
     ) -> tuple[Tensor, Tensor]:
-        """Collapse the tokens and masks into two tensors."""
+        """Collapse the tokens and masks into two tensors.
+
+        Args:
+            x: the dictionary with tokens and masks.
+            mode: what kind of attention to apply.
+            block_idx: the block index, used by some attention modes.
+        """
         if mode == AttentionMode.FULL:
             return self.collapse_and_combine_full(x)
         elif mode == AttentionMode.SPATIAL:
             return self.collapse_and_combine_spatial(x)
         elif mode == AttentionMode.TEMPORAL:
             return self.collapse_and_combine_temporal(x)
+        elif mode == AttentionMode.WINDOWED:
+            return self.collapse_and_combine_windowed(x, block_idx)
         # Should not be possible.
         assert False
 
@@ -142,10 +153,10 @@ class STBase(nn.Module):
             x_modality_mask = x[masked_modality_name]
             tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
             masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
-        tokens = torch.cat(tokens, dim=1)
-        masks = torch.cat(masks, dim=1)
+        tokens_tensor = torch.cat(tokens, dim=1)
+        masks_tensor = torch.cat(masks, dim=1)
 
-        return tokens, masks
+        return tokens_tensor, masks_tensor
 
     def collapse_and_combine_temporal(
         self, x: dict[str, Tensor]
@@ -169,7 +180,7 @@ class STBase(nn.Module):
         w: int | None = None
         for modality in modalities_to_process:
             x_modality = x[modality]
-            if len(x_modality.shape) not in [5, 6]:
+            if len(x_modality.shape) != 6:
                 continue
             cur_h = x_modality.shape[1]
             cur_w = x_modality.shape[2]
@@ -202,7 +213,7 @@ class STBase(nn.Module):
                     x_modality_mask, "b b_s -> (b h w) b_s", h=h, w=w
                 )
 
-            elif len(x_modality.shape) in [5, 6]:
+            elif len(x_modality.shape) == 6:
                 flattened_tokens = rearrange(
                     x_modality, "b h w ... d -> (b h w) (...) d"
                 )
@@ -221,9 +232,9 @@ class STBase(nn.Module):
             masks.append(flattened_masks)
 
         # Concatenate along temporal (token) dimension.
-        tokens = torch.cat(tokens, dim=1)
-        masks = torch.cat(masks, dim=1)
-        return tokens, masks
+        tokens_tensor = torch.cat(tokens, dim=1)
+        masks_tensor = torch.cat(masks, dim=1)
+        return tokens_tensor, masks_tensor
 
     def collapse_and_combine_spatial(
         self, x: dict[str, Tensor]
@@ -247,7 +258,7 @@ class STBase(nn.Module):
         w: int | None = None
         for modality in modalities_to_process:
             x_modality = x[modality]
-            if len(x_modality.shape) not in [5, 6]:
+            if len(x_modality.shape) != 6:
                 continue
             cur_h = x_modality.shape[1]
             cur_w = x_modality.shape[2]
@@ -281,7 +292,7 @@ class STBase(nn.Module):
                     x_modality_mask, (0, amount_to_pad), value=MaskValue.MISSING.value
                 )
 
-            elif len(x_modality.shape) in [5, 6]:
+            elif len(x_modality.shape) == 6:
                 flattened_tokens = rearrange(
                     x_modality, "b h w ... d -> (b ...) (h w) d"
                 )
@@ -300,9 +311,104 @@ class STBase(nn.Module):
             masks.append(flattened_masks)
 
         # Concatenate along temporal (batch) dimension.
-        tokens = torch.cat(tokens, dim=0)
-        masks = torch.cat(masks, dim=0)
-        return tokens, masks
+        tokens_tensor = torch.cat(tokens, dim=0)
+        masks_tensor = torch.cat(masks, dim=0)
+        return tokens_tensor, masks_tensor
+
+    def collapse_and_combine_windowed(
+        self, x: dict[str, Tensor], block_idx: int
+    ) -> tuple[Tensor, Tensor]:
+        """Collapse the tokens and masks, respectively, into two tensors.
+
+        This applies attention that is full along the temporal dimension but windowed
+        along the spatial dimension. The size of the windows is controlled by
+        windowed_attention_size. The windows used for even blocks will be offset by
+        half of the window size.
+
+        Args:
+            x: the tokens and masks dictionary.
+            block_idx: the index of this block in the transformer.
+
+        Returns:
+            the (tokens, masks) tuple.
+        """
+        size = self.windowed_attention_size
+        assert size is not None
+        if block_idx % 2 == 0:
+            offset_padding = size // 2
+        else:
+            offset_padding = 0
+
+        available_modalities = return_modalities_from_dict(x)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+
+        # For each modality, we will compute a tensor like this:
+        # (Batch x Window ID) x Number of Tokens x Embedding Size
+        # The number of tokens will be the product of the window height and width along
+        # with the number of timesteps and the number of band sets.
+        tokens, masks = [], []
+        for modality in modalities_to_process:
+            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            x_modality = x[modality]
+            x_modality_mask = x[masked_modality_name]
+
+            if len(x_modality.shape) == 6:
+                # First collapse the temporal and band set dimensions.
+                cur_tokens = rearrange(x_modality, "b h w ... d -> b (...) d h w")
+                cur_masks = rearrange(x_modality_mask, "b h w ... -> b (...) h w")
+                # Add the offset padding that shifts the windows to the beginning.
+                cur_tokens = torch.nn.functional.pad(
+                    cur_tokens, (offset_padding, 0, offset_padding, 0)
+                )
+                cur_masks = torch.nn.functional.pad(
+                    cur_masks,
+                    (offset_padding, 0, offset_padding, 0),
+                    value=MaskValue.MISSING.value,
+                )
+                # Add padding to the end to make it multiple of window size.
+                w_padding = (-cur_tokens.shape[-1]) % size
+                h_padding = (-cur_tokens.shape[-2]) % size
+                cur_tokens = torch.nn.functional.pad(
+                    cur_tokens, (0, w_padding, 0, h_padding)
+                )
+                cur_masks = torch.nn.functional.pad(
+                    cur_masks,
+                    (0, w_padding, 0, h_padding),
+                    value=MaskValue.MISSING.value,
+                )
+                # Now we can split it up into the windows.
+                flattened_tokens = rearrange(
+                    cur_tokens,
+                    "b tbs d (hn hs) (wn ws) -> (b hn wn) (tbs hs ws) d",
+                    hs=size,
+                    ws=size,
+                )
+                flattened_masks = rearrange(
+                    cur_masks,
+                    "b tbs (hn hs) (wn ws) -> (b hn wn) (tbs hs ws)",
+                    hs=size,
+                    ws=size,
+                )
+
+            else:
+                raise NotImplementedError(
+                    f"not implemented for {len(x_modality.shape)} dimensions"
+                )
+
+            num_tokens = flattened_tokens.shape[0]
+            logger.debug(f"Modality {modality} has {num_tokens} tokens")
+            tokens.append(flattened_tokens)
+            masks.append(flattened_masks)
+
+        # Concatenate along the token dimension.
+        tokens_tensor = torch.cat(tokens, dim=1)
+        masks_tensor = torch.cat(masks, dim=1)
+        logger.info(
+            f"collapse_and_combine_windowed: end up with {tokens_tensor.shape[0]} batches of {tokens_tensor.shape[1]} tokens"
+        )
+        return tokens_tensor, masks_tensor
 
     @staticmethod
     def _construct_einops_pattern(
@@ -349,6 +455,7 @@ class STBase(nn.Module):
         x: dict[str, Tensor],
         modalities_to_dims_dict: dict[str, tuple],
         mode: AttentionMode,
+        block_idx: int,
     ) -> dict[str, Tensor]:
         """Split and expand the tokens per modality."""
         if mode == AttentionMode.FULL:
@@ -360,6 +467,11 @@ class STBase(nn.Module):
         elif mode == AttentionMode.TEMPORAL:
             return self.split_and_expand_per_modality_temporal(
                 x, modalities_to_dims_dict
+            )
+        elif mode == AttentionMode.WINDOWED:
+            assert self.windowed_attention_size is not None
+            return self.split_and_expand_per_modality_windowed(
+                x, modalities_to_dims_dict, self.windowed_attention_size, block_idx
             )
         # Should not be possible.
         assert False
@@ -429,26 +541,6 @@ class STBase(nn.Module):
                 )
                 x_modality = torch.mean(modality_tokens, dim=1)
 
-            elif len(dims) == 5:
-                batch, h, w, b_s, _ = dims
-
-                # Extract tokens for this modality (b*h*w b_s d).
-                # Modalities are stacked on the temporal (token) axis.
-                num_tokens_for_modality = b_s
-                modality_tokens = x[
-                    :, tokens_reshaped : tokens_reshaped + num_tokens_for_modality, :
-                ]
-
-                # Reshape to original dimensions.
-                x_modality = rearrange(
-                    modality_tokens,
-                    "(b h w) b_s d -> b h w b_s d",
-                    b=batch,
-                    h=h,
-                    w=w,
-                    b_s=b_s,
-                )
-
             elif len(dims) == 6:
                 batch, h, w, t, b_s, _ = dims
 
@@ -508,21 +600,6 @@ class STBase(nn.Module):
                 ]
                 x_modality = modality_tokens[:, 0:b_s, :]
 
-            elif len(dims) == 5:
-                batch, h, w, b_s, _ = dims
-                num_tokens_for_modality = batch * b_s
-                modality_tokens = x[
-                    tokens_reshaped : tokens_reshaped + num_tokens_for_modality, :, :
-                ]
-                x_modality = rearrange(
-                    modality_tokens,
-                    "(b b_s) (h w) d -> b h w b_s d",
-                    b=batch,
-                    h=h,
-                    w=w,
-                    b_s=b_s,
-                )
-
             elif len(dims) == 6:
                 # Extract tokens for this modality (b*t*b_s h*w d).
                 # Modalities are stacked on the temporal axis, which is part of the batch
@@ -549,6 +626,70 @@ class STBase(nn.Module):
 
         assert tokens_reshaped == x.shape[0]
 
+        return tokens_only_dict
+
+    @staticmethod
+    def split_and_expand_per_modality_windowed(
+        x: Tensor,
+        modalities_to_dims_dict: dict[str, tuple],
+        window_size: int,
+        block_idx: int,
+    ) -> dict[str, Tensor]:
+        """Split and expand the tokens per modality.
+
+        This is for tokens that were collapsed using collapse_and_combine_windowed (for
+        doing windowed attention).
+
+        Args:
+            x: Tokens to split and expand (b*hn*wn t*bs*hs*ws d)
+            modalities_to_dims_dict: Dictionary mapping modalities to their dimensions
+            window_size: the window size to use.
+            block_idx: the block index. Even blocks are shifted so we need to account
+                for that when expanding.
+
+        Returns:
+            tokens_only_dict: mapping modalities to their tokens
+        """
+        if block_idx % 2 == 0:
+            offset_padding = window_size // 2
+        else:
+            offset_padding = 0
+        tokens_only_dict = {}
+        tokens_reshaped = 0
+        for modality, dims in modalities_to_dims_dict.items():
+            if len(dims) != 6:
+                raise NotImplementedError(f"not implemented for {len(dims)} dimensions")
+
+            batch, h, w, t, b_s, _ = dims
+            hn = (h + offset_padding + window_size - 1) // window_size
+            wn = (w + offset_padding + window_size - 1) // window_size
+            # Extract tokens for this modality (b*hn*wn t*bs*hs*ws d).
+            # Modalities are stacked on the token axis.
+            num_tokens_for_modality = t * b_s * window_size * window_size
+            modality_tokens = x[
+                :, tokens_reshaped : tokens_reshaped + num_tokens_for_modality, :
+            ]
+            # Rearrange to padded form.
+            modality_tokens = rearrange(
+                modality_tokens,
+                "(b hn wn) (t bs hs ws) d -> b (hn hs) (wn ws) t bs d",
+                b=batch,
+                hn=hn,
+                wn=wn,
+                hs=window_size,
+                ws=window_size,
+                t=t,
+                bs=b_s,
+            )
+            # Remove beginning padding.
+            modality_tokens = modality_tokens[:, offset_padding:, offset_padding:]
+            # Remove end padding.
+            x_modality = modality_tokens[:, 0:h, 0:w]
+
+            tokens_reshaped += num_tokens_for_modality
+            tokens_only_dict[modality] = x_modality
+
+        assert tokens_reshaped == x.shape[1]
         return tokens_only_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
@@ -578,6 +719,7 @@ class STEncoder(STBase):
         drop_path: float,
         supported_modalities: list[ModalitySpec],
         max_sequence_length: int,
+        windowed_attention_size: int | None = None,
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         num_projection_layers: int = 1,
@@ -595,6 +737,7 @@ class STEncoder(STBase):
             drop_path: Drop path rate
             supported_modalities: list documenting modalities used in a given model instantiation
             max_sequence_length: Maximum sequence length
+            windowed_attention_size: Window size to do windowed attention instead of spatial/temporal attention.
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             num_projection_layers: Number of projection layers
@@ -609,6 +752,7 @@ class STEncoder(STBase):
             learnable_channel_embeddings=learnable_channel_embeddings,
             drop_path=drop_path,
             supported_modalities=supported_modalities,
+            windowed_attention_size=windowed_attention_size,
             random_channel_embeddings=random_channel_embeddings,
         )
         self.min_patch_size = min_patch_size
@@ -795,12 +939,15 @@ class STEncoder(STBase):
 
             # On even blocks, do temporal attention.
             # On odd blocks, do spatial attention.
-            if i_blk % 2 == 0:
+            # Unless windowed attention is configured.
+            if self.windowed_attention_size is not None:
+                attention_mode = AttentionMode.WINDOWED
+            elif i_blk % 2 == 0:
                 attention_mode = AttentionMode.TEMPORAL
             else:
                 attention_mode = AttentionMode.SPATIAL
 
-            x, mask = self.collapse_and_combine(x, attention_mode)
+            x, mask = self.collapse_and_combine(x, attention_mode, i_blk)
             bool_mask = mask == MaskValue.ONLINE_ENCODER.value
             tokens, indices, new_mask = self.remove_masked_tokens(x, bool_mask)
             tokens = blk(x=tokens, y=None, attn_mask=new_mask)
@@ -811,7 +958,7 @@ class STEncoder(STBase):
 
             tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
             x = self.split_and_expand_per_modality(
-                tokens, modalities_to_dims_dict, attention_mode
+                tokens, modalities_to_dims_dict, attention_mode, i_blk
             )
             x.update(original_masks_dict)
 
@@ -891,6 +1038,7 @@ class STPredictor(STBase):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         output_embedding_size: int | None = None,
+        windowed_attention_size: int | None = None,
     ):
         """Initialize the predictor.
 
@@ -906,6 +1054,8 @@ class STPredictor(STBase):
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Whether to randomly initialize channel embeddings
             output_embedding_size: Size of output embeddings
+            windowed_attention_size: the size for windowed attention. If set, we do
+                windowed attention instead of spatial/temporal attention.
         """
         super().__init__(
             embedding_size=decoder_embedding_size,
@@ -917,6 +1067,7 @@ class STPredictor(STBase):
             learnable_channel_embeddings=learnable_channel_embeddings,
             random_channel_embeddings=random_channel_embeddings,
             supported_modalities=supported_modalities,
+            windowed_attention_size=windowed_attention_size,
         )
         # TODO: Rename this weird misname
         self.learnable_channel_embeddings = learnable_channel_embeddings
@@ -1100,12 +1251,15 @@ class STPredictor(STBase):
         for i_blk, blk in enumerate(self.blocks):
             # On even blocks, do temporal attention.
             # On odd blocks, do spatial attention.
-            if i_blk % 2 == 0:
+            # Unless windowed attention is configured.
+            if self.windowed_attention_size is not None:
+                attention_mode = AttentionMode.WINDOWED
+            elif i_blk % 2 == 0:
                 attention_mode = AttentionMode.TEMPORAL
             else:
                 attention_mode = AttentionMode.SPATIAL
 
-            x, mask = self.collapse_and_combine(x, attention_mode)
+            x, mask = self.collapse_and_combine(x, attention_mode, i_blk)
             x, y, x_mask, y_mask, indices = self.split_x_y(x, mask)
 
             # note that we are not taking the inverse of the mask, since split_x_y gives us
@@ -1120,7 +1274,7 @@ class STPredictor(STBase):
                 indices=indices,
             )
             x = self.split_and_expand_per_modality(
-                x, modalities_to_dims_dict, attention_mode
+                x, modalities_to_dims_dict, attention_mode, i_blk
             )
             x.update(original_masks_dict)
 
@@ -1213,6 +1367,7 @@ class STEncoderConfig(Config):
     depth: int = 2
     drop_path: float = 0.1
     max_sequence_length: int = 12
+    windowed_attention_size: int | None = None
     learnable_channel_embeddings: bool = True
     random_channel_embeddings: bool = False
 
@@ -1256,6 +1411,7 @@ class STPredictorConfig(Config):
     learnable_channel_embeddings: bool = True
     random_channel_embeddings: bool = False
     output_embedding_size: int | None = None
+    windowed_attention_size: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
