@@ -1144,25 +1144,19 @@ class Encoder(FlexiHeliosBase):
                 else:
                     multiplier = 1
                 for idx, band_set in enumerate(modality.band_sets):
-                    if len(probe_dims) == 0:
-                        probes[f"{modality_name}_{idx}"] = nn.Linear(
-                            self.embedding_size,
+                    probe_dims = [self.embedding_size] + probe_dims
+                    layers = [nn.LayerNorm(self.embedding_size)]
+                    for i in range(len(probe_dims) - 1):
+                        layers.extend(
+                            [nn.Linear(probe_dims[i], probe_dims[i + 1]), nn.GELU()]
+                        )
+                    layers.append(
+                        nn.Linear(
+                            probe_dims[-1],
                             output_hw * len(band_set.bands) * multiplier,
                         )
-                    else:
-                        probe_dims = [self.embedding_size] + probe_dims
-                        layers = []
-                        for i in range(len(probe_dims) - 1):
-                            layers.extend(
-                                [nn.Linear(probe_dims[i], probe_dims[i + 1]), nn.GELU()]
-                            )
-                        layers.append(
-                            nn.Linear(
-                                probe_dims[-1],
-                                output_hw * len(band_set.bands) * multiplier,
-                            )
-                        )
-                        probes[f"{modality_name}_{idx}"] = nn.Sequential(*layers)
+                    )
+                    probes[f"{modality_name}_{idx}"] = nn.Sequential(*layers)
             self.probes = nn.ModuleDict(probes)
         else:
             self.probes = {}
