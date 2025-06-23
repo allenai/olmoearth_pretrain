@@ -419,6 +419,22 @@ class SpaceMaskingStrategy(MaskingStrategy):
         patch_size_at_16: int,
         device: torch.device | None = None,
     ) -> torch.Tensor:
+        """Create a h_p x w_p spatial mask.
+
+        Here, h_p and w_p are the number of patches along height and width dimension
+        respectively.
+
+        The mask computed here is modality-agnostic, but we still expect a specific
+        modality to be passed since it will be used to compute h_p/w_p. The mask will
+        then need to be resized using _resize_spatial_mask_for_modality to the
+        modality's patch size.
+
+        Args:
+            modality: the modality we are using to compute h_p/w_p.
+            shape: the shape of the image for that modality.
+            patch_size_at_16: the patch size measured in 10 m/pixel pixels.
+            device: the device to use.
+        """
         if not modality.is_spatial:
             raise ValueError("Non-spatial modality {modality}")
 
@@ -452,31 +468,25 @@ class SpaceMaskingStrategy(MaskingStrategy):
         random_batch_mask = torch.stack(masks)
         return rearrange(random_batch_mask, "b (h w) -> b h w", h=h_p, w=w_p)
 
-    def _create_spatial_mask(
+    def _resize_spatial_mask_for_modality(
         self,
         patch_mask: torch.Tensor,
         modality: ModalitySpec,
-        shape: torch.Size,
         patch_size_at_16: int,
     ) -> ArrayTensor:
+        """Resize the mask computed by _create_patch_spatial_mask for the given modality.
+
+        Args:
+            patch_mask: the mask computed by _create_patch_spatial_mask.
+            modality: the modality to compute the mask for.
+            patch_size_at_16: the patch size measured in 10 m/pixel pixels.
+        """
         if not modality.is_spatial:
             raise ValueError("Non-spatial modality {modality}")
 
-        b, h, w = shape[:3]
-
         patch_size = patch_size_at_16 * modality.image_tile_size_factor
-        assert (h % patch_size == 0) and (w % patch_size == 0)
-        h_p = h // patch_size
-        w_p = w // patch_size
-
-        if (patch_mask.shape[1] != h_p) or (patch_mask.shape[2] != w_p):
-            raise ValueError(
-                f"Mismached shapes for {modality.name}: "
-                f"got patch_mask {patch_mask.shape} for h_p {h_p}, w_p {w_p}"
-            )
-
         mask = repeat(
-            patch_mask, "b h w -> b (h hp) (w wp)", hp=patch_size, wp=patch_size
+            patch_mask, "b h w -> b (h hps) (w wps)", hps=patch_size, wps=patch_size
         )
         return mask
 
@@ -532,9 +542,15 @@ class SpaceMaskingStrategy(MaskingStrategy):
                     patch_spatial_mask = self._create_patch_spatial_mask(
                         modality, shape, patch_size, device
                     )
-                spatial_mask = self._create_spatial_mask(
-                    patch_spatial_mask, modality, shape, patch_size
+                resized_spatial_mask = self._resize_spatial_mask_for_modality(
+                    patch_spatial_mask, modality, patch_size
                 )
+
+                if resized_spatial_mask.shape[0:3] != shape[0:3]:
+                    raise ValueError(
+                        f"Mismached shapes for {modality.name}: "
+                        f"computed mask {mask.shape} but image shape is {shape}"
+                    )
 
                 if len(shape) == 5:
                     t = shape[-2]
@@ -542,7 +558,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
                     t = 1
                 b_s = modality.num_band_sets
                 # Mask is a view of the spatial mask, so changes to mask will change spatial_mask
-                mask = repeat(spatial_mask, "... -> ... t b_s", t=t, b_s=b_s)
+                mask = repeat(resized_spatial_mask, "... -> ... t b_s", t=t, b_s=b_s)
                 mask = mask.view(*shape[:-1], b_s).clone()
             mask = self.fill_mask_with_missing_values(instance, mask, modality)
 

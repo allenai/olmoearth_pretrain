@@ -339,7 +339,7 @@ def test_create_random_mask_with_missing_mask() -> None:
 
 
 def test_create_spatial_mask_with_patch_size() -> None:
-    """Test the _create_spatial_mask function with different patch sizes."""
+    """Test the _create_patch_spatial_mask function with different patch sizes."""
     b = 4
     h, w = 16, 16
     shape = (b, h, w)
@@ -350,14 +350,13 @@ def test_create_spatial_mask_with_patch_size() -> None:
         encode_ratio=encode_ratio, decode_ratio=decode_ratio
     )
 
-    # Call the _create_spatial_mask function directly
+    # Call the _create_patch_spatial_mask function directly
     patch_mask = strategy._create_patch_spatial_mask(
         modality=Modality.SENTINEL2_L2A, shape=shape, patch_size_at_16=patch_size
     )
-    mask = strategy._create_spatial_mask(
+    mask = strategy._resize_spatial_mask_for_modality(
         patch_mask,
         modality=Modality.SENTINEL2_L2A,
-        shape=shape,
         patch_size_at_16=patch_size,
     )
 
