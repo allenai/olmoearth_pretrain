@@ -360,15 +360,15 @@ class TimeMaskingStrategy(MaskingStrategy):
     ) -> ArrayTensor:
         b = shape[0]
         t = shape[-2]
-        assert t >= 3
         # timesteps withat least one modality are the only ones we can put as either encoder and decoder randomly pick from those instead
         # can we relax the all sample contraint here as we are doing per sample stuff anyways
         present_t = timesteps_with_at_least_one_modality.shape[0] # across all samples
-
+        assert present_t >= 3
+        logger.info(f"Present timesteps: {present_t}")
         encode_times = max(int(self.encode_ratio * present_t), 1)
         decode_times = max(int(self.decode_ratio * present_t), 1)
         target_times = present_t - encode_times - decode_times
-
+        logger.info(f"Encode times: {encode_times}, Decode times: {decode_times}, Target times: {target_times}")
         # Create mask values only for the encodable timesteps
         encodable_mask_values = torch.cat(
             [
@@ -394,15 +394,6 @@ class TimeMaskingStrategy(MaskingStrategy):
 
         mask = torch.stack(masks)
         return mask
-
-    def _create_temporal_mask_with_missing_values(
-        self,
-        shape: torch.Size,
-        valid_timesteps: torch.Tensor,
-        device: torch.device | None = None,
-    ) -> MaskedHeliosSample:
-        # pick the encode decode and target from the valid timesteps
-        pass
 
     def apply_mask(
         self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
@@ -451,8 +442,8 @@ class TimeMaskingStrategy(MaskingStrategy):
                 else:
                     if temporal_mask is None:
                         # if there are timesteps that we wouldn't want to pick we should call a seprate mask creation function
-
-                        temporal_mask = self._create_temporal_mask(shape, device)
+                        logger.info(f"Creating temporal mask for modality {modality.name}")
+                        temporal_mask = self._create_temporal_mask(shape, timesteps_with_at_least_one_modality, device)
                     b_s = modality.num_band_sets
                     b, h, w = list(shape[:-2]) + [1] * (3 - len(shape[:-2]))
                     # Repeat shares a view of the temporal masks so if we don't clone future changes may propogate across modalities

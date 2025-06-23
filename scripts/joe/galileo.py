@@ -92,7 +92,7 @@ def build_train_module_config(
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config_a=MaskingConfig(
             strategy_config={
-                "type": "space_time",
+                "type": "time",
                 "encode_ratio": 0.1,
                 "decode_ratio": 0.75,
             }

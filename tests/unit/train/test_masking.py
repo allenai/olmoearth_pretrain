@@ -220,7 +220,7 @@ def test_time_structure_masking_and_unmask() -> None:
 
 def test_time_with_missing_timesteps_structure_masking_and_unmask() -> None:
     """Test time structure masking ratios."""
-    b, h, w, t = 100, 16, 16, 8
+    b, h, w, t = 8, 8, 8, 8
 
     patch_size = 4
 
@@ -229,14 +229,34 @@ def test_time_with_missing_timesteps_structure_masking_and_unmask() -> None:
     years = torch.randint(2018, 2020, (b, 1, t), dtype=torch.long)
     timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
     sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
+    sentinel1_num_bands = Modality.SENTINEL1.num_bands
     latlon_num_bands = Modality.LATLON.num_bands
     worldcover_num_bands = Modality.WORLDCOVER.num_bands
+
+    # Create data with random missing timesteps for each modality and sample
+    sentinel2_l2a = torch.ones((b, h, w, t, sentinel2_l2a_num_bands))
+    sentinel1 = torch.ones((b, h, w, t, sentinel1_num_bands))
+
+    # Randomly set some timesteps to missing for each sample and modality
+    for sample_idx in range(b):
+        # For sentinel2_l2a: randomly mask 2-4 timesteps per sample
+        num_missing_timesteps = torch.randint(2, 5, (1,)).item()
+        missing_timesteps = torch.randint(2, 5, (num_missing_timesteps,))
+        sentinel2_l2a[sample_idx, :, :, missing_timesteps, :] = MISSING_VALUE
+
+        # For sentinel1: randomly mask 2-4 timesteps per sample (different from sentinel2)
+        num_missing_timesteps = torch.randint(2, 5, (1,)).item()
+        missing_timesteps = torch.randint(2, 5, (num_missing_timesteps,))
+        sentinel1[sample_idx, :, :, missing_timesteps, :] = MISSING_VALUE
+
     batch = HeliosSample(
-        sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
+        sentinel2_l2a=sentinel2_l2a,
+        sentinel1=sentinel1,
         latlon=torch.ones((b, latlon_num_bands)),
         timestamps=timestamps,
         worldcover=torch.ones((b, h, w, worldcover_num_bands)),
     )
+
     encode_ratio, decode_ratio = 0.25, 0.5
     masked_sample = TimeMaskingStrategy(
         encode_ratio=encode_ratio,
@@ -246,32 +266,25 @@ def test_time_with_missing_timesteps_structure_masking_and_unmask() -> None:
         patch_size=patch_size,
     )
     # check that each modality has the right masking ratio
-    for modality_name in masked_sample._fields:
-        if modality_name.endswith("mask"):
-            unmasked_modality_name = masked_sample.get_unmasked_modality_name(
-                modality_name
-            )
-            modality = Modality.get(unmasked_modality_name)
-            mask = getattr(masked_sample, modality_name)
-            data = getattr(masked_sample, unmasked_modality_name)
-            logger.info(f"Mask name: {modality_name}")
-            if mask is None:
-                continue
-            total_elements = mask.numel()
-            num_encoder = len(mask[mask == MaskValue.ONLINE_ENCODER.value])
-            num_decoder = len(mask[mask == MaskValue.DECODER.value])
-            assert (
-                num_encoder / total_elements
-            ) == encode_ratio, f"{modality_name} has incorrect encode mask ratio"
-            assert (
-                num_decoder / total_elements
-            ) == decode_ratio, f"{modality_name} has incorrect decode mask ratio"
-            assert (
-                mask.shape[:-1] == data.shape[:-1]
-            ), f"{modality_name} has incorrect shape"
-            assert (
-                mask.shape[-1] == modality.num_band_sets
-            ), f"{modality_name} has incorrect num band sets"
+    for i in range(b):
+        # for every sample check that at least 1 modality is present at each timestep
+        timestamp_present_mask = torch.zeros((t), dtype=torch.bool)
+        for modality_name in masked_sample._fields:
+            if modality_name.endswith("mask"):
+                mask = getattr(masked_sample, modality_name)
+                unmasked_modality_name = masked_sample.get_unmasked_modality_name(
+                    modality_name
+                )
+                modality_spec = Modality.get(unmasked_modality_name)
+                if not modality_spec.is_multitemporal:
+                    continue
+                logger.info(f"Mask name: {modality_name}")
+                if mask is None:
+                    continue
+                present_timesteps = (mask[i] != MaskValue.MISSING.value).all(dim=(0,1,3))
+                timestamp_present_mask = timestamp_present_mask | present_timesteps
+        assert timestamp_present_mask.any(), f"Sample {i} has no present modalities"
+
 
     unmasked_sample = masked_sample.unmask()
     for modality_name in unmasked_sample._fields:

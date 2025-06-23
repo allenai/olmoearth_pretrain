@@ -243,6 +243,9 @@ class HeliosSample(NamedTuple):
         # assumes we have a batch dimension
         per_modality_present_masks = []
         for modality in self.modalities:
+            # TODO: seems like we never want timestamps when we loop so maybe we should move this to the property
+            if modality == "timestamps":
+                continue
             modality_spec = Modality.get(modality)
             if modality_spec.is_multitemporal:
                 data = getattr(self, modality)
@@ -253,8 +256,8 @@ class HeliosSample(NamedTuple):
         # at least one means we need any across the timesteps
         modality_timestep_present_mask = torch.stack(
             per_modality_present_masks, dim=1
-        ).any(dim=1)
-        at_least_one_modality_present_mask = modality_timestep_present_mask.any(dim=0)
+        )
+        at_least_one_modality_present_mask = modality_timestep_present_mask.any(dim=1)
         timesteps_with_at_least_one_modality = torch.where(
             at_least_one_modality_present_mask
         )[0]
