@@ -1210,6 +1210,17 @@ class Encoder(FlexiHeliosBase):
             exit_ids_seq = None
         return exit_ids_seq
 
+    def get_attn_or_none_mask(
+        self,
+        new_mask: Tensor,
+        always_pass_none_mask_to_transformer: bool,
+    ) -> Tensor | None:
+        """Get the attention mask or None if we should pass None to the transformer."""
+        if always_pass_none_mask_to_transformer or not self.training:
+            return None
+        else:
+            return new_mask
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -1217,6 +1228,7 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
+        always_pass_none_mask_to_transformer: bool = False,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1256,6 +1268,9 @@ class Encoder(FlexiHeliosBase):
             og_shape = tokens.shape
             tokens = self.pack_tokens(tokens, new_mask)
 
+        attn_mask = self.get_attn_or_none_mask(
+            new_mask, always_pass_none_mask_to_transformer
+        )
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -1278,7 +1293,7 @@ class Encoder(FlexiHeliosBase):
                 cu_seqlens=cu_seqlens,
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
-                attn_mask=new_mask if self.training else None,
+                attn_mask=attn_mask,
             )
 
         if self.use_flash_attn:
@@ -1315,6 +1330,7 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
+        always_pass_none_mask_to_transformer: bool = False,
     ) -> tuple[TokensAndMasks, torch.Tensor]:
         """Process masked input samples into token representations.
 
@@ -1323,6 +1339,7 @@ class Encoder(FlexiHeliosBase):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
+            always_pass_none_mask_to_transformer: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -1338,6 +1355,7 @@ class Encoder(FlexiHeliosBase):
                 patch_size=patch_size,
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
+                always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
         return output, self.project_and_aggregate(output)

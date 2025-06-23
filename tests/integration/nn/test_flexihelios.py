@@ -237,25 +237,30 @@ class TestEncoder:
         patch_size = 4
         input_res = 10
 
-        output = encoder.apply_attn(
-            x=x, timestamps=timestamps, patch_size=patch_size, input_res=input_res
-        )
+        for always_pass_none_mask_to_transformer in [True, False]:
+            output = encoder.apply_attn(
+                x=x,
+                timestamps=timestamps,
+                patch_size=patch_size,
+                input_res=input_res,
+                always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+            )
 
-        # Ensure shape is preserved in the output tokens.
-        assert (
-            output["sentinel2_l2a"].shape == sentinel2_l2a_tokens.shape
-        ), f"Expected output 'sentinel2_l2a' shape {sentinel2_l2a_tokens.shape}, got {output['sentinel2_l2a'].shape}."
+            # Ensure shape is preserved in the output tokens.
+            assert (
+                output["sentinel2_l2a"].shape == sentinel2_l2a_tokens.shape
+            ), f"Expected output 'sentinel2_l2a' shape {sentinel2_l2a_tokens.shape}, got {output['sentinel2_l2a'].shape}."
 
-        # Confirm the mask was preserved and that masked tokens are zeroed out in the output.
-        assert (
-            output["sentinel2_l2a_mask"] == sentinel2_l2a_mask
-        ).all(), "Mask should be preserved in output"
-        assert (
-            output["sentinel2_l2a"][
-                sentinel2_l2a_mask >= MaskValue.TARGET_ENCODER_ONLY.value
-            ]
-            == 0
-        ).all(), "Masked tokens should be 0 in output"
+            # Confirm the mask was preserved and that masked tokens are zeroed out in the output.
+            assert (
+                output["sentinel2_l2a_mask"] == sentinel2_l2a_mask
+            ).all(), "Mask should be preserved in output"
+            assert (
+                output["sentinel2_l2a"][
+                    sentinel2_l2a_mask >= MaskValue.TARGET_ENCODER_ONLY.value
+                ]
+                == 0
+            ).all(), "Masked tokens should be 0 in output"
 
     def test_forward_exit_config_none(
         self,
