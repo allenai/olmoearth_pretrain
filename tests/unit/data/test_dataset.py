@@ -8,7 +8,7 @@ import pytest
 import torch
 from upath import UPath
 
-from helios.data.constants import MISSING_VALUE
+from helios.data.constants import MISSING_VALUE, Modality
 from helios.data.dataset import HeliosDataset, HeliosSample, collate_helios
 
 logger = getLogger(__name__)
@@ -97,39 +97,6 @@ class TestHeliosDataset:
         h5py_dir = tmp_path / "h5py_data"
         h5py_dir.mkdir()
         return UPath(h5py_dir)
-
-    def test_fill_missing_timesteps(self, tmp_h5py_dir: UPath) -> None:
-        """Test _fill_missing_timesteps function."""
-        # Create test data
-        h, w, t, c = 4, 4, 2, 2
-        data = np.random.randn(h, w, t, c).astype(np.float32)
-        # Only first and last timesteps present
-        mask = np.array([True, False, True])
-        max_sequence_length = 5
-
-        # Create dataset instance
-        dataset = HeliosDataset(
-            h5py_dir=tmp_h5py_dir,
-            training_modalities=["sentinel2_l2a"],
-            dtype=np.float32,
-            max_sequence_length=max_sequence_length,
-            normalize=False,  # Disable normalization for testing
-        )
-
-        # Fill missing timesteps
-        filled_data = dataset._fill_missing_timesteps(data, mask)
-
-        # Check shape
-        assert filled_data.shape == (h, w, max_sequence_length, c)
-
-        # Check that original data is preserved at correct timesteps
-        # the data is stored without any missing data for the missing timesteps
-        assert np.array_equal(filled_data[..., 0, :], data[..., 0, :])
-        assert np.array_equal(filled_data[..., 2, :], data[..., 1, :])
-
-        # Check that missing timesteps are filled with MISSING_VALUE
-        assert np.all(filled_data[..., 1, :] == MISSING_VALUE)
-        assert np.all(filled_data[..., 3:, :] == MISSING_VALUE)
 
     def test_fill_missing_timesteps(self, tmp_h5py_dir: UPath) -> None:
         """Test _fill_missing_timesteps function."""
@@ -238,19 +205,16 @@ class TestHeliosDataset:
     def test_crop_timestamps(self) -> None:
         """Test _crop_timestamps function."""
         timestamps = np.array([[i, 1, 2023] for i in range(10)])
+
         missing_timesteps_masks = {
-            "sentinel2_l2a": np.array([True] * 8 + [False] * 2),
-            "landsat": np.array([True] * 10),
+            Modality.SENTINEL2_L2A.name: np.array([True] * 8 + [False] * 2),
+            Modality.LANDSAT.name: np.array([False] * 3 + [True] * 6),
         }
         cropped_timestamps, cropped_missing_timesteps_masks = (
             HeliosDataset._crop_timestamps_and_masks(
                 timestamps, missing_timesteps_masks
             )
         )
-        logger.warning(
-            f"cropped_timestamps: {cropped_timestamps} length: {len(cropped_timestamps)}"
-        )
-        logger.warning(
-            f"cropped_missing_timesteps_masks: {cropped_missing_timesteps_masks} "
-        )
-        assert False
+        assert len(cropped_timestamps) == 9
+        assert len(cropped_missing_timesteps_masks[Modality.SENTINEL2_L2A.name]) == 9
+        assert len(cropped_missing_timesteps_masks[Modality.LANDSAT.name]) == 9
