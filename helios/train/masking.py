@@ -903,11 +903,11 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                         ]
                     )
                 else:
-                    decoded_bandset_idxs = (
+                    available_decoded_bandset_idxs = list(
                         set(present_modalities_bandsets_for_sample)
                         - encoded_bandset_idxs
                     )
-                    num_decoded_bandsets = len(decoded_bandset_idxs)
+                    num_decoded_bandsets = len(available_decoded_bandset_idxs)
                     min_decoded_bandsets = min(
                         min_decoded_bandsets, num_decoded_bandsets
                     )
@@ -916,15 +916,12 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     )
                     # select the decoded bandsets
                     decoded_idxs = np.random.choice(
-                        len(present_modalities_bandsets_for_sample),
+                        len(available_decoded_bandset_idxs),
                         size=num_decoded_bandsets,
                         replace=False,
                     )
                     decoded_bandset_idxs = set(
-                        [
-                            present_modalities_bandsets_for_sample[i]
-                            for i in decoded_idxs
-                        ]
+                        [available_decoded_bandset_idxs[i] for i in decoded_idxs]
                     )
             encoded_decoded_bandsets.append(
                 (encoded_bandset_idxs, decoded_bandset_idxs)
