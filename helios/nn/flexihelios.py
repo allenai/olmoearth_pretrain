@@ -1145,7 +1145,7 @@ class Encoder(FlexiHeliosBase):
                     multiplier = 1
                 for idx, band_set in enumerate(modality.band_sets):
                     probe_dims = [self.embedding_size] + probe_dims
-                    layers = [nn.LayerNorm(self.embedding_size)]
+                    layers: list[nn.Module] = []
                     for i in range(len(probe_dims) - 1):
                         layers.extend(
                             [nn.Linear(probe_dims[i], probe_dims[i + 1]), nn.GELU()]
