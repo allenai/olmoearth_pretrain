@@ -69,6 +69,8 @@ class MaskedHeliosSample(NamedTuple):
     landsat_mask: ArrayTensor | None = None
     naip: ArrayTensor | None = None
     naip_mask: ArrayTensor | None = None
+    naip_10: ArrayTensor | None = None
+    naip_10_mask: ArrayTensor | None = None
 
     def as_dict(self, return_none: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
@@ -114,51 +116,6 @@ class MaskedHeliosSample(NamedTuple):
             and field != "timestamps"
             and getattr(self, field) is not None
         ]
-
-    @property
-    def height(self) -> int:
-        """Get the height of the data."""
-        for modality in self.modalities:
-            if modality == "timestamps":
-                continue
-            modality_spec = Modality.get(modality)
-            if not modality_spec.is_spatial:
-                continue
-            x = getattr(self, modality)
-            if x is not None:
-                if len(x.shape) == 5:
-                    return x.shape[1]
-                else:
-                    # no batch dimension
-                    if len(x.shape) != 4:
-                        raise ValueError(f"Unexpected shape {x.shape} for {modality}")
-                    return x.shape[0]
-        raise ValueError("No modality with height or width present")
-
-    @property
-    def width(self) -> int:
-        """Get the height of the data."""
-        for modality in self.modalities:
-            if modality == "timestamps":
-                continue
-            modality_spec = Modality.get(modality)
-            if not modality_spec.is_spatial:
-                continue
-            x = getattr(self, modality)
-            if x is not None:
-                if len(x.shape) == 5:
-                    return x.shape[2]
-                else:
-                    # no batch dimension
-                    if len(x.shape) != 4:
-                        raise ValueError(f"Unexpected shape {x.shape} for {modality}")
-                    return x.shape[1]
-        raise ValueError("No modality with height or width present")
-
-    @property
-    def time(self) -> int:
-        """Get the number of time steps in the data."""
-        return self.timestamps.shape[1]
 
     @staticmethod
     def get_masked_modality_name(modality: str) -> str:
@@ -280,7 +237,7 @@ class MaskingStrategy:
         self,
         modality: ModalitySpec,
         shape: torch.Size,
-        patch_size: int,
+        patch_size_at_16: int,
         device: torch.device | None = None,
         encode_ratio: float | None = None,
         decode_ratio: float | None = None,
@@ -288,6 +245,7 @@ class MaskingStrategy:
         mask_shape = list(shape)
         mask_shape[-1] = modality.num_band_sets
         if modality.is_spatial:
+            patch_size = patch_size_at_16 * modality.image_tile_size_factor
             mask_shape[1] //= patch_size
             mask_shape[2] //= patch_size
 
@@ -454,18 +412,35 @@ class SpaceMaskingStrategy(MaskingStrategy):
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
 
-    def _create_spatial_mask(
+    def _create_patch_spatial_mask(
         self,
         modality: ModalitySpec,
         shape: torch.Size,
-        patch_size: int,
+        patch_size_at_16: int,
         device: torch.device | None = None,
-    ) -> ArrayTensor:
+    ) -> torch.Tensor:
+        """Create a h_p x w_p spatial mask.
+
+        Here, h_p and w_p are the number of patches along height and width dimension
+        respectively.
+
+        The mask computed here is modality-agnostic, but we still expect a specific
+        modality to be passed since it will be used to compute h_p/w_p. The mask will
+        then need to be resized using _resize_spatial_mask_for_modality to the
+        modality's patch size.
+
+        Args:
+            modality: the modality we are using to compute h_p/w_p.
+            shape: the shape of the image for that modality.
+            patch_size_at_16: the patch size measured in 10 m/pixel pixels.
+            device: the device to use.
+        """
         if not modality.is_spatial:
             raise ValueError("Non-spatial modality {modality}")
 
         b, h, w = shape[:3]
 
+        patch_size = patch_size_at_16 * modality.image_tile_size_factor
         assert (h % patch_size == 0) and (w % patch_size == 0)
         h_p = h // patch_size
         w_p = w // patch_size
@@ -491,10 +466,27 @@ class SpaceMaskingStrategy(MaskingStrategy):
 
         masks = [flat_mask[torch.randperm(patches, device=device)] for i in range(b)]
         random_batch_mask = torch.stack(masks)
-        patch_mask = rearrange(random_batch_mask, "b (h w) -> b h w", h=h_p, w=w_p)
+        return rearrange(random_batch_mask, "b (h w) -> b h w", h=h_p, w=w_p)
 
+    def _resize_spatial_mask_for_modality(
+        self,
+        patch_mask: torch.Tensor,
+        modality: ModalitySpec,
+        patch_size_at_16: int,
+    ) -> ArrayTensor:
+        """Resize the mask computed by _create_patch_spatial_mask for the given modality.
+
+        Args:
+            patch_mask: the mask computed by _create_patch_spatial_mask.
+            modality: the modality to compute the mask for.
+            patch_size_at_16: the patch size measured in 10 m/pixel pixels.
+        """
+        if not modality.is_spatial:
+            raise ValueError("Non-spatial modality {modality}")
+
+        patch_size = patch_size_at_16 * modality.image_tile_size_factor
         mask = repeat(
-            patch_mask, "b h w -> b (h hp) (w wp)", hp=patch_size, wp=patch_size
+            patch_mask, "b h w -> b (h hps) (w wps)", hps=patch_size, wps=patch_size
         )
         return mask
 
@@ -507,7 +499,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
 
         Args:
             batch: Input data of type HeliosSample
-            patch_size: patch size applied to sample
+            patch_size: patch size applied to sample, at an image_tile_size_factor == 16
             **kwargs: Additional arguments for maskings
 
         Returns:
@@ -516,7 +508,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
         if patch_size is None:
             raise ValueError("patch_size must be provided for space masking")
         output_dict: dict[str, ArrayTensor | None] = {}
-        spatial_mask = None
+        patch_spatial_mask = None
         # Same spatial mask for all modalities
         for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
@@ -545,10 +537,19 @@ class SpaceMaskingStrategy(MaskingStrategy):
                 )
                 mask = self._create_random_mask(modality, shape, patch_size, device)
             else:
-                if spatial_mask is None:
+                if patch_spatial_mask is None:
                     logger.info(f"Creating spatial mask for modality {modality.name}")
-                    spatial_mask = self._create_spatial_mask(
+                    patch_spatial_mask = self._create_patch_spatial_mask(
                         modality, shape, patch_size, device
+                    )
+                resized_spatial_mask = self._resize_spatial_mask_for_modality(
+                    patch_spatial_mask, modality, patch_size
+                )
+
+                if resized_spatial_mask.shape[0:3] != shape[0:3]:
+                    raise ValueError(
+                        f"Mismached shapes for {modality.name}: "
+                        f"computed mask {mask.shape} but image shape is {shape}"
                     )
 
                 if len(shape) == 5:
@@ -557,7 +558,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
                     t = 1
                 b_s = modality.num_band_sets
                 # Mask is a view of the spatial mask, so changes to mask will change spatial_mask
-                mask = repeat(spatial_mask, "... -> ... t b_s", t=t, b_s=b_s)
+                mask = repeat(resized_spatial_mask, "... -> ... t b_s", t=t, b_s=b_s)
                 mask = mask.view(*shape[:-1], b_s).clone()
             mask = self.fill_mask_with_missing_values(instance, mask, modality)
 
@@ -1409,6 +1410,60 @@ class SelectableRandomRangeModalityMaskingStrategy(MaskingStrategy):
                 )[batch_idx] = value
 
         return masked_sample
+
+
+class FixedModalityMaskingStrategy(MaskingStrategy):
+    """Abstract class for masking strategies always mask certain modalities on top of another masking strategy."""
+
+    def __init__(
+        self,
+        strategy: MaskingStrategy,
+        decoded_modalities: list[str],
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+    ) -> None:
+        """Initialize the masking strategy."""
+        self._encode_ratio = encode_ratio
+        self._decode_ratio = decode_ratio
+        self.strategy = strategy
+        self.decoded_modalities = decoded_modalities
+
+    def apply_mask(
+        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedHeliosSample:
+        """Apply masking to the input data."""
+        # Apply other strategy first.
+        masked_sample = self.strategy.apply_mask(batch, patch_size, **kwargs)
+
+        # Now mark the decoded_modalities for decoding, similar to SelectableModalityMaskingStrategy.
+        for modality in self.decoded_modalities:
+            mask = getattr(
+                masked_sample, MaskedHeliosSample.get_masked_modality_name(modality)
+            )
+            if mask is None:
+                continue
+            mask[:] = MaskValue.DECODER.value
+
+        return masked_sample
+
+
+@MASKING_STRATEGY_REGISTRY.register("random_fixed_modality")
+class RandomFixedModalityMaskingStrategy(FixedModalityMaskingStrategy):
+    """Fixed modality masking + random masking."""
+
+    def __init__(
+        self,
+        decoded_modalities: list[str],
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+    ) -> None:
+        """Initialize the masking strategy."""
+        super().__init__(
+            strategy=RandomMaskingStrategy(encode_ratio, decode_ratio),
+            decoded_modalities=decoded_modalities,
+            encode_ratio=encode_ratio,
+            decode_ratio=decode_ratio,
+        )
 
 
 @dataclass

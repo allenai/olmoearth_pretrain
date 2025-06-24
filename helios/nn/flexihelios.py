@@ -89,6 +89,8 @@ class TokensAndMasks(NamedTuple):
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None
     naip_mask: Tensor | None = None
+    naip_10: Tensor | None = None
+    naip_10_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
@@ -330,7 +332,8 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     self._get_embedding_module_name(modality, idx): FlexiPatchEmbed(
                         in_chans=len(channel_set_idxs),
                         embedding_size=self.embedding_size,
-                        patch_size=self.max_patch_size,
+                        patch_size_at_16=self.max_patch_size,
+                        modality_spec=modality_spec,
                     )
                     for idx, channel_set_idxs in enumerate(
                         modality_spec.bandsets_as_indices()
@@ -356,16 +359,29 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                 # static in time
                 token_mask = modality_mask[..., idx]
             else:
-                token_mask = modality_mask[:, 0::patch_size, 0::patch_size, ..., idx]
+                token_mask = modality_mask[
+                    :,
+                    0 :: patch_size * modality_spec.image_tile_size_factor,
+                    0 :: patch_size * modality_spec.image_tile_size_factor,
+                    ...,
+                    idx,
+                ]
                 modality_specific_kwargs = {"patch_size": patch_size}
             # Now apply the embedding to the patchified data
-            patchified_data = modality_data[..., channel_set_indices]
-            embedding_module = self.per_modality_embeddings[modality][
-                self._get_embedding_module_name(modality, idx)
-            ]
-            patchified_data = embedding_module(
-                patchified_data, **modality_specific_kwargs
-            )
+            if (token_mask == MaskValue.ONLINE_ENCODER.value).any():
+                patchified_data = modality_data[..., channel_set_indices]
+                embedding_module = self.per_modality_embeddings[modality][
+                    self._get_embedding_module_name(modality, idx)
+                ]
+                patchified_data = embedding_module(
+                    patchified_data, **modality_specific_kwargs
+                )
+            else:
+                mask_shape = token_mask.shape + (self.embedding_size,)
+                patchified_data = torch.zeros(
+                    mask_shape, dtype=token_mask.dtype, device=token_mask.device
+                )
+
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
@@ -1678,7 +1694,7 @@ class Predictor(FlexiHeliosBase):
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
         """
-        decoder_emedded_dict = x._asdict()
+        decoder_emedded_dict = x.as_dict(return_none=False)
         # Apply Input Norms and encoder to decoder embeds to each modality
         available_modalities = x.modalities
         modalities_to_process = get_modalities_to_process(

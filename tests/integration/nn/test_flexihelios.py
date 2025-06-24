@@ -120,6 +120,64 @@ class TestFlexiHeliosPatchEmbeddings:
         )  # B, C_G , D
         assert output["latlon_mask"].shape == (B, latlon_num_band_sets)  # B, C_G
 
+    def test_forward_with_missing_modalities(
+        self,
+        patch_embeddings: FlexiHeliosPatchEmbeddings,
+        modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    ) -> None:
+        """Test the forward pass of the patch embeddings."""
+        sentinel_2_num_band_sets, sentinel_2_num_bands = (
+            modality_band_set_len_and_total_bands["sentinel2_l2a"]
+        )
+        latlon_num_band_sets, latlon_num_bands = modality_band_set_len_and_total_bands[
+            "latlon"
+        ]
+        B, H, W, T, num_bands = 1, 16, 16, 3, sentinel_2_num_bands
+        sentinel2_l2a = torch.randn((B, H, W, T, num_bands))
+        sentinel2_l2a_mask = torch.zeros((B, H, W, T, num_bands), dtype=torch.long)
+        patch_size = 4
+
+        latlon = torch.randn(B, latlon_num_bands)
+        # ones means it should all be masked out from the perspective of the patch embeddings
+        latlon_mask = torch.ones((B, latlon_num_bands), dtype=torch.float32)
+        days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+        months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+        years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
+
+        masked_sample_dict = {
+            "sentinel2_l2a": sentinel2_l2a,
+            "sentinel2_l2a_mask": sentinel2_l2a_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+            "timestamps": timestamps,
+        }
+        sample = MaskedHeliosSample(**masked_sample_dict)
+        output = patch_embeddings.forward(sample, patch_size)
+        embedding_size = patch_embeddings.embedding_size
+        assert output["sentinel2_l2a"].shape == (
+            B,
+            H // patch_size,
+            W // patch_size,
+            T,
+            sentinel_2_num_band_sets,  # of band sets
+            embedding_size,
+        )
+        assert output["sentinel2_l2a_mask"].shape == (
+            B,
+            H // patch_size,
+            W // patch_size,
+            T,
+            sentinel_2_num_band_sets,  # of band sets
+        )
+        assert output["latlon"].shape == (
+            B,
+            latlon_num_band_sets,
+            embedding_size,
+        )  # B, C_G , D
+        assert (output["latlon"] == 0).all()
+        assert output["latlon_mask"].shape == (B, latlon_num_band_sets)  # B, C_G
+
 
 class TestEncoder:
     """Integration tests for the Encoder class."""
