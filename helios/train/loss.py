@@ -676,6 +676,59 @@ class KoLeoLoss(Loss):
         return self.weight * -torch.log(distances_to_nn + self.eps).mean()
 
 
+@LOSS_REGISTRY.register("BatchContrastive")
+class BatchContrastiveLoss(Loss):
+    """Loss function for cross entropy.
+
+    The KoLeo regularizer derives from the
+    Kozachenko-Leonenko differential entropy estimator and
+    encourages a uniform span of the features within a batch.
+
+    https://github.com/facebookresearch/dinov2/blob/main/dinov2/loss/koleo_loss.py
+    """
+
+    name = "BatchContrastive"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        weight: float = 0.1,
+    ) -> None:
+        """Initialize KoLeo regularizer.
+
+        Args:
+            tau: the softmax temperature
+            weight: a weight to apply to the regularization value. Default value follows Dinov2
+        """
+        self.weight = weight
+        self.tau = tau
+
+    def compute(self, predictions: TokensAndMasks, **kwargs: Any) -> Tensor:
+        """Compute stuff.
+
+        Args:
+            predictions: Model predictions. Unlike other losses, these are
+                _online encoder outputs_, not decoder outputs.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        loss = torch.tensor(0.0, device=predictions.sentinel2_l2a.device)
+        for modality in predictions.modalities:
+            if modality == "latlon":
+                continue
+            t = getattr(predictions, modality)
+            t = rearrange(t, "b h w t bs d -> (h w t bs) b d")
+            scores = torch.einsum("npd,nqd->npq", t, t) / self.tau
+            labels = torch.arange(
+                scores.shape[1], dtype=torch.long, device=t.device
+            ).repeat(scores.shape[0])
+            scores = scores.flatten(0, 1)
+            loss += F.cross_entropy(scores, labels)
+        return loss
+
+
 @dataclass
 class LossConfig(Config):
     """Configuration for loss functions.

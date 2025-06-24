@@ -7,6 +7,7 @@ import torch
 from helios.nn.flexihelios import TokensAndMasks
 from helios.train.loss import (
     AdjustedPatchDiscriminationLoss,
+    BatchContrastiveLoss,
     CrossEntropyLoss,
     InfoNCELoss,
     L1Loss,
@@ -223,6 +224,20 @@ def test_cross_entropy_loss() -> None:
     loss_value = loss.compute(preds, targets)
     # loss for BCE, prediction of .5 for both classes
     assert torch.isclose(loss_value, -torch.log(torch.tensor(0.5)), 0.0001)
+
+
+def test_batch_contrastive_loss() -> None:
+    """Just test that it runs as expected."""
+    b, h, w, t, bs, d = 3, 4, 4, 2, 2, 2
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=2 * torch.ones((b, h, w, t, bs, d)),
+        sentinel2_l2a_mask=torch.ones((b, h, w, t, bs, d)) * 2,
+        latlon=2 * torch.ones((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * 2,
+    )
+    loss = BatchContrastiveLoss()
+    loss_value = loss.compute(preds)
 
 
 def test_infonce_loss() -> None:
