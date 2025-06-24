@@ -132,7 +132,7 @@ class MAETrainModule(HeliosTrainModule):
             rank_microbatch_size: The rank microbatch size in instances.
             compile_model: Whether to compile to the model.
             dp_config: Data parallel configuration for the model.
-            ac_config: Activation checkpointing configuration for the model.
+
             loss_fn: Loss function to use.
             compile_loss: Whether to compile the loss function.
             autocast_precision: Enable AMP with this data type.

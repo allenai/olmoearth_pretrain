@@ -281,10 +281,11 @@ def test_time_with_missing_timesteps_structure_masking_and_unmask() -> None:
                 logger.info(f"Mask name: {modality_name}")
                 if mask is None:
                     continue
-                present_timesteps = (mask[i] != MaskValue.MISSING.value).all(dim=(0,1,3))
+                present_timesteps = (mask[i] != MaskValue.MISSING.value).all(
+                    dim=(0, 1, 3)
+                )
                 timestamp_present_mask = timestamp_present_mask | present_timesteps
         assert timestamp_present_mask.any(), f"Sample {i} has no present modalities"
-
 
     unmasked_sample = masked_sample.unmask()
     for modality_name in unmasked_sample._fields:
@@ -467,8 +468,10 @@ def test_create_temporal_mask() -> None:
     strategy = TimeMaskingStrategy(encode_ratio=encode_ratio, decode_ratio=decode_ratio)
 
     # Call the _create_temporal_mask function directly
+    timesteps_with_at_least_one_modality = torch.tensor(list(range(t)))
     mask = strategy._create_temporal_mask(
         shape=shape,
+        timesteps_with_at_least_one_modality=timesteps_with_at_least_one_modality,
     )
 
     # Check the masking ratios for non-missing timesteps

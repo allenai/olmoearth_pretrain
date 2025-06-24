@@ -6,7 +6,6 @@ import shutil
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import cached_property
 from math import floor
 from typing import Any, NamedTuple, cast
 
@@ -220,7 +219,7 @@ class HeliosSample(NamedTuple):
         """Get the minimum number of valid time steps in a batch."""
         return self.timesteps_with_at_least_one_modality.shape[0]
 
-    @cached_property
+    @property
     def timesteps_with_at_least_one_modality(self) -> torch.Tensor:
         """Get timesteps with at least one modality present."""
         per_modality_present_masks = []
