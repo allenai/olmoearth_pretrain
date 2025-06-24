@@ -73,19 +73,34 @@ class TestHeliosSample:
         # Check that the missing modality masks are preserved
         assert (subset_sample.sentinel1[1] != MISSING_VALUE).sum() == 0
 
-    def test_get_valid_start_ts(self) -> None:
+    def test_get_valid_start_ts_raises_if_timesteps_are_not_cropped(self) -> None:
         """Test the get_valid_start_ts function."""
+        with pytest.raises(ValueError):
+            missing_timesteps = {
+                "sentinel2_l2a": np.array([False] * 6 + [True] * 6),
+                "sentinel1": np.array([False] * 6 + [True] * 6),
+            }
+            max_t = 2
+            current_length = 6
+            HeliosSample._get_valid_start_ts(missing_timesteps, max_t, current_length)
+
+    def test_get_valid_start_ts_with_cropped_timesteps(self) -> None:
+        """Test the get_valid_start_ts function with properly cropped timesteps."""
         missing_timesteps = {
-            "sentinel2_l2a": np.array([False] * 6 + [True] * 6),
-            "sentinel1": np.array([False] * 6 + [True] * 6),
+            "sentinel2_l2a": np.array([True] * 4 + [False] * 2 + [True] * 2),
+            "sentinel1": np.array([True] * 4 + [False] * 2 + [True] * 1 + [False] * 1),
         }
         max_t = 2
-        current_length = 6
-        valid_start_ts = HeliosSample._get_valid_start_ts(
+        current_length = 8
+
+        # This should not raise an error since timesteps are properly cropped
+        start_ts = HeliosSample._get_valid_start_ts(
             missing_timesteps, max_t, current_length
         )
-        logger.warning(f"valid_start_ts: {valid_start_ts}")
-        assert False
+
+        # Verify that a valid start timestamp is returned
+        for t in start_ts:
+            assert 0 <= t <= current_length - max_t
 
 
 class TestHeliosDataset:
