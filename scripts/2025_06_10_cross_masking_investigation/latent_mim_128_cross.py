@@ -180,10 +180,10 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         "m-eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
             embedding_batch_size=128,
-            num_workers=8,
+            num_workers=0, # only for debugging
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(4000),
+            eval_interval=Duration.steps(1),
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",

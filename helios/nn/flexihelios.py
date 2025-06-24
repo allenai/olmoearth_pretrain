@@ -1472,6 +1472,31 @@ class Predictor(FlexiHeliosBase):
 
         return output_dict
 
+    def create_learnable_spatial_tokens(self, x: TokensAndMasks) -> Tensor:
+        """Create learnable spatial tokens."""
+        # I want to create a bunch of tokens that are learnable and of the same spatial extent as the input tokens
+        available_modalities = return_modalities_from_dict(x)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            modality_spec = Modality.get(modality)
+            if modality_spec.is_spatial:
+                x_modality = x[modality]
+                # Build the einops pattern and dimension dict
+                spatial_dims = x_modality.shape[
+                    :-1
+                ]  # all dimensions except the last (embedding)
+                logger.warning(f"spatial_dims: {spatial_dims}")
+                pattern_input, dim_dict = self._construct_einops_pattern(spatial_dims)
+                logger.warning(f"pattern_input: {pattern_input}")
+                logger.warning(f"dim_dict: {dim_dict}")
+                mask_token_broadcasted = repeat(self.mask_token, pattern_input, **dim_dict)
+                break
+        logger.warning(f"shape of mask token broadcasted: {mask_token_broadcasted.shape}")
+        return mask_token_broadcasted
+
+
     # TODO: GIVE more explicit function names
     @staticmethod
     def split_x_y(tokens: Tensor, mask: Tensor) -> tuple[Tensor, ...]:
@@ -1671,6 +1696,114 @@ class Predictor(FlexiHeliosBase):
         )
         tokens_per_modality_dict.update(original_masks_dict)
         return tokens_per_modality_dict
+
+    def predictor_pooling_apply_attn( self,
+        x: dict[str, Tensor],
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int,
+    ) -> dict[str, Tensor]:
+        """Apply attention to the tokens."""
+        tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
+            self.split_tokens_masks_and_dims(x)
+        )
+        tokens_dict = self.composite_encodings(
+            tokens_only_dict, timestamps, patch_size, input_res
+        )
+        tokens_dict.update(original_masks_dict)
+        # X contains the tokens to decode, Y contains the tokens to attend to for context
+        learnable_spatial_tokens = self.create_learnable_spatial_tokens(tokens_dict)
+        learnable_tokens_dict = {
+            Modality.SENTINEL2_L2A.name: learnable_spatial_tokens
+        }
+
+        learnable_tokens_dict = self.composite_encodings(
+            learnable_tokens_dict, timestamps, patch_size, input_res
+        )
+        learnable_spatial_tokens = learnable_tokens_dict[Modality.SENTINEL2_L2A.name]
+        collapsed_learnable_spatial_tokens = rearrange(learnable_spatial_tokens, "b ... d -> b (...) d")
+        all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+
+        # # Pack x tokens
+        # if self.use_flash_attn:
+        #     og_shape_tokens_to_decode = tokens_to_decode.shape
+        #     tokens_to_decode = self.pack_tokens(
+        #         tokens_to_decode, tokens_to_decode_mask.bool()
+        #     )
+        #     og_shape_unmasked_tokens = unmasked_tokens.shape
+        #     unmasked_tokens = self.pack_tokens(
+        #         unmasked_tokens, unmasked_tokens_mask.bool()
+        #     )
+        #     cu_seqlens_tokens_to_decode = get_cumulative_sequence_lengths(
+        #         seqlens_tokens_to_decode
+        #     )
+        #     cu_seqlens_unmasked_tokens = get_cumulative_sequence_lengths(
+        #         seqlens_unmasked_tokens
+        #     )
+        # else:
+        #     cu_seqlens_tokens_to_decode = None
+        #     cu_seqlens_unmasked_tokens = None
+
+
+        # Only do the first block
+        for blk in self.blocks:
+            # note that we are not taking the inverse of the mask, since split_x_y gives us
+            # true values for values we want to take part in attention
+            predicted_learnable_spatial_tokens = blk(
+                x=collapsed_learnable_spatial_tokens,
+                y=all_tokens,
+                attn_mask=None, #(
+                 #   unmasked_tokens_mask.bool() if not self.use_flash_attn else None
+               # ),  # only for flash attn though this should not be left in
+                # cu_seqlens_q=cu_seqlens_tokens_to_decode,
+                # cu_seqlens_k=cu_seqlens_unmasked_tokens,
+                # max_seqlen_q=max_length_of_tokens_to_decode,
+                # max_seqlen_k=max_length_of_unmasked_tokens,
+            )
+            break
+
+        # if self.use_flash_attn:
+        #     tokens_to_decode = self.unpack_tokens(
+        #         tokens_to_decode,
+        #         tokens_to_decode_mask.bool(),
+        #         og_shape_tokens_to_decode,
+        #     )
+        #     unmasked_tokens = self.unpack_tokens(
+        #         unmasked_tokens, unmasked_tokens_mask.bool(), og_shape_unmasked_tokens
+        #     )
+        if torch.equal(collapsed_learnable_spatial_tokens, predicted_learnable_spatial_tokens):
+            raise ValueError("The predicted learnable spatial tokens are the same as the collapsed learnable spatial tokens")
+        else:
+            logger.warning("The predicted learnable spatial tokens are not the same as the collapsed learnable spatial tokens")
+        return predicted_learnable_spatial_tokens
+
+    def predictor_pooling(
+        self, x: TokensAndMasks, timestamps: Tensor, patch_size: int, input_res: int = BASE_GSD
+    ) -> TokensAndMasks:
+        """Pool the tokens."""
+        decoder_emedded_dict = x.as_dict(return_none=False)
+        # Apply Input Norms and encoder to decoder embeds to each modality
+        available_modalities = x.modalities
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            x_modality = getattr(x, modality)
+            # Are these normalizations masked correctly?
+            x_modality = self.input_norm(x_modality)
+            x_modality = self.encoder_to_decoder_embed(x_modality)
+            masked_modality_name = x.get_masked_modality_name(modality)
+            decoder_emedded_dict[modality] = x_modality
+            decoder_emedded_dict[masked_modality_name] = getattr(
+                x, masked_modality_name
+            )
+        # What I want to do here is to create a decoded_version of all the tokens for the modalities
+        tokens_only_dict = self.add_masks(decoder_emedded_dict)
+        decoder_emedded_dict.update(tokens_only_dict)
+        tokens_to_decode = self.predictor_pooling_apply_attn(
+            decoder_emedded_dict, timestamps, patch_size, input_res
+        )
+        return self.to_output_embed(self.norm(tokens_to_decode))
 
     def is_any_data_to_be_decoded(self, modality_mask: Tensor) -> bool:
         """Check if any data is to be decoded for a given modality."""

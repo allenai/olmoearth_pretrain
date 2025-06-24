@@ -40,17 +40,27 @@ def get_embeddings(
             masked_helios_sample = MaskedHeliosSample.from_dict(
                 masked_helios_sample_dict
             )
+            # log the predictor and encoder
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 # TODO: Model expects masked helios sample we need to pass empty masks
                 # Likely we want to have a flag that checks for eval mode and passes empty masks
-                batch_embeddings: TokensAndMasks = model(
+                # I want to be able to pass in extra tokens to the decoder only here
+                batch_embeddings: TokensAndMasks = model.encoder(
                     masked_helios_sample, patch_size=patch_size
                 )[0]  # (bsz, dim)
+                # unshard the decoder because we are not in the hooked fsdp path
+                model.decoder.unshard()
+                batch_embeddings = model.decoder.predictor_pooling(
+                    batch_embeddings, masked_helios_sample.timestamps, patch_size
+                )
+            # get the shape of the batcc embeddings
+            averaged_embeddings = batch_embeddings.mean(dim=tuple(range(1, batch_embeddings.ndim -1)))
+            logger.warning(f"averaged_embeddings shape: {averaged_embeddings.shape}")
 
-            spatial_pool = True if task_type == TaskType.SEGMENTATION else False
-            averaged_embeddings = batch_embeddings.pool_unmasked_tokens(
-                pooling_type, spatial_pooling=spatial_pool
-            )
+            # spatial_pool = True if task_type == TaskType.SEGMENTATION else False
+            # averaged_embeddings = batch_embeddings.pool_unmasked_tokens(
+            #     pooling_type, spatial_pooling=spatial_pool
+            # )
             embeddings.append(averaged_embeddings.cpu())
             labels.append(label)
             logger.debug(f"Processed {i} / {total_samples}")

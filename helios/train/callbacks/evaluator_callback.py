@@ -131,7 +131,7 @@ class DownstreamEvaluator:
         return get_embeddings(
             data_loader=data_loader,
             task_type=self.config.task_type,
-            model=self.trainer.train_module.model.encoder,
+            model=self.trainer.train_module.model,
             patch_size=self.patch_size,
             pooling_type=self.pooling_type,
         )
