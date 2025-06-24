@@ -703,18 +703,21 @@ class BatchContrastiveLoss(Loss):
         self.weight = weight
         self.tau = tau
 
-    def compute(self, predictions: TokensAndMasks, **kwargs: Any) -> Tensor:
+    def compute(
+        self, predictions: TokensAndMasks, targets: None, **kwargs: Any
+    ) -> Tensor:
         """Compute stuff.
 
         Args:
             predictions: Model predictions. Unlike other losses, these are
                 _online encoder outputs_, not decoder outputs.
+            targets: none.
             **kwargs: Additional keyword arguments.
 
         Returns:
             The computed loss value.
         """
-        loss = torch.tensor(0.0, device=predictions.sentinel2_l2a.device)
+        loss = torch.tensor(0.0, device=predictions.device)
         for modality in predictions.modalities:
             if modality == "latlon":
                 continue

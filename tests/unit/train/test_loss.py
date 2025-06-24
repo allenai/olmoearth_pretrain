@@ -237,7 +237,7 @@ def test_batch_contrastive_loss() -> None:
         latlon_mask=torch.ones((b, 1)) * 2,
     )
     loss = BatchContrastiveLoss()
-    loss_value = loss.compute(preds)
+    loss.compute(preds, None)
 
 
 def test_infonce_loss() -> None:
