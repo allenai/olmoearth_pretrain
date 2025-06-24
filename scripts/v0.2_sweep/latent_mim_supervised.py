@@ -105,7 +105,7 @@ def build_train_module_config(
                 "type": "patch_discrimination_new",
             }
         ),
-        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        token_exit_cfg={modality: 12 for modality in common.training_modalities},
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(),
         ema_decay=(1.0, 1.0),
