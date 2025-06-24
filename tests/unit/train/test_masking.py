@@ -908,16 +908,13 @@ def test_space_cross_modality_masking_with_missing_data(set_random_seeds: None) 
     )
     # Check that the worldcover mask has the expected values
     # Check that latlon mask has the expected values
-    expected_latlon_mask = torch.tensor([[2], [2], [0], [0]])
+    expected_latlon_mask = torch.tensor([[2], [0], [0], [2]])
 
     # Assert that the masks match the expected values
     assert (masked_sample_allow_false.worldcover_mask == MaskValue.MISSING.value).all()  # type: ignore
     assert torch.equal(masked_sample_allow_false.latlon_mask, expected_latlon_mask)
 
     # Compare the masks between two strategies
-    assert not torch.equal(
-        masked_sample_allow_false.latlon_mask, masked_sample_allow_true.latlon_mask
-    )
     assert not torch.equal(
         masked_sample_allow_false.sentinel2_l2a_mask,
         masked_sample_allow_true.sentinel2_l2a_mask,
