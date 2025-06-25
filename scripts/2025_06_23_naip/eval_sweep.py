@@ -5,17 +5,17 @@ import subprocess  # nosec
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 
 lr_args = [
-    "--trainer.callbacks.downstream_evaluator.tasks.m-sa-crop-type.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.m-cashew-plant.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.mados.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.probe_lr={lr}"
+    "--trainer.callbacks.downstream_evaluator.tasks.m-sa-crop-type.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m-cashew-plant.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.mados.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.probe_lr={lr}",
 ]
 
 for probe_lr in LP_LRs:
