@@ -89,6 +89,8 @@ class TokensAndMasks(NamedTuple):
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None
     naip_mask: Tensor | None = None
+    naip_10: Tensor | None = None
+    naip_10_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
@@ -387,7 +389,8 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     self._get_embedding_module_name(modality, idx): FlexiPatchEmbed(
                         in_chans=len(channel_set_idxs),
                         embedding_size=self.embedding_size,
-                        patch_size=self.max_patch_size,
+                        patch_size_at_16=self.max_patch_size,
+                        modality_spec=modality_spec,
                     )
                     for idx, channel_set_idxs in enumerate(
                         modality_spec.bandsets_as_indices()
@@ -413,16 +416,29 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                 # static in time
                 token_mask = modality_mask[..., idx]
             else:
-                token_mask = modality_mask[:, 0::patch_size, 0::patch_size, ..., idx]
+                token_mask = modality_mask[
+                    :,
+                    0 :: patch_size * modality_spec.image_tile_size_factor,
+                    0 :: patch_size * modality_spec.image_tile_size_factor,
+                    ...,
+                    idx,
+                ]
                 modality_specific_kwargs = {"patch_size": patch_size}
             # Now apply the embedding to the patchified data
-            patchified_data = modality_data[..., channel_set_indices]
-            embedding_module = self.per_modality_embeddings[modality][
-                self._get_embedding_module_name(modality, idx)
-            ]
-            patchified_data = embedding_module(
-                patchified_data, **modality_specific_kwargs
-            )
+            if (token_mask == MaskValue.ONLINE_ENCODER.value).any():
+                patchified_data = modality_data[..., channel_set_indices]
+                embedding_module = self.per_modality_embeddings[modality][
+                    self._get_embedding_module_name(modality, idx)
+                ]
+                patchified_data = embedding_module(
+                    patchified_data, **modality_specific_kwargs
+                )
+            else:
+                mask_shape = token_mask.shape + (self.embedding_size,)
+                patchified_data = torch.zeros(
+                    mask_shape, dtype=token_mask.dtype, device=token_mask.device
+                )
+
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
@@ -1284,6 +1300,17 @@ class Encoder(FlexiHeliosBase):
             exit_ids_seq = None
         return exit_ids_seq
 
+    def get_attn_or_none_mask(
+        self,
+        new_mask: Tensor,
+        always_pass_none_mask_to_transformer: bool,
+    ) -> Tensor | None:
+        """Get the attention mask or None if we should pass None to the transformer."""
+        if always_pass_none_mask_to_transformer or not self.training:
+            return None
+        else:
+            return new_mask
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -1291,6 +1318,7 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
+        always_pass_none_mask_to_transformer: bool = False,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1330,6 +1358,9 @@ class Encoder(FlexiHeliosBase):
             og_shape = tokens.shape
             tokens = self.pack_tokens(tokens, new_mask)
 
+        attn_mask = self.get_attn_or_none_mask(
+            new_mask, always_pass_none_mask_to_transformer
+        )
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -1352,7 +1383,7 @@ class Encoder(FlexiHeliosBase):
                 cu_seqlens=cu_seqlens,
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
-                attn_mask=new_mask if self.training else None,
+                attn_mask=attn_mask,
             )
 
         if self.use_flash_attn:
@@ -1420,6 +1451,7 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
+        always_pass_none_mask_to_transformer: bool = False,
     ) -> tuple[TokensAndMasks, torch.Tensor, dict[str, torch.Tensor]]:
         """Process masked input samples into token representations.
 
@@ -1428,6 +1460,7 @@ class Encoder(FlexiHeliosBase):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
+            always_pass_none_mask_to_transformer: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -1443,6 +1476,7 @@ class Encoder(FlexiHeliosBase):
                 patch_size=patch_size,
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
+                always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
         return (

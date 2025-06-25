@@ -125,6 +125,7 @@ class HeliosDataLoader(DataLoaderBase):
         if self.shuffle:
             # Deterministically shuffle based on epoch and seed
             rng = get_rng(self.seed + self.epoch)  # type: ignore
+
         indices: np.ndarray
         indices = np.arange(len(self.dataset), dtype=np.uint32)
         if rng is not None:
@@ -292,6 +293,9 @@ class HeliosDataLoader(DataLoaderBase):
         if Modality.SENTINEL2_L2A.name in self.dataset.training_modalities:
             mock_sentinel2_l2a = rng.random((256, 256, 12, 12), dtype=np.float32)
             output_dict["sentinel2_l2a"] = mock_sentinel2_l2a
+        if Modality.NAIP_10.name in self.dataset.training_modalities:
+            mock_naip_10 = rng.random((1024, 1024, 1, 4), dtype=np.float32)
+            output_dict["naip_10"] = mock_naip_10
         if Modality.SENTINEL1.name in self.dataset.training_modalities:
             mock_sentinel1 = rng.random((256, 256, 12, 2), dtype=np.float32)
             output_dict[Modality.SENTINEL1.name] = mock_sentinel1
