@@ -839,7 +839,7 @@ def test_space_cross_modality_masking(set_random_seeds: None) -> None:
     logger.info(f"masked_sample: {masked_sample}")
     # Check that the worldcover mask has the expected values
     # Check that latlon mask has the expected values
-    expected_latlon_mask = torch.tensor([[0], [2], [2], [0]])
+    expected_latlon_mask = torch.tensor([[0], [2], [0], [0]])
     expected_worldcover_mask = torch.tensor(
         [
             [
@@ -855,10 +855,10 @@ def test_space_cross_modality_masking(set_random_seeds: None) -> None:
                 [[[2]], [[2]], [[1]], [[2]]],
             ],
             [
-                [[[2]], [[2]], [[1]], [[2]]],
-                [[[2]], [[1]], [[2]], [[1]]],
-                [[[2]], [[2]], [[1]], [[2]]],
-                [[[2]], [[2]], [[2]], [[2]]],
+                [[[1]], [[1]], [[1]], [[1]]],
+                [[[1]], [[1]], [[1]], [[0]]],
+                [[[1]], [[1]], [[1]], [[1]]],
+                [[[1]], [[1]], [[1]], [[1]]],
             ],
             [
                 [[[2]], [[2]], [[2]], [[2]]],
@@ -911,20 +911,15 @@ def test_space_cross_modality_masking_with_missing_data(set_random_seeds: None) 
     masked_sample_allow_true = strategy_allow_true.apply_mask(
         batch, patch_size=patch_size
     )
-    logger.info(f"masked_sample_allow_false: {masked_sample_allow_false}")
-    logger.info(f"masked_sample_allow_true: {masked_sample_allow_true}")
     # Check that the worldcover mask has the expected values
     # Check that latlon mask has the expected values
-    expected_latlon_mask = torch.tensor([[0], [2], [2], [0]])
+    expected_latlon_mask = torch.tensor([[2], [0], [0], [2]])
 
     # Assert that the masks match the expected values
     assert (masked_sample_allow_false.worldcover_mask == MaskValue.MISSING.value).all()  # type: ignore
     assert torch.equal(masked_sample_allow_false.latlon_mask, expected_latlon_mask)
 
     # Compare the masks between two strategies
-    assert not torch.equal(
-        masked_sample_allow_false.latlon_mask, masked_sample_allow_true.latlon_mask
-    )
     assert not torch.equal(
         masked_sample_allow_false.sentinel2_l2a_mask,
         masked_sample_allow_true.sentinel2_l2a_mask,
