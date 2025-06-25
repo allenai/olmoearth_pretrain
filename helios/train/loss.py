@@ -725,11 +725,17 @@ class BatchContrastiveLoss(Loss):
                 continue
             t = getattr(predictions, modality)
             t = rearrange(t, "b h w t bs d -> (h w t bs) b d")
-            scores = torch.einsum("npd,nqd->npq", t, t) / self.tau
+            m = getattr(predictions, modality + "_mask")
+            m = rearrange(m, "b h w t bs -> (h w t bs) b")
+            bool_mask = m == MaskValue.ONLINE_ENCODER.value
+            full_mask = torch.einsum("np,nq->npq", bool_mask, bool_mask)
+            scores = torch.einsum("npd,nqd->npq", t, t) / self.tau * full_mask
             labels = torch.arange(
                 scores.shape[1], dtype=torch.long, device=t.device
             ).repeat(scores.shape[0])
             scores = scores.flatten(0, 1)
+            labels = labels[bool_mask.flatten()]
+            scores = scores[bool_mask.flatten()]
             loss += F.cross_entropy(scores, labels)
             _, predicted = torch.max(scores, 1)
             cor = (predicted == labels).sum().item()

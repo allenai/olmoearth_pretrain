@@ -232,7 +232,7 @@ def test_batch_contrastive_loss() -> None:
 
     preds = TokensAndMasks(
         sentinel2_l2a=2 * torch.ones((b, h, w, t, bs, d)),
-        sentinel2_l2a_mask=torch.ones((b, h, w, t, bs, d)) * 2,
+        sentinel2_l2a_mask=torch.randint(0, 3, (b, h, w, t, bs)),
         latlon=2 * torch.ones((b, 1, d)),
         latlon_mask=torch.ones((b, 1)) * 2,
     )
