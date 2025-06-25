@@ -28,7 +28,7 @@ for probe_lr in LP_LRs:
             "ai2/titan-cirrascale",
             "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_naip_moredata_random_fixed_modality_0.5/step320000",
         ]
-        + lr_args.format(lr=probe_lr)
+        + [arg.format(lr=probe_lr) for arg in lr_args],
     )  # nosec
     subprocess.call(
         [
@@ -40,7 +40,7 @@ for probe_lr in LP_LRs:
             "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.decodes1landsat/step340000",
             "--common.training_modalities=[sentinel2_l2a,sentinel1,worldcover,latlon,srtm,landsat,openstreetmap_raster]",
         ]
-        + lr_args.format(lr=probe_lr)
+        + [arg.format(lr=probe_lr) for arg in lr_args],
     )  # nosec
     subprocess.call(
         [
@@ -57,7 +57,7 @@ for probe_lr in LP_LRs:
             "--model.encoder_config.num_heads=6",
             "--model.decoder_config.num_heads=6",
         ]
-        + lr_args.format(lr=probe_lr)
+        + [arg.format(lr=probe_lr) for arg in lr_args],
     )  # nosec
     subprocess.call(
         [
@@ -69,5 +69,5 @@ for probe_lr in LP_LRs:
             "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5/step320000",
             "--common.training_modalities=[sentinel2_l2a,sentinel1,worldcover,latlon,srtm,landsat,openstreetmap_raster]",
         ]
-        + lr_args.format(lr=probe_lr)
+        + [arg.format(lr=probe_lr) for arg in lr_args],
     )  # nosec
