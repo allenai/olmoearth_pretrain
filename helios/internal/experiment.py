@@ -23,7 +23,6 @@ from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig, collate_helios
 from helios.data.visualize import visualize_sample
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 from helios.train.train_module.train_module import HeliosTrainModuleConfig
 
 logger = logging.getLogger(__name__)
@@ -321,9 +320,7 @@ def main(
     dataset_config_builder: Callable[[CommonComponents], Config],
     dataloader_config_builder: Callable[[CommonComponents], HeliosDataLoaderConfig],
     trainer_config_builder: Callable[[CommonComponents], TrainerConfig],
-    train_module_config_builder: Callable[
-        [CommonComponents], LatentMIMTrainModuleConfig
-    ],
+    train_module_config_builder: Callable[[CommonComponents], HeliosTrainModuleConfig],
     visualize_config_builder: (
         Callable[[CommonComponents], HeliosVisualizeConfig] | None
     ) = None,
