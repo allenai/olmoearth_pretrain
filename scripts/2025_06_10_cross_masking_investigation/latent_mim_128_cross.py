@@ -177,24 +177,24 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
-        "m-eurosat": DownstreamTaskConfig(
-            dataset="m-eurosat",
-            embedding_batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(4000),
-        ),
-        "pastis": DownstreamTaskConfig(
+        # "m-eurosat": DownstreamTaskConfig(
+        #     dataset="m-eurosat",
+        #     embedding_batch_size=128,
+        #     num_workers=8,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     eval_interval=Duration.steps(4000),
+        # ),
+        "pastis-s1-s2": DownstreamTaskConfig(
             dataset="pastis",
             embedding_batch_size=32,
-            probe_batch_size=8,
-            num_workers=8,
+            probe_batch_size=16,
+            num_workers=4,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
             eval_interval=Duration.steps(20000),
-            input_modalities=[Modality.SENTINEL2_L2A.name],
+            input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
             epochs=50,
         ),
     }
@@ -216,6 +216,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
                 tasks=EVAL_TASKS,
+                eval_on_startup=True,
+                cancel_after_first_eval=True,
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)

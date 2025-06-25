@@ -49,8 +49,9 @@ def get_embeddings(
 
             spatial_pool = True if task_type == TaskType.SEGMENTATION else False
             averaged_embeddings = batch_embeddings.pool_unmasked_tokens(
-                pooling_type, spatial_pooling=spatial_pool
+                pooling_type, spatial_pooling=spatial_pool, concat_features=True
             )
+            logger.info(f"Averaged embeddings shape: {averaged_embeddings.shape}")
             embeddings.append(averaged_embeddings.cpu())
             labels.append(label)
             logger.debug(f"Processed {i} / {total_samples}")
