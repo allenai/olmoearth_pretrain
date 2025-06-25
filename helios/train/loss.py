@@ -732,9 +732,15 @@ class BatchContrastiveLoss(Loss):
             scores = scores.flatten(0, 1)
             loss += F.cross_entropy(scores, labels)
             _, predicted = torch.max(scores, 1)
-            correct += (predicted == labels).sum().item()
-            total += labels.shape[0]
-        logger.warning(f"BatchContrastive accuracy :{correct/total*100.}")
+            cor = (predicted == labels).sum().item()
+            tot = labels.shape[0]
+            correct += cor
+            total += tot
+            logger.warning(f"BatchContrastive {modality} :{cor/tot*100.} {cor}/{tot}")
+
+        logger.warning(
+            f"BatchContrastive total accuracy :{correct/total*100.} {correct}/{total}"
+        )
         return loss * self.weight
 
 
