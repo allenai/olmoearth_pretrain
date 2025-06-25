@@ -185,18 +185,18 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.steps(1),
         ),
-        "pastis": DownstreamTaskConfig(
-            dataset="pastis",
-            embedding_batch_size=32,
-            probe_batch_size=8,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.steps(20000),
-            input_modalities=[Modality.SENTINEL2_L2A.name],
-            epochs=50,
-        ),
+        # "pastis": DownstreamTaskConfig(
+        #     dataset="pastis",
+        #     embedding_batch_size=32,
+        #     probe_batch_size=8,
+        #     num_workers=8,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     probe_lr=0.1,
+        #     eval_interval=Duration.steps(20000),
+        #     input_modalities=[Modality.SENTINEL2_L2A.name],
+        #     epochs=50,
+        # ),
     }
     trainer_config = (
         TrainerConfig(
@@ -216,6 +216,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
                 tasks=EVAL_TASKS,
+                eval_on_startup=True,
+                cancel_after_first_eval=True,
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)

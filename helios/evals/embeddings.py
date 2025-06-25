@@ -55,7 +55,6 @@ def get_embeddings(
                 )
             # get the shape of the batcc embeddings
             averaged_embeddings = batch_embeddings.mean(dim=tuple(range(1, batch_embeddings.ndim -1)))
-            logger.warning(f"averaged_embeddings shape: {averaged_embeddings.shape}")
 
             # spatial_pool = True if task_type == TaskType.SEGMENTATION else False
             # averaged_embeddings = batch_embeddings.pool_unmasked_tokens(

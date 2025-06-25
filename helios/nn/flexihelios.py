@@ -699,7 +699,6 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             Tensor with encodings applied based on modality type
         """
         # TODO: Improve this implementation it is quite bad
-
         modality = Modality.get(modality_name)
         logger.debug(f"Applying encodings to modality {modality}")
 
@@ -1482,18 +1481,15 @@ class Predictor(FlexiHeliosBase):
         for modality in modalities_to_process:
             modality_spec = Modality.get(modality)
             if modality_spec.is_spatial:
+                logger.warning(f"modality used for learnable spatial tokens: {modality}")
                 x_modality = x[modality]
                 # Build the einops pattern and dimension dict
-                spatial_dims = x_modality.shape[
+                spatial_dims = list(x_modality.shape[
                     :-1
-                ]  # all dimensions except the last (embedding)
-                logger.warning(f"spatial_dims: {spatial_dims}")
+                ])  # all dimensions except the last (embedding)
                 pattern_input, dim_dict = self._construct_einops_pattern(spatial_dims)
-                logger.warning(f"pattern_input: {pattern_input}")
-                logger.warning(f"dim_dict: {dim_dict}")
                 mask_token_broadcasted = repeat(self.mask_token, pattern_input, **dim_dict)
                 break
-        logger.warning(f"shape of mask token broadcasted: {mask_token_broadcasted.shape}")
         return mask_token_broadcasted
 
 
@@ -1720,7 +1716,6 @@ class Predictor(FlexiHeliosBase):
         learnable_tokens_dict = self.composite_encodings(
             learnable_tokens_dict, timestamps, patch_size, input_res
         )
-        learnable_spatial_tokens = learnable_tokens_dict[Modality.SENTINEL2_L2A.name]
         collapsed_learnable_spatial_tokens = rearrange(learnable_spatial_tokens, "b ... d -> b (...) d")
         all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
@@ -1746,10 +1741,10 @@ class Predictor(FlexiHeliosBase):
 
 
         # Only do the first block
-        for blk in self.blocks:
+        for i,blk in enumerate(self.blocks):
             # note that we are not taking the inverse of the mask, since split_x_y gives us
             # true values for values we want to take part in attention
-            predicted_learnable_spatial_tokens = blk(
+            collapsed_learnable_spatial_tokens = blk(
                 x=collapsed_learnable_spatial_tokens,
                 y=all_tokens,
                 attn_mask=None, #(
@@ -1760,7 +1755,8 @@ class Predictor(FlexiHeliosBase):
                 # max_seqlen_q=max_length_of_tokens_to_decode,
                 # max_seqlen_k=max_length_of_unmasked_tokens,
             )
-            break
+            if i == 0:
+                break
 
         # if self.use_flash_attn:
         #     tokens_to_decode = self.unpack_tokens(
@@ -1771,11 +1767,7 @@ class Predictor(FlexiHeliosBase):
         #     unmasked_tokens = self.unpack_tokens(
         #         unmasked_tokens, unmasked_tokens_mask.bool(), og_shape_unmasked_tokens
         #     )
-        if torch.equal(collapsed_learnable_spatial_tokens, predicted_learnable_spatial_tokens):
-            raise ValueError("The predicted learnable spatial tokens are the same as the collapsed learnable spatial tokens")
-        else:
-            logger.warning("The predicted learnable spatial tokens are not the same as the collapsed learnable spatial tokens")
-        return predicted_learnable_spatial_tokens
+        return collapsed_learnable_spatial_tokens
 
     def predictor_pooling(
         self, x: TokensAndMasks, timestamps: Tensor, patch_size: int, input_res: int = BASE_GSD
@@ -1803,7 +1795,7 @@ class Predictor(FlexiHeliosBase):
         tokens_to_decode = self.predictor_pooling_apply_attn(
             decoder_emedded_dict, timestamps, patch_size, input_res
         )
-        return self.to_output_embed(self.norm(tokens_to_decode))
+        return self.norm(tokens_to_decode) # self.to_output_embed(self.norm(tokens_to_decode))
 
     def is_any_data_to_be_decoded(self, modality_mask: Tensor) -> bool:
         """Check if any data is to be decoded for a given modality."""
