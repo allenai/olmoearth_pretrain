@@ -717,6 +717,8 @@ class BatchContrastiveLoss(Loss):
         Returns:
             The computed loss value.
         """
+        correct = 0
+        total = 0
         loss = torch.tensor(0.0, device=predictions.device)
         for modality in predictions.modalities:
             if modality == "latlon":
@@ -729,7 +731,11 @@ class BatchContrastiveLoss(Loss):
             ).repeat(scores.shape[0])
             scores = scores.flatten(0, 1)
             loss += F.cross_entropy(scores, labels)
-        return loss
+            _, predicted = torch.max(scores, 1)
+            correct += (predicted == labels).sum().item()
+            total += labels.shape[0]
+        logger.warning(f"BatchContrastive accuracy :{correct/total*100.}")
+        return loss * self.weight
 
 
 @dataclass
