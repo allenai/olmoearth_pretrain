@@ -145,14 +145,27 @@ class PatchDiscriminationLossNew(Loss):
         Returns:
             The computed loss value.
         """
-        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_preds, all_masks, modality_token_ranges = (
+            predictions.flatten_tokens_and_masks()
+        )
         all_targets = targets.flatten_tokens_and_masks()[0]
 
-        # Samples may have different number of tokens
-        # TODO: Skip unqueeze and the for loop when mask_other_samples is True
-        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        bs, nt, _ = pred.shape
+        # create a dict of per modality masks where it is 1 if it is part of the modality and 0 otherwise
+        # we want the masks to be the same shape as all masks
+        modality_masks = {}
+        for modality_name, (start, end) in modality_token_ranges.items():
+            modality_masks[modality_name] = torch.zeros_like(all_masks)
+            modality_masks[modality_name][:, start:end] = 1
+        # The masked part is where we get flattened
+        # Get decoder mask and filter predictions/targets
+        decoder_mask = all_masks == MaskValue.DECODER.value
+        pred = all_preds[decoder_mask].unsqueeze(dim=0)
+        target = all_targets[decoder_mask].unsqueeze(dim=0)
+        # Get number of decoded tokens per modality Assuming we always loop modality in same order
+        for modality_name, modality_mask in modality_masks.items():
+            # segment the modality mask to the ones that are decoded
+            decoded_tokens_per_modality_count = (modality_mask & decoder_mask).sum(dim=-1)
+            modality_masks[modality_name] = decoded_tokens_per_modality_count
 
         if self.pred2unit:
             pred_mu = pred.mean(1, keepdims=True)
@@ -162,31 +175,71 @@ class PatchDiscriminationLossNew(Loss):
         pred = F.normalize(pred, p=2, dim=-1)
         target = F.normalize(target, p=2, dim=-1)
 
-        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+        count = (decoder_mask).sum(dim=-1)
+
         losses = []
+        modality_losses = {}
         start = 0
-        for c in count:
+        for i,c in enumerate(count):
             end = start + c
             if c == 0:
-                # we will occasionally get a sample with no decoded values due to missing data this will let us skip it
                 logger.warning("No decoded values for this sample")
                 continue
+
             pred_sample = pred[:, start:end, :]
             target_sample = target[:, start:end, :]
             score_sample = (
                 torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
             )
             labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
+
+            # Compute loss for this sample
             loss = F.cross_entropy(
                 score_sample.flatten(0, 1),
                 labels.flatten(0, 1),
                 reduction="none",
             ) * (self.tau * 2)
-            loss = loss.mean()
-            losses.append(loss)
+            losses.append(loss.mean())
+            # # Compute per-modality losses for this sample
+            sample_modality_losses = {}
+            last_idx = 0
+            total_count_across_modalities = 0
+            for modality_name, decoded_tokens_per_modality_count in modality_masks.items():
+                sample_decoded_tokens_per_modality_count = decoded_tokens_per_modality_count[i]
+                total_count_across_modalities += sample_decoded_tokens_per_modality_count
+                if sample_decoded_tokens_per_modality_count != 0:
+                    mod_loss = loss[last_idx:last_idx+sample_decoded_tokens_per_modality_count].mean()
+                    sample_modality_losses[modality_name] = mod_loss
+                    last_idx += sample_decoded_tokens_per_modality_count
+                else:
+                    logger.warning(f"Modality {modality_name} has no decoded tokens")
+                    mod_loss = -10
+            assert total_count_across_modalities == c, f"Total count across modalities {total_count_across_modalities} does not match count {c}"
+
+            # Aggregate modality losses
+            for modality_name, mod_loss in sample_modality_losses.items():
+                if modality_name not in modality_losses:
+                    modality_losses[modality_name] = []
+                if mod_loss != -10:
+                    modality_losses[modality_name].append(mod_loss)
+                else:
+                    logger.warning(f"Modality {modality_name} has no decoded tokens")
+
             start = end
-        loss = torch.stack(losses).mean()
-        return self.weight * loss
+
+        # Average the per-modality losses across samples
+        for modality_name in modality_losses:
+            modality_specific_loss = modality_losses[modality_name]
+            # log the number of samples that have this modality
+            logger.info(f"Modality {modality_name} has {len(modality_specific_loss)} samples")
+            modality_losses[modality_name] = torch.stack(
+                modality_losses[modality_name]
+            ).mean()
+
+        # Compute overall loss
+        overall_loss = torch.stack(losses).mean()
+        logger.info(f"Modality losses: {modality_losses} {overall_loss}")
+        return {"loss": overall_loss, "modality_losses": modality_losses}
 
 
 @LOSS_REGISTRY.register("patch_discrimination")
