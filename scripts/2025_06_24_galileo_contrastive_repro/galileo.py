@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
-model_size = MODEL_SIZE_ARGS["large_shallow_decoder"]
+model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
 
 def build_model_config(common: CommonComponents) -> Config:
@@ -91,16 +91,30 @@ def build_train_module_config(
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config_a=MaskingConfig(
             strategy_config={
-                "type": "space_time",
-                "encode_ratio": 0.1,
-                "decode_ratio": 0.75,
+                "type": "modality_cross_space_time",
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
+                "allow_encoding_decoding_same_bandset": True,
+                "min_decoded_bandsets": 6,
+                "only_decode_modalities": [
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                ],
             }
         ),
         masking_config_b=MaskingConfig(
             strategy_config={
-                "type": "random",
-                "encode_ratio": 0.1,
-                "decode_ratio": 0.75,
+                "type": "modality_cross_random",
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
+                "allow_encoding_decoding_same_bandset": True,
+                "min_decoded_bandsets": 6,
+                "only_decode_modalities": [
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                ],
             }
         ),
         loss_config_a=LossConfig(
@@ -120,13 +134,13 @@ def build_train_module_config(
             }
         ),
         token_exit_cfg_a={
-            Modality.SENTINEL2_L2A.name: 40,
-            Modality.LATLON.name: 40,
-            Modality.SENTINEL1.name: 40,
+            Modality.SENTINEL2_L2A.name: 0,
+            Modality.LATLON.name: 0,
+            Modality.SENTINEL1.name: 0,
             Modality.WORLDCOVER.name: 0,
-            Modality.SRTM.name: 40,
+            Modality.SRTM.name: 0,
             Modality.OPENSTREETMAP_RASTER.name: 0,
-            Modality.LANDSAT.name: 40,
+            Modality.LANDSAT.name: 0,
         },
         # token_exit_cfg_a={
         #    Modality.SENTINEL2_L2A.name: model_size["encoder_depth"],
