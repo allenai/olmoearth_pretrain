@@ -52,7 +52,7 @@ MIN_PATCH_SIZE = 1
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    model_size = MODEL_SIZE_ARGS["large_shallow_decoder"]
 
     encoder_config = EncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
@@ -90,13 +90,13 @@ def build_train_module_config(
     )
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        warmup_duration=Duration.steps(8000),
+        warmup_duration=Duration.steps(15000),
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "modality_cross_space_time",
-                "encode_ratio": 0.1,
-                "decode_ratio": 0.75,
+                "type": "modality_cross_random",
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
                 "min_decoded_bandsets": 6,
                 "only_decode_modalities": [
