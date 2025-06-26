@@ -188,13 +188,14 @@ class TokensAndMasks(NamedTuple):
                     if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
                         attr = getattr(self, attr_name)
                         logger.info(f"Pooling spatial feature: {attr_name} with shape {attr.shape}")
-                        spatial_stacked_features.append(attr)
+                        # only mean in temporal dimension
+                        spatial_stacked_features.append(torch.mean(attr, dim=(-2)))
             if len(spatial_stacked_features) == 0:
                 raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
             # Concatenate along the band sets dimension instead of stacking
             spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
             # flatten the last 3 dimensions
-            return rearrange(spatial_stacked_features, "b h w t c d-> b h w (t c d)")
+            return rearrange(spatial_stacked_features, "b h w c d-> b h w (c d)")
 
         if not spatial_pooling:
             x, mask = self.flatten_tokens_and_masks()
