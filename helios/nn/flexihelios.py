@@ -188,7 +188,13 @@ class TokensAndMasks(NamedTuple):
                 )
                 return x_for_pooling.max(dim=1).values
             elif pooling_type == PoolingType.MEAN:
-                return x_for_pooling.sum(dim=1) / torch.sum(mask, -1, keepdim=True)
+                num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
+                logger.debug(f"num_encoded_tokens: {num_encoded_tokens}")
+                if (num_encoded_tokens == 0).any():
+                    raise ValueError(
+                        f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
+                    )
+                return x_for_pooling.sum(dim=1) / num_encoded_tokens
             else:
                 raise ValueError(f"Invalid pooling type: {pooling_type}")
         else:
@@ -814,6 +820,7 @@ class FlexiHeliosBase(nn.Module):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         use_flash_attn: bool = False,
+        qk_norm: bool = False,
     ) -> None:
         """Initialize the FlexiHeliosBase class."""
         super().__init__()
@@ -835,6 +842,7 @@ class FlexiHeliosBase(nn.Module):
                     num_heads,
                     mlp_ratio,
                     qkv_bias=True,
+                    qk_norm=qk_norm,
                     norm_layer=nn.LayerNorm,  # TODO: This should be configurable
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
@@ -1032,6 +1040,7 @@ class Encoder(FlexiHeliosBase):
         aggregate_then_project: bool = True,
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
+        qk_norm: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1054,6 +1063,7 @@ class Encoder(FlexiHeliosBase):
             use_flash_attn: Whether to use flash attention
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
+            qk_norm: Whether to apply normalization to Q and K in attention
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1066,6 +1076,7 @@ class Encoder(FlexiHeliosBase):
             supported_modalities=supported_modalities,
             use_flash_attn=use_flash_attn,
             random_channel_embeddings=random_channel_embeddings,
+            qk_norm=qk_norm,
         )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
@@ -1390,6 +1401,7 @@ class Predictor(FlexiHeliosBase):
         random_channel_embeddings: bool = False,
         output_embedding_size: int | None = None,
         use_flash_attn: bool = False,
+        qk_norm: bool = False,
     ):
         """Initialize the predictor.
 
@@ -1406,6 +1418,7 @@ class Predictor(FlexiHeliosBase):
             random_channel_embeddings: Whether to randomly initialize channel embeddings
             output_embedding_size: Size of output embeddings
             use_flash_attn: Whether to use flash attention
+            qk_norm: Whether to apply normalization to Q and K in attention
         """
         super().__init__(
             embedding_size=decoder_embedding_size,
@@ -1418,6 +1431,7 @@ class Predictor(FlexiHeliosBase):
             random_channel_embeddings=random_channel_embeddings,
             supported_modalities=supported_modalities,
             use_flash_attn=use_flash_attn,
+            qk_norm=qk_norm,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -1765,6 +1779,7 @@ class EncoderConfig(Config):
     aggregate_then_project: bool = True
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
+    qk_norm: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1807,6 +1822,7 @@ class PredictorConfig(Config):
     random_channel_embeddings: bool = False
     output_embedding_size: int | None = None
     use_flash_attn: bool = False
+    qk_norm: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""

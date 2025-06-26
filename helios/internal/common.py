@@ -22,7 +22,7 @@ from helios.internal.experiment import (
 )
 
 logger = logging.getLogger(__name__)
-BUDGET = "ai2/d5"
+BUDGET = "ai2/es-platform"
 WORKSPACE = "ai2/earth-systems"
 
 DEFAULT_HELIOS_WEKA_BUCKET = BeakerWekaBucket("dfive-default", "/weka/dfive-default")

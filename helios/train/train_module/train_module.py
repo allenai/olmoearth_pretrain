@@ -24,9 +24,6 @@ from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import Duration, ReduceType
 from olmo_core.train.train_module import EvalBatchSizeUnit, EvalBatchSpec, TrainModule
-from olmo_core.train.train_module.transformer import (
-    TransformerActivationCheckpointingConfig,
-)
 from olmo_core.utils import gc_cuda, get_default_device
 from torch import nn
 from torch.distributed.checkpoint.metadata import Metadata
@@ -52,13 +49,13 @@ class HeliosTrainModuleConfig(Config):
         transform_config: The transform configuration for the model.
         compile_model: Whether to compile the model using torch.compile.
         dp_config: Data parallel configuration for distributed training.
-        ac_config: Activation checkpointing configuration.
         compile_loss: Whether to compile the loss function.
         autocast_precision: Enable AMP with this data type.
         max_grad_norm: Clip gradient norms to this value.
         scheduler: Optional learning rate scheduler.
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
+        find_unused_parameters: Whether to find unused parameters for DDP.
     """
 
     # Training settings
@@ -72,17 +69,15 @@ class HeliosTrainModuleConfig(Config):
     # Model settings
     compile_model: bool = False
     dp_config: DataParallelConfig | None = None
-    ac_config: TransformerActivationCheckpointingConfig | None = (
-        None  # UNTESTED for helios
-    )
 
     # Loss function settings
     compile_loss: bool = False
 
     # Training settings
-    autocast_precision: DType | None = None  # UNTESTED for helios
+    autocast_precision: DType | None = None
     max_grad_norm: float | None = None
     scheduler: Scheduler | None = None
+    find_unused_parameters: bool = True
 
     # Checkpoint settings
     state_dict_save_opts: dict[str, Any] | None = None
@@ -139,7 +134,6 @@ class HeliosTrainModule(TrainModule):
         rank_microbatch_size: The rank micro batch size in instances.
         compile_model: Whether to compile to the model.
         dp_config: Data parallel configuration for the model.
-        ac_config: Activation checkpointing configuration for the model.
         compile_loss: Whether to compile the loss function.
         autocast_precision: Enable AMP with this data type.
         max_grad_norm: Clip gradient norms to this value.
@@ -158,7 +152,6 @@ class HeliosTrainModule(TrainModule):
         warmup_duration: Duration | None = None,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
-        ac_config: TransformerActivationCheckpointingConfig | None = None,
         compile_loss: bool = False,
         find_unused_parameters: bool = True,
         autocast_precision: torch.dtype | None = None,
@@ -178,7 +171,6 @@ class HeliosTrainModule(TrainModule):
             warmup_duration: The warmup duration.
             compile_model: Whether to compile to the model.
             dp_config: Data parallel configuration for the model.
-            ac_config: Activation checkpointing configuration for the model.
             compile_loss: Whether to compile the loss function.
             find_unused_parameters: Whether to find unused parameters for DDP.
             autocast_precision: Enable AMP with this data type.
@@ -216,16 +208,6 @@ class HeliosTrainModule(TrainModule):
             self.world_mesh = None
 
         self.warmup_duration = warmup_duration
-        # Maybe apply activation checkpointing.
-        if ac_config is not None:
-            self.model.apply_activation_checkpointing(
-                ac_config.mode,
-                block_interval=ac_config.block_interval,
-                modules=ac_config.modules,
-            )
-            logger.info(
-                f"Applied '{ac_config.mode}' activation checkpointing to the model"
-            )
 
         # Maybe compile.
         if compile_model:
