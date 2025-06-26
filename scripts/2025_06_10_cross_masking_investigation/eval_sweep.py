@@ -21,10 +21,10 @@ cluster= "local" #"ai2/titan-cirrascale"
 run_cmd = "train" #"launch"
 for checkpoint in checkpoints:
     for probe_lr in LP_LRs:
-        run_name = checkpoint.split("/")[-2] + f"_eval_{probe_lr}"
+        run_name = checkpoint.split("/")[-2] + checkpoint.split("/")[-1] + f"_eval_{probe_lr}"
         start_command = "python3" if run_cmd == "launch" else "torchrun"
         lr_args = lr_args.format(lr=probe_lr)
         print(lr_args)
         cmd = f"{start_command} scripts/2025_06_10_cross_masking_investigation/eval.py {run_cmd} {run_name} {cluster} {lr_args} --trainer.load_path={checkpoint}"
         print(cmd)
-        subprocess.run(cmd, shell=True)
+        # subprocess.run(cmd, shell=True)
