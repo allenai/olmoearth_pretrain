@@ -205,23 +205,33 @@ class HeliosSample(NamedTuple):
 
     @property
     def valid_time(self) -> int:
-        """Get the minimum number of valid time steps in a batch.
+        """Get the minimum number of valid time steps in a batch."""
+        return self.timesteps_with_at_least_one_modality.shape[0]
 
-        Note that the timestamps are edge padded by repeating the last timestamp.
-        """
-        min_valid_time = MAX_SEQUENCE_LENGTH
-        if self.timestamps is None:
-            raise ValueError("Timestamps are not present in the sample")
-        if len(self.timestamps.shape) != 3:
-            raise ValueError("Valid time is only defined for a batch of samples")
-        for i in range(self.timestamps.shape[0]):
-            unique_timesteps = torch.unique(self.timestamps[i], dim=0)
-            min_valid_time = min(min_valid_time, unique_timesteps.shape[0])
-        if min_valid_time < self.time:
-            logger.debug(
-                f"valid_time is smaller than time: {min_valid_time} < {self.time}"
-            )
-        return min_valid_time
+    @property
+    def timesteps_with_at_least_one_modality(self) -> torch.Tensor:
+        """Get timesteps with at least one modality present."""
+        per_modality_present_masks = []
+        for modality in self.modalities:
+            if modality == "timestamps":
+                continue
+            modality_spec = Modality.get(modality)
+            if modality_spec.is_multitemporal:
+                data = getattr(self, modality)
+                if isinstance(data, np.ndarray):
+                    raise ValueError(
+                        "timesteps_with_at_least_one_modality is not yet supported for numpy arrays"
+                    )
+                # Get all timestamps that are present for all samples for the given modality
+                present_mask = (data != MISSING_VALUE).all(dim=(0, 1, 2, 4))
+                per_modality_present_masks.append(present_mask)
+        at_least_one_modality_present_timestep_mask = torch.stack(
+            per_modality_present_masks, dim=1
+        ).any(dim=1)
+        timesteps_with_at_least_one_modality = torch.where(
+            at_least_one_modality_present_timestep_mask
+        )[0]
+        return timesteps_with_at_least_one_modality
 
     def get_expected_shape(self, attribute: str, mask: bool = False) -> tuple[int, ...]:
         """Get the expected shape of an attribute."""
@@ -289,12 +299,47 @@ class HeliosSample(NamedTuple):
 
         return min(floor(max_t_within_budget), self.time)
 
+    @staticmethod
+    def _get_valid_start_ts(
+        missing_timesteps: dict[str, Any], max_t: int, current_length: int
+    ) -> list[int]:
+        """Get valid starting timesteps."""
+        if current_length > max_t:
+            # We can randomly sample from the range of valid starting timesteps because current_length exceeds max_t
+            if not missing_timesteps:
+                # No missing timesteps info available - all timesteps are potentially valid
+                # Create a range of all possible starting positions that fit within max_t
+                valid_start_ts = list(range(current_length - max_t + 1))
+            else:
+                # We have missing timesteps info - need to find valid starting positions
+                # that ensure we have at least some present data at the chosen start_t
+                start_ts = set()
+                for modality in missing_timesteps:
+                    valid_timesteps = np.flatnonzero(missing_timesteps[modality])
+                    valid_timesteps = valid_timesteps[
+                        valid_timesteps + max_t <= current_length
+                    ]
+                    start_ts.update(valid_timesteps)
+                valid_start_ts = list(start_ts)
+        else:
+            # Picking the first timestep aims to maximize the number of present timesteps
+            valid_start_ts = [0]
+        if len(valid_start_ts) == 0:
+            logger.warning(
+                f"No valid start timesteps found for {missing_timesteps} with max_t {max_t} and current_length {current_length}"
+            )
+            raise ValueError(
+                f"No valid start timesteps found for {missing_timesteps} with max_t {max_t} and current_length {current_length}"
+            )
+        return sorted(valid_start_ts)
+
     def subset(
         self,
         patch_size: int,
-        max_tokens_per_instance: int,
+        max_tokens_per_instance: int | None,
         sampled_hw_p: int,
         current_length: int,
+        missing_timesteps_masks: dict[str, Any] = {},
     ) -> "HeliosSample":
         """Subset a HelioSample that is unbatched ie no batch dimension.
 
@@ -302,9 +347,10 @@ class HeliosSample(NamedTuple):
             patch_size: The patch size being applied to this sample.
             max_tokens_per_instance: The token budget when subsetting. This is used
                 to determine the maximum number of timesteps possible for a given
-                height and width.
+                height and width. If None, this operation is a no-op.
             sampled_hw_p: The number of tokens in the height and width dimensions.
             current_length: The current maximum sequence length of the sample.
+            missing_timesteps_masks: A dictionary of missing timesteps masks.
 
         We apply current_length here to ensure that the subset focuses on the valid timesteps
         instead of the padded timesteps.
@@ -317,8 +363,8 @@ class HeliosSample(NamedTuple):
         of timesteps allowable so that the total tokens (per instance) is >=
         max_tokens_per_instance
         """
-        # TODO: Pick a start_t and a max_t such that there is at least one modality present at each timestep
-        # this may help us maximize the number os samples without missing modalities
+        if max_tokens_per_instance is None:
+            return self
         max_t = self._get_max_t_within_token_budget(
             sampled_hw_p, max_tokens_per_instance
         )
@@ -326,14 +372,12 @@ class HeliosSample(NamedTuple):
         start_h = np.random.choice(self.height - sampled_hw + 1)
         start_w = np.random.choice(self.width - sampled_hw + 1)
 
-        # The timestamps are edge padded and we always want to start from a valid timestep
-        if current_length > max_t:
-            start_t = np.random.choice(current_length - max_t + 1)
-        else:
-            start_t = 0
+        valid_start_ts = self._get_valid_start_ts(
+            missing_timesteps_masks, max_t, current_length
+        )
+        start_t = np.random.choice(valid_start_ts)
 
         new_data_dict: dict[str, ArrayTensor] = {}
-
         for attribute, modality in self.as_dict(ignore_nones=True).items():
             assert modality is not None
             if attribute == "timestamps":
@@ -686,33 +730,6 @@ class HeliosDataset(Dataset):
             sample_dict["timestamps"] = padded_timestamps
         return sample_dict, current_length
 
-    def apply_subset(
-        self,
-        sample: HeliosSample,
-        args: GetItemArgs,
-        current_length: int,
-    ) -> HeliosSample:
-        """Apply the subset to the sample.
-
-        Args:
-            sample: The sample to apply the subset to.
-            args: The arguments to apply the subset.
-            current_length: The current maximum sequence length of the sample.
-
-        Returns:
-            The subset of the sample.
-        """
-        if args.token_budget is not None:
-            sample_subset = sample.subset(
-                patch_size=args.patch_size,
-                max_tokens_per_instance=args.token_budget,
-                sampled_hw_p=args.sampled_hw_p,
-                current_length=current_length,
-            )
-        else:
-            sample_subset = sample
-        return sample_subset
-
     def _apply_throttling(self) -> None:
         """Apply read throttling.
 
@@ -783,6 +800,32 @@ class HeliosDataset(Dataset):
         """Get the h5 file path."""
         return self.h5py_dir / ConvertToH5py.sample_file_pattern.format(index=index)
 
+    @staticmethod
+    def _crop_timestamps_and_masks(
+        timestamps: np.ndarray, missing_timesteps_masks: dict[str, Any]
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        """Crop the timestamps to the first and last valid timestep of the present modalities."""
+        # Assumes that the missing timesteps masks has already been filtered for training modalities
+        # get first present timestep
+        if not missing_timesteps_masks:
+            first_valid_timestep = 0
+            last_valid_timestep = MAX_SEQUENCE_LENGTH
+        else:
+            # Timestep masks are the same length as the timestamps
+            first_valid_timestep = MAX_SEQUENCE_LENGTH
+            last_valid_timestep = 0
+            for timestep_mask in missing_timesteps_masks.values():
+                valid_timesteps = np.where(timestep_mask)[0]
+                if len(valid_timesteps) > 0:
+                    first_valid_timestep = min(first_valid_timestep, valid_timesteps[0])
+                    last_valid_timestep = max(last_valid_timestep, valid_timesteps[-1])
+        timestamps = timestamps[first_valid_timestep : last_valid_timestep + 1]
+        for modality, timestep_mask in missing_timesteps_masks.items():
+            missing_timesteps_masks[modality] = timestep_mask[
+                first_valid_timestep : last_valid_timestep + 1
+            ]
+        return timestamps, missing_timesteps_masks
+
     def __getitem__(self, args: GetItemArgs) -> tuple[int, HeliosSample]:
         """Get the sample at the given index."""
         if hasattr(self, "sample_indices") and self.sample_indices is not None:
@@ -792,13 +835,23 @@ class HeliosDataset(Dataset):
         h5_file_path = self._get_h5_file_path(index)
 
         sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
+        timestamps, missing_timesteps_masks = self._crop_timestamps_and_masks(
+            sample_dict["timestamps"], missing_timesteps_masks
+        )
+        sample_dict["timestamps"] = timestamps
         sample_dict, current_length = self._pad_timestamps(sample_dict)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
             sample_dict, missing_timesteps_masks
         )
 
-        subset_sample = self.apply_subset(sample, args, current_length)
+        subset_sample = sample.subset(
+            patch_size=args.patch_size,
+            max_tokens_per_instance=args.token_budget,
+            sampled_hw_p=args.sampled_hw_p,
+            current_length=current_length,
+            missing_timesteps_masks=missing_timesteps_masks,
+        )
 
         sample_dict = subset_sample.as_dict(ignore_nones=True)
 
