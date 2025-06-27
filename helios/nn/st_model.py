@@ -944,6 +944,17 @@ class STEncoder(STBase):
 
         return output
 
+    def get_attn_or_none_mask(
+        self,
+        new_mask: Tensor,
+        always_pass_none_mask_to_transformer: bool,
+    ) -> Tensor | None:
+        """Get the attention mask or None if we should pass None to the transformer."""
+        if always_pass_none_mask_to_transformer or not self.training:
+            return None
+        else:
+            return new_mask
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
