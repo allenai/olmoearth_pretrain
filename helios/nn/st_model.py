@@ -951,6 +951,7 @@ class STEncoder(STBase):
         patch_size: int,
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
+        always_pass_none_mask_to_transformer: bool = False,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1028,6 +1029,10 @@ class STEncoder(STBase):
             bool_mask = mask == MaskValue.ONLINE_ENCODER.value
             tokens, indices, new_mask = self.remove_masked_tokens(x, bool_mask)
 
+            attn_mask = self.get_attn_or_none_mask(
+                new_mask, always_pass_none_mask_to_transformer
+            )
+
             if do_token_fusing and self.fuse_using_cross_attn:
                 # Last layer with fusing enabled, that means we do cross attention to compute
                 # per-spatial-patch tokens.
@@ -1040,12 +1045,12 @@ class STEncoder(STBase):
                     .repeat(attention_batch_size, 1, 1)
                 )
                 # Computed tokens will also be [B, 1, D].
-                tokens = blk(x=fuse_x, y=tokens, attn_mask=new_mask)
+                tokens = blk(x=fuse_x, y=tokens, attn_mask=attn_mask)
                 # Now expand the tokens to [B, T, D].
                 # This is to keep consistent with the expected output format.
                 tokens = tokens.expand(-1, attention_seq_len, -1)
             else:
-                tokens = blk(x=tokens, y=None, attn_mask=new_mask)
+                tokens = blk(x=tokens, y=None, attn_mask=attn_mask)
 
             # Apply normalization on last block.
             if i_blk == len(self.blocks) - 1:
@@ -1088,6 +1093,7 @@ class STEncoder(STBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
+        always_pass_none_mask_to_transformer: bool = False,
     ) -> tuple[TokensAndMasks, Tensor]:
         """Process masked input samples into token representations.
 
@@ -1096,6 +1102,7 @@ class STEncoder(STBase):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
+            always_pass_none_mask_to_transformer: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -1111,6 +1118,7 @@ class STEncoder(STBase):
                 patch_size=patch_size,
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
+                always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
         return output, self.project_and_aggregate(output)
