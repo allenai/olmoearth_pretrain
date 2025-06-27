@@ -8,11 +8,13 @@ from train import (
     build_train_module_config,
     build_trainer_config,
     build_visualize_config,
-    my_build_common_components,
 )
 
+from helios.data.constants import Modality
+from helios.internal.common import build_common_components
 from helios.internal.experiment import (
     CommonComponents,
+    SubCmd,
     main,
 )
 from helios.internal.utils import MODEL_SIZE_ARGS
@@ -26,6 +28,27 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
+
+
+def my_build_common_components(
+    script: str,
+    cmd: SubCmd,
+    run_name: str,
+    cluster: str,
+    overrides: list[str],
+) -> CommonComponents:
+    """Build the common components for an experiment."""
+    config = build_common_components(script, cmd, run_name, cluster, overrides)
+    config.training_modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.WORLDCOVER.name,
+        Modality.SRTM.name,
+        Modality.LANDSAT.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+        Modality.NAIP_10.name,
+    ]
+    return config
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
