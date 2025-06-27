@@ -18,56 +18,76 @@ lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.probe_lr={lr}",
 ]
 
-for probe_lr in LP_LRs:
-    subprocess.call(
-        [
-            "python",
-            "scripts/2025_06_23_naip/eval.py",
-            "launch",
-            f"v0.2_base_latent_mim_128_naip_moredata_random_fixed_modality_0.5_eval_{probe_lr}",
-            "ai2/titan-cirrascale",
-            "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_naip_moredata_random_fixed_modality_0.5/step320000",
-        ]
-        + [arg.format(lr=probe_lr) for arg in lr_args],
-    )  # nosec
-    subprocess.call(
-        [
-            "python",
-            "scripts/2025_06_23_naip/eval.py",
-            "launch",
-            f"v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.decodes1landsat_eval_{probe_lr}",
-            "ai2/titan-cirrascale",
-            "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.decodes1landsat/step340000",
-            "--common.training_modalities=[sentinel2_l2a,sentinel1,worldcover,latlon,srtm,landsat,openstreetmap_raster]",
-        ]
-        + [arg.format(lr=probe_lr) for arg in lr_args],
-    )  # nosec
-    subprocess.call(
-        [
-            "python",
-            "scripts/2025_06_23_naip/eval.py",
-            "launch",
-            f"v0.2_small_latent_mim_128_naip_moredata_random_fixed_modality_0.5_nonaip_eval_{probe_lr}",
-            "ai2/titan-cirrascale",
-            "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_small_latent_mim_128_naip_moredata_random_fixed_modality_0.5_nonaip/step310000",
-            "--common.training_modalities=[sentinel2_l2a,sentinel1,worldcover,latlon,srtm,landsat,openstreetmap_raster]",
-            "--model.encoder_config.embedding_size=384",
-            "--model.decoder_config.encoder_embedding_size=384",
-            "--model.decoder_config.decoder_embedding_size=384",
-            "--model.encoder_config.num_heads=6",
-            "--model.decoder_config.num_heads=6",
-        ]
-        + [arg.format(lr=probe_lr) for arg in lr_args],
-    )  # nosec
-    subprocess.call(
-        [
-            "python",
-            "scripts/2025_06_23_naip/eval_alldata.py",
-            "launch",
-            f"v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5_eval_{probe_lr}",
-            "ai2/titan-cirrascale",
-            "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5/step320000",
-            "--common.training_modalities=[sentinel2_l2a,sentinel1,worldcover,latlon,srtm,landsat,openstreetmap_raster]",
-        ]
-        + [arg.format(lr=probe_lr) for arg in lr_args],
-    )  # nosec
+dataset_percentages = [0.01, 0.05, 0.2, 0.5, 1.0]
+dataset_percentage_args = [
+    "--trainer.callbacks.downstream_evaluator.tasks.m-eurosat.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m-bigearthnet.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m-so2sat.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m-brick-kiln.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m-sa-crop-type.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m-cashew-plant.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.mados.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.dataset_percentage={dataset_percentage}",
+]
+for dataset_percentage in dataset_percentages:
+    for probe_lr in LP_LRs:
+        for dataset_percentage in dataset_percentages:
+            subprocess.call(
+                [
+                "python",
+                "scripts/2025_06_23_naip/eval.py",
+                "launch",
+                f"v0.2_base_latent_mim_128_naip_moredata_random_fixed_modality_0.5_eval_{probe_lr}",
+                "ai2/titan-cirrascale",
+                "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_naip_moredata_random_fixed_modality_0.5/step320000",
+            ]
+            + [arg.format(lr=probe_lr) for arg in lr_args] + [arg.format(dataset_percentage=dataset_percentage) for arg in dataset_percentage_args],
+        )  # nosec
+        subprocess.call(
+            [
+                "python",
+                "scripts/2025_06_23_naip/eval.py",
+                "launch",
+                f"v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.decodes1landsat_eval_{probe_lr}",
+                "ai2/titan-cirrascale",
+                "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.decodes1landsat/step340000",
+                "--common.training_modalities=[sentinel2_l2a,sentinel1,worldcover,latlon,srtm,landsat,openstreetmap_raster]",
+            ]
+            + [arg.format(lr=probe_lr) for arg in lr_args] + [arg.format(dataset_percentage=dataset_percentage) for arg in dataset_percentage_args] ,
+        )  # nosec
+        subprocess.call(
+            [
+                "python",
+                "scripts/2025_06_23_naip/eval.py",
+                "launch",
+                f"v0.2_small_latent_mim_128_naip_moredata_random_fixed_modality_0.5_nonaip_eval_{probe_lr}",
+                "ai2/titan-cirrascale",
+                "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_small_latent_mim_128_naip_moredata_random_fixed_modality_0.5_nonaip/step310000",
+                "--common.training_modalities=[sentinel2_l2a,sentinel1,worldcover,latlon,srtm,landsat,openstreetmap_raster]",
+                "--model.encoder_config.embedding_size=384",
+                "--model.decoder_config.encoder_embedding_size=384",
+                "--model.decoder_config.decoder_embedding_size=384",
+                "--model.encoder_config.num_heads=6",
+                "--model.decoder_config.num_heads=6",
+            ]
+            + [arg.format(lr=probe_lr) for arg in lr_args] + [arg.format(dataset_percentage=dataset_percentage) for arg in dataset_percentage_args],
+        )  # nosec
+        subprocess.call(
+            [
+                "python",
+                "scripts/2025_06_23_naip/eval_alldata.py",
+                "launch",
+                f"v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5_eval_{probe_lr}",
+                "ai2/titan-cirrascale",
+                "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5/step320000",
+                "--common.training_modalities=[sentinel2_l2a,sentinel1,worldcover,latlon,srtm,landsat,openstreetmap_raster]",
+            ]
+            + [arg.format(lr=probe_lr) for arg in lr_args] + [arg.format(dataset_percentage=dataset_percentage) for arg in dataset_percentage_args],
+        )  # nosec

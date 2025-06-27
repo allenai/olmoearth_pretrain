@@ -146,18 +146,6 @@ class DownstreamEvaluator:
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
         train_embeddings, train_labels = self._get_embeddings(train_loader)
-        if self.dataset_percentage < 1.0:
-            # Randomly sample a percentage of the test data
-            num_train_samples = train_embeddings.shape[0]
-            num_train_samples_to_sample = int(
-                num_train_samples * self.dataset_percentage
-            )
-            # Randomly sample the indices integers from 0 to num_train_samples
-            train_indices = torch.randperm(num_train_samples)[
-                :num_train_samples_to_sample
-            ]
-            train_embeddings = train_embeddings[train_indices]
-            train_labels = train_labels[train_indices]
         logger.info(f"Getting test embeddings for {self.dataset}...")
         test_embeddings, test_labels = self._get_embeddings(val_loader)
         logger.info(
@@ -170,24 +158,57 @@ class DownstreamEvaluator:
         logger.info(
             f"test embeddings shape for {self.dataset}: {test_embeddings.shape}"
         )
-        logger.info(f"train labels shape for {self.dataset}: {train_labels.shape}")
-        logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
+        eval_results = []
+        for i in range(20):
+            if self.dataset_percentage < 1.0:
+                # Randomly sample a percentage of the test data
+                # log number before sampling
+                logger.info(f"Number of train samples before sampling: {train_embeddings.shape[0]}")
+                num_train_samples = train_embeddings.shape[0]
+                num_train_samples_to_sample = int(
+                    num_train_samples * self.dataset_percentage
+                )
+                # Randomly sample the indices integers from 0 to num_train_samples
+                train_indices = torch.randperm(num_train_samples)[
+                    :num_train_samples_to_sample
+                ]
+                train_embeddings_sampled = train_embeddings[train_indices]
+                train_labels_sampled = train_labels[train_indices]
+                # log number after sampling
+                # log number of unique labels
+                logger.info(f"Number of train samples after sampling: {train_embeddings_sampled.shape[0]}")
+                logger.info(f"Number of unique train labels: {len(torch.unique(train_labels_sampled))}")
+            # logger.info(f"train labels shape for {self.dataset}: {train_labels.shape}")
+            # logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        val_result = self.eval_function(  # type: ignore
-            config=self.config,
-            train_embeddings=train_embeddings,
-            train_labels=train_labels,
-            test_embeddings=test_embeddings,
-            test_labels=test_labels,
-            device=self.device,
-        )
-        logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
+            val_result = self.eval_function(  # type: ignore
+                config=self.config,
+                train_embeddings=train_embeddings_sampled,
+                train_labels=train_labels_sampled,
+                test_embeddings=test_embeddings,
+                test_labels=test_labels,
+                device=self.device,
+            )
+            logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
+            eval_results.append(val_result)
+            if self.dataset_percentage == 1.0:
+                break
+
+        logger.info(f"Downstream evaluator {self.evaluation_name} scores: {eval_results}")
+        # get mean and std of eval_results
+        mean_eval_result = torch.mean(torch.tensor(eval_results))
+        std_eval_result = torch.std(torch.tensor(eval_results))
+        logger.info(f"Downstream evaluator {self.evaluation_name} mean score: {mean_eval_result}")
+        logger.info(f"Downstream evaluator {self.evaluation_name} std score: {std_eval_result}")
+        # what is the variance of the eval_results
+        variance_eval_result = torch.var(torch.tensor(eval_results))
+        logger.info(f"Downstream evaluator {self.evaluation_name} variance score: {variance_eval_result}")
         # free memory
         del train_embeddings, train_labels, test_embeddings, test_labels
         torch.cuda.empty_cache()
         gc.collect()
 
-        return val_result
+        return mean_eval_result
 
 
 @dataclass
@@ -327,6 +348,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     patch_size=task.patch_size,
                     eval_interval=task.eval_interval,
                     epochs=task.epochs,
+                    dataset_percentage=task.dataset_percentage,
                     eval_mode=task.eval_mode,
                 )
             )
