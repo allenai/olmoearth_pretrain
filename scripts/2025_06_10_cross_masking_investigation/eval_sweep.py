@@ -1,3 +1,4 @@
+import argparse
 import subprocess
 
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
@@ -21,7 +22,13 @@ checkpoints = [
     "/weka/dfive-default/helios/checkpoints/henryh/v0.2_latent_mim_128_cross_random_allow_overlap_minenc_2_alldec_only_dec_srtm_worldcover_osm_mask_0.5/step160000",
     "/weka/dfive-default/helios/checkpoints/henryh/v0.2_latent_mim_128_cross_random_allow_overlap_minenc_2_alldec_only_dec_srtm_worldcover_osm_mask_0.5/step235950",
 ]
-cluster = "ai2/titan-cirrascale"
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--cluster", type=str, default="ai2/titan-cirrascale", help="Cluster to run on"
+)
+args = parser.parse_args()
+
 run_cmd = "launch"
 for checkpoint in checkpoints:
     for probe_lr in LP_LRs:
@@ -33,6 +40,6 @@ for checkpoint in checkpoints:
         start_command = "python3" if run_cmd == "launch" else "torchrun"
         formatted_lr_args = lr_args.format(lr=probe_lr)
         print(formatted_lr_args)
-        cmd = f"{start_command} scripts/2025_06_10_cross_masking_investigation/eval.py {run_cmd} {run_name} {cluster} --launch.priority=high {formatted_lr_args} --trainer.load_path={checkpoint}"
+        cmd = f"{start_command} scripts/2025_06_10_cross_masking_investigation/eval.py {run_cmd} {run_name} {args.cluster} --launch.priority=high {formatted_lr_args} --trainer.load_path={checkpoint}"
         print(cmd)
         subprocess.run(cmd, shell=True)  # nosec
