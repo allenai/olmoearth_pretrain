@@ -20,12 +20,12 @@ lr_args = [
 
 dataset_percentages = [0.01, 0.05, 0.2, 0.5, 1.0]
 dataset_percentage_args = [
-    "--trainer.callbacks.downstream_evaluator.tasks.m-eurosat.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.m-bigearthnet.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.m-so2sat.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.m-brick-kiln.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.m-sa-crop-type.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.m-cashew-plant.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m_eurosat.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m_bigearthnet.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m_so2sat.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m_brick_kiln.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m_sa_crop_type.dataset_percentage={dataset_percentage}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m_cashew_plant.dataset_percentage={dataset_percentage}",
     "--trainer.callbacks.downstream_evaluator.tasks.mados.dataset_percentage={dataset_percentage}",
     "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.dataset_percentage={dataset_percentage}",
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.dataset_percentage={dataset_percentage}",
@@ -90,4 +90,16 @@ for dataset_percentage in dataset_percentages:
                 "--common.training_modalities=[sentinel2_l2a,sentinel1,worldcover,latlon,srtm,landsat,openstreetmap_raster]",
             ]
             + [arg.format(lr=probe_lr) for arg in lr_args] + [arg.format(dataset_percentage=dataset_percentage) for arg in dataset_percentage_args],
+        )  # nosec
+        subprocess.call(
+            [
+                "python",
+                "scripts/2025_06_23_naip/eval.py",
+                "launch",
+                f"v0.2_base_latent_mim_128_naip_moredata_random_fixed_modality_0.5_nonaip_eval_{probe_lr}",
+                "ai2/titan-cirrascale",
+                "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_naip_moredata_random_fixed_modality_0.5_nonaip/step340000",
+                "--common.training_modalities=[sentinel2_l2a,sentinel1,worldcover,latlon,srtm,landsat,openstreetmap_raster]",
+            ]
+            + [arg.format(lr=probe_lr) for arg in lr_args] + [arg.format(dataset_percentage=dataset_percentage) for arg in dataset_percentage_args] ,
         )  # nosec
