@@ -26,6 +26,7 @@ for probe_lr in LP_LRs:
             "launch",
             f"v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm_step320k_eval_{probe_lr}",
             "ai2/titan-cirrascale",
+            "--common.training_modalities=/[sentinel2_l2a,sentinel1,latlon,srtm,landsat]",
             "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm/step320000",
         ]
         + [arg.format(lr=probe_lr) for arg in lr_args],
@@ -37,6 +38,7 @@ for probe_lr in LP_LRs:
             "launch",
             f"v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm_step220k_eval_{probe_lr}",
             "ai2/titan-cirrascale",
+            "--common.training_modalities=/[sentinel2_l2a,sentinel1,latlon,srtm,landsat]",
             "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm/step220000",
         ]
         + [arg.format(lr=probe_lr) for arg in lr_args],
@@ -48,6 +50,7 @@ for probe_lr in LP_LRs:
             "launch",
             f"v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm_step120k_eval_{probe_lr}",
             "ai2/titan-cirrascale",
+            "--common.training_modalities=/[sentinel2_l2a,sentinel1,latlon,srtm,landsat]"
             "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm/step120000",
         ]
         + [arg.format(lr=probe_lr) for arg in lr_args],
