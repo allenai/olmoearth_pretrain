@@ -20,32 +20,29 @@ lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr}",
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr}",
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr}",
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr}",
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr}",
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}",
-    "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.probe_lr={lr}",
 ]
 
-dataset_percentages = [0.01, 0.05, 0.2, 0.5, 1.0]
-dataset_percentage_args = [
-    "--trainer.callbacks.downstream_evaluator.tasks.m_eurosat.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.m_bigearthnet.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.m_so2sat.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.m_brick_kiln.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.m_sa_crop_type.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.m_cashew_plant.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.mados.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.dataset_percentage={dataset_percentage}",
-    "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.dataset_percentage={dataset_percentage}",
+dataset_paritions = [
+    "0.01x_train",
+    "0.05x_train",
+    "0.2x_train",
+    "0.5x_train",
+]
+dataset_partition_args = [
+    "--trainer.callbacks.downstream_evaluator.tasks.m_eurosat.partition={dataset_partition}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m_bigearthnet.partition={dataset_partition}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m_so2sat.partition={dataset_partition}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m_brick_kiln.partition={dataset_partition}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m_sa_crop_type.partition={dataset_partition}",
+    "--trainer.callbacks.downstream_evaluator.tasks.m_cashew_plant.partition={dataset_partition}",
+    "--trainer.callbacks.downstream_evaluator.tasks.mados.partition={dataset_partition}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.partition={dataset_partition}",
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.partition={dataset_partition}",
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.partition={dataset_partition}",
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.partition={dataset_partition}",
 ]
 for probe_lr in LP_LRs:
-    for dataset_percentage in dataset_percentages:
+    for dataset_partition in dataset_paritions:
         # Add priority argument if provided
         priority_args = []
         if args.priority:
@@ -95,7 +92,7 @@ for probe_lr in LP_LRs:
                 "python",
                 "scripts/2025_06_23_naip/eval_alldata.py",
                 "launch",
-                f"1v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5_eval_{probe_lr}_dp_{dataset_percentage}",
+                f"gal_partition_v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5_eval_{probe_lr}_dp_{dataset_partition}",
                 args.cluster,
                 "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5/step320000",
                 "--common.training_modalities=[sentinel2_l2a,sentinel1,worldcover,latlon,srtm,landsat,openstreetmap_raster]",
@@ -103,8 +100,8 @@ for probe_lr in LP_LRs:
             + priority_args
             + [arg.format(lr=probe_lr) for arg in lr_args]
             + [
-                arg.format(dataset_percentage=dataset_percentage)
-                for arg in dataset_percentage_args
+                arg.format(dataset_partition=dataset_partition)
+                for arg in dataset_partition_args
             ],
         )  # nosec
         # subprocess.call(
