@@ -8,40 +8,62 @@ lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.m-sa-crop-type.probe_lr={lr}",
     "--trainer.callbacks.downstream_evaluator.tasks.m-cashew-plant.probe_lr={lr}",
     "--trainer.callbacks.downstream_evaluator.tasks.mados.probe_lr={lr}",
-    # "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.probe_lr={lr}",
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr}",
-    # "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr}",
-    # "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr}",
-    # "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr}",
-    # "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr}",
-    # "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr}",
+    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}",
     "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.probe_lr={lr}",
 ]
 
 for probe_lr in LP_LRs:
-    # subprocess.call(
-    #     [
-    #         "python",
-    #         "scripts/2025_06_23_naip/eval.py",
-    #         "launch",
-    #         f"v0.2_base_latent_mim_128_naip_moredata_random_fixed_modality_0.5_eval_{probe_lr}",
-    #         "ai2/titan-cirrascale",
-    #         "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_naip_moredata_random_fixed_modality_0.5/step320000",
-    #     ]
-    #     + [arg.format(lr=probe_lr) for arg in lr_args],
-    # )  # nosec
     subprocess.call(
         [
             "python",
             "scripts/2025_06_23_naip/eval.py",
             "launch",
-            f"v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaips1landsat_eval_{probe_lr}",
+            f"v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm_step320k_eval_{probe_lr}",
             "ai2/titan-cirrascale",
-            "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaips1landsat/step280000",
-            "--common.training_modalities=[sentinel2_l2a,worldcover,latlon,srtm,openstreetmap_raster]",
+            "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm/step320000",
         ]
         + [arg.format(lr=probe_lr) for arg in lr_args],
     )  # nosec
+    subprocess.call(
+        [
+            "python",
+            "scripts/2025_06_23_naip/eval.py",
+            "launch",
+            f"v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm_step220k_eval_{probe_lr}",
+            "ai2/titan-cirrascale",
+            "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm/step220000",
+        ]
+        + [arg.format(lr=probe_lr) for arg in lr_args],
+    )  # nosec
+    subprocess.call(
+        [
+            "python",
+            "scripts/2025_06_23_naip/eval.py",
+            "launch",
+            f"v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm_step120k_eval_{probe_lr}",
+            "ai2/titan-cirrascale",
+            "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm/step120000",
+        ]
+        + [arg.format(lr=probe_lr) for arg in lr_args],
+    )  # nosec
+    # subprocess.call(
+    #     [
+    #         "python",
+    #         "scripts/2025_06_23_naip/eval.py",
+    #         "launch",
+    #         f"v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaips1landsat_eval_{probe_lr}",
+    #         "ai2/titan-cirrascale",
+    #         "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaips1landsat/step280000",
+    #         "--common.training_modalities=[sentinel2_l2a,worldcover,latlon,srtm,openstreetmap_raster]",
+    #     ]
+    #     + [arg.format(lr=probe_lr) for arg in lr_args],
+    # )  # nosec
     # subprocess.call(
     #     [
     #         "python",
