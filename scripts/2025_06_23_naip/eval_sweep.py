@@ -17,7 +17,7 @@ lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}",
     "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.probe_lr={lr}",
 ]
-
+cluster = "ai2/saturn-cirrascale"
 for probe_lr in LP_LRs:
     # subprocess.call(
     #     [
@@ -49,7 +49,7 @@ for probe_lr in LP_LRs:
             "scripts/2025_06_23_naip/eval.py",
             "launch",
             f"v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm_step120k_eval_{probe_lr}",
-            "ai2/titan-cirrascale",
+            cluster,
             "--common.training_modalities=[sentinel2_l2a,sentinel1,latlon,srtm,landsat]",
             "--trainer.load_path=/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_moredata_random_fixed_modality_0.5_nonaipworldcoverosm/step120000",
         ]
