@@ -18,9 +18,9 @@ lr_args = " ".join(
     ]
 )
 checkpoints = [
-    "/weka/dfive-default/helios/checkpoints/henryh/v0.2_latent_mim_128_cross_random_allow_overlap_minenc_2_alldec_only_dec_srtm_worldcover_osm_mask_0.5/step185000",
-    "/weka/dfive-default/helios/checkpoints/henryh/v0.2_latent_mim_128_cross_random_allow_overlap_minenc_2_alldec_only_dec_srtm_worldcover_osm_mask_0.5/step160000",
-    "/weka/dfive-default/helios/checkpoints/henryh/v0.2_latent_mim_128_cross_random_allow_overlap_minenc_2_alldec_only_dec_srtm_worldcover_osm_mask_0.5/step235950",
+    "/weka/dfive-default/helios/checkpoints/henryh/v0.2_latent_mim_128_large_cross_random_allow_overlap_minenc_1_min6dec_only_dec_srtm_worldcover_osm_mask_0.5/step220000",
+    # "/weka/dfive-default/helios/checkpoints/henryh/v0.2_latent_mim_128_cross_random_allow_overlap_minenc_2_alldec_only_dec_srtm_worldcover_osm_mask_0.5/step160000",
+    # "/weka/dfive-default/helios/checkpoints/henryh/v0.2_latent_mim_128_cross_random_allow_overlap_minenc_2_alldec_only_dec_srtm_worldcover_osm_mask_0.5/step235950",
 ]
 
 parser = argparse.ArgumentParser()
