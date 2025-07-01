@@ -1,4 +1,7 @@
-"""Trying to prototype fitting everything into olmo core."""
+"""Script for Debugging Galileo.
+
+These Settings are meant to help you get quick results on a single GPU in minimal time
+"""
 
 import logging
 
@@ -19,21 +22,20 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
-from upath import UPath
 
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
+from helios.internal.common import build_common_components, build_visualize_config
+from helios.internal.experiment import CommonComponents, main
 from helios.internal.utils import MODEL_SIZE_ARGS
 from helios.nn.flexihelios import (
     EncoderConfig,
     PoolingType,
     PredictorConfig,
 )
-from helios.nn.latent_mim import LatentMIMConfig
+from helios.nn.galileo import GalileoConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -42,83 +44,89 @@ from helios.train.callbacks import (
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from helios.train.train_module.galileo import GalileoTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
-MAX_PATCH_SIZE = 8
+MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 MIN_PATCH_SIZE = 1
 
 model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
 
-def build_model_config(common: CommonComponents) -> LatentMIMConfig:
+def build_model_config(common: CommonComponents) -> GalileoConfig:
     """Build the model config for an experiment."""
-    encoder_config = EncoderConfig(
-        embedding_size=model_size["encoder_embedding_size"],
-        num_heads=model_size["encoder_num_heads"],
-        depth=model_size["encoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        supported_modality_names=common.training_modalities,
-        max_patch_size=MAX_PATCH_SIZE,
-        min_patch_size=MIN_PATCH_SIZE,
-        drop_path=0.1,
-        max_sequence_length=12,
+    return GalileoConfig(
+        encoder_config=EncoderConfig(
+            embedding_size=model_size["encoder_embedding_size"],
+            num_heads=model_size["encoder_num_heads"],
+            depth=model_size["encoder_depth"],
+            mlp_ratio=model_size["mlp_ratio"],
+            supported_modality_names=common.training_modalities,
+            max_patch_size=MAX_PATCH_SIZE,
+            min_patch_size=MIN_PATCH_SIZE,
+            drop_path=0.1,
+            max_sequence_length=12,
+        ),
+        decoder_config=PredictorConfig(
+            encoder_embedding_size=model_size["encoder_embedding_size"],
+            decoder_embedding_size=model_size["decoder_embedding_size"],
+            depth=model_size["decoder_depth"],
+            mlp_ratio=model_size["mlp_ratio"],
+            num_heads=model_size["decoder_num_heads"],
+            supported_modality_names=common.training_modalities,
+            max_sequence_length=12,
+        ),
     )
-    decoder_config = PredictorConfig(
-        encoder_embedding_size=model_size["encoder_embedding_size"],
-        decoder_embedding_size=model_size["decoder_embedding_size"],
-        depth=model_size["decoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        num_heads=model_size["decoder_num_heads"],
-        supported_modality_names=common.training_modalities,
-        max_sequence_length=12,
-    )
-    model_config = LatentMIMConfig(
-        encoder_config=encoder_config,
-        decoder_config=decoder_config,
-    )
-    return model_config
 
 
 def build_train_module_config(
     common: CommonComponents,
-) -> LatentMIMTrainModuleConfig:
+) -> GalileoTrainModuleConfig:
     """Build the train module config for an experiment."""
-    return LatentMIMTrainModuleConfig(
+    return GalileoTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
         warmup_duration=Duration.steps(2000),
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
-        masking_config=MaskingConfig(
+        masking_config_a=MaskingConfig(
             strategy_config={
-                "type": "space_time",
-                "encode_ratio": 0.5,
-                "decode_ratio": 0.5,
+                "type": "modality_cross_space_time",
+                "encode_ratio": 0.3,
+                "decode_ratio": 0.7,
+                "allow_encoding_decoding_same_bandset": True,
             }
         ),
-        loss_config=LossConfig(
+        masking_config_b=MaskingConfig(
+            strategy_config={
+                "type": "modality_cross_space_time",
+                "encode_ratio": 0.3,
+                "decode_ratio": 0.7,
+                "allow_encoding_decoding_same_bandset": True,
+            }
+        ),
+        loss_config_a=LossConfig(
             loss_config={
-                "type": "patch_discrimination_new",
+                "type": "all_discrimination",
             }
         ),
-        regularizer_config=LossConfig(
+        loss_config_b=LossConfig(
             loss_config={
-                "type": "BatchContrastive",
+                "type": "all_discrimination",
             }
         ),
-        token_exit_cfg={modality: 0 for modality in common.training_modalities},
-        # token_exit_cfg={
-        #    Modality.SENTINEL2_L2A.name: model_size["encoder_depth"],
-        #    Modality.LATLON.name: model_size["encoder_depth"],
-        #    Modality.SENTINEL1.name: model_size["encoder_depth"],
-        #    Modality.WORLDCOVER.name: 0,
-        #    Modality.SRTM.name: model_size["encoder_depth"] // 2,
-        #    Modality.OPENSTREETMAP_RASTER.name: 0,
-        #    Modality.LANDSAT.name: model_size["encoder_depth"],
-        # },
+        token_exit_cfg_a={
+            Modality.SENTINEL2_L2A.name: model_size["encoder_depth"],
+            Modality.LATLON.name: model_size["encoder_depth"],
+            Modality.SENTINEL1.name: model_size["encoder_depth"],
+            Modality.WORLDCOVER.name: 0,
+            Modality.SRTM.name: model_size["encoder_depth"] // 2,
+            Modality.OPENSTREETMAP_RASTER.name: 0,
+            Modality.LANDSAT.name: model_size["encoder_depth"],
+        },
+        token_exit_cfg_b={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(),
-        ema_decay=(1.0, 1.0),
+        ema_decay=(0.99, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
             param_dtype=DType.bfloat16,
@@ -222,15 +230,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                 ephemeral_save_interval=250,
             ),
         )
-    )
-
-
-def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
-    """Build the visualize config for an experiment."""
-    return HeliosVisualizeConfig(
-        num_samples=None,
-        output_dir=str(UPath(common.save_folder) / "visualizations"),
-        std_multiplier=2.0,
     )
 
 
