@@ -48,6 +48,8 @@ def get_embeddings(
                 )[0]  # (bsz, dim)
 
             spatial_pool = True if task_type == TaskType.SEGMENTATION else False
+            # B, H, W, T, C, D Embeddings and I want to attentively pool across C, D
+            # I may also want to take max across C?
             averaged_embeddings = batch_embeddings.pool_unmasked_tokens(
                 pooling_type, spatial_pooling=spatial_pool
             )

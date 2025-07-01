@@ -16,7 +16,7 @@ from helios.evals.utils import adjust_learning_rate
 
 logger = getLogger(__name__)
 
-
+# First lets do attentive probing across channel
 def train_and_eval_probe(
     config: EvalDatasetConfig,
     lr: float,
@@ -37,7 +37,9 @@ def train_and_eval_probe(
 
     if config.task_type == TaskType.SEGMENTATION:
         logits_per_patch = int(config.num_classes * patch_size * patch_size)
-        probe = nn.Sequential(nn.Linear(in_features, logits_per_patch)).to(device)
+        probe = nn.Sequential(
+            nn.Linear(in_features, logits_per_patch),
+        ).to(device)
     else:
         probe = nn.Sequential(
             nn.BatchNorm1d(in_features), nn.Linear(in_features, config.num_classes)
@@ -82,6 +84,7 @@ def train_and_eval_probe(
             device=device,
             task_type=config.task_type,
         )
+        logger.info(f"Epoch {end_epoch}, MIoU: {eval_miou}")
         eval_mious.append(eval_miou)
     for i in range(len(eval_mious)):
         logger.debug(f"Epoch {(i + 1) * eval_interval}, MIoU: {eval_mious[i]}")
@@ -95,6 +98,38 @@ def train_and_eval_probe(
         )
     return final_miou
 
+class AttnPoolClassifier(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        assert in_dim % 64 == 0
+        self.query_token = nn.Parameter(torch.empty(in_dim))
+        self.num_heads = in_dim // 64
+        self.kv = nn.Linear(in_dim, in_dim * 2)
+        self.linear = nn.Linear(in_dim, out_dim)
+        self.init_weights()
+
+    def init_weights(self):
+        nn.init.trunc_normal_(self.query_token, std=0.02)
+        nn.init.trunc_normal_(self.kv.weight, std=0.02)
+        nn.init.zeros_(self.kv.bias)
+        nn.init.trunc_normal_(self.linear.weight, std=0.02)
+        nn.init.zeros_(self.linear.bias)
+
+    def forward(self, feat_tokens):
+        B, N, D = feat_tokens.shape
+
+        q = self.query_token.expand(B, 1, -1)
+        q = q.reshape(B, 1, self.num_heads, D // self.num_heads)  # [B, 1, head, D_head]
+        q = q.permute(0, 2, 1, 3)  # [B, head, 1, D_head]
+
+        kv = self.kv(feat_tokens).reshape(B, N, 2, self.num_heads, D // self.num_heads)  # [B, N, 2, head, D_head]
+        kv = kv.permute(2, 0, 3, 1, 4)  # [2, B, head, N, D_head]
+        k, v = torch.unbind(kv, dim=0)  # 2 * [B, head, N, D_head]
+
+        x = F.scaled_dot_product_attention(q, k, v)  # [B, head, 1, D_head]
+        x = x.reshape(B, D)  # [B, D]
+
+        return self.linear(x)
 
 def train_probe(
     data_loader: DataLoader,
@@ -142,7 +177,7 @@ def train_probe(
                             align_corners=True,
                         )  # (bsz, num_classes, H, W)
                 loss = loss_function(logits, batch_labels.to(device))
-                logger.debug(f"Epoch {epoch}, Step {i}, Loss: {loss.item()}")
+                logger.info(f"Epoch {epoch}, Step {i}, Loss: {loss.item()}")
 
             loss.backward()
             adjust_learning_rate(
