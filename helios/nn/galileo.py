@@ -121,6 +121,7 @@ class Galileo(nn.Module, DistributedMixins):
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
+        register_fsdp_forward_method(self.target_projector, "forward")
 
     def apply_compile(self) -> None:
         """Apply torch.compile to the model."""
@@ -128,6 +129,7 @@ class Galileo(nn.Module, DistributedMixins):
         self.decoder_a.apply_compile()
         self.decoder_b.apply_compile()
         self.target_encoder.apply_compile()
+        self.target_projector.apply_compile()
         if self.reconstructor is not None:
             self.reconstructor.apply_compile()
 
