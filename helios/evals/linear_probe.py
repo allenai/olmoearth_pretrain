@@ -63,20 +63,20 @@ class AttnPoolClassifier(nn.Module):
         # Flash attention Fails for seq length of 3
         seq_len = q.shape[-2]
         use_flash = seq_len >= 4      #   guard tiny-seq bug
-        with torch.backends.cuda.sdp_kernel(
-                enable_flash=use_flash,
-                enable_mem_efficient=True,
-                enable_math=True):
-            x = F.scaled_dot_product_attention(q, k, v)  # [B, head, 1, D_head]
+        # with torch.backends.cuda.sdp_kernel(
+        #         enable_flash=use_flash,
+        #         enable_mem_efficient=True,
+        #         enable_math=True):
+        #     x = F.scaled_dot_product_attention(q, k, v)  # [B, head, 1, D_head]
         # Compute attention scores
-        # attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(D // self.num_heads)
-        # attn_weights = F.softmax(attn_scores, dim=-1)
-        # x = torch.matmul(attn_weights, v)  # [B, head, 1, D_head]
+        attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(D // self.num_heads)
+        attn_weights = F.softmax(attn_scores, dim=-1)
+        x = torch.matmul(attn_weights, v)  # [B, head, 1, D_head]
         # logger.info(f"x shape: {x.shape}")
         x = x.reshape(B, H, W, D)
         # reshape this ffor linear code
 
-        return self.linear(x)
+        return self.linear(x), attn_weights
 
 
 # First lets do attentive probing across channel
@@ -188,7 +188,7 @@ def train_probe(
 
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 # logger.info(f"Batch emb shape: {batch_emb.shape}")
-                logits = probe(
+                logits, _ = probe(
                     batch_emb
                 )  # (bsz, num_patches, logits_per_patch) or (bsz, n_cls)
                 if task_type == TaskType.SEGMENTATION:
@@ -220,7 +220,7 @@ def train_probe(
                 total_epochs=total_epochs,
                 warmup_epochs=int(total_epochs * 0.1),
                 max_lr=lr,
-                min_lr=lr*.1,# 1.0e-5, # maybe this is too low and should just be 10x smaller
+                min_lr=1.0e-5, # maybe this is too low and should just be 10x smaller that seems to work well
             )
 
             opt.step()
@@ -242,13 +242,14 @@ def evaluate_probe(
 
     all_preds = []
     all_labels = []
+    all_attn_weights = []
     with torch.no_grad():
         for batch in data_loader:
             batch_emb, batch_labels = batch  # (bsz, num_patches, dim), (bsz, H, W)
             batch_emb = batch_emb.to(device)
 
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                logits = probe(batch_emb)  # (bsz, num_patches, logits_per_patch)
+                logits, attn_weights = probe(batch_emb)  # (bsz, num_patches, logits_per_patch)
                 if task_type == TaskType.SEGMENTATION:
                     spatial_patches_per_dim = batch_emb.shape[1]
                     logits = rearrange(
@@ -271,6 +272,15 @@ def evaluate_probe(
             preds = torch.argmax(logits, dim=1).cpu()
             all_preds.append(preds)
             all_labels.append(batch_labels)
+            all_attn_weights.append(attn_weights)
+
+    all_attn_weights = torch.cat(all_attn_weights)
+    per_head = all_attn_weights.mean(dim=(0, 2))      # → [heads, 3]
+    overall = all_attn_weights.mean(dim=(0, 1, 2))    # → [3]
+    logger.info(f"overall shape: {overall.shape}")
+    logger.info(f"overall: {overall.tolist()}")
+    logger.info(f"per_head shape: {per_head.shape}")
+    logger.info(f"per_head: {per_head.tolist()}")
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
