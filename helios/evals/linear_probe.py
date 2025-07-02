@@ -24,6 +24,7 @@ class AttnPoolClassifier(nn.Module):
         self.num_heads = in_dim // 64
         self.kv = nn.Linear(in_dim, in_dim * 2)
         self.linear = nn.Linear(in_dim, out_dim)
+        # Maybe the weight intialization is what is changing the results
         self.init_weights()
 
     def init_weights(self):
@@ -54,9 +55,9 @@ class AttnPoolClassifier(nn.Module):
         # logger.info(f"k shape: {k.shape}")
         # logger.info(f"v shape: {v.shape}")
         # log if q k v are contiguous or not
-        q = q.contiguous()
-        k = k.contiguous()
-        v = v.contiguous()
+        # q = q.contiguous()
+        # k = k.contiguous()
+        # v = v.contiguous()
         # logger.info(f"q contiguous: {q.is_contiguous()}")
         # logger.info(f"k contiguous: {k.is_contiguous()}")
         # logger.info(f"v contiguous: {v.is_contiguous()}")
@@ -71,8 +72,8 @@ class AttnPoolClassifier(nn.Module):
         # Compute attention scores
         # attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(D // self.num_heads)
         # attn_weights = F.softmax(attn_scores, dim=-1)
+
         # x = torch.matmul(attn_weights, v)  # [B, head, 1, D_head]
-        # logger.info(f"x shape: {x.shape}")
         x = x.reshape(B, H, W, D)
         # reshape this ffor linear code
 
@@ -220,7 +221,7 @@ def train_probe(
                 total_epochs=total_epochs,
                 warmup_epochs=int(total_epochs * 0.1),
                 max_lr=lr,
-                min_lr=lr*.1,# 1.0e-5, # maybe this is too low and should just be 10x smaller
+                min_lr=1.0e-5, # maybe this is too low and should just be 10x smaller
             )
 
             opt.step()
@@ -242,6 +243,7 @@ def evaluate_probe(
 
     all_preds = []
     all_labels = []
+    all_attn_weights = []
     with torch.no_grad():
         for batch in data_loader:
             batch_emb, batch_labels = batch  # (bsz, num_patches, dim), (bsz, H, W)
@@ -249,6 +251,7 @@ def evaluate_probe(
 
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 logits = probe(batch_emb)  # (bsz, num_patches, logits_per_patch)
+                # all_attn_weights.append(attn_weights)
                 if task_type == TaskType.SEGMENTATION:
                     spatial_patches_per_dim = batch_emb.shape[1]
                     logits = rearrange(
@@ -267,10 +270,17 @@ def evaluate_probe(
                             mode="bilinear",
                             align_corners=True,
                         )  # (bsz, num_classes, H, W)
-
-            preds = torch.argmax(logits, dim=1).cpu()
-            all_preds.append(preds)
-            all_labels.append(batch_labels)
+    # all_attn_weights = torch.cat(all_attn_weights)
+    # logger.info(f"all_attn_weights shape: {all_attn_weights.shape}")
+    # per_head = all_attn_weights.mean(dim=(0, 2))      # → [heads, 3]
+    # overall = all_attn_weights.mean(dim=(0, 1, 2))    # → [3]
+    # logger.info(f"overall shape: {overall.shape}")
+    # logger.info(f"overall: {overall.tolist()}")
+    # logger.info(f"per_head shape: {per_head.shape}")
+    # logger.info(f"per_head: {per_head.tolist()}")
+    preds = torch.argmax(logits, dim=1).cpu()
+    all_preds.append(preds)
+    all_labels.append(batch_labels)
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
