@@ -86,21 +86,21 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return GalileoTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
-        warmup_duration=Duration.steps(2000),
+        warmup_duration=Duration.steps(4000),
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config_a=MaskingConfig(
             strategy_config={
                 "type": "modality_cross_space_time",
-                "encode_ratio": 0.3,
-                "decode_ratio": 0.7,
+                "encode_ratio": 0.1,
+                "decode_ratio": 0.75,
                 "allow_encoding_decoding_same_bandset": True,
             }
         ),
         masking_config_b=MaskingConfig(
             strategy_config={
                 "type": "modality_cross_space_time",
-                "encode_ratio": 0.3,
-                "decode_ratio": 0.7,
+                "encode_ratio": 0.1,
+                "decode_ratio": 0.75,
                 "allow_encoding_decoding_same_bandset": True,
             }
         ),
@@ -126,7 +126,7 @@ def build_train_module_config(
         token_exit_cfg_b={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(),
-        ema_decay=(0.99, 1.0),
+        ema_decay=(0.99925, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
             param_dtype=DType.bfloat16,
