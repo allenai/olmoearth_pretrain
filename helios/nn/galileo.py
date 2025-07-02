@@ -45,6 +45,9 @@ class Galileo(nn.Module, DistributedMixins):
         self.reconstructor = reconstructor
         for p in self.target_encoder.parameters():
             p.requires_grad = False
+        self.target_projector = deepcopy(self.encoder)
+        for p in self.target_projector.parameters():
+            p.requires_grad = False
 
     def forward_a(
         self, x: MaskedHeliosSample, patch_size: int
@@ -112,6 +115,7 @@ class Galileo(nn.Module, DistributedMixins):
         self.decoder_a.apply_fsdp(**fsdp_config)
         self.decoder_b.apply_fsdp(**fsdp_config)
         self.target_encoder.apply_fsdp(**fsdp_config)
+        self.target_projector.apply_fsdp(**fsdp_config)
         if self.reconstructor:
             self.reconstructor.apply_fsdp(**fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time

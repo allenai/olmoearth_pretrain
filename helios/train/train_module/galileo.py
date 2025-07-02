@@ -368,7 +368,7 @@ class GalileoTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_a,
                 )
-                target_output_b, _ = self.model.target_encoder.forward(
+                target_output_b, _ = self.model.target_projector.forward(
                     batch_b.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_b,
