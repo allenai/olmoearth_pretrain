@@ -62,7 +62,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         "m_eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
             embedding_batch_size=128,
-            num_workers=0,
+            num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
