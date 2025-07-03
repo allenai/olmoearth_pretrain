@@ -265,6 +265,7 @@ class HeliosTrainModule(TrainModule):
         self.state_dict_load_opts = state_dict_load_opts or dist_cp_sd.StateDictOptions(
             flatten_optimizer_state_dict=True, strict=True
         )
+        self.param_list = []
 
     @property
     def dp_process_group(self) -> dist.ProcessGroup | None:
@@ -551,17 +552,16 @@ class HeliosTrainModule(TrainModule):
             for p, tp in zip(
                 self.model.encoder.parameters(), self.model.target_encoder.parameters()
             ):
-                # what happens if we don't do to_local? Is not neccesary
-
                 if isinstance(p.data, DTensor):
                     # get the local shard, update it in place
-                    tp_before = tp.data.clone()
-                    p_local = p.data.to_local()
-                    tp_local = tp.data.to_local()
+                    tp_before = tp.clone()
+                    # clone p into param_list
+                    p_local = p.to_local()
+                    tp_local = tp.to_local()
                     tp_local.mul_(cur_ema_value).add_(
                         p_local, alpha=(1 - cur_ema_value)
                     )
-                    logger.info(f"difference {(tp.data - tp_before).sum()}")
+                    logger.info(f"difference {(tp - tp_before).sum()}")
                 # else:
                     # fallback for any plain Tensor
                 # if isinstance(p.data, DTensor):
@@ -577,6 +577,7 @@ class HeliosTrainModule(TrainModule):
                 # else:
                 #     logger.info(f"Updating target encoder {tp.data.shape} with {p.data.shape}")
                 #     tp.data.mul_(cur_ema_value).add_(p.data, alpha=(1 - cur_ema_value))
+                # Break is so the logs don't get too messy
                 break
 
     def eval_batch(
