@@ -558,6 +558,8 @@ class HeliosTrainModule(TrainModule):
                     # clone p into param_list
                     p_local = p.to_local()
                     tp_local = tp.to_local()
+                    diff = (tp_local - p_local).sum()
+                    logger.info(f"difference tp and p{diff}")
                     tp_local.mul_(cur_ema_value).add_(
                         p_local, alpha=(1 - cur_ema_value)
                     )
