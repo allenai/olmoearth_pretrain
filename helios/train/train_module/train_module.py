@@ -551,16 +551,33 @@ class HeliosTrainModule(TrainModule):
             for p, tp in zip(
                 self.model.encoder.parameters(), self.model.target_encoder.parameters()
             ):
+                # what happens if we don't do to_local? Is not neccesary
+
                 if isinstance(p.data, DTensor):
                     # get the local shard, update it in place
+                    tp_before = tp.data.clone()
                     p_local = p.data.to_local()
                     tp_local = tp.data.to_local()
                     tp_local.mul_(cur_ema_value).add_(
                         p_local, alpha=(1 - cur_ema_value)
                     )
-                else:
+                    logger.info(f"difference {(tp.data - tp_before).sum()}")
+                # else:
                     # fallback for any plain Tensor
-                    tp.data.mul_(cur_ema_value).add_(p.data, alpha=(1 - cur_ema_value))
+                # if isinstance(p.data, DTensor):
+                #     # log p.data before and after to_local
+                #     # copy tp before
+                #     tp_before = tp.data.clone()
+                #     # logger.info(f"p.data before {tp.data}")
+                #     logger.info(f"Updating target encoder {tp.data.shape} with {p.data.shape} {type(p.data)}")
+                #     tp.data.mul_(cur_ema_value).add_(p.data, alpha=(1 - cur_ema_value))
+                #     # logger.info(f"p.data after {tp.data}")
+                #     # difference between tp before and after
+                #     logger.info(f"difference {(tp.data - tp_before).sum()}")
+                # else:
+                #     logger.info(f"Updating target encoder {tp.data.shape} with {p.data.shape}")
+                #     tp.data.mul_(cur_ema_value).add_(p.data, alpha=(1 - cur_ema_value))
+                break
 
     def eval_batch(
         self, batch: dict[str, Any], labels: torch.Tensor | None = None
