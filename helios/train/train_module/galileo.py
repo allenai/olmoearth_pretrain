@@ -314,13 +314,13 @@ class GalileoTrainModule(HeliosTrainModule):
             ReduceType.mean,
         )
         self.trainer.record_metric(
-            f"{self.masking_strategy_a.name}_masking_{self.base_loss_a.name}",
+            f"{self.masking_strategy_a.name}_masking_a_{self.base_loss_a.name}",
             total_mask_a_loss,
             ReduceType.mean,
             namespace="train",
         )
         self.trainer.record_metric(
-            f"{self.masking_strategy_b.name}_masking_{self.base_loss_b.name}",
+            f"{self.masking_strategy_b.name}_masking_b_{self.base_loss_b.name}",
             total_mask_b_loss,
             ReduceType.mean,
             namespace="train",
