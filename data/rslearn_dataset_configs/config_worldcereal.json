@@ -1,0 +1,26 @@
+{
+  "layers": {
+    "worldcereal": {
+      "band_sets": [
+        {
+          "bands": [
+            "tc-annual-temporarycrops-confidence",
+            "tc-maize-main-irrigation-confidence",
+            "tc-maize-main-maize-confidence",
+            "tc-maize-second-irrigation-confidence",
+            "tc-maize-second-maize-confidence",
+            "tc-springcereals-springcereals-confidence",
+            "tc-wintercereals-irrigation-confidence"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "name": "rslearn.data_sources.worldcereal.WorldCerealConfidences",
+        "worldcereal_dir": "source_data/worldcereal/"
+      },
+      "resampling_method": "nearest",
+      "type": "raster"
+    }
+  }
+}
