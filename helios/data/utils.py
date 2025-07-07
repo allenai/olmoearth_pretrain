@@ -139,7 +139,7 @@ def plot_latlon_distribution(latlons: np.ndarray, title: str) -> plt.Figure:
         latlons[:, 0],
         transform=ccrs.PlateCarree(),
         alpha=0.5,
-        s=1,
+        s=0.01,
     )
 
     ax.set_global()  # Show the entire globe

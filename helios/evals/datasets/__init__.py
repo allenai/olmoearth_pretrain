@@ -2,6 +2,7 @@
 
 import logging
 
+from olmo_core.config import StrEnum
 from torch.utils.data import Dataset
 
 from .breizhcrops import BREIZHCROPS_DIR, BreizhCropsDataset
@@ -15,12 +16,24 @@ from .sickle_dataset import SICKLE_DIR, SICKLEDataset
 logger = logging.getLogger(__name__)
 
 
+class EvalDatasetPartition(StrEnum):
+    """Enum for different dataset partitions."""
+
+    TRAIN1X = "default"
+    TRAIN_001X = "0.01x_train"  # Not valid for non train split
+    TRAIN_002X = "0.02x_train"
+    TRAIN_005X = "0.05x_train"
+    TRAIN_010X = "0.10x_train"
+    TRAIN_020X = "0.20x_train"
+    TRAIN_050X = "0.50x_train"
+
+
 def get_eval_dataset(
     eval_dataset: str,
     split: str,
     norm_stats_from_pretrained: bool = False,
     input_modalities: list[str] = [],
-    partition: str = "default",
+    partition: str = EvalDatasetPartition.TRAIN1X,
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
     if eval_dataset not in ALL_DATASETS:
