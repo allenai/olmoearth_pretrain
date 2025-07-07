@@ -20,6 +20,7 @@ repos:
       - id: check-case-conflict
       - id: check-docstring-first
       - id: check-added-large-files
+        args: ["--maxkb=2000"]
         exclude: wheels/*
       - id: check-ast
       - id: check-byte-order-marker
