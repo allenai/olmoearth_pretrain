@@ -156,6 +156,7 @@ def build_launch_config(
             #  "pip install --upgrade --pre torch==2.6.0.dev20241112+cu121 --index-url https://download.pytorch.org/whl/nightly/cu121",
             pytorch_upgrade,
             "pip freeze",
+            "export TORCH_NCCL_TRACE_BUFFER_SIZE=2000",
         ],
     )
 
