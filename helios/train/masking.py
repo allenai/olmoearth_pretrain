@@ -816,6 +816,11 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             assert (
                 max_encoded_bandsets is None
             ), "max_encoded_bandsets must be set if min_encoded_bandsets is set"
+        else:
+            assert (
+                min_encoded_bandsets > 1
+            ), "min_encoded_bandsets must be greater than 1 so that we don't only  \
+                encode a modality that is randomly masked on batch dimension ie latlon"
         self.min_encoded_bandsets = min_encoded_bandsets
         self.max_encoded_bandsets = max_encoded_bandsets
         self.min_decoded_bandsets = min_decoded_bandsets
@@ -853,7 +858,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     present_modalities_bandsets[sample_idx].append(
                         (modality, bandset_idx)
                     )
-
         return present_modalities_bandsets
 
     def select_encoded_decoded_bandsets(
@@ -912,7 +916,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 encoded_bandset_idxs = set(
                     [encodable_modalities[i] for i in encoded_idxs]
                 )
-
                 # Select Indices to Decode
                 min_decoded_bandsets = min(
                     self.min_decoded_bandsets or 1, num_present_modalities
@@ -1099,7 +1102,7 @@ class ModalityCrossSpaceMaskingStrategy(ModalityCrossMaskingStrategy):
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
         allow_encoding_decoding_same_bandset: bool = False,
-        min_encoded_bandsets: int = 1,
+        min_encoded_bandsets: int = 2,
         max_encoded_bandsets: int | None = None,
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
@@ -1135,7 +1138,7 @@ class ModalityCrossTimeMaskingStrategy(ModalityCrossMaskingStrategy):
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
         allow_encoding_decoding_same_bandset: bool = False,
-        min_encoded_bandsets: int = 1,
+        min_encoded_bandsets: int = 2,
         max_encoded_bandsets: int | None = None,
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
@@ -1171,7 +1174,7 @@ class ModalityCrossSpaceTimeMaskingStrategy(MaskingStrategy):
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
         allow_encoding_decoding_same_bandset: bool = False,
-        min_encoded_bandsets: int = 1,
+        min_encoded_bandsets: int = 2,
         max_encoded_bandsets: int | None = None,
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
@@ -1293,7 +1296,7 @@ class ModalityCrossRandomMaskingStrategy(ModalityCrossMaskingStrategy):
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
         allow_encoding_decoding_same_bandset: bool = False,
-        min_encoded_bandsets: int = 1,
+        min_encoded_bandsets: int = 2,
         max_encoded_bandsets: int | None = None,
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,

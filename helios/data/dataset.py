@@ -458,6 +458,7 @@ class HeliosDataset(Dataset):
         normalize: bool = True,
         cache_dir: UPath | None = None,
         samples_per_sec: float | None = None,
+        dataset_percentage: float = 1.0,
     ):
         """Initialize the dataset.
 
@@ -479,6 +480,7 @@ class HeliosDataset(Dataset):
             samples_per_sec: throttle to reading this many samples per second. This
                 throttling only applies when reading from the h5py_dir, not the
                 cache_dir (if set).
+            dataset_percentage: The percentage of the dataset to use.
 
         Returns:
             None
@@ -494,6 +496,7 @@ class HeliosDataset(Dataset):
 
         self.dtype = dtype
         self.normalize = normalize
+        self.dataset_percentage = dataset_percentage
         if self.normalize:
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
@@ -615,6 +618,14 @@ class HeliosDataset(Dataset):
         self.latlon_distribution = self.get_geographic_distribution()
         self.sample_indices = np.arange(num_samples)
         self._filter_sample_indices_for_training()
+        # randomly pick dataset percentage fraction of the sample indices
+        if self.dataset_percentage < 1.0:
+            self.sample_indices = np.random.choice(
+                self.sample_indices,
+                size=int(len(self.sample_indices) * self.dataset_percentage),
+                replace=False,
+            )
+        self.latlon_distribution = self.latlon_distribution[self.sample_indices]
 
     def get_geographic_distribution(self) -> np.ndarray:
         """Get the geographic distribution of the dataset.
@@ -889,6 +900,7 @@ class HeliosDatasetConfig(Config):
     normalize: bool = True
     cache_dir: str | None = None
     samples_per_sec: float | None = None
+    dataset_percentage: float = 1.0
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

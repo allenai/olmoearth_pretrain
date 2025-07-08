@@ -27,10 +27,6 @@ from helios.train.train_module.train_module import HeliosTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
-# TODO: Make this more agnostic to the training setup
-# TODO: Add support for different model configs
-# TODO: Add support for different train module configs
-
 
 @dataclass
 class HeliosBeakerLaunchConfig(BeakerLaunchConfig):
@@ -56,7 +52,6 @@ class HeliosBeakerLaunchConfig(BeakerLaunchConfig):
         return spec
 
 
-# maybe this build common components can be the same function for every experiment
 @dataclass
 class CommonComponents(Config):
     """Any configurable items that are common to all experiments."""
@@ -65,6 +60,7 @@ class CommonComponents(Config):
     save_folder: str
     launch: HeliosBeakerLaunchConfig
     training_modalities: list[str]
+    dataset_percentage: float = 1.0  # TO make it easier to overide for concat dataset
     # callbacks: dict[str, Callback]
 
     def validate(self) -> None:
