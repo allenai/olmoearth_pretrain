@@ -5,13 +5,20 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from einops import repeat
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
 from upath import UPath
 
+from helios.data.dataset import HeliosSample
 from helios.train.masking import MaskedHeliosSample
 
-from .constants import EVAL_S1_BAND_NAMES, EVAL_S2_BAND_NAMES
+from .constants import (
+    EVAL_S1_BAND_NAMES,
+    EVAL_S2_BAND_NAMES,
+    EVAL_TO_HELIOS_S1_BANDS,
+    EVAL_TO_HELIOS_S2_BANDS,
+)
 from .cropharvest_package.bands import BANDS
 from .cropharvest_package.datasets import CropHarvest
 from .cropharvest_package.utils import memoized
@@ -60,12 +67,12 @@ def _download_cropharvest_data(root: Path = CROPHARVEST_DIR) -> None:
 class CropHarvestDataset(Dataset):
     """CropHarvest dataset for the Togo cropland classification task."""
 
+    START_MONTH = 1
     DEFAULT_SEED = 42  # mirrors nasaharvest/galileo
 
     """
     TODO:
       1. get the norm stats (S1, S2) from the norm dict
-      2. get the right bands and turn them into a HeliosSample
       3. add the timesteps and latlons too
       4. normalize
 
@@ -145,13 +152,19 @@ class CropHarvestDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[MaskedHeliosSample, torch.Tensor]:
         """Return the sample at idx."""
-        # x = self.array[idx]
+        x = self.array[idx]
         y = self.labels[idx]
-        latlon = self.latlons[idx]
+        # latlon = self.latlons[idx]
 
-        # x_hw = repeat(x, "t c -> h w t c", w=1, h=1)
+        x_hw = repeat(x, "t c -> h w t c", w=1, h=1)
 
-        # s2 = x_hw[:, :, :, S2_INPUT_TO_OUTPUT_BAND_MAPPING]
-        # s1 = x_hw[:, :, :, S1_INPUT_TO_OUTPUT_BAND_MAPPING]
-        # tmp
-        return MaskedHeliosSample(timestamps=y), latlon
+        s2 = x_hw[:, :, :, S2_INPUT_TO_OUTPUT_BAND_MAPPING][
+            :, :, :, EVAL_TO_HELIOS_S2_BANDS
+        ]
+        s1 = x_hw[:, :, :, S1_INPUT_TO_OUTPUT_BAND_MAPPING][
+            :, :, :, EVAL_TO_HELIOS_S1_BANDS
+        ]
+
+        return MaskedHeliosSample.from_heliossample(
+            HeliosSample(sentinel1=s1, sentinel2_l2a=s2, timestamps=y)
+        ), y
