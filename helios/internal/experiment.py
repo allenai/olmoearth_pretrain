@@ -23,14 +23,9 @@ from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig, collate_helios
 from helios.data.visualize import visualize_sample
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 from helios.train.train_module.train_module import HeliosTrainModuleConfig
 
 logger = logging.getLogger(__name__)
-
-# TODO: Make this more agnostic to the training setup
-# TODO: Add support for different model configs
-# TODO: Add support for different train module configs
 
 
 @dataclass
@@ -57,7 +52,6 @@ class HeliosBeakerLaunchConfig(BeakerLaunchConfig):
         return spec
 
 
-# maybe this build common components can be the same function for every experiment
 @dataclass
 class CommonComponents(Config):
     """Any configurable items that are common to all experiments."""
@@ -66,6 +60,7 @@ class CommonComponents(Config):
     save_folder: str
     launch: HeliosBeakerLaunchConfig
     training_modalities: list[str]
+    dataset_percentage: float = 1.0  # TO make it easier to overide for concat dataset
     # callbacks: dict[str, Callback]
 
     def validate(self) -> None:
@@ -321,9 +316,7 @@ def main(
     dataset_config_builder: Callable[[CommonComponents], Config],
     dataloader_config_builder: Callable[[CommonComponents], HeliosDataLoaderConfig],
     trainer_config_builder: Callable[[CommonComponents], TrainerConfig],
-    train_module_config_builder: Callable[
-        [CommonComponents], LatentMIMTrainModuleConfig
-    ],
+    train_module_config_builder: Callable[[CommonComponents], HeliosTrainModuleConfig],
     visualize_config_builder: (
         Callable[[CommonComponents], HeliosVisualizeConfig] | None
     ) = None,

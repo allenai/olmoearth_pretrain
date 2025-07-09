@@ -12,7 +12,7 @@ from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader
 
-from helios.evals.datasets import get_eval_dataset
+from helios.evals.datasets import EvalDatasetPartition, get_eval_dataset
 from helios.evals.datasets.configs import DATASET_TO_CONFIG, TaskType
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
@@ -44,6 +44,7 @@ class DownstreamEvaluator:
         probe_lr: float | None = None,
         input_modalities: list[str] = field(default_factory=list),
         eval_mode: str | None = None,
+        partition: str = "default",
     ) -> None:
         """Initialize the downstream evaluator.
 
@@ -64,6 +65,7 @@ class DownstreamEvaluator:
             input_modalities: Input modalities, only used for multimodal tasks.
             eval_mode: whether to use knn or linear probe. Defaults to KNN for classification
                 and linear probe for segmentation. Only classification is supported by KNN
+            partition: Partition to use for evaluation.
         """
         self.evaluation_name = evaluation_name
         self.dataset = dataset
@@ -80,6 +82,7 @@ class DownstreamEvaluator:
         self.patch_size = patch_size
         self.input_modalities = input_modalities
         self.epochs = epochs
+        self.partition = partition
 
         if eval_mode is None:
             eval_mode = (
@@ -115,7 +118,7 @@ class DownstreamEvaluator:
             get_eval_dataset(
                 eval_dataset=self.dataset,
                 split=split,
-                partition="default",
+                partition=self.partition,
                 norm_stats_from_pretrained=self.norm_stats_from_pretrained,
                 input_modalities=self.input_modalities,
             ),
@@ -252,6 +255,7 @@ class DownstreamTaskConfig:
     epochs: int = 50  # Number of training epochs for linear probing task
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
     eval_mode: str | None = None
+    partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
 
 
 @dataclass
@@ -313,6 +317,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     eval_interval=task.eval_interval,
                     epochs=task.epochs,
                     eval_mode=task.eval_mode,
+                    partition=task.partition,
                 )
             )
         return DownstreamEvaluatorCallback(
