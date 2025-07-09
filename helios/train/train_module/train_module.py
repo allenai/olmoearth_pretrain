@@ -569,8 +569,12 @@ class HeliosTrainModule(TrainModule):
                         f"EMA mismatch: got difference {(expected - actual).sum().item()}"
                     if cur_ema_value == 1.0:
                         assert torch.equal(tp_before, tp_local)
+                        logger.info("target encoder never updated")
+                        print(f"target encoder never updated")
                     elif cur_ema_value == 0.0:
                         assert torch.equal(p_local, tp_local)
+                        logger.info("target encoder updated to encoder")
+                        print(f"target encoder updated to encoder")
                 else:
                     # fallback for any plain Tensor
                     tp.mul_(cur_ema_value).add_(p, alpha=(1 - cur_ema_value))
