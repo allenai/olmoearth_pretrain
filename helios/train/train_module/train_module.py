@@ -563,6 +563,14 @@ class HeliosTrainModule(TrainModule):
                     diff = (tp_before - tp_local).sum().item()
                     logger.info(f"EMA update diff = {diff:.9f}")
                     print(f"EMA update diff = {diff:.9f}")
+                    expected = cur_ema_value * tp_before + (1 - cur_ema_value) * p_local
+                    actual = tp_local
+                    assert torch.allclose(actual, expected, atol=1e-8), \
+                        f"EMA mismatch: got difference {(expected - actual).sum().item()}"
+                    if cur_ema_value == 1.0:
+                        assert torch.equal(tp_before, tp_local)
+                    elif cur_ema_value == 0.0:
+                        assert torch.equal(p_local, tp_local)
                 else:
                     # fallback for any plain Tensor
                     tp.mul_(cur_ema_value).add_(p, alpha=(1 - cur_ema_value))
