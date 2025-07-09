@@ -562,6 +562,7 @@ class HeliosTrainModule(TrainModule):
                     )
                     diff = (tp_before - tp_local).sum().item()
                     logger.info(f"EMA update diff = {diff:.9f}")
+                    print(f"EMA update diff = {diff:.9f}")
                 else:
                     # fallback for any plain Tensor
                     tp.mul_(cur_ema_value).add_(p, alpha=(1 - cur_ema_value))
