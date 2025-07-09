@@ -263,6 +263,27 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    WORLDCEREAL = ModalitySpec(
+        name="worldcereal",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [
+                    "tc-annual-temporarycrops-confidence",
+                    "tc-maize-main-irrigation-confidence",
+                    "tc-maize-main-maize-confidence",
+                    "tc-maize-second-irrigation-confidence",
+                    "tc-maize-second-maize-confidence",
+                    "tc-springcereals-springcereals-confidence",
+                    "tc-wintercereals-irrigation-confidence",
+                ],
+                16,
+            )
+        ],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     SRTM = ModalitySpec(
         name="srtm",
         tile_resolution_factor=16,
