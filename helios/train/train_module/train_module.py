@@ -542,6 +542,7 @@ class HeliosTrainModule(TrainModule):
             * (self.end_ema - self.start_ema)
             / self.trainer.max_steps
         )
+        logger.info(f"ema_decay {cur_ema_value}")
         with torch.no_grad():
             self.trainer.record_metric(
                 "train/ema_decay",
@@ -551,16 +552,19 @@ class HeliosTrainModule(TrainModule):
             for p, tp in zip(
                 self.model.encoder.parameters(), self.model.target_encoder.parameters()
             ):
-                if isinstance(p.data, DTensor):
-                    # get the local shard, update it in place
-                    p_local = p.data.to_local()
-                    tp_local = tp.data.to_local()
+                if isinstance(p, DTensor):
+                    # get the local shard, update it in place to avoid an extra reduction of the sum operation across DTensor
+                    p_local = p.to_local()
+                    tp_local = tp.to_local()
+                    tp_before = tp_local.clone()
                     tp_local.mul_(cur_ema_value).add_(
                         p_local, alpha=(1 - cur_ema_value)
                     )
+                    diff = (tp_before - tp_local).sum().item()
+                    logger.info(f"EMA update diff = {diff:.9f}")
                 else:
                     # fallback for any plain Tensor
-                    tp.data.mul_(cur_ema_value).add_(p.data, alpha=(1 - cur_ema_value))
+                    tp.mul_(cur_ema_value).add_(p, alpha=(1 - cur_ema_value))
 
     def eval_batch(
         self, batch: dict[str, Any], labels: torch.Tensor | None = None
