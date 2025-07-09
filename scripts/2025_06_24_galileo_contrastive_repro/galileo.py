@@ -133,15 +133,7 @@ def build_train_module_config(
                 "weight": 0.05,
             }
         ),
-        token_exit_cfg_a={
-            Modality.SENTINEL2_L2A.name: 0,
-            Modality.LATLON.name: 0,
-            Modality.SENTINEL1.name: 0,
-            Modality.WORLDCOVER.name: 0,
-            Modality.SRTM.name: 0,
-            Modality.OPENSTREETMAP_RASTER.name: 0,
-            Modality.LANDSAT.name: 0,
-        },
+        token_exit_cfg_a={modality: 0 for modality in common.training_modalities},
         # token_exit_cfg_a={
         #    Modality.SENTINEL2_L2A.name: model_size["encoder_depth"],
         #    Modality.LATLON.name: model_size["encoder_depth"],
