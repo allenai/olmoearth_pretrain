@@ -24,7 +24,9 @@ def get_eval_dataset(
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
     if input_modalities:
-        if eval_dataset not in ["pastis", "sickle"]:
+        if (not eval_dataset.startswith("cropharvest")) or (
+            eval_dataset not in ["pastis", "sickle"]
+        ):
             raise ValueError(
                 f"input_modalities is only supported for multimodal tasks, got {eval_dataset}"
             )
@@ -94,6 +96,7 @@ def get_eval_dataset(
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             timesteps=int(timesteps),
+            input_modalities=input_modalities,
         )
     else:
         raise ValueError(f"Unrecognized eval_dataset {eval_dataset}")

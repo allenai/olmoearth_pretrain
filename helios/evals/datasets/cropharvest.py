@@ -148,6 +148,7 @@ class CropHarvestDataset(Dataset):
         norm_stats_from_pretrained: bool = False,
         norm_method: str = "norm_no_clip",
         timesteps: int = 12,
+        input_modalities: list[str] = [],
     ) -> None:
         """CropHarvest dataset.
 
@@ -210,6 +211,9 @@ class CropHarvestDataset(Dataset):
         # We will always need the normalized to normalize latlons
         self.normalizer_computed = Normalizer(Strategy.COMPUTED)
         self.norm_method = norm_method
+        self.input_modalities = input_modalities
+        if len(self.input_modalities) == 0:
+            raise ValueError("Expected at least one input modality, got none")
 
     @staticmethod
     def _normalize_from_ch_stats(array: np.ndarray) -> np.ndarray:
@@ -292,12 +296,15 @@ class CropHarvestDataset(Dataset):
             s1 = self.normalizer_computed.normalize(Modality.SENTINEL1, s1)
             srtm = self.normalizer_computed.normalize(Modality.SRTM, srtm)
 
-        return MaskedHeliosSample.from_heliossample(
-            HeliosSample(
-                sentinel1=torch.tensor(s1).float(),
-                sentinel2_l2a=torch.tensor(s2).float(),
-                latlon=torch.tensor(latlon).float(),
-                srtm=srtm,
-                timestamps=timestamp,
-            )
-        ), y
+        input_dict: dict[str, torch.Tensor] = {
+            "timestamps": timestamp,
+            "latlon": torch.tensor(latlon).float(),
+        }
+        if Modality.SENTINEL2_L2A.name in self.input_modalities:
+            input_dict[Modality.SENTINEL2_L2A.name] = torch.tensor(s2).float()
+        if Modality.SENTINEL1.name in self.input_modalities:
+            input_dict[Modality.SENTINEL1.name] = torch.tensor(s2).float()
+        if Modality.SRTM.name in self.input_modalities:
+            input_dict[Modality.SRTM.name] = torch.tensor(s2).float()
+
+        return MaskedHeliosSample.from_heliossample(HeliosSample(**input_dict)), y
