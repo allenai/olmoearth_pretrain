@@ -57,7 +57,7 @@ class AttnPoolLinearProbe(nn.Module):
         nn.init.trunc_normal_(self.linear.weight, std=0.02)
         nn.init.zeros_(self.linear.bias)
 
-    def forward(self, feat_tokens: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, feat_tokens: torch.Tensor) -> dict:
         """Forward pass for attention pooling linear probe.
 
         Args:
@@ -90,6 +90,7 @@ class AttnPoolLinearProbe(nn.Module):
         x = x.reshape(B, H, W, D)
         return {"logits": self.linear(x), "attn_weights": attn_weights}
 
+
 class LinearProbe(nn.Module):
     """Linear Probe for classification tasks."""
 
@@ -102,7 +103,7 @@ class LinearProbe(nn.Module):
         else:
             self.batchnorm = nn.Identity()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> dict:
         """Forward pass for linear probe."""
         return {"logits": self.linear(self.batchnorm(x))}
 
