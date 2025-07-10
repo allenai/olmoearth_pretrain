@@ -216,6 +216,15 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             epochs=50,
         ),
+        "cropharvest_Togo_12": DownstreamTaskConfig(
+            dataset="cropharvest_Togo_12",
+            batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(20),
+            input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        ),
     }
     trainer_config = (
         TrainerConfig(
