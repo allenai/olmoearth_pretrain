@@ -179,7 +179,8 @@ class TokensAndMasks(NamedTuple):
             spatial_pooling: Whether to keep the spatial dimensions when pooling. If true,
                 this expects the masks within a spatial modality to be consistent (e.g. all
                 s2 tokens would have the same mask.)
-            concat_features: Whether to concatenate the features instead of averaging them, only enabled for spatial pooling as of now
+            concat_features: Whether to concatenate the features instead of averaging them, only enabled for spatial pooling as of now,
+            requires no masked out tokens
         """
         if concat_features and spatial_pooling:
             spatial_stacked_features = []
@@ -202,6 +203,8 @@ class TokensAndMasks(NamedTuple):
             spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
             # flatten the last 3 dimensions
             return rearrange(spatial_stacked_features, "b h w c d-> b h w c d")
+        if concat_features:
+            raise ValueError("concat_features is not supported for non-spatial pooling")
         if not spatial_pooling:
             x, mask = self.flatten_tokens_and_masks()
             # 1s for online encoder, 0s elsewhere

@@ -75,11 +75,11 @@ class AttnPoolLinearProbe(nn.Module):
         q = q.reshape(
             collapsed_dim, 1, self.num_heads, D // self.num_heads
         )  # [B, 1, head, D_head]
-        q = q.permute(0, 2, 1, 3)  # [B, head, 1, D_head]
+        q = rearrange(q, "b h n d -> b n h d")
         kv = self.kv(feat_tokens).reshape(
             collapsed_dim, N, 2, self.num_heads, D // self.num_heads
         )  # [B, N, 2, head, D_head]
-        kv = kv.permute(2, 0, 3, 1, 4)  # [2, B, head, N, D_head]
+        kv = rearrange(kv, "b n two h d -> two b h n d")
         k, v = torch.unbind(kv, dim=0)  # 2 * [B, head, N, D_head]
         # Compute attention scores
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(
@@ -106,6 +106,7 @@ def train_and_eval_probe(
     probe_type: ProbeType = ProbeType.LINEAR,
 ) -> float:
     """Run a linear probe on the Helios model."""
+    logger.info(f"Probe type {probe_type}")
     if train_embeddings.shape[-1] != test_embeddings.shape[-1]:
         raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
@@ -211,13 +212,11 @@ def train_probe(
             batch_emb = batch_emb.to(device)
 
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                if isinstance(probe, nn.Sequential):
-                    batch_emb = torch.mean(batch_emb, dim=(-2))
                 logits = probe(
                     batch_emb
                 )  # (bsz, num_patches, logits_per_patch) or (bsz, n_cls)
                 if isinstance(logits, tuple):
-                    logits, attn_weights = logits
+                    logits, _ = logits
                 if task_type == TaskType.SEGMENTATION:
                     logits = rearrange(
                         logits,
@@ -260,6 +259,7 @@ def evaluate_probe(
     patch_size: int,
     device: torch.device,
     task_type: TaskType,
+    probe_type: ProbeType,
 ) -> float:
     """Evaluate a trained linear probe on a segmentation or classification task."""
     probe = probe.eval()
@@ -273,8 +273,6 @@ def evaluate_probe(
             batch_emb = batch_emb.to(device)
 
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                if isinstance(probe, nn.Sequential):
-                    batch_emb = torch.mean(batch_emb, dim=(-2))
                 logits = probe(batch_emb)  # (bsz, num_patches, logits_per_patch)
                 if isinstance(logits, tuple):
                     logits, attn_weights = logits
@@ -303,10 +301,10 @@ def evaluate_probe(
             if not isinstance(probe, nn.Sequential):
                 all_attn_weights.append(attn_weights)
 
-    if not isinstance(probe, nn.Sequential):
+    if probe_type == ProbeType.ATTNPOOL:
         all_attn_weights_tensor = torch.cat(all_attn_weights)
-        per_head = all_attn_weights_tensor.mean(dim=(0, 2))  # → [heads, 3]
-        overall = all_attn_weights_tensor.mean(dim=(0, 1, 2))  # → [3]
+        per_head = all_attn_weights_tensor.mean(dim=(0, 2))  # → [heads, Num_bandsets]
+        overall = all_attn_weights_tensor.mean(dim=(0, 1, 2))  # → [Num_bandsets]
         logger.info(f"overall: {overall.tolist()}")
         logger.info(f"per_head: {per_head.tolist()}")
 
