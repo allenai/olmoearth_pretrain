@@ -11,7 +11,8 @@ from torch.utils.data import Dataset
 from upath import UPath
 
 from helios.data.dataset import HeliosSample
-from helios.train.masking import MaskedHeliosSample
+from helios.data.normalize import Normalizer, Strategy
+from helios.train.masking import MaskedHeliosSample, Modality
 
 from .constants import (
     EVAL_S1_BAND_NAMES,
@@ -87,7 +88,6 @@ class CropHarvestDataset(Dataset):
         partition: str,
         norm_stats_from_pretrained: bool = False,
         norm_method: str = "norm_no_clip",
-        visualize_samples: bool = False,
         timesteps: int = 12,
     ) -> None:
         """CropHarvest dataset.
@@ -146,6 +146,10 @@ class CropHarvestDataset(Dataset):
         else:
             raise ValueError(f"Unrecognized split {split}")
 
+        self.norm_stats_from_pretrained = norm_stats_from_pretrained
+        # We will always need the normalized to normalize latlons
+        self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+
     def __len__(self) -> int:
         """Length of the dataset."""
         return self.array.shape[0]
@@ -154,7 +158,7 @@ class CropHarvestDataset(Dataset):
         """Return the sample at idx."""
         x = self.array[idx]
         y = self.labels[idx]
-        latlon = self.latlons[idx]
+        latlon = self.normalizer_computed.normalize(Modality.LATLON, self.latlons[idx])
 
         x_hw = repeat(x, "t c -> h w t c", w=1, h=1)
 
@@ -176,6 +180,10 @@ class CropHarvestDataset(Dataset):
         # computing the composite encodings
         years = torch.ones_like(months) * 2017
         timestamp = torch.stack([days, months, years], dim=-1)  # t, c=3
+
+        if self.norm_stats_from_pretrained:
+            s2 = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, s2)
+            s1 = self.normalizer_computed.normalize(Modality.SENTINEL1, s1)
 
         return MaskedHeliosSample.from_heliossample(
             HeliosSample(
