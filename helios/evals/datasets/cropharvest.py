@@ -229,7 +229,7 @@ class CropHarvestDataset(Dataset):
         image_list: list[np.ndarray],
         names_list: list[str],
         imputes: list[tuple[str, str]],
-    ) -> list:
+    ) -> np.ndarray:
         # image_list should be one np.array per band, stored in a list
         # image_list and names_list should be ordered consistently!
         if not imputes:
@@ -251,7 +251,7 @@ class CropHarvestDataset(Dataset):
                         band_idx = names_list.index(src)
                         new_image_list.append(image_list[band_idx])
                         break
-        return new_image_list
+        return np.stack(new_image_list, axis=-1)  # (h, w, 13)
 
     def __getitem__(self, idx: int) -> tuple[MaskedHeliosSample, torch.Tensor]:
         """Return the sample at idx."""
@@ -270,8 +270,11 @@ class CropHarvestDataset(Dataset):
 
         # for s2, we need to impute missing bands
         s2 = self._impute_bands(
-            s2, S2_EVAL_BANDS_BEFORE_IMPUTATION, self.config.imputes
+            [s2[:, :, :, idx] for idx in s2.shape[-1]],
+            S2_EVAL_BANDS_BEFORE_IMPUTATION,
+            self.config.imputes,
         )
+
         s2 = s2[:, :, :, EVAL_TO_HELIOS_S2_BANDS]
         s1 = x_hw[:, :, : self.timesteps, S1_INPUT_TO_OUTPUT_BAND_MAPPING][
             :, :, :, EVAL_TO_HELIOS_S1_BANDS
