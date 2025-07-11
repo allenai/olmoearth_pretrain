@@ -1,25 +1,16 @@
-# The base image, which will be the starting point for the Docker image.
-# We're using a PyTorch image built from https://github.com/allenai/docker-images
-# because PyTorch is really big we want to install it first for caching.
-FROM ghcr.io/allenai/pytorch:2.5.1-cuda12.1-python3.11
+FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime
 
-ENV LC_ALL=C.UTF-8
-ENV LANG=C.UTF-8
+RUN apt update
+RUN apt install -y libpq-dev ffmpeg libsm6 libxext6 git wget
 
-# This is the directory that files will be copied into.
-# It's also the directory that you'll start in if you connect to the image.
-WORKDIR /stage/
+# Install rslearn and helios (need to be in local directory).
+COPY ./rslearn /opt/rslearn
+COPY ./helios /opt/helios
+COPY requirements.txt /opt/rslearn_projects/requirements.txt
+RUN pip install --no-cache-dir --upgrade /opt/rslearn[extra] /opt/helios -r /opt/rslearn_projects/requirements.txt
 
-# Copy the `requirements.txt` to `/stage/requirements.txt/` and then install them.
-# We do this first because it's slow and each of these commands are cached in sequence.
-RUN apt-get update && apt-get install --no-install-recommends -y git && apt-get clean && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy rslearn_projects and install it too.
+COPY . /opt/rslearn_projects/
+RUN pip install --no-cache-dir /opt/rslearn_projects
 
-# Copy the folder `scripts` to `scripts/`
-# You might need multiple of these statements to copy all the folders you need for your experiment.
-COPY helios/ /stage/helios/
-COPY scripts/latent_mim.py /stage/latent_mim.py
-COPY scripts/galileo.py /stage/galileo.py
-COPY data/norm_configs /stage/data/norm_configs
-ENV PYTHONPATH="${PYTHONPATH}:/stage/"
+WORKDIR /opt/rslearn_projects
