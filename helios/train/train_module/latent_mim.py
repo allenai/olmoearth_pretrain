@@ -7,7 +7,7 @@ from typing import Any
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
-from olmo_core.distributed.utils import get_local_tensor
+from olmo_core.distributed.utils import get_local_rank, get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import Duration, ReduceType
@@ -211,8 +211,8 @@ class LatentMIMTrainModule(HeliosTrainModule):
         num_microbatches = len(microbatches)
         for microbatch_idx, microbatch in enumerate(microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
-                logger.info(
-                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
+                print(
+                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size} on rank {get_local_rank()}\n"
                 )
                 microbatch = self.transform.apply(microbatch).to_device(self.device)
                 masked_batch = self.masking_strategy.apply_mask(
@@ -239,10 +239,8 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     logger.warning(
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
                     )
-                    del latent, decoded, target_output
-                    break
+                    print(f"rank {get_local_rank()} has nan or inf")
 
-                del latent, decoded, target_output
                 loss.backward()
 
         self.trainer.record_metric(
@@ -257,6 +255,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
 
         del batch, batch_data  # In case this helps with memory utilization.
         del masked_batch
+        del latent, decoded, target_output
 
     def model_forward(
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]

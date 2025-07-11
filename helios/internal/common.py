@@ -76,7 +76,7 @@ def build_launch_config(
     task_name: str = "train",
     workspace: str = WORKSPACE,
     budget: str = BUDGET,
-    nccl_debug: bool = False,
+    nccl_debug: bool = True,  # False,
 ) -> HeliosBeakerLaunchConfig:
     """Build a launch config for a helios experiment.
 
