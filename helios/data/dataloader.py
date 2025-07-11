@@ -59,7 +59,7 @@ class HeliosDataLoader(DataLoaderBase):
         collator: Callable = default_collate,
         target_device_type: str = "cpu",
         drop_last: bool = True,
-        persistent_workers: bool = True,
+        persistent_workers: bool = False,
         multiprocessing_context: str = "spawn",
     ):
         """Initialize the HeliosDataLoader."""
@@ -195,9 +195,8 @@ class HeliosDataLoader(DataLoaderBase):
             num_workers=self.num_workers,
             pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
-            persistent_workers=(
-                self.persistent_workers if self.num_workers > 0 else False
-            ),
+            # Persistent workers are not useful and can cause memoory lekas because dataloader objects are not reused over the course of an epoch
+            persistent_workers=self.persistent_workers,
             multiprocessing_context=(
                 self.multiprocessing_context if self.num_workers > 0 else None
             ),
