@@ -10,7 +10,8 @@
             "tc-maize-second-irrigation-confidence",
             "tc-maize-second-maize-confidence",
             "tc-springcereals-springcereals-confidence",
-            "tc-wintercereals-irrigation-confidence"
+            "tc-wintercereals-irrigation-confidence",
+            "tc-wintercereals-wintercereals-confidence"
           ],
           "dtype": "float32"
         }
