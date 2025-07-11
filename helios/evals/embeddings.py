@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from helios.evals.datasets.configs import TaskType
 from helios.nn.flexihelios import Encoder, PoolingType, TokensAndMasks
 from helios.train.masking import MaskedHeliosSample
+from geobreeze.models.dinov2 import DinoV2
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +45,10 @@ def get_embeddings(
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 # TODO: Model expects masked helios sample we need to pass empty masks
                 # Likely we want to have a flag that checks for eval mode and passes empty masks
-                batch_embeddings: TokensAndMasks = model(
-                    masked_helios_sample, patch_size=patch_size
-                )[0]  # (bsz, dim)
-
+                # batch_embeddings: TokensAndMasks = model(
+                #     masked_helios_sample, patch_size=patch_size
+                # )[0]  # (bsz, dim)
+                batch_embeddings = model.forward_features(masked_helios_sample)
             spatial_pool = True if task_type == TaskType.SEGMENTATION else False
             # Concat features across modalities in space averaged across time
             averaged_embeddings = batch_embeddings.pool_unmasked_tokens(
