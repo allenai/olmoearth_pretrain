@@ -206,9 +206,26 @@ class TokensAndMasks(NamedTuple):
         if concat_features:
             raise ValueError("concat_features is not supported for non-spatial pooling")
         if not spatial_pooling:
-            x, mask = self.flatten_tokens_and_masks()
+            for attr_name in self.modalities:
+                if Modality.get(attr_name).is_spatial:
+                    mask_attr_name = self.get_masked_modality_name(attr_name)
+                    masked_attr = getattr(self, mask_attr_name)
+                    if masked_attr is None:
+                        continue
+                    attr = getattr(self, attr_name)
+                    logger.info(f"attr shape: {attr.shape}")
+                    logger.info(f"attr_name shape: {attr_name}")
+                    attr = attr[:,:, :, :, 2]
+                    logger.info(f"attr shape after slicing: {attr.shape}")
+                    if attr.ndim == 5:
+                        attr = attr.mean(dim=(1, 2,3,))
+                    if attr.ndim == 6:
+                        attr = attr.mean(dim=(1, 2,3,4))
+                    logger.info(f"attr shape after mean: {attr.shape}")
+                    return attr
+            # x, mask = self.flatten_tokens_and_masks()
             # 1s for online encoder, 0s elsewhere
-            mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
+            # mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
             x_for_pooling = x * mask.unsqueeze(-1)
             if pooling_type == PoolingType.MAX:
                 x_for_pooling = x_for_pooling.masked_fill(
@@ -222,6 +239,7 @@ class TokensAndMasks(NamedTuple):
                     raise ValueError(
                         f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
                     )
+                logger.info(f"x_for_pooling shape: {x_for_pooling.shape}")
                 return x_for_pooling.sum(dim=1) / num_encoded_tokens
             else:
                 raise ValueError(f"Invalid pooling type: {pooling_type}")
@@ -237,7 +255,9 @@ class TokensAndMasks(NamedTuple):
                         attr = getattr(self, attr_name)
                         # pool across time and bandset dimensions
                         if pooling_type == PoolingType.MEAN:
-                            spatial_average.append(torch.mean(attr, dim=(-2, -3)))
+                            attr = attr[:,:, :, 0, :]
+                            pooled_attr = torch.mean(attr, dim=(-2, -3))
+                            spatial_average.append(pooled_attr)
                         else:
                             spatial_average.append(
                                 torch.max(torch.max(attr, dim=-2).values, dim=-2).values
