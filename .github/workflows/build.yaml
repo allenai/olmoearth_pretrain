@@ -28,6 +28,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Checkout rslearn
+        uses: actions/checkout@v4
+        with:
+          repository: https://github.com/allenai/rslearn.git
+          path: rslearn
+
+      - name: Checkout rslearn_projects
+        uses: actions/checkout@v4
+        with:
+          repository: https://github.com/allenai/rslearn_projects.git
+          path: rslearn_projects
+
       - name: Log in to the Container registry
         uses: docker/login-action@v3
         with:
