@@ -1,0 +1,68 @@
+name: Build and Publish Docker Image
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  SERVICE_NAME: "helios"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+        ghcr_docker_image: ${{ steps.image-names.outputs.ghcr_image_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ env.SERVICE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        id: build-push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_USERNAME=${{ secrets.GIT_USERNAME }}
+            GIT_TOKEN=${{ secrets.GIT_TOKEN }}
+
+      - name: Store Image Names
+        # We need the docker image name downstream in test & deploy. This saves the full docker image names to outputs
+        id: image-names
+        run: |-
+          GHCR_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ env.SERVICE_NAME }}@${{ steps.build-push.outputs.digest }}"
+          GHCR_IMAGE=`echo ${GHCR_IMAGE} | tr '[:upper:]' '[:lower:]'` # docker requires that all image names be lowercase
+          echo "ghcr.io Docker image name is ${GHCR_IMAGE}"
+          echo "ghcr_image_name=\"${GHCR_IMAGE}\"" >> $GITHUB_OUTPUT
