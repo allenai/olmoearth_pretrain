@@ -31,13 +31,13 @@ jobs:
       - name: Checkout rslearn
         uses: actions/checkout@v4
         with:
-          repository: https://github.com/allenai/rslearn.git
+          repository: allenai/rslearn
           path: rslearn
 
       - name: Checkout rslearn_projects
         uses: actions/checkout@v4
         with:
-          repository: https://github.com/allenai/rslearn_projects.git
+          repository: allenai/rslearn_projects
           path: rslearn_projects
 
       - name: Log in to the Container registry
