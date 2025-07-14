@@ -167,7 +167,10 @@ class TokensAndMasks(NamedTuple):
         return x, masks
 
     def pool_unmasked_tokens(
-        self, pooling_type: PoolingType = PoolingType.MAX, spatial_pooling: bool = False
+        self,
+        pooling_type: PoolingType = PoolingType.MAX,
+        spatial_pooling: bool = False,
+        concat_features: bool = False,
     ) -> Tensor:
         """Pool the unmasked tokens.
 
@@ -176,7 +179,32 @@ class TokensAndMasks(NamedTuple):
             spatial_pooling: Whether to keep the spatial dimensions when pooling. If true,
                 this expects the masks within a spatial modality to be consistent (e.g. all
                 s2 tokens would have the same mask.)
+            concat_features: Whether to concatenate the features instead of averaging them, only enabled for spatial pooling as of now,
+            requires no masked out tokens
         """
+        if concat_features and spatial_pooling:
+            spatial_stacked_features = []
+            for attr_name in self.modalities:
+                if Modality.get(attr_name).is_spatial:
+                    mask_attr_name = self.get_masked_modality_name(attr_name)
+                    masked_attr = getattr(self, mask_attr_name)
+                    if masked_attr is None:
+                        continue
+                    if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
+                        attr = getattr(self, attr_name)
+                        # only mean in temporal dimension
+                        pooled_attr = torch.mean(attr, dim=(-3))
+                        spatial_stacked_features.append(pooled_attr)
+            if len(spatial_stacked_features) == 0:
+                raise ValueError(
+                    "Missing unmasked spatial modalities for spatial pooling."
+                )
+            # Concatenate along the band sets dimension instead of stacking
+            spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
+            # flatten the last 3 dimensions
+            return rearrange(spatial_stacked_features, "b h w c d-> b h w c d")
+        if concat_features:
+            raise ValueError("concat_features is not supported for non-spatial pooling")
         if not spatial_pooling:
             x, mask = self.flatten_tokens_and_masks()
             # 1s for online encoder, 0s elsewhere
