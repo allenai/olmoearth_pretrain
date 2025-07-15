@@ -365,13 +365,13 @@ class HeliosTrainModule(TrainModule):
             options=self.state_dict_load_opts,
         )
         gc_cuda()
-        dist_cp_sd.set_optimizer_state_dict(
-            self.model,
-            self.optimizer,
-            state_dict["optim"],
-            options=self.state_dict_load_opts,
-        )
-        gc_cuda()
+        # dist_cp_sd.set_optimizer_state_dict(
+        #    self.model,
+        #    self.optimizer,
+        #    state_dict["optim"],
+        #    options=self.state_dict_load_opts,
+        # )
+        # gc_cuda()
 
     def zero_grads(self) -> None:
         """Zero the gradients."""
