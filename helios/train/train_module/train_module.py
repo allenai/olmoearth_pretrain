@@ -24,7 +24,7 @@ from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import Duration, ReduceType
 from olmo_core.train.train_module import EvalBatchSizeUnit, EvalBatchSpec, TrainModule
-from olmo_core.utils import gc_cuda, get_default_device
+from olmo_core.utils import get_default_device
 from torch import nn
 from torch.distributed.checkpoint.metadata import Metadata
 from torch.distributed.fsdp import FSDPModule
@@ -359,12 +359,12 @@ class HeliosTrainModule(TrainModule):
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load the state dict."""
-        dist_cp_sd.set_model_state_dict(
-            self.model,
-            state_dict["model"],
-            options=self.state_dict_load_opts,
-        )
-        gc_cuda()
+        # dist_cp_sd.set_model_state_dict(
+        #    self.model,
+        #    state_dict["model"],
+        #    options=self.state_dict_load_opts,
+        # )
+        # gc_cuda()
         # dist_cp_sd.set_optimizer_state_dict(
         #    self.model,
         #    self.optimizer,
