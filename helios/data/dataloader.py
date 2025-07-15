@@ -273,7 +273,7 @@ class HeliosDataLoader(DataLoaderBase):
             self.seed = state_dict["seed"]
 
         self.batches_processed = state_dict["batches_processed"]
-        self._epoch = state_dict["epoch"] or self._epoch  # type: ignore
+        # self._epoch = state_dict["epoch"] or self._epoch  # type: ignore
 
     def _format_fname_from_fields(self, prefix: str, **fields: Any) -> str:
         parts = [prefix]
