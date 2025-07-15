@@ -167,6 +167,7 @@ class HeliosDataLoader(DataLoaderBase):
         self, epoch: int | None = None, in_memory: bool = False, **kwargs: Any
     ) -> None:
         """Reshuffle the data."""
+        in_memory = True
         del kwargs
         if epoch is None:
             epoch = 1 if self._epoch is None else self._epoch + 1  # type: ignore
@@ -252,29 +253,28 @@ class HeliosDataLoader(DataLoaderBase):
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load the state dict."""
-        # if (
-        #     state_dict["dataset_fingerprint_version"]
-        #     != self.dataset.fingerprint_version
-        # ):
-        #     logger.warning(
-        #         "Dataset fingerprint version does not match the version in the checkpoint, "
-        #         "this could mean the data has changed"
-        #     )
-        # elif state_dict["dataset_fingerprint"] != self.dataset.fingerprint:
-        #     raise RuntimeError(
-        #         "Restoring state from a different dataset is not supported! (fingerprint doesn't match)"
-        #     )
+        if (
+            state_dict["dataset_fingerprint_version"]
+            != self.dataset.fingerprint_version
+        ):
+            logger.warning(
+                "Dataset fingerprint version does not match the version in the checkpoint, "
+                "this could mean the data has changed"
+            )
+        elif state_dict["dataset_fingerprint"] != self.dataset.fingerprint:
+            raise RuntimeError(
+                "Restoring state from a different dataset is not supported! (fingerprint doesn't match)"
+            )
 
-        # if state_dict["seed"] != self.seed:
-        #     logger.warning(
-        #         "Restoring data loading state with a different data seed, "
-        #         "will use data seed from state dict for data order consistency."
-        #     )
-        #     self.seed = state_dict["seed"]
+        if state_dict["seed"] != self.seed:
+            logger.warning(
+                "Restoring data loading state with a different data seed, "
+                "will use data seed from state dict for data order consistency."
+            )
+            self.seed = state_dict["seed"]
 
-        # self.batches_processed = state_dict["batches_processed"]
-        # self._epoch = state_dict["epoch"] or self._epoch  # type: ignore
-        pass
+        self.batches_processed = state_dict["batches_processed"]
+        self._epoch = state_dict["epoch"] or self._epoch  # type: ignore
 
     def _format_fname_from_fields(self, prefix: str, **fields: Any) -> str:
         parts = [prefix]
