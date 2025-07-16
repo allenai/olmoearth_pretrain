@@ -68,6 +68,7 @@ class FlexiPatchEmbed(nn.Module):
         # Flexi specific attributes
         self.interpolation = interpolation
         self.antialias = antialias
+        self.zero_grad()
 
     @staticmethod
     def to_2tuple(x: Any) -> Any:

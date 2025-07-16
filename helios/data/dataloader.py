@@ -167,7 +167,6 @@ class HeliosDataLoader(DataLoaderBase):
         self, epoch: int | None = None, in_memory: bool = False, **kwargs: Any
     ) -> None:
         """Reshuffle the data."""
-        in_memory = True
         del kwargs
         if epoch is None:
             epoch = 1 if self._epoch is None else self._epoch + 1  # type: ignore
@@ -186,7 +185,6 @@ class HeliosDataLoader(DataLoaderBase):
             raise RuntimeError(
                 f"Missing global indices file {self._global_indices_file}, did you forget to call 'reshuffle()'?"
             )
-        RuntimeError("doing file stuff bad")
         return np.memmap(self._global_indices_file, mode="r", dtype=np.uint32)
 
     def _iter_batches(self) -> Iterable[HeliosSample]:
@@ -358,7 +356,6 @@ class HeliosDataLoader(DataLoaderBase):
         batch_start = int(self.get_global_indices()[step_in_epoch])
         batch_end = batch_start + self.global_batch_size
         sample_indices = np.arange(batch_start, batch_end)
-        logger.warning(f"sample_indices {sample_indices} {batch_start} {batch_end}")
         return sample_indices
 
 
