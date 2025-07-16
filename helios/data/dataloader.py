@@ -283,10 +283,7 @@ class HeliosDataLoader(DataLoaderBase):
                 parts.append(f"{key}{value}")
         return "_".join(parts)
 
-    def get_mock_batch(self) -> HeliosSample:
-        """Get a mock batch, for dry-run of forward and backward pass."""
-        logger.info("Getting mock batch NOT FROM DATASET")
-        rng = get_rng(42)
+    def _get_mock_sample(self, rng: np.random.Generator) -> HeliosSample:
         output_dict = {}
         # ToDO: change to training modalities
         logger.info(f"Training modalities: {self.dataset.training_modalities}")
@@ -323,19 +320,26 @@ class HeliosDataLoader(DataLoaderBase):
         timestamps = np.concatenate([days, months, years], axis=1)  # shape: (12, 3)
 
         output_dict["timestamps"] = timestamps
+        return HeliosSample(**output_dict)
 
+    def get_mock_batch(self) -> HeliosSample:
+        """Get a mock batch, for dry-run of forward and backward pass."""
+        logger.info("Getting mock batch NOT FROM DATASET")
+        rng = get_rng(42)
+        batch_size = self.global_batch_size // self.dp_world_size
         patch_size = 1
         collated_sample = self.collator(
             [
                 (
                     patch_size,
-                    HeliosSample(**output_dict).subset(
+                    self._get_mock_sample(rng).subset(
                         patch_size,
                         max_tokens_per_instance=1500,
                         sampled_hw_p=6,
                         current_length=12,
                     ),
                 )
+                for num in range(batch_size)
             ]
         )
         return collated_sample
