@@ -3,6 +3,7 @@ albumentations
 beaker-py==1.34.1
 breizhcrops
 cartopy
+shapely>=2 # temporary hack to force shapely 2.x
 class-registry
 datasets==3.6.0
 einops>=0.7.0
