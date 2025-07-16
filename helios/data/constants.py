@@ -379,6 +379,26 @@ class Modality:
         ignore_when_parsing=True,
     )
 
+    ERA5_10 = ModalitySpec(
+        name="era5_10",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [
+                    "2m-temperature",
+                    "2m-dewpoint-temperature",
+                    "surface-pressure",
+                    "10m-u-component-of-wind",
+                    "10m-v-component-of-wind",
+                    "total-precipitation",
+                ],
+                4096,  # 16 * 256
+            ),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+    )
+
     LATLON = ModalitySpec(
         name="latlon",
         tile_resolution_factor=0,
