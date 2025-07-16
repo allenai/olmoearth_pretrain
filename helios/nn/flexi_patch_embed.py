@@ -8,6 +8,7 @@ import logging
 from collections.abc import Iterable
 from typing import Any
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
@@ -68,7 +69,8 @@ class FlexiPatchEmbed(nn.Module):
         # Flexi specific attributes
         self.interpolation = interpolation
         self.antialias = antialias
-        self.zero_grad()
+        for p in self.parameters():
+            p.grad = torch.zeros_like(p)
 
     @staticmethod
     def to_2tuple(x: Any) -> Any:
