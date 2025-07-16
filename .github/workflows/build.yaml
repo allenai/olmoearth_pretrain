@@ -32,12 +32,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: allenai/rslearn
+          ref: yawenz/classification_output_geotiff
           path: rslearn
 
       - name: Checkout rslearn_projects
         uses: actions/checkout@v4
         with:
           repository: allenai/rslearn_projects
+          ref: yawenz/crop_window_inference
           path: rslearn_projects
 
       - name: Log in to the Container registry

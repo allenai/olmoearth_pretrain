@@ -1,4 +1,5 @@
-FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime
+#FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime
+FROM nvcr.io/nvidia/pytorch:25.06-py3
 
 RUN apt update
 RUN apt install -y libpq-dev ffmpeg libsm6 libxext6 git wget
@@ -9,7 +10,8 @@ COPY ./rslearn /opt/rslearn
 COPY ./rslearn_projects /opt/rslearn_projects/
 COPY requirements.txt /opt/helios/requirements.txt
 
-RUN pip install --no-cache-dir --upgrade /opt/rslearn[extra] /opt/helios -r /opt/helios/requirements.txt
+RUN pip install --no-cache-dir --upgrade /opt/rslearn[extra]
+RUN pip install /opt/helios
 RUN pip install --no-cache-dir /opt/rslearn_projects
 
 WORKDIR /opt/rslearn_projects
