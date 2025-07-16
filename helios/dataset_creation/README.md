@@ -103,6 +103,15 @@ ERA5 can also be processed on one machine:
     rslearn dataset ingest --root $DATASET_PATH --group res_160 --workers 64 --no-use-initial-job
     rslearn dataset materialize --root $DATASET_PATH --group res_160 --workers 64 --no-use-initial-job
 
+For 10 m/pixel window/tiling ERA5 data:
+
+    cp data/rslearn_dataset_configs/config_era5_10.json $DATASET_PATH/config.json
+    rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64
+    rslearn dataset ingest --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
+    rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
+
+
+
 The steps above can be performed in a Beaker session:
 
 ```
@@ -134,6 +143,7 @@ Now we convert the data to Helios format.
     python -m helios.dataset_creation.rslearn_to_helios.worldcover --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.gse --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.era5 --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
+    python -m helios.dataset_creation.rslearn_to_helios.era5_10 --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
 
 
 Landsat
@@ -217,3 +227,5 @@ into the per-modality CSVs:
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality gse
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality era5 --time_span two_week
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality era5 --time_span year
+    python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality era5_10 --time_span two_week
+    python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality era5_10 --time_span year
