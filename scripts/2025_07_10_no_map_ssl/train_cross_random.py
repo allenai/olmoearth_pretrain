@@ -96,7 +96,7 @@ def build_train_module_config(
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "modality_cross_random",
-                "encode_ratio": 0.1,
+                "encode_ratio": 0.25,
                 "decode_ratio": 0.75,
                 "allow_encoding_decoding_same_bandset": True,
                 "min_decoded_bandsets": None,
@@ -156,8 +156,8 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
     MAX_DURATION = Duration.epochs(75)
-    METRICS_COLLECT_INTERVAL = 10
-    CANCEL_CHECK_INTERVAL = 25
+    METRICS_COLLECT_INTERVAL = 1
+    CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "2025_07_10_no_map_ssl"

@@ -7,7 +7,8 @@ from typing import Any
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
-from olmo_core.distributed.utils import get_local_rank, get_local_tensor
+from olmo_core.distributed.utils import get_local_rank, get_local_tensor, barrier
+import torch.distributed as dist
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import Duration, ReduceType
@@ -240,7 +241,28 @@ class LatentMIMTrainModule(HeliosTrainModule):
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
                     )
                     print(f"rank {get_local_rank()} has nan or inf")
-
+                # for name, p in self.model.named_parameters():
+                #     local = p.to_local().shape
+                #     # get a product of the shape
+                #     product = 1
+                #     for size in local:
+                #         product *= size
+                #     print(f"rank {get_local_rank()} {name} local shape: {local} product: {product}")
+                #     # has_grad = torch.tensor(p.grad is not None, device=self.device)
+                #     # remote_has_grad = dist.broadcast(has_grad, src=0)
+                #     local = torch.tensor(product, device=self.device)
+                #     remote = dist.broadcast(local, src=0)  # gather shapes from rank 0
+                #     assert local == remote, f"{name}: local {local} vs remote {remote}"
+                    # assert has_grad == remote_has_grad, f"{name}: local {has_grad} vs remote {remote_has_grad}"
+                # no_grad_params = [
+                #     name
+                #     for name, p in self.model.encoder.patch_embeddings.named_parameters()
+                #     if p.requires_grad and p.grad is None
+                # ]
+                # no_grad_count = len(no_grad_params)
+                # print(f"rank {get_local_rank()} Parameters without gradients: {no_grad_count}")
+                # if no_grad_params:
+                #     print(f"rank {get_local_rank()} Names of parameters without gradients: {no_grad_params}")
                 loss.backward()
 
         self.trainer.record_metric(

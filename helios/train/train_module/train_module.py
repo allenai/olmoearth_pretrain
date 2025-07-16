@@ -6,7 +6,7 @@ from collections.abc import Generator
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any, cast
-
+from olmo_core.distributed.utils import get_local_rank, get_local_tensor, barrier
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
@@ -359,12 +359,17 @@ class HeliosTrainModule(TrainModule):
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load the state dict."""
+        # Get number of parameters in the model on each rank
+        # print the number of parameters in the model on each rank
+        print(f"rank {get_local_rank()} number of parameters in the model: {sum(p.numel() for p in self.model.parameters())}")
         dist_cp_sd.set_model_state_dict(
             self.model,
             state_dict["model"],
             options=self.state_dict_load_opts,
         )
         gc_cuda()
+        #print optimiszer state dict per rank
+        # print(f"rank {get_local_rank()} optimizer state dict: {state_dict["optim"]}")
         dist_cp_sd.set_optimizer_state_dict(
             self.model,
             self.optimizer,
@@ -372,6 +377,7 @@ class HeliosTrainModule(TrainModule):
             options=self.state_dict_load_opts,
         )
         gc_cuda()
+        print(f"rank {get_local_rank()} number of parameters in the model after loading: {sum(p.numel() for p in self.model.parameters())}")
 
     def zero_grads(self) -> None:
         """Zero the gradients."""

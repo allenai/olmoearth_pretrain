@@ -141,6 +141,7 @@ class HeliosDataLoader(DataLoaderBase):
         else:
             self._global_indices = None
             if self.fs_local_rank == 0:
+                print(f"dp rank:{self.dp_rank}, fs local rank:{self.fs_local_rank}")
                 # Either load from file or build and save to file
                 if self._global_indices_file.is_file():
                     logger.info(
@@ -162,6 +163,8 @@ class HeliosDataLoader(DataLoaderBase):
                         f"Global data order indices saved to:\n'{self._global_indices_file}'"
                     )
         barrier()
+        print(f"dp rank:{self.dp_rank}, fs local rank:{self.fs_local_rank} got past barrier")
+
 
     def reshuffle(
         self, epoch: int | None = None, in_memory: bool = False, **kwargs: Any
@@ -224,7 +227,12 @@ class HeliosDataLoader(DataLoaderBase):
             indices = indices[worker_info.id :: worker_info.num_workers]
 
         # Finally slice batches into micro batches for the local DP rank.
-        indices = indices[:, self.dp_rank :: self.dp_world_size].reshape((-1,))
+        rank = self.dp_rank
+        world_size = self.dp_world_size
+        # rank = 2
+        # world_size = 8
+        logger.info(f"rank: {rank}, world_size: {world_size}")
+        indices = indices[:, rank :: world_size].reshape((-1,))
         return indices
 
     def _get_dataset_item(

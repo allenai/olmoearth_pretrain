@@ -5,6 +5,7 @@ import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, NamedTuple
+from olmo_core.distributed.utils import get_local_rank
 
 import numpy as np
 import torch
@@ -904,7 +905,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     min_encoded_bandsets = min(
                         self.min_encoded_bandsets, num_encodable_modalities
                     )
-
                 num_encoded_bandsets = np.random.randint(
                     min_encoded_bandsets, max_encoded_bandsets + 1
                 )
@@ -917,8 +917,9 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     [encodable_modalities[i] for i in encoded_idxs]
                 )
                 # Select Indices to Decode
+                # TODO: Revise this basically we never want decode only here to be just latlon
                 min_decoded_bandsets = min(
-                    self.min_decoded_bandsets or 1, num_present_modalities
+                    self.min_decoded_bandsets or 2, num_present_modalities
                 )
                 max_decoded_bandsets = min(
                     self.max_decoded_bandsets or num_present_modalities,
@@ -1002,11 +1003,14 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             modality_spec = Modality.get(modality)
             modality_mask = masked_batch_dict[masked_modality_name]
             num_bandsets = modality_mask.shape[-1]
-
+            rank_encoded_modalities = set()
+            rank_decoded_modalities = set()
             for sample_idx in range(masked_batch.timestamps.shape[0]):
                 encoded_bandset_idxs, decoded_bandset_idxs = encoded_decoded_bandsets[
                     sample_idx
                 ]
+                rank_encoded_modalities.update(encoded_bandset_idxs)
+                rank_decoded_modalities.update(decoded_bandset_idxs)
                 available_modalities = [
                     modality_bandset[0]
                     for modality_bandset in present_modalities_bandsets[sample_idx]
@@ -1072,7 +1076,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                         )
 
             masked_batch_dict[masked_modality_name] = modality_mask
-
+        print(f"rank {get_local_rank()} num rank_encoded_modalities: {len(rank_encoded_modalities)} num rank_decoded_modalities: {len(rank_decoded_modalities)}")
         masked_batch = MaskedHeliosSample(**masked_batch_dict)
         return masked_batch
 

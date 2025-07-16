@@ -10,7 +10,8 @@ import torch
 from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor, nn
-from torch.distributed.fsdp import fully_shard
+from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
+from olmo_core.distributed.utils import get_local_rank
 
 from helios.data.constants import Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
@@ -411,6 +412,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     patchified_data, **modality_specific_kwargs
                 )
             else:
+                print(f"rank {get_local_rank()} token_mask.shape: no encoding tokens for a given modality {modality} at idx {idx} {token_mask.shape}")
                 mask_shape = token_mask.shape + (self.embedding_size,)
                 patchified_data = torch.zeros(
                     mask_shape, dtype=token_mask.dtype, device=token_mask.device
@@ -1402,8 +1404,8 @@ class Encoder(FlexiHeliosBase):
         """Apply FSDP to the model."""
         super().apply_fsdp(**fsdp_kwargs)
         # Don't Shard the small layers
-        # fully_shard(self.patch_embeddings, **fsdp_kwargs)
-        # register_fsdp_forward_method(self.patch_embeddings, "forward")
+        fully_shard(self.patch_embeddings, **fsdp_kwargs)
+        register_fsdp_forward_method(self.patch_embeddings, "forward")
         # fully_shard(self.project_and_aggregate, **fsdp_kwargs)
         # register_fsdp_forward_method(self.project_and_aggregate, "forward")
         fully_shard(self, **fsdp_kwargs)
