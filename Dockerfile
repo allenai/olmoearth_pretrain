@@ -1,6 +1,6 @@
 #FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime
-FROM nvcr.io/nvidia/pytorch:25.06-py3
-#FROM python:3.12
+#FROM nvcr.io/nvidia/pytorch:25.06-py3
+FROM python:3.12
 
 
 RUN apt update
