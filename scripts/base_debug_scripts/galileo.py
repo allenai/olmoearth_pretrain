@@ -44,6 +44,13 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 MIN_PATCH_SIZE = 1
+USE_4_X_128_DATASET = False
+
+# Training duration constants
+TOTAL_EPOCHS = 300
+if USE_4_X_128_DATASET:
+    TOTAL_EPOCHS = TOTAL_EPOCHS // 4
+WARMUP_FRACTION = 0.0667  # changed from 20 warmup epochs / 300 total
 
 tiny_model_args = MODEL_SIZE_ARGS["tiny"]
 MAX_SEQUENCE_LENGTH = 12
@@ -89,7 +96,7 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> GalileoTrainModuleConfig:
     """Build the train module config for an experiment."""
-    LR = 0.002
+    LR = 0.0001
     RANK_MICROBATCH_SIZE = 64
     ENCODE_RATIO = 0.1
     DECODE_RATIO = 0.75
@@ -123,6 +130,7 @@ def build_train_module_config(
         Modality.SENTINEL2_L2A.name: int(tiny_model_args["encoder_depth"]),
         Modality.LATLON.name: int(tiny_model_args["encoder_depth"]),
         Modality.SENTINEL1.name: int(tiny_model_args["encoder_depth"]),
+        Modality.NAIP_10.name: int(tiny_model_args["encoder_depth"]),
         Modality.WORLDCOVER.name: 0,
         Modality.SRTM.name: int(tiny_model_args["encoder_depth"] // 2),
         Modality.OPENSTREETMAP_RASTER.name: 0,
@@ -133,7 +141,7 @@ def build_train_module_config(
             f"All modalities must be in token_exit_cfg_a: {common.training_modalities}"
         )
     token_exit_cfg_b = {modality: 0 for modality in common.training_modalities}
-    WARMUP_EPOCHS = 5
+    WARMUP_EPOCHS = int(TOTAL_EPOCHS * WARMUP_FRACTION)
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
@@ -163,7 +171,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # TODO: Include collate function here
 
     NUM_WORKERS = 8
-    GLOBAL_BATCH_SIZE = 128
+    GLOBAL_BATCH_SIZE = 512
     PREFETCH_FACTOR = 4
     TOKEN_BUDGET = 1500
     SAMPLE_HW_P_LIST = list(range(5, 13))
@@ -186,8 +194,12 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
+    if USE_4_X_128_DATASET:
+        dataset_path = "/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892"
+    else:
+        dataset_path = "/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/"
     return HeliosDatasetConfig(
-        h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
+        h5py_dir=dataset_path,
         training_modalities=common.training_modalities,
         dtype="float32",
         # cache_dir="/helios_cache/osm_sampling",
@@ -197,7 +209,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(300)
+    MAX_DURATION = Duration.epochs(TOTAL_EPOCHS)
     METRICS_COLLECT_INTERVAL = 1
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
@@ -220,7 +232,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(5),
+            eval_interval=Duration.epochs(1),
         ),
         "breizhcrops": DownstreamTaskConfig(
             dataset="breizhcrops",

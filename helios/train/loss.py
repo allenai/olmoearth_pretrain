@@ -577,6 +577,8 @@ class InfoNCELoss(Loss):
         targets = F.normalize(targets, p=2, dim=-1)
         logits = predictions @ targets.transpose(-2, -1)
 
+        logger.warning(logits.shape)
+
         # Positive keys are the entries on the diagonal
         labels = torch.arange(len(predictions), device=predictions.device)
 

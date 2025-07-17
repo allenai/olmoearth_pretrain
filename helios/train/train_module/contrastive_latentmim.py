@@ -11,9 +11,6 @@ from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import Duration, ReduceType
-from olmo_core.train.train_module.transformer import (
-    TransformerActivationCheckpointingConfig,
-)
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
@@ -79,28 +76,6 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
     """A :class:`TrainModule`.
 
     Initialize the training module.
-
-    Args:
-        model: The transformer model to train.
-        optim: The corresponding optimizer config.
-        transform_config: The transform configuration for the model.
-        masking_config: The masking configuration for the model.
-        loss_config: The loss configuration for the model.
-        mae_loss_config: Optional loss config for masked auto-encoding.
-        rank_microbatch_size: The rank microbatch size in instances.
-        compile_model: Whether to compile to the model.
-        dp_config: Data parallel configuration for the model.
-        ac_config: Activation checkpointing configuration for the model.
-        loss_fn: Loss function to use.
-        compile_loss: Whether to compile the loss function.
-        autocast_precision: Enable AMP with this data type.
-        max_grad_norm: Clip gradient norms to this value.
-        scheduler: Optional learning rate scheduler.
-        device: The device to train on.
-        state_dict_save_opts: Override state dict options for saving.
-        state_dict_load_opts: Override state dict options for loading.
-        token_exit_cfg: The token exit configuration for the model.
-        warmup_duration: The warmup duration for the model.
     """
 
     def __init__(
@@ -115,7 +90,6 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         mae_loss_config: LossConfig | None = None,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
-        ac_config: TransformerActivationCheckpointingConfig | None = None,
         compile_loss: bool = False,
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
@@ -127,6 +101,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
         contrastive_config: LossConfig | None = None,
+        find_unused_parameters: bool = True,
     ):
         """Initialize the training module.
 
@@ -140,7 +115,6 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
             rank_microbatch_size: The rank microbatch size in instances.
             compile_model: Whether to compile to the model.
             dp_config: Data parallel configuration for the model.
-            ac_config: Activation checkpointing configuration for the model.
             loss_fn: Loss function to use.
             compile_loss: Whether to compile the loss function.
             autocast_precision: Enable AMP with this data type.
@@ -154,6 +128,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
             warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
             contrastive_config: An optional contrastive configration for the model.
+            find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
         """
         super().__init__(
             model=model,
@@ -162,7 +137,6 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
             rank_microbatch_size=rank_microbatch_size,
             compile_model=compile_model,
             dp_config=dp_config,
-            ac_config=ac_config,
             compile_loss=compile_loss,
             autocast_precision=autocast_precision,
             max_grad_norm=max_grad_norm,
@@ -171,6 +145,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
             warmup_duration=warmup_duration,
+            find_unused_parameters=find_unused_parameters,
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg = token_exit_cfg

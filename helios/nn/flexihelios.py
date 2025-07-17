@@ -89,6 +89,8 @@ class TokensAndMasks(NamedTuple):
     landsat_mask: Tensor | None = None
     naip: Tensor | None = None
     naip_mask: Tensor | None = None
+    naip_10: Tensor | None = None
+    naip_10_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
@@ -165,7 +167,10 @@ class TokensAndMasks(NamedTuple):
         return x, masks
 
     def pool_unmasked_tokens(
-        self, pooling_type: PoolingType = PoolingType.MAX, spatial_pooling: bool = False
+        self,
+        pooling_type: PoolingType = PoolingType.MAX,
+        spatial_pooling: bool = False,
+        concat_features: bool = False,
     ) -> Tensor:
         """Pool the unmasked tokens.
 
@@ -174,7 +179,32 @@ class TokensAndMasks(NamedTuple):
             spatial_pooling: Whether to keep the spatial dimensions when pooling. If true,
                 this expects the masks within a spatial modality to be consistent (e.g. all
                 s2 tokens would have the same mask.)
+            concat_features: Whether to concatenate the features instead of averaging them, only enabled for spatial pooling as of now,
+            requires no masked out tokens
         """
+        if concat_features and spatial_pooling:
+            spatial_stacked_features = []
+            for attr_name in self.modalities:
+                if Modality.get(attr_name).is_spatial:
+                    mask_attr_name = self.get_masked_modality_name(attr_name)
+                    masked_attr = getattr(self, mask_attr_name)
+                    if masked_attr is None:
+                        continue
+                    if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
+                        attr = getattr(self, attr_name)
+                        # only mean in temporal dimension
+                        pooled_attr = torch.mean(attr, dim=(-3))
+                        spatial_stacked_features.append(pooled_attr)
+            if len(spatial_stacked_features) == 0:
+                raise ValueError(
+                    "Missing unmasked spatial modalities for spatial pooling."
+                )
+            # Concatenate along the band sets dimension instead of stacking
+            spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
+            # flatten the last 3 dimensions
+            return rearrange(spatial_stacked_features, "b h w c d-> b h w c d")
+        if concat_features:
+            raise ValueError("concat_features is not supported for non-spatial pooling")
         if not spatial_pooling:
             x, mask = self.flatten_tokens_and_masks()
             # 1s for online encoder, 0s elsewhere
@@ -186,7 +216,13 @@ class TokensAndMasks(NamedTuple):
                 )
                 return x_for_pooling.max(dim=1).values
             elif pooling_type == PoolingType.MEAN:
-                return x_for_pooling.sum(dim=1) / torch.sum(mask, -1, keepdim=True)
+                num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
+                logger.debug(f"num_encoded_tokens: {num_encoded_tokens}")
+                if (num_encoded_tokens == 0).any():
+                    raise ValueError(
+                        f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
+                    )
+                return x_for_pooling.sum(dim=1) / num_encoded_tokens
             else:
                 raise ValueError(f"Invalid pooling type: {pooling_type}")
         else:
@@ -330,7 +366,8 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     self._get_embedding_module_name(modality, idx): FlexiPatchEmbed(
                         in_chans=len(channel_set_idxs),
                         embedding_size=self.embedding_size,
-                        patch_size=self.max_patch_size,
+                        patch_size_at_16=self.max_patch_size,
+                        modality_spec=modality_spec,
                     )
                     for idx, channel_set_idxs in enumerate(
                         modality_spec.bandsets_as_indices()
@@ -356,16 +393,29 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                 # static in time
                 token_mask = modality_mask[..., idx]
             else:
-                token_mask = modality_mask[:, 0::patch_size, 0::patch_size, ..., idx]
+                token_mask = modality_mask[
+                    :,
+                    0 :: patch_size * modality_spec.image_tile_size_factor,
+                    0 :: patch_size * modality_spec.image_tile_size_factor,
+                    ...,
+                    idx,
+                ]
                 modality_specific_kwargs = {"patch_size": patch_size}
             # Now apply the embedding to the patchified data
-            patchified_data = modality_data[..., channel_set_indices]
-            embedding_module = self.per_modality_embeddings[modality][
-                self._get_embedding_module_name(modality, idx)
-            ]
-            patchified_data = embedding_module(
-                patchified_data, **modality_specific_kwargs
-            )
+            if (token_mask == MaskValue.ONLINE_ENCODER.value).any():
+                patchified_data = modality_data[..., channel_set_indices]
+                embedding_module = self.per_modality_embeddings[modality][
+                    self._get_embedding_module_name(modality, idx)
+                ]
+                patchified_data = embedding_module(
+                    patchified_data, **modality_specific_kwargs
+                )
+            else:
+                mask_shape = token_mask.shape + (self.embedding_size,)
+                patchified_data = torch.zeros(
+                    mask_shape, dtype=token_mask.dtype, device=token_mask.device
+                )
+
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
@@ -797,6 +847,7 @@ class FlexiHeliosBase(nn.Module):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         use_flash_attn: bool = False,
+        qk_norm: bool = False,
     ) -> None:
         """Initialize the FlexiHeliosBase class."""
         super().__init__()
@@ -818,6 +869,7 @@ class FlexiHeliosBase(nn.Module):
                     num_heads,
                     mlp_ratio,
                     qkv_bias=True,
+                    qk_norm=qk_norm,
                     norm_layer=nn.LayerNorm,  # TODO: This should be configurable
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
@@ -1015,6 +1067,7 @@ class Encoder(FlexiHeliosBase):
         aggregate_then_project: bool = True,
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
+        qk_norm: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1037,6 +1090,7 @@ class Encoder(FlexiHeliosBase):
             use_flash_attn: Whether to use flash attention
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
+            qk_norm: Whether to apply normalization to Q and K in attention
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1049,6 +1103,7 @@ class Encoder(FlexiHeliosBase):
             supported_modalities=supported_modalities,
             use_flash_attn=use_flash_attn,
             random_channel_embeddings=random_channel_embeddings,
+            qk_norm=qk_norm,
         )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
@@ -1193,6 +1248,17 @@ class Encoder(FlexiHeliosBase):
             exit_ids_seq = None
         return exit_ids_seq
 
+    def get_attn_or_none_mask(
+        self,
+        new_mask: Tensor,
+        always_pass_none_mask_to_transformer: bool,
+    ) -> Tensor | None:
+        """Get the attention mask or None if we should pass None to the transformer."""
+        if always_pass_none_mask_to_transformer or not self.training:
+            return None
+        else:
+            return new_mask
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -1200,6 +1266,7 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
+        always_pass_none_mask_to_transformer: bool = False,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1239,6 +1306,9 @@ class Encoder(FlexiHeliosBase):
             og_shape = tokens.shape
             tokens = self.pack_tokens(tokens, new_mask)
 
+        attn_mask = self.get_attn_or_none_mask(
+            new_mask, always_pass_none_mask_to_transformer
+        )
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -1261,7 +1331,7 @@ class Encoder(FlexiHeliosBase):
                 cu_seqlens=cu_seqlens,
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
-                attn_mask=new_mask if self.training else None,
+                attn_mask=attn_mask,
             )
 
         if self.use_flash_attn:
@@ -1298,6 +1368,7 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
+        always_pass_none_mask_to_transformer: bool = False,
     ) -> tuple[TokensAndMasks, torch.Tensor]:
         """Process masked input samples into token representations.
 
@@ -1306,6 +1377,7 @@ class Encoder(FlexiHeliosBase):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
+            always_pass_none_mask_to_transformer: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -1321,6 +1393,7 @@ class Encoder(FlexiHeliosBase):
                 patch_size=patch_size,
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
+                always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
         return output, self.project_and_aggregate(output)
@@ -1355,6 +1428,7 @@ class Predictor(FlexiHeliosBase):
         random_channel_embeddings: bool = False,
         output_embedding_size: int | None = None,
         use_flash_attn: bool = False,
+        qk_norm: bool = False,
     ):
         """Initialize the predictor.
 
@@ -1371,6 +1445,7 @@ class Predictor(FlexiHeliosBase):
             random_channel_embeddings: Whether to randomly initialize channel embeddings
             output_embedding_size: Size of output embeddings
             use_flash_attn: Whether to use flash attention
+            qk_norm: Whether to apply normalization to Q and K in attention
         """
         super().__init__(
             embedding_size=decoder_embedding_size,
@@ -1383,6 +1458,7 @@ class Predictor(FlexiHeliosBase):
             random_channel_embeddings=random_channel_embeddings,
             supported_modalities=supported_modalities,
             use_flash_attn=use_flash_attn,
+            qk_norm=qk_norm,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -1660,7 +1736,7 @@ class Predictor(FlexiHeliosBase):
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
         """
-        decoder_emedded_dict = x._asdict()
+        decoder_emedded_dict = x.as_dict(return_none=False)
         # Apply Input Norms and encoder to decoder embeds to each modality
         available_modalities = x.modalities
         modalities_to_process = get_modalities_to_process(
@@ -1730,6 +1806,7 @@ class EncoderConfig(Config):
     aggregate_then_project: bool = True
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
+    qk_norm: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1772,6 +1849,7 @@ class PredictorConfig(Config):
     random_channel_embeddings: bool = False
     output_embedding_size: int | None = None
     use_flash_attn: bool = False
+    qk_norm: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""

@@ -11,6 +11,7 @@ from olmo_core.distributed.parallel.data_parallel import (
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
+    BeakerCallback,
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
@@ -42,8 +43,15 @@ from helios.train.masking import MaskingConfig
 from helios.train.train_module.mae import MAETrainModuleConfig
 
 logger = logging.getLogger(__name__)
-MAX_PATCH_SIZE = 16  # NOTE: actual patch_size <= max_patch_size
+MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 MIN_PATCH_SIZE = 4
+USE_4_X_128_DATASET = False
+
+# Training duration constants
+TOTAL_EPOCHS = 300
+if USE_4_X_128_DATASET:
+    TOTAL_EPOCHS = TOTAL_EPOCHS // 4
+WARMUP_FRACTION = 0.0667  # changed from 20 warmup epochs / 300 total
 
 MAE_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
@@ -83,8 +91,8 @@ def build_model_config(common: CommonComponents) -> MAEConfig:
     )
     reconstructor_config = ReconstructorConfig(
         supported_modality_names=common.training_modalities,
-        embedding_size=ENCODER_EMBEDDING_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
+        decoder_config=decoder_config,
     )
     model_config = MAEConfig(
         encoder_config=encoder_config,
@@ -117,7 +125,7 @@ def build_train_module_config(
         }
     )
     token_exit_cfg = {modality: 4 for modality in common.training_modalities}
-    WARMUP_EPOCHS = 2
+    WARMUP_EPOCHS = int(TOTAL_EPOCHS * WARMUP_FRACTION)
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
@@ -165,8 +173,12 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
+    if USE_4_X_128_DATASET:
+        dataset_path = "/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892"
+    else:
+        dataset_path = "/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/"
     return HeliosDatasetConfig(
-        h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
+        h5py_dir=dataset_path,
         training_modalities=common.training_modalities,
         dtype="float32",
         # cache_dir="/helios_cache/osm_sampling",
@@ -176,7 +188,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(300)
+    MAX_DURATION = Duration.epochs(TOTAL_EPOCHS)
     METRICS_COLLECT_INTERVAL = 1
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
@@ -334,6 +346,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
+        .with_callback("beaker", BeakerCallback())
     )
     return trainer_config
 
