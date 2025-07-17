@@ -12,7 +12,8 @@ COPY ./rslearn /opt/rslearn
 COPY ./rslearn_projects /opt/rslearn_projects/
 COPY requirements.txt /opt/helios/requirements.txt
 
-RUN pip install --no-cache-dir --upgrade /opt/rslearn[extra]
+RUN pip install --upgrade pip
+RUN pip install --no-cache-dir /opt/rslearn[extra]
 RUN pip install /opt/helios
 RUN pip install --no-cache-dir /opt/rslearn_projects
 
