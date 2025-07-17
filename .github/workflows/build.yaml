@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: allenai/rslearn
-          ref: yawenz/classification_output_geotiff
+          ref: josh/yawenz/classification_output_geotiff
           path: rslearn
 
       - name: Checkout rslearn_projects
