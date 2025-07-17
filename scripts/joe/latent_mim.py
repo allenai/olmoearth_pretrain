@@ -108,7 +108,7 @@ def build_train_module_config(
         ),
         loss_config=LossConfig(
             loss_config={
-                "type": "patch_discrimination_new",
+                "type": "all_discrimination",
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
@@ -174,7 +174,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             "wandb",
             HeliosWandBCallback(
                 name=common.run_name,
-                project="v0.2_sweep",
+                project="helios-joer",
                 entity="eai-ai2",  # nosec
                 enabled=True,  # set to False to avoid wandb errors
             ),
