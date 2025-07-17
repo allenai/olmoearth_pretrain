@@ -100,7 +100,7 @@ def build_train_module_config(
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "cross_random",
+                "type": "modality_cross_random",
                 "encode_ratio": 0.75,
                 "decode_ratio": 0.25,
                 "allow_encoding_decoding_same_bandset": True,
