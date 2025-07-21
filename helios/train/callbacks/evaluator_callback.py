@@ -17,11 +17,32 @@ from helios.evals.datasets.configs import DATASET_TO_CONFIG, TaskType
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
 from helios.evals.knn import run_knn
-from helios.evals.linear_probe import train_and_eval_probe
+from helios.evals.linear_probe import ProbeType, train_and_eval_probe
 from helios.nn.flexihelios import PoolingType
 from helios.train.callbacks.wandb import HeliosWandBCallback
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DownstreamTaskConfig:
+    """Config for a downstream task."""
+
+    dataset: str
+    embedding_batch_size: int = 128
+    num_workers: int = 8
+    pooling_type: PoolingType = PoolingType.MEAN
+    norm_stats_from_pretrained: bool = True
+    input_modalities: list[str] = field(default_factory=list)
+    # Sweep across lrs for segmentation tasks
+    probe_lr: float | None = None
+    patch_size: int = 4
+    probe_batch_size: int = 32
+    epochs: int = 50  # Number of training epochs for linear probing task
+    eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
+    eval_mode: str | None = None
+    probe_type: str = "linear"
+    partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
 
 
 class DownstreamEvaluator:
@@ -30,68 +51,50 @@ class DownstreamEvaluator:
     def __init__(
         self,
         evaluation_name: str,
-        dataset: str,
+        task: DownstreamTaskConfig,
         trainer: Trainer,
-        eval_interval: Duration,
-        embedding_batch_size: int,
-        probe_batch_size: int,
-        num_workers: int = 8,
-        patch_size: int = 4,
-        epochs: int = 50,
-        pooling_type: PoolingType = PoolingType.MEAN,
-        norm_stats_from_pretrained: bool = True,
         device: torch.device | None = None,
-        probe_lr: float | None = None,
-        input_modalities: list[str] = field(default_factory=list),
-        eval_mode: str | None = None,
-        partition: str = "default",
     ) -> None:
         """Initialize the downstream evaluator.
 
         Args:
             evaluation_name: Name of the evaluation.
-            dataset: Dataset to evaluate on.
+            task: Task configuration.
             trainer: Trainer object.
-            eval_interval: Interval to evaluate on.
-            embedding_batch_size: Batch size for embedding.
-            probe_batch_size: Batch size for probe.
-            num_workers: Number of workers.
-            patch_size: Patch size.
-            epochs: Number of epochs for linear probing.
-            pooling_type: Pooling type.
-            norm_stats_from_pretrained: Whether to use normalized stats from pretrained model.
             device: Device to evaluate on.
-            probe_lr: Learning rate for probe.
-            input_modalities: Input modalities, only used for multimodal tasks.
-            eval_mode: whether to use knn or linear probe. Defaults to KNN for classification
-                and linear probe for segmentation. Only classification is supported by KNN
-            partition: Partition to use for evaluation.
         """
         self.evaluation_name = evaluation_name
-        self.dataset = dataset
-        self.config = DATASET_TO_CONFIG[dataset]
-        self.eval_interval = eval_interval
+        self.config = DATASET_TO_CONFIG[task.dataset]
         self.trainer = trainer
         self.device = device
-        self.embedding_batch_size = embedding_batch_size
-        self.probe_batch_size = probe_batch_size
-        self.num_workers = num_workers
-        self.pooling_type = pooling_type
-        self.norm_stats_from_pretrained = norm_stats_from_pretrained
-        self.probe_lr = probe_lr
-        self.patch_size = patch_size
-        self.input_modalities = input_modalities
-        self.epochs = epochs
-        self.partition = partition
+        # Add all task attributes to self
+        self.dataset = task.dataset
+        self.embedding_batch_size = task.embedding_batch_size
+        self.num_workers = task.num_workers
+        self.pooling_type = task.pooling_type
+        self.norm_stats_from_pretrained = task.norm_stats_from_pretrained
+        self.input_modalities = task.input_modalities
+        self.probe_lr = task.probe_lr
+        self.patch_size = task.patch_size
+        self.probe_batch_size = task.probe_batch_size
+        self.epochs = task.epochs
+        self.eval_interval = task.eval_interval
+        self.eval_mode = task.eval_mode
+        self.probe_type = task.probe_type
+        self.partition = task.partition
 
-        if eval_mode is None:
-            eval_mode = (
+        if self.eval_mode is None:
+            self.eval_mode = (
                 "knn"
                 if self.config.task_type == TaskType.CLASSIFICATION
                 else "linear_probe"
             )
-        assert eval_mode in ["knn", "linear_probe"], f"Unexpected eval mode {eval_mode}"
-        if eval_mode == "linear_probe":
+
+        assert self.eval_mode in [
+            "knn",
+            "linear_probe",
+        ], f"Unexpected eval mode {self.eval_mode}"
+        if self.eval_mode == "linear_probe":
             if self.probe_lr is None:
                 raise ValueError("probe_lr cannot be none for segmentation tasks.")
             if self.config.task_type == TaskType.SEGMENTATION:
@@ -103,10 +106,13 @@ class DownstreamEvaluator:
                     raise ValueError("Image height / width indivisable by patch size.")
         self.eval_function = (
             run_knn
-            if eval_mode == "knn"
+            if self.eval_mode == "knn"
             else partial(
                 train_and_eval_probe,
                 batch_size=self.probe_batch_size,
+                epochs=self.epochs,
+                eval_interval=self.eval_interval.value,
+                probe_type=self.probe_type,
                 lr=self.probe_lr,
                 patch_size=self.patch_size,
             )
@@ -137,6 +143,7 @@ class DownstreamEvaluator:
             model=self.trainer.train_module.model.encoder,
             patch_size=self.patch_size,
             pooling_type=self.pooling_type,
+            concat_features=(self.probe_type == ProbeType.ATTNPOOL),
         )
 
     def val(self) -> float:
@@ -239,26 +246,6 @@ class DownstreamEvaluatorCallback(Callback):
 
 
 @dataclass
-class DownstreamTaskConfig:
-    """Config for a downstream task."""
-
-    dataset: str
-    embedding_batch_size: int = 128
-    num_workers: int = 8
-    pooling_type: PoolingType = PoolingType.MEAN
-    norm_stats_from_pretrained: bool = True
-    input_modalities: list[str] = field(default_factory=list)
-    # Sweep across lrs for segmentation tasks
-    probe_lr: float | None = None
-    patch_size: int = 4
-    probe_batch_size: int = 32
-    epochs: int = 50  # Number of training epochs for linear probing task
-    eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
-    eval_mode: str | None = None
-    partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
-
-
-@dataclass
 class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     """Config for the downstream evaluator callback."""
 
@@ -303,21 +290,9 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             evaluators.append(
                 DownstreamEvaluator(
                     evaluation_name=evaluation_name,
-                    dataset=task.dataset,
+                    task=task,
                     trainer=trainer,
-                    embedding_batch_size=task.embedding_batch_size,
-                    probe_batch_size=task.probe_batch_size,
-                    num_workers=task.num_workers,
-                    pooling_type=task.pooling_type,
-                    norm_stats_from_pretrained=task.norm_stats_from_pretrained,
-                    input_modalities=task.input_modalities,
                     device=trainer.device,
-                    probe_lr=task.probe_lr,
-                    patch_size=task.patch_size,
-                    eval_interval=task.eval_interval,
-                    epochs=task.epochs,
-                    eval_mode=task.eval_mode,
-                    partition=task.partition,
                 )
             )
         return DownstreamEvaluatorCallback(
