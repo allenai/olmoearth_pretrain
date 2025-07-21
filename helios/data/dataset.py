@@ -259,9 +259,9 @@ class HeliosSample(NamedTuple):
                 num_bands,
             )
         elif modality_spec.is_time_only_varying:
-            return (1, 1, self.time, num_bands)
+            return (self.time, num_bands)
         else:
-            return (1, 1, 1, num_bands)
+            return (num_bands,)
 
     def _get_max_t_within_token_budget(
         self, h_w_p: int, max_tokens_per_instance: int
@@ -621,27 +621,29 @@ class HeliosDataset(Dataset):
         logger.info(f"columns: {metadata_df.columns}")
 
         # Get the indices of samples that don't have any training modalities that are
-        # multi-temporal. We want to remove these samples.
-        multitemporal_training_modalities = [
+        # spacetime varying. We want to remove these samples.
+        spacetime_varying_training_modalities = [
             modality
             for modality in self.training_modalities
-            if Modality.get(modality).is_multitemporal
+            if Modality.get(modality).is_spacetime_varying
         ]
-        if len(multitemporal_training_modalities) == 0:
-            raise ValueError("no multi-temporal modalities are specified for training")
-        no_multitemporal_indices = metadata_df[
-            metadata_df[multitemporal_training_modalities].sum(axis=1) == 0
+        if len(spacetime_varying_training_modalities) == 0:
+            raise ValueError(
+                "no spacetime varying modalities are specified for training"
+            )
+        no_spacetime_varying_indices = metadata_df[
+            metadata_df[spacetime_varying_training_modalities].sum(axis=1) == 0
         ].index
 
         # Filter these indices out
         logger.info(
-            f"Filtering out {len(no_multitemporal_indices)} samples without any training modalities"
+            f"Filtering out {len(no_spacetime_varying_indices)} samples without any training modalities"
         )
         self.sample_indices = np.setdiff1d(
-            self.sample_indices, no_multitemporal_indices
+            self.sample_indices, no_spacetime_varying_indices
         )
         logger.info(
-            f"Filtered {len(no_multitemporal_indices)} samples to {self.sample_indices.shape} samples"
+            f"Filtered {len(no_spacetime_varying_indices)} samples to {self.sample_indices.shape} samples"
         )
 
     def prepare(self) -> None:

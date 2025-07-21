@@ -122,8 +122,8 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
     )
     raster_format.encode_raster(
         path=year_dst_fname.parent,
-        projection=window.projection,
-        bounds=window.bounds,
+        projection=adjusted_projection,
+        bounds=adjusted_bounds,
         array=year_stacked_image,
         fname=year_dst_fname.name,
     )
@@ -158,8 +158,8 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
     )
     raster_format.encode_raster(
         path=two_week_dst_fname.parent,
-        projection=window.projection,
-        bounds=window.bounds,
+        projection=adjusted_projection,
+        bounds=adjusted_bounds,
         array=two_week_image,
         fname=two_week_dst_fname.name,
     )

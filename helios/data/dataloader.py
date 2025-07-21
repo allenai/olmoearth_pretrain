@@ -340,7 +340,9 @@ class HeliosDataLoader(DataLoaderBase):
             )
             output_dict["gse"] = mock_gse
         if Modality.ERA5_10.name in self.dataset.training_modalities:
-            mock_era5_10 = rng.random((12, 6), dtype=np.float32)
+            mock_era5_10 = rng.random(
+                (12, Modality.ERA5_10.num_bands), dtype=np.float32
+            )
             output_dict["era5_10"] = mock_era5_10
 
         days = rng.integers(0, 25, (12, 1))

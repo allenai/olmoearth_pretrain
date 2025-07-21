@@ -1,4 +1,8 @@
-"""Compute the normalization stats for a given dataset."""
+"""Compute the normalization stats for a given dataset.
+
+Example usage:
+    python /weka/dfive-default/yawenz/helios/helios/internal/compute_h5_norm.py --h5py_dir /weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469736 --supported_modalities "era5_10,landsat,naip_10,sentinel1,sentinel2_l2a,srtm,worldcover" --estimate_from 100 --output_path /weka/dfive-default/yawenz/helios/data/norm_configs/computed_20250722.json
+"""
 
 import argparse
 import json
@@ -9,7 +13,11 @@ from typing import Any
 from olmo_core.utils import prepare_cli_environment
 from tqdm import tqdm
 
-from helios.data.constants import IMAGE_TILE_SIZE, MISSING_VALUE, Modality
+from helios.data.constants import (
+    IMAGE_TILE_SIZE,
+    MISSING_VALUE,
+    Modality,
+)
 from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosDatasetConfig
 from helios.data.utils import update_streaming_stats
 
@@ -47,9 +55,10 @@ def compute_normalization_values(
             modality_bands = modality_spec.band_order
             if modality_data is None:
                 continue
-            if (modality_data == MISSING_VALUE).all():
+            # To avoid the case where we include missing values in the stats
+            if (modality_data == MISSING_VALUE).any():
                 logger.info(
-                    f"Skipping modality {i} because modality {modality} has no valid data"
+                    f"Skipping sample {i} because modality {modality} contains missing values."
                 )
                 continue
             if modality not in norm_dict:
@@ -63,7 +72,7 @@ def compute_normalization_values(
                     }
             # Compute the normalization stats for the modality
             for idx, band in enumerate(modality_bands):
-                modality_band_data = modality_data[:, :, :, idx]  # (H, W, T, C)
+                modality_band_data = modality_data[..., idx]
                 current_stats = norm_dict[modality][band]
                 new_count, new_mean, new_var = update_streaming_stats(
                     current_stats["count"],
@@ -72,9 +81,9 @@ def compute_normalization_values(
                     modality_band_data,
                 )
                 # Update the normalization stats
-                norm_dict[modality][band]["count"] = new_count
-                norm_dict[modality][band]["mean"] = new_mean
-                norm_dict[modality][band]["var"] = new_var
+                norm_dict[modality][band]["count"] = int(new_count)
+                norm_dict[modality][band]["mean"] = float(new_mean)
+                norm_dict[modality][band]["var"] = float(new_var)
 
     # Compute the standard deviation
     for modality in norm_dict:
@@ -114,7 +123,7 @@ if __name__ == "__main__":
     # Use the config to build the dataset
     dataset_config = HeliosDatasetConfig(
         h5py_dir=args_dict["h5py_dir"],
-        supported_modality_names=supported_modalities,
+        training_modalities=supported_modalities,
         normalize=False,
     )
     dataset = dataset_config.build()
@@ -129,7 +138,3 @@ if __name__ == "__main__":
 
     with open(args_dict["output_path"], "w") as f:
         json.dump(norm_dict, f)
-
-    # Example usage:
-    # 20250304 run:
-    # python3 compute_norm.py --tile_path "/weka/dfive-default/helios/dataset/presto" --supported_modalities "sentinel2_l2a,sentinel1,worldcover" --output_path "/weka/dfive-default/yawenz/helios/data/norm_configs/computed_20250304.json"
