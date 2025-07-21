@@ -53,6 +53,7 @@ class HeliosSample(NamedTuple):
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
     # Unsure what the shapes should be for this one
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
+    gse: ArrayTensor | None = None  # [B, H, W, 1, len(GSE_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
