@@ -103,6 +103,7 @@ def build_train_module_config(
                     Modality.OPENSTREETMAP_RASTER.name,
                     Modality.WORLDCOVER.name,
                     Modality.SRTM.name,
+                    Modality.ERA5_10.name,
                 ],
             }
         ),
