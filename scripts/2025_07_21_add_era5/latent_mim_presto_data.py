@@ -26,7 +26,12 @@ from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
+from helios.internal.experiment import (
+    CommonComponents,
+    HeliosVisualizeConfig,
+    SubCmd,
+    main,
+)
 from helios.internal.utils import MODEL_SIZE_ARGS
 from helios.nn.flexihelios import (
     EncoderConfig,
@@ -46,8 +51,30 @@ from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
-MAX_PATCH_SIZE = 8
+MAX_PATCH_SIZE = 1
 MIN_PATCH_SIZE = 1
+
+
+def my_build_common_components(
+    script: str,
+    cmd: SubCmd,
+    run_name: str,
+    cluster: str,
+    overrides: list[str],
+) -> CommonComponents:
+    """Build the common components for an experiment."""
+    config = build_common_components(script, cmd, run_name, cluster, overrides)
+    config.training_modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.WORLDCOVER.name,
+        Modality.LATLON.name,
+        Modality.SRTM.name,
+        Modality.LANDSAT.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+        # Modality.ERA5_10.name,
+    ]
+    return config
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -91,19 +118,17 @@ def build_train_module_config(
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         warmup_duration=Duration.steps(8000),
-        rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
+        rank_microbatch_size=64,
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "modality_cross_random",
+                "type": "random_fixed_modality",
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
-                "allow_encoding_decoding_same_bandset": True,
-                "min_decoded_bandsets": 6,
-                "only_decode_modalities": [
-                    Modality.OPENSTREETMAP_RASTER.name,
+                "decoded_modalities": [
                     Modality.WORLDCOVER.name,
                     Modality.SRTM.name,
-                    Modality.ERA5_10.name,
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    # Modality.ERA5_10.name,
                 ],
             }
         ),
@@ -146,7 +171,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     dataset_configs = [
         # presto
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892",
+            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469728",
             training_modalities=common.training_modalities,
         ),
     ]
@@ -155,7 +180,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(75)
+    MAX_DURATION = Duration.epochs(300)
     METRICS_COLLECT_INTERVAL = 10
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
@@ -180,6 +205,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.steps(4000),
+            patch_size=1,
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
@@ -192,6 +218,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
+            patch_size=1,
         ),
     }
     trainer_config = (
@@ -238,7 +265,7 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
 
 if __name__ == "__main__":
     main(
-        common_components_builder=build_common_components,
+        common_components_builder=my_build_common_components,
         model_config_builder=build_model_config,
         train_module_config_builder=build_train_module_config,
         dataset_config_builder=build_dataset_config,

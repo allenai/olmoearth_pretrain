@@ -102,11 +102,7 @@ def update_streaming_stats(
     Returns:
         Updated count, mean, and variance for the modality band.
     """
-    band_data_count = (
-        modality_band_data.shape[-3]
-        * modality_band_data.shape[-2]
-        * modality_band_data.shape[-1]
-    )  # modality shape: (H, W, T)
+    band_data_count = np.prod(modality_band_data.shape)
 
     # Compute updated mean and variance with the new batch of data
     # Reference: https://www.geeksforgeeks.org/expression-for-mean-and-variance-in-a-running-stream/

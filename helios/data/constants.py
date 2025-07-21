@@ -23,6 +23,12 @@ MISSING_VALUE = -99999
 # Default maximum sequence length.
 MAX_SEQUENCE_LENGTH = 12
 
+# Default nodata value for Sentinel-1 data.
+SENTINEL1_NODATA = -32768
+
+# Number of timesteps for YEAR data.
+YEAR_NUM_TIMESTEPS = 12
+
 
 def get_resolution(resolution_factor: int) -> float | int:
     """Compute the resolution.
@@ -390,7 +396,7 @@ class Modality:
 
     ERA5_10 = ModalitySpec(
         name="era5_10",
-        # 9 km/pixel bands that we store at 2.5 km/pixel.
+        # 9 km/pixel bands that we store at 2.56 km/pixel.
         tile_resolution_factor=16,
         band_sets=[
             BandSet(

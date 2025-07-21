@@ -91,6 +91,8 @@ class TokensAndMasks(NamedTuple):
     naip_mask: Tensor | None = None
     naip_10: Tensor | None = None
     naip_10_mask: Tensor | None = None
+    era5_10: Tensor | None = None
+    era5_10_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
@@ -348,7 +350,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
 
         # I likely will need to know about what the embedding strategy is in the forward as well
         # Static modality
-        if modality_spec.get_tile_resolution() == 0:
+        if not modality_spec.is_spatial:
             # static in space
             return nn.ModuleDict(
                 {
