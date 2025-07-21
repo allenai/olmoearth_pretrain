@@ -164,8 +164,8 @@ class ConvertToH5py:
         """Process a sample into an h5 file."""
         i, (sublock_index, sample) = index_sample_tuple
         h5_file_path = self._get_h5_file_path(i)
-        if h5_file_path.exists():
-            return
+        # if h5_file_path.exists():
+        #     return
         self._create_h5_file(sample, h5_file_path, sublock_index)
 
     def create_h5_dataset(self, samples: list[tuple[int, SampleInformation]]) -> None:
@@ -316,6 +316,12 @@ class ConvertToH5py:
                 logger.info(f"Image shape: {image.shape}")
                 image = image[row : row + tile_size, col : col + tile_size, ...]
                 logger.info(f"Image shape after slicing: {image.shape}")
+
+            if np.all(image == 0):
+                logger.warning(
+                    f"Image for modality {modality.name} is all zeros, skipping this modality"
+                )
+                continue
             sample_dict[modality.name] = image
 
         # w+b as sometimes metadata needs to be read as well for different chunking/compression settings
@@ -470,8 +476,15 @@ class ConvertToH5py:
 
         if image.ndim == 4:
             modality_data = rearrange(image, "t c h w -> h w t c")
-        else:
+        elif image.ndim == 3:
             modality_data = rearrange(image, "c h w -> h w c")
+        elif image.ndim == 2:
+            # It is already in the correct shape (t, c)
+            modality_data = image
+        else:
+            raise ValueError(
+                f"Unexpected image shape {image.shape} for modality {sample_modality.modality.name}"
+            )
         return modality_data
 
     def _filter_samples(

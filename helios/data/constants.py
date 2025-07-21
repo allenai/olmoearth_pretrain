@@ -153,10 +153,18 @@ class ModalitySpec:
         """
         return sum(len(band_set.bands) for band_set in self.band_sets)
 
+    def get_expected_tile_size(self) -> int:
+        """Get the expected size of the tile."""
+        if self.image_tile_size_factor < 0:
+            return IMAGE_TILE_SIZE // abs(self.image_tile_size_factor)
+        else:
+            return IMAGE_TILE_SIZE * self.image_tile_size_factor
+
     @property
     def is_spatial(self) -> bool:
         """Does the modality have spatial data."""
-        return self.get_tile_resolution() > 0
+        # Tile size must be greater than 1 to have spatial varying data.
+        return self.get_tile_resolution() > 0 and self.get_expected_tile_size() > 1
 
     @property
     def is_spacetime_varying(self) -> bool:
@@ -361,6 +369,7 @@ class Modality:
 
     ERA5 = ModalitySpec(
         name="era5",
+        # 9 km/pixel bands that we store at 150 m/pixel.
         tile_resolution_factor=256,
         band_sets=[
             BandSet(
@@ -381,6 +390,7 @@ class Modality:
 
     ERA5_10 = ModalitySpec(
         name="era5_10",
+        # 9 km/pixel bands that we store at 2.5 km/pixel.
         tile_resolution_factor=16,
         band_sets=[
             BandSet(
@@ -392,11 +402,12 @@ class Modality:
                     "10m-v-component-of-wind",
                     "total-precipitation",
                 ],
-                4096,  # 16 * 256
+                4096,
             ),
         ],
         is_multitemporal=True,
         ignore_when_parsing=False,
+        image_tile_size_factor=-256,
     )
 
     LATLON = ModalitySpec(
