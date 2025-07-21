@@ -1384,17 +1384,17 @@ class Encoder(FlexiHeliosBase):
         """
         # TODO: Add step to validate the exit config is valid
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
-        if token_exit_cfg is None or any(
-            [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
-        ):
-            patchified_tokens_and_masks = self.apply_attn(
-                x=patchified_tokens_and_masks,
-                timestamps=x.timestamps,
-                patch_size=patch_size,
-                input_res=input_res,
-                token_exit_cfg=token_exit_cfg,
-                always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
-            )
+        # if token_exit_cfg is None or any(
+        #    [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
+        # ):
+        #    patchified_tokens_and_masks = self.apply_attn(
+        #        x=patchified_tokens_and_masks,
+        #        timestamps=x.timestamps,
+        #        patch_size=patch_size,
+        #        input_res=input_res,
+        #        token_exit_cfg=token_exit_cfg,
+        #        always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+        #    )
         output = TokensAndMasks(**patchified_tokens_and_masks)
         return output, self.project_and_aggregate(output)
 
