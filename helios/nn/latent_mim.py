@@ -93,6 +93,7 @@ class LatentMIM(nn.Module, DistributedMixins):
 
         self.encoder.apply_fsdp(**fsdp_config)
         self.decoder.apply_fsdp(**fsdp_config)
+        self.decoder2.apply_fsdp(**fsdp_config)
         self.target_encoder.apply_fsdp(**fsdp_config)
         self.projector.apply_fsdp(**fsdp_config)
         if self.reconstructor:
