@@ -28,6 +28,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         self,
         encoder: nn.Module,
         decoder: nn.Module,
+        projector: nn.Module,
         reconstructor: torch.nn.Module | None = None,
     ):
         """Initialize the Latent MIM Style.
@@ -35,6 +36,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         Args:
             encoder: The encoder to use.
             decoder: The decoder to use.
+            projector: The projector to use.
             reconstructor: Optional reconstructor for auto-encoding.
         """
         super().__init__()
@@ -43,6 +45,10 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.reconstructor = reconstructor
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
+            p.requires_grad = False
+
+        self.projector = projector
+        for p in self.projector.parameters():
             p.requires_grad = False
 
     def forward(
@@ -102,6 +108,7 @@ class LatentMIMConfig(Config):
     """Configuration for the Latent Predictor."""
 
     encoder_config: Config
+    projector_config: Config
     decoder_config: Config
     reconstructor_config: Config | None = None
 
@@ -130,6 +137,7 @@ class LatentMIMConfig(Config):
         self.validate()
         encoder = self.encoder_config.build()
         decoder = self.decoder_config.build()
+        projector = self.projector_config.build()
         reconstructor = (
             self.reconstructor_config.build()
             if self.reconstructor_config is not None
@@ -138,5 +146,6 @@ class LatentMIMConfig(Config):
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
+            projector=projector,
             reconstructor=reconstructor,
         )

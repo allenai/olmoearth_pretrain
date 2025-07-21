@@ -63,29 +63,38 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
-    encoder_config = EncoderConfig(
-        embedding_size=model_size["encoder_embedding_size"],
-        num_heads=model_size["encoder_num_heads"],
-        depth=model_size["encoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        supported_modality_names=common.training_modalities,
-        max_patch_size=MAX_PATCH_SIZE,
-        min_patch_size=MIN_PATCH_SIZE,
-        drop_path=0.1,
-        max_sequence_length=12,
-    )
-    decoder_config = PredictorConfig(
-        encoder_embedding_size=model_size["encoder_embedding_size"],
-        decoder_embedding_size=model_size["decoder_embedding_size"],
-        depth=model_size["decoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        num_heads=model_size["decoder_num_heads"],
-        supported_modality_names=common.training_modalities,
-        max_sequence_length=12,
-    )
     model_config = LatentMIMConfig(
-        encoder_config=encoder_config,
-        decoder_config=decoder_config,
+        projector_config=EncoderConfig(
+            embedding_size=model_size["encoder_embedding_size"],
+            num_heads=model_size["encoder_num_heads"],
+            depth=0,
+            mlp_ratio=model_size["mlp_ratio"],
+            supported_modality_names=common.training_modalities,
+            max_patch_size=MAX_PATCH_SIZE,
+            min_patch_size=MIN_PATCH_SIZE,
+            drop_path=0.1,
+            max_sequence_length=12,
+        ),
+        encoder_config=EncoderConfig(
+            embedding_size=model_size["encoder_embedding_size"],
+            num_heads=model_size["encoder_num_heads"],
+            depth=model_size["encoder_depth"],
+            mlp_ratio=model_size["mlp_ratio"],
+            supported_modality_names=common.training_modalities,
+            max_patch_size=MAX_PATCH_SIZE,
+            min_patch_size=MIN_PATCH_SIZE,
+            drop_path=0.1,
+            max_sequence_length=12,
+        ),
+        decoder_config=PredictorConfig(
+            encoder_embedding_size=model_size["encoder_embedding_size"],
+            decoder_embedding_size=model_size["decoder_embedding_size"],
+            depth=model_size["decoder_depth"],
+            mlp_ratio=model_size["mlp_ratio"],
+            num_heads=model_size["decoder_num_heads"],
+            supported_modality_names=common.training_modalities,
+            max_sequence_length=12,
+        ),
     )
     return model_config
 

@@ -271,7 +271,13 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
+                target_projection, _ = self.model.projector.forward(
+                    batch.unmask(),
+                    patch_size=patch_size,
+                    token_exit_cfg=token_exit_cfg,
+                )
             loss = self.loss_fn(decoded, target_output)
+            loss += self.loss_fn(decoded, target_projection)
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output
