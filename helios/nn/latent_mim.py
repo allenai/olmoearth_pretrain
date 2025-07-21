@@ -86,11 +86,13 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.encoder.apply_fsdp(**fsdp_config)
         self.decoder.apply_fsdp(**fsdp_config)
         self.target_encoder.apply_fsdp(**fsdp_config)
+        self.projector.apply_fsdp(**fsdp_config)
         if self.reconstructor:
             self.reconstructor.apply_fsdp(**fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
+        register_fsdp_forward_method(self.projector, "forward")
 
     def apply_compile(self) -> None:
         """Apply torch.compile to the model."""
@@ -101,6 +103,8 @@ class LatentMIM(nn.Module, DistributedMixins):
         logger.info("Applied torch.compile to the decoder")
         self.target_encoder.apply_compile()
         logger.info("Applied torch.compile to the target encoder")
+        self.projector.apply_compile()
+        logger.info("Applied torch.compile to the projector")
 
 
 @dataclass
