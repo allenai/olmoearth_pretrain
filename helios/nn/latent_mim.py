@@ -42,6 +42,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
+        self.decoder2 = deepcopy(self.decoder)
         self.reconstructor = reconstructor
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
@@ -53,7 +54,13 @@ class LatentMIM(nn.Module, DistributedMixins):
 
     def forward(
         self, x: MaskedHeliosSample, patch_size: int
-    ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
+    ) -> tuple[
+        TokensAndMasks,
+        TokensAndMasks,
+        torch.Tensor,
+        TokensAndMasks | None,
+        TokensAndMasks | None,
+    ]:
         """Forward pass for the Latent MIM Style.
 
         Returns:
@@ -68,7 +75,8 @@ class LatentMIM(nn.Module, DistributedMixins):
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
         decoded = self.decoder(latent, timestamps=x.timestamps, patch_size=patch_size)
-        return latent, decoded, latent_projected_and_pooled, reconstructed
+        decoded2 = self.decoder2(latent, timestamps=x.timestamps, patch_size=patch_size)
+        return latent, decoded, latent_projected_and_pooled, reconstructed, decoded2
 
     def apply_fsdp(
         self,
