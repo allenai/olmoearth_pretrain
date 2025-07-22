@@ -420,19 +420,18 @@ class HeliosSample(NamedTuple):
         Args:
             num_t: desired number of timesteps to pick. Must be <= the number
                 of timesteps in the HeliosSample.
-        """
-        start_t = np.random.choice(self.time - num_t + 1)
+        """  #
         new_data_dict: dict[str, ArrayTensor] = {}
         for attribute, modality in self.as_dict(ignore_nones=True).items():
             assert modality is not None
             if attribute == "timestamps":
-                new_data_dict[attribute] = modality[:, start_t : start_t + num_t]
+                new_data_dict[attribute] = modality[:, 0:num_t]
                 continue
             modality_spec = Modality.get(attribute)
             if modality_spec.is_spacetime_varying:
-                new_data_dict[attribute] = modality[:, :, :, start_t : start_t + num_t]
+                new_data_dict[attribute] = modality[:, :, :, 0:num_t]
             elif modality_spec.is_time_only_varying:
-                new_data_dict[attribute] = modality[:, start_t : start_t + num_t]
+                new_data_dict[attribute] = modality[:, 0:num_t]
             else:
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
