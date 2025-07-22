@@ -421,7 +421,7 @@ class HeliosSample(NamedTuple):
             num_t: desired number of timesteps to pick. Must be <= the number
                 of timesteps in the HeliosSample.
         """
-        start_t = np.random.choice(self.time - num_t)
+        start_t = np.random.choice(self.time - num_t + 1)
         new_data_dict: dict[str, ArrayTensor] = {}
         for attribute, modality in self.as_dict(ignore_nones=True).items():
             assert modality is not None
