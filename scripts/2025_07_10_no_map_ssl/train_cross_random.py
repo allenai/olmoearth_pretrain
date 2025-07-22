@@ -92,20 +92,20 @@ def build_train_module_config(
     )
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        warmup_duration=Duration.steps(8000),
+        warmup_duration=Duration.steps(1000),
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "random",  # "modality_cross_random",
+                "type": "modality_cross_random",
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
-                # "allow_encoding_decoding_same_bandset": True,
-                # "min_decoded_bandsets": None,
-                # "only_decode_modalities": [
-                #     Modality.OPENSTREETMAP_RASTER.name,
-                #     Modality.WORLDCOVER.name,
-                #     Modality.SRTM.name,
-                # ],
+                "allow_encoding_decoding_same_bandset": True,
+                "min_decoded_bandsets": None,
+                "only_decode_modalities": [
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                ],
             }
         ),
         loss_config=LossConfig(
@@ -162,8 +162,8 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
     MAX_DURATION = Duration.epochs(75)
-    METRICS_COLLECT_INTERVAL = 10
-    CANCEL_CHECK_INTERVAL = 25
+    METRICS_COLLECT_INTERVAL = 1
+    CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "2025_07_10_no_map_ssl"
@@ -301,7 +301,7 @@ def build_common_components_no_maps_ssl(*args: Any) -> CommonComponents:
         run_name=common.run_name,
         save_folder=common.save_folder,
         launch=common.launch,
-        training_modalities=NO_MAPS_SSL_MODALITIES,
+        training_modalities=common.training_modalities,
     )
 
 

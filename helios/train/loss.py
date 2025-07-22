@@ -145,13 +145,25 @@ class PatchDiscriminationLossNew(Loss):
         Returns:
             The computed loss value.
         """
-        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        # make a modality name to index mapping
+        modality_name_to_index = {modality: i for i, modality in enumerate(predictions.modalities)}
+        all_preds, all_masks, flattened_modality_names = predictions.flatten_tokens_and_masks()
         all_targets = targets.flatten_tokens_and_masks()[0]
 
         # Samples may have different number of tokens
         # TODO: Skip unqueeze and the for loop when mask_other_samples is True
         pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
         target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        # filter the flattened_modality_names to only include the modality names for the decoder tokens # using torch
+        batch_size = all_masks.shape[0]
+        # repeat the flattened_modality_names batch_size times
+        flattened_modality_names = repeat(flattened_modality_names, "n -> b n", b=batch_size)
+        logger.info(f"Flattened modality names: {flattened_modality_names.unique()}")
+        logger.info(f"Flattened modality names shape: {flattened_modality_names.shape}")
+        logger.info(f"All masks shape: {all_masks.shape}")
+        flattened_modality_names = flattened_modality_names[all_masks == MaskValue.DECODER.value]
+        logger.info(f"Flattened modality names shape: {flattened_modality_names.shape}")
+        logger.info(f"Modality name to index mapping: {modality_name_to_index}")
         bs, nt, _ = pred.shape
 
         if self.pred2unit:
@@ -165,6 +177,16 @@ class PatchDiscriminationLossNew(Loss):
         count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
         losses = []
         start = 0
+        per_modality_positive_means = {modality: [] for modality in predictions.modalities}
+        per_modality_negative_means = {modality: [] for modality in predictions.modalities}
+        per_modality_positive_mins = {modality: [] for modality in predictions.modalities}
+        per_modality_positive_maxs = {modality: [] for modality in predictions.modalities}
+        per_modality_negative_mins = {modality: [] for modality in predictions.modalities}
+        per_modality_negative_maxs = {modality: [] for modality in predictions.modalities}
+        intra_modality_negative_means = {modality: [] for modality in predictions.modalities}
+        intra_modality_negative_mins = {modality: [] for modality in predictions.modalities}
+        intra_modality_negative_maxs = {modality: [] for modality in predictions.modalities}
+        # I also want to record and track the predicted similarities for all the modality combinations
         for c in count:
             end = start + c
             if c == 0:
@@ -173,20 +195,110 @@ class PatchDiscriminationLossNew(Loss):
                 continue
             pred_sample = pred[:, start:end, :]
             target_sample = target[:, start:end, :]
+            flattened_modality_names_sample = flattened_modality_names[start:end]
+            logger.info(f"Flattened modality names sample shape: {flattened_modality_names_sample.shape}")
             score_sample = (
                 torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
             )
+            logger.info(f"Score sample shape: {score_sample.shape}")
             labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
             loss = F.cross_entropy(
                 score_sample.flatten(0, 1),
                 labels.flatten(0, 1),
                 reduction="none",
             ) * (self.tau * 2)
+            logger.info(f"Loss sample shape: {loss.shape}")
             loss = loss.mean()
             losses.append(loss)
             start = end
+            with torch.no_grad():
+                score_sample = score_sample.detach()
+                # First intra modality similarity of preds and targets
+                for modality in predictions.modalities:
+                    logger.info(f"Modality: {modality}")
+                    # Get the index of the modality
+                    modality_index = modality_name_to_index[modality]
+                    modality_mask = flattened_modality_names_sample == modality_index
+                    logger.info(f"Modality mask shape: {modality_mask.shape}")
+                    # get how many tokens are in the modality
+                    modality_count = modality_mask.sum()
+                    if modality == "latlon":
+                        continue
+                    if modality_count == 0:
+                        logger.warning(f"No decoded tokens for modality: {modality}")
+                        continue
+                    logger.info(f"Modality count: {modality_count}")
+                    modality_mask = modality_mask.unsqueeze(0)
+                    # Get the score sample for the modality
+                    # get the product of the modality mask and itself so it is a 2d mask
+                    modality_mask_2d = torch.einsum("bn,bm->bnm", modality_mask, modality_mask)
+                    positive_mask_modality = torch.eye(modality_mask.shape[1], dtype=torch.bool, device=pred.device)[None]
+                    negative_mask_modality = ~positive_mask_modality
+                    # I want to get a mask of negatives from other modalities compared with this modality
+                    intra_modality_mask = torch.einsum("bn,bm->bnm", torch.ones_like(modality_mask), modality_mask) & ~modality_mask_2d
+                    logger.info(f"Intra modality mask shape: {intra_modality_mask.shape}")
+                    intra_modality_negative_scores = score_sample[intra_modality_mask]
+                    logger.info(f"Intra modality negative scores shape: {intra_modality_negative_scores.shape}")
+                    # get the mean median and std min and max of the intra modality negative scores
+                    intra_modality_negative_mean = intra_modality_negative_scores.mean()
+                    intra_modality_negative_min = intra_modality_negative_scores.min()
+                    intra_modality_negative_max = intra_modality_negative_scores.max()
+                    logger.info(f"Intra modality negative mean: {intra_modality_negative_mean} min: {intra_modality_negative_min} max: {intra_modality_negative_max}")
+                    intra_modality_negative_means[modality].append(intra_modality_negative_mean)
+                    intra_modality_negative_mins[modality].append(intra_modality_negative_min)
+                    intra_modality_negative_maxs[modality].append(intra_modality_negative_max)
+
+                    positive_scores_modality = score_sample[modality_mask_2d & positive_mask_modality]
+                    negative_scores_modality = score_sample[modality_mask_2d & negative_mask_modality]
+                    # get the mean median and std min and max of the positive and negative scores
+                    positive_mean = positive_scores_modality.mean()
+                    positive_median = positive_scores_modality.median()
+                    positive_std = positive_scores_modality.std()
+                    positive_min = positive_scores_modality.min()
+                    positive_max = positive_scores_modality.max()
+                    logger.info(f"Positive mean: {positive_mean} median: {positive_median} std: {positive_std} min: {positive_min} max: {positive_max}")
+                    negative_mean = negative_scores_modality.mean()
+                    negative_median = negative_scores_modality.median()
+                    negative_std = negative_scores_modality.std()
+                    negative_min = negative_scores_modality.min()
+                    negative_max = negative_scores_modality.max()
+                    logger.info(f"Negative mean: {negative_mean} median: {negative_median} std: {negative_std} min: {negative_min} max: {negative_max}")
+                    per_modality_positive_means[modality].append(positive_mean)
+                    per_modality_negative_means[modality].append(negative_mean)
+                    per_modality_positive_mins[modality].append(positive_min)
+                    per_modality_positive_maxs[modality].append(positive_max)
+                    per_modality_negative_mins[modality].append(negative_min)
+                    per_modality_negative_maxs[modality].append(negative_max)
+
+        # For each dictionary from above I want to take the mean of th list of values
+        for modality in predictions.modalities:
+            per_modality_positive_means[modality] = torch.tensor(per_modality_positive_means[modality]).mean()
+            per_modality_negative_means[modality] = torch.tensor(per_modality_negative_means[modality]).mean()
+            per_modality_positive_mins[modality] = torch.tensor(per_modality_positive_mins[modality]).mean()
+            per_modality_positive_maxs[modality] = torch.tensor(per_modality_positive_maxs[modality]).mean()
+            per_modality_negative_mins[modality] = torch.tensor(per_modality_negative_mins[modality]).mean()
+            per_modality_negative_maxs[modality] = torch.tensor(per_modality_negative_maxs[modality]).mean()
+            intra_modality_negative_means[modality] = torch.tensor(intra_modality_negative_means[modality]).mean()
+            intra_modality_negative_mins[modality] = torch.tensor(intra_modality_negative_mins[modality]).mean()
+            intra_modality_negative_maxs[modality] = torch.tensor(intra_modality_negative_maxs[modality]).mean()
+        similarities_dict = {
+            "inter_modality_positive_means": per_modality_positive_means,
+            "inter_modality_negative_means": per_modality_negative_means,
+            "inter_modality_positive_mins": per_modality_positive_mins,
+            "inter_modality_positive_maxs": per_modality_positive_maxs,
+            "inter_modality_negative_mins": per_modality_negative_mins,
+            "inter_modality_negative_maxs": per_modality_negative_maxs,
+            "intra_modality_negative_means": intra_modality_negative_means,
+            "intra_modality_negative_mins": intra_modality_negative_mins,
+            "intra_modality_negative_maxs": intra_modality_negative_maxs
+        }
+        # I want to plot the mean min max of how similar the positives are over time
+
+        # I also want to plot the mean min max of how similar the negatives are over time both within and across modalities
+
+        # I want to make a confusion matrix of the predictions and targets to basically just see how those change over time
         loss = torch.stack(losses).mean()
-        return self.weight * loss
+        return self.weight * loss, similarities_dict
 
 
 @LOSS_REGISTRY.register("patch_discrimination")

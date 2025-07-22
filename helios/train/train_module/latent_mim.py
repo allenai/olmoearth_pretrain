@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
+import torch.nn.functional as F
 from olmo_core.distributed.parallel import DataParallelConfig
 from olmo_core.distributed.utils import get_local_rank, get_local_tensor
 from olmo_core.optim import OptimConfig
@@ -23,7 +24,10 @@ from helios.train.train_module.train_module import (
     HeliosTrainModule,
     HeliosTrainModuleConfig,
 )
+import itertools
 from helios.train.utils import split_batch
+from einops import rearrange
+import time
 
 logger = getLogger(__name__)
 
@@ -206,6 +210,8 @@ class LatentMIMTrainModule(HeliosTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         patch_size, batch_data = batch
+        # log the patch size
+        logger.info(f"Patch size: {patch_size}")
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
         num_microbatches = len(microbatches)
@@ -220,8 +226,167 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 )
                 # Run Encoder and decoder on the augmented input
                 loss, latent, decoded, target_output = self.model_forward(
-                    masked_batch, patch_size, self.token_exit_cfg
+                    masked_batch, patch_size, self.token_exit_cfg, dry_run
                 )
+                if not dry_run:
+                    pass
+                    # with torch.no_grad():
+                        # # Understand intramodal similarity within a sample
+                        # for modality in target_output.modalities:
+                        #     if modality == "latlon":
+                        #         continue
+                        #     data = getattr(target_output, modality)
+                        #     if data is None:
+                        #         continue
+                        #     # logger.info(f"Target output modality {modality} has shape {data.shape}")
+                        #     batch_size = data.shape[0]
+                        #     mean_sims = []
+                        #     min_sims = []
+                        #     max_sims = []
+                        #     num_high_sims = []
+                        #     num_very_high_sims = []
+                        #     batch_total_sim = 0
+                        #     for i in range(batch_size):
+                        #         data_i = data[i]
+                        #         data_i = data_i.unsqueeze(0)
+                        #         data_i = rearrange(data_i, "b ... d -> b (...) d")
+                        #         # similarity distributions of all the different token embeddings
+                        #         emb_norm = F.normalize(data_i, p=2, dim=-1)
+                        #         emb_sim = torch.einsum("b n d, b m d -> b n m", emb_norm, emb_norm)
+                        #         logger.info(f"Embedding similarity matrix shape: {emb_sim.shape}")
+
+                        #         # The diagonal of the similarity matrix should be 1 so we don't want to include it in the analysis we want to just filter it out
+                        #         emb_sim = emb_sim[..., torch.eye(emb_sim.shape[-1]) == 0]
+                        #         logger.info(f"Embedding similarity matrix shape after removing the diagonal: {emb_sim.shape}")
+                        #         # Get mean median and std of the similarity
+                        #         mean_sim = emb_sim.mean()
+                        #         median_sim = emb_sim.median()
+                        #         std_sim = emb_sim.std()
+                        #         mean_sims.append(mean_sim)
+                        #         logger.info(f"Mean similarity: {mean_sim}, Median similarity: {median_sim}, Std similarity: {std_sim}")
+                        #         # log the min and max of the similarity
+                        #         min_sim = emb_sim.min()
+                        #         max_sim = emb_sim.max()
+                        #         min_sims.append(min_sim)
+                        #         max_sims.append(max_sim)
+                        #         # logger.info(f"Min similarity: {min_sim}, Max similarity: {max_sim}")
+                        #         # count the number of similarities that are greater than 0.9
+                        #         total_sim = emb_sim.numel()
+                        #         batch_total_sim += total_sim
+                        #         num_high_sim = (emb_sim > 0.9).sum()
+                        #         # logger.info(f"Number of similarities greater than 0.9: {num_high_sim} out of {total_sim}")
+                        #         num_very_high_sim = (emb_sim > 0.95).sum()
+                        #         num_very_high_sims.append(num_very_high_sim)
+                        #         # logger.info(f"Number of similarities greater than 0.95: {num_very_high_sim} out of {total_sim}")
+                        #         # log 75 and 90 and 95th percentile of the similarity
+                        #         seventy_fifth_percentile = torch.quantile(emb_sim.float(), 0.75)
+                        #         ninety_percentile = torch.quantile(emb_sim.float(), 0.9)
+                        #         ninety_fifth_percentile = torch.quantile(emb_sim.float(), 0.95)
+                        #         # logger.info(f"75th percentile similarity: {seventy_fifth_percentile}, 90th percentile similarity: {ninety_percentile}, 95th percentile similarity: {ninety_fifth_percentile}")
+                        #     # Get the mean of the lists
+                        #     mean_sims = torch.tensor(mean_sims).mean()
+                        #     min_sims = torch.tensor(min_sims).mean()
+                        #     max_sims = torch.tensor(max_sims).mean()
+                        #     num_very_high_sims = torch.tensor(num_very_high_sims).float().sum()
+                        #     percent_very_high_sims = num_very_high_sims / batch_total_sim
+                        #     logger.info(f"Mean similarity: {mean_sims}, Min similarity: {min_sims}, Max similarity: {max_sims}, Number of similarities greater than 0.95: {num_very_high_sims} out of {batch_total_sim} total similarities for modality {modality} at percent {percent_very_high_sims}")
+                        #     self.trainer.record_metric(
+                        #         f"similarity/random_proj_{modality}_mean_sim",
+                        #         mean_sims,
+                        #         ReduceType.mean,
+                        #     )
+                        #     self.trainer.record_metric(
+                        #         f"similarity/random_proj_{modality}_min_sim",
+                        #         min_sims,
+                        #         ReduceType.mean,
+                        #     )
+                        #     self.trainer.record_metric(
+                        #         f"similarity/random_proj_{modality}_percent_very_high_sims",
+                        #         percent_very_high_sims,
+                        #         ReduceType.mean,
+                        #     )
+
+                        # Understand intermodal similarity
+                        # For every combination of modalities compute and analyze the similarities
+                        # modality_combinations = list(itertools.combinations(target_output.modalities, 2))
+                        # for modality_combination in modality_combinations:
+                        #     modality_1, modality_2 = modality_combination
+                        #     data_1 = getattr(target_output, modality_1)
+                        #     data_2 = getattr(target_output, modality_2)
+                        #     if data_1 is None or data_2 is None:
+                        #         continue
+                        #     # Compute the similarity between the two modalities
+                        #     batch_size = data_1.shape[0]
+                        #     combination_total_sim = 0
+                        #     combination_mean_sims = []
+                        #     combination_min_sims = []
+                        #     combination_max_sims = []
+                        #     combination_num_high_sims = []
+                        #     combination_num_very_high_sims = []
+                        #     for i in range(batch_size):
+                        #         data_1_i = data_1[i]
+                        #         data_2_i = data_2[i]
+                        #         data_1_i = rearrange(data_1_i, "b ... d -> b (...) d")
+                        #         data_2_i = rearrange(data_2_i, "b ... d -> b (...) d")
+                        #         # Compute the similarity between the two modalities
+                        #         emb_norm_1 = F.normalize(data_1_i, p=2, dim=-1)
+                        #         emb_norm_2 = F.normalize(data_2_i, p=2, dim=-1)
+                        #         emb_sim = torch.einsum("b n d, b m d -> b n m", emb_norm_1, emb_norm_2)
+                        #         # Get the mean of the similarity
+                        #         mean_sim = emb_sim.mean()
+                        #         logger.info(f"Mean similarity between {modality_1} and {modality_2}: {mean_sim}")
+                        #         combination_mean_sims.append(mean_sim)
+                        #         # Get the min of the similarity
+                        #         min_sim = emb_sim.min()
+                        #         logger.info(f"Min similarity between {modality_1} and {modality_2}: {min_sim}")
+                        #         combination_min_sims.append(min_sim)
+                        #         # Get the max of the similarity
+                        #         max_sim = emb_sim.max()
+                        #         logger.info(f"Max similarity between {modality_1} and {modality_2}: {max_sim}")
+                        #         combination_max_sims.append(max_sim)
+                        #         # Get the 75th percentile of the similarity
+                        #         seventy_fifth_percentile = torch.quantile(emb_sim.float(), 0.75)
+                        #         logger.info(f"75th percentile similarity between {modality_1} and {modality_2}: {seventy_fifth_percentile}")
+                        #         # get the number of similarities that are greater than 0.9
+                        #         num_high_sim = (emb_sim > 0.9).sum()
+                        #         logger.info(f"Number of similarities greater than 0.9 between {modality_1} and {modality_2}: {num_high_sim}")
+                        #         combination_num_high_sims.append(num_high_sim)
+                        #         # get the number of similarities that are greater than 0.95
+                        #         num_very_high_sim = (emb_sim > 0.95).sum()
+                        #         logger.info(f"Number of similarities greater than 0.95 between {modality_1} and {modality_2}: {num_very_high_sim}")
+                        #         combination_num_very_high_sims.append(num_very_high_sim)
+                        #         # get the total number of similarities
+                        #         total_sim = emb_sim.numel()
+                        #         combination_total_sim += total_sim
+                        #     # Get the mean of the lists
+                        #     combination_mean_sims = torch.tensor(combination_mean_sims).mean()
+                        #     combination_min_sims = torch.tensor(combination_min_sims).mean()
+                        #     combination_max_sims = torch.tensor(combination_max_sims).mean()
+                        #     combination_num_high_sims = torch.tensor(combination_num_high_sims).float().sum()
+                        #     combination_num_very_high_sims = torch.tensor(combination_num_very_high_sims).float().sum()
+                        #     percent_very_high_sims = combination_num_very_high_sims / combination_total_sim
+                        #     logger.info(f"Mean similarity between {modality_1} and {modality_2}: {combination_mean_sims}, Min similarity: {combination_min_sims}, Max similarity: {combination_max_sims}, Number of similarities greater than 0.95: {combination_num_very_high_sims} out of {combination_total_sim} total similarities for modality {modality_1} and {modality_2} at percent {percent_very_high_sims}")
+                        #     self.trainer.record_metric(
+                        #         f"intermodal_similarity/random_proj_intermodal_{modality_1}_{modality_2}_mean_sim",
+                        #         combination_mean_sims,
+                        #         ReduceType.mean,
+                        #     )
+                        #     self.trainer.record_metric(
+                        #         f"intermodal_similarity/random_proj_intermodal_{modality_1}_{modality_2}_min_sim",
+                        #         combination_min_sims,
+                        #         ReduceType.mean,
+                        #     )
+                        #     self.trainer.record_metric(
+                        #         f"intermodal_similarity/random_proj_intermodal_{modality_1}_{modality_2}_max_sim",
+                        #         combination_max_sims,
+                        #         ReduceType.mean,
+                        #     )
+                        #     self.trainer.record_metric(
+                        #         f"intermodal_similarity/random_proj_intermodal_{modality_1}_{modality_2}_percent_very_high_sims",
+                        #         percent_very_high_sims,
+                        #         ReduceType.mean,
+                        #     )
+
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
                     loss = loss + reg_term
@@ -258,7 +423,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         del latent, decoded, target_output
 
     def model_forward(
-        self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
+        self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int], dry_run: bool = False
     ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
@@ -270,7 +435,21 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
-            loss = self.loss_fn(decoded, target_output)
+            loss, similarities_dict = self.loss_fn(decoded, target_output)
+            logger.info(f"Similarities dict: {similarities_dict}")
+            if not dry_run:
+                # record all the similarities for every modality
+                for key, per_modality_dict in similarities_dict.items():
+                    for modality, value in per_modality_dict.items():
+                        if modality == "latlon":
+                            continue
+                        name = f"similarity/{key}_{modality}"
+                        logger.info(f"Recording similarity metric {name} with value {value}")
+                        self.trainer.record_metric(
+                            name,
+                            value,
+                            ReduceType.mean,
+                        )
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output

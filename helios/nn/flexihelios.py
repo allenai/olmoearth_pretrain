@@ -148,7 +148,18 @@ class TokensAndMasks(NamedTuple):
 
         Tokens will have shape [B, T, D] and masks will have shape [B, T]
         """
+        # I want to keep track of the following things for each token
+        # 1. what modalitity it is from
+        #2 the original spatial position
+        #3 the original temporal position
+        #4 the original band set
+        modality_name_to_index = {modality: i for i, modality in enumerate(self.modalities)}
         flattened_x, flattened_masks = [], []
+        flattened_modality_names = []
+        flattened_spatial_positions = []
+        flattened_temporal_positions = []
+        flattened_band_set_indices = []
+
         for attr_name in self.modalities:
             mask_attr_name = self.get_masked_modality_name(attr_name)
             attr = getattr(self, attr_name)
@@ -158,13 +169,18 @@ class TokensAndMasks(NamedTuple):
                     raise ValueError(
                         f"Can't have present {attr_name} but None {mask_attr_name}"
                     )
+                flattened_attr = self._flatten(attr)
                 masked_attr = masked_attr.unsqueeze(dim=-1)
-                flattened_x.append(self._flatten(attr))
+                # append the modality name n times
+                # I want to keep the batch dimension
+                flattened_modality_names.extend(torch.tensor([modality_name_to_index[attr_name]] * flattened_attr.shape[1], device=self.device))
+
+                flattened_x.append(flattened_attr)
                 flattened_masks.append(self._flatten(masked_attr))
 
         x = torch.cat(flattened_x, dim=1)
         masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
-        return x, masks
+        return x, masks, flattened_modality_names
 
     def pool_unmasked_tokens(
         self,
@@ -206,7 +222,7 @@ class TokensAndMasks(NamedTuple):
         if concat_features:
             raise ValueError("concat_features is not supported for non-spatial pooling")
         if not spatial_pooling:
-            x, mask = self.flatten_tokens_and_masks()
+            x, mask, _ = self.flatten_tokens_and_masks()
             # 1s for online encoder, 0s elsewhere
             mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
             x_for_pooling = x * mask.unsqueeze(-1)
