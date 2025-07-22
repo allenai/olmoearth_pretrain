@@ -302,15 +302,15 @@ class HeliosSample(NamedTuple):
 
     @staticmethod
     def _get_valid_start_ts(
-        missing_timesteps: dict[str, Any], num_t: int, current_length: int
+        missing_timesteps: dict[str, Any], max_t: int, current_length: int
     ) -> list[int]:
         """Get valid starting timesteps."""
-        if current_length > num_t:
-            # We can randomly sample from the range of valid starting timesteps because current_length exceeds num_t
+        if current_length > max_t:
+            # We can randomly sample from the range of valid starting timesteps because current_length exceeds max_t
             if not missing_timesteps:
                 # No missing timesteps info available - all timesteps are potentially valid
-                # Create a range of all possible starting positions that fit within num_t
-                valid_start_ts = list(range(current_length - num_t + 1))
+                # Create a range of all possible starting positions that fit within max_t
+                valid_start_ts = list(range(current_length - max_t + 1))
             else:
                 # We have missing timesteps info - need to find valid starting positions
                 # that ensure we have at least some present data at the chosen start_t
@@ -318,7 +318,7 @@ class HeliosSample(NamedTuple):
                 for modality in missing_timesteps:
                     valid_timesteps = np.flatnonzero(missing_timesteps[modality])
                     valid_timesteps = valid_timesteps[
-                        valid_timesteps + num_t <= current_length
+                        valid_timesteps + max_t <= current_length
                     ]
                     start_ts.update(valid_timesteps)
                 valid_start_ts = list(start_ts)
@@ -327,10 +327,10 @@ class HeliosSample(NamedTuple):
             valid_start_ts = [0]
         if len(valid_start_ts) == 0:
             logger.warning(
-                f"No valid start timesteps found for {missing_timesteps} with num_t {num_t} and current_length {current_length}"
+                f"No valid start timesteps found for {missing_timesteps} with max_t {max_t} and current_length {current_length}"
             )
             raise ValueError(
-                f"No valid start timesteps found for {missing_timesteps} with num_t {num_t} and current_length {current_length}"
+                f"No valid start timesteps found for {missing_timesteps} with max_t {max_t} and current_length {current_length}"
             )
         return sorted(valid_start_ts)
 
@@ -369,24 +369,12 @@ class HeliosSample(NamedTuple):
         max_t = self._get_max_t_within_token_budget(
             sampled_hw_p, max_tokens_per_instance
         )
-        timestep_mode = np.random.choice(4)
-        if timestep_mode == 0:
-            # With 1/4 probability, just set num_t = 1.
-            # We do this because single-timestep performance is important.
-            num_t = 1
-        elif timestep_mode == 1:
-            # With 1/4 probability, we set num_t = max_t.
-            # Since many timesteps performance is also important.
-            num_t = max_t
-        else:
-            # Otherwise (1/2 probability), we pick a num_t between 1 and max_t.
-            num_t = 1 + np.random.choice(max_t)
         sampled_hw = sampled_hw_p * patch_size
         start_h = np.random.choice(self.height - sampled_hw + 1)
         start_w = np.random.choice(self.width - sampled_hw + 1)
 
         valid_start_ts = self._get_valid_start_ts(
-            missing_timesteps_masks, num_t, current_length
+            missing_timesteps_masks, max_t, current_length
         )
         start_t = np.random.choice(valid_start_ts)
 
@@ -394,7 +382,7 @@ class HeliosSample(NamedTuple):
         for attribute, modality in self.as_dict(ignore_nones=True).items():
             assert modality is not None
             if attribute == "timestamps":
-                new_data_dict[attribute] = modality[start_t : start_t + num_t]
+                new_data_dict[attribute] = modality[start_t : start_t + max_t]
                 continue
             modality_spec = Modality.get(attribute)
             if modality_spec.is_spacetime_varying:
@@ -407,7 +395,7 @@ class HeliosSample(NamedTuple):
                         start_w + sampled_hw
                     )
                     * modality_spec.image_tile_size_factor,
-                    start_t : start_t + num_t,
+                    start_t : start_t + max_t,
                 ]
             elif modality_spec.is_space_only_varying:
                 new_data_dict[attribute] = modality[
@@ -421,8 +409,31 @@ class HeliosSample(NamedTuple):
                     * modality_spec.image_tile_size_factor,
                 ]
             elif modality_spec.is_time_only_varying:
-                new_data_dict[attribute] = modality[start_t : start_t + num_t]
+                new_data_dict[attribute] = modality[start_t : start_t + max_t]
             elif modality_spec.is_static_in_space_and_time:
+                new_data_dict[attribute] = modality
+        return HeliosSample(**new_data_dict)
+
+    def subset_time(self, num_t: int) -> "HeliosSample":
+        """Subset the HeliosSample in time only.
+
+        Args:
+            num_t: desired number of timesteps to pick. Must be <= the number
+                of timesteps in the HeliosSample.
+        """
+        start_t = np.random.choice(self.time - num_t)
+        new_data_dict: dict[str, ArrayTensor] = {}
+        for attribute, modality in self.as_dict(ignore_nones=True).items():
+            assert modality is not None
+            if attribute == "timestamps":
+                new_data_dict[attribute] = modality[start_t : start_t + num_t]
+                continue
+            modality_spec = Modality.get(attribute)
+            if modality_spec.is_spacetime_varying:
+                new_data_dict[attribute] = modality[:, :, start_t : start_t + num_t]
+            elif modality_spec.is_time_only_varying:
+                new_data_dict[attribute] = modality[start_t : start_t + num_t]
+            else:
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
 
@@ -446,7 +457,24 @@ def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSa
 
     # Create a dictionary of stacked tensors for each field
     collated_dict = {field: stack_or_none(field) for field in sample_fields}
-    return patch_size, HeliosSample(**collated_dict)
+    collated_sample = HeliosSample(**collated_dict)
+
+    # Decide whether to reduce num_t.
+    timestep_mode = np.random.choice(4)
+    if timestep_mode == 0:
+        # With 1/4 probability, we set num_t = 1 (one timestep).
+        # Since single-timestep performance is important.
+        num_t = 1
+    elif timestep_mode == 1:
+        # With 1/4 probability, we retain all the timesteps.
+        # Since we also care about high performance with many timesteps.
+        num_t = collated_sample.time
+    else:
+        # Otherwise (1/2 probability), we randomly pick a num_t.
+        num_t = 1 + np.random.choice(collated_sample.time)
+    collated_sample = collated_sample.subset_time(num_t)
+
+    return patch_size, collated_sample
 
 
 class GetItemArgs(NamedTuple):
