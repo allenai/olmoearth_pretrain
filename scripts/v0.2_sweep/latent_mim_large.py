@@ -134,13 +134,13 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     dataset_configs = [
         # presto
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/rerun_1_h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/",
+            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892",
             training_modalities=common.training_modalities,
             cache_dir="/helios_cache/presto",
         ),
         # osm_sampling
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/285288/",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
             training_modalities=common.training_modalities,
             cache_dir="/helios_cache/osm_sampling",
         ),

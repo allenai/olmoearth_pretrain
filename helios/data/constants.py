@@ -202,7 +202,10 @@ class Modality:
         band_sets=[BandSet(["R", "G", "B", "IR"], 1)],
         is_multitemporal=False,
         ignore_when_parsing=False,
-        image_tile_size_factor=16,
+        # Currently this is set to 4x (2.5 m/pixel) so that it is more feasible to
+        # train with NAIP_10. This way we end up with 512x512 NAIP images in the
+        # 128x128 H5 files instead of 2048x2048, which slows down data loading.
+        image_tile_size_factor=4,
     )
 
     SENTINEL1 = ModalitySpec(
@@ -388,6 +391,19 @@ class Modality:
         band_sets=[BandSet(["lat", "lon"], 0)],
         is_multitemporal=False,
         ignore_when_parsing=True,
+    )
+
+    GSE = ModalitySpec(
+        name="gse",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [f"A{idx:02d}" for idx in range(64)],
+                16,
+            ),
+        ],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
     )
 
     @classmethod

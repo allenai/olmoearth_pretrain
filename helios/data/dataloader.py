@@ -125,6 +125,7 @@ class HeliosDataLoader(DataLoaderBase):
         if self.shuffle:
             # Deterministically shuffle based on epoch and seed
             rng = get_rng(self.seed + self.epoch)  # type: ignore
+
         indices: np.ndarray
         indices = np.arange(len(self.dataset), dtype=np.uint32)
         if rng is not None:
@@ -282,16 +283,16 @@ class HeliosDataLoader(DataLoaderBase):
                 parts.append(f"{key}{value}")
         return "_".join(parts)
 
-    def get_mock_batch(self) -> HeliosSample:
-        """Get a mock batch, for dry-run of forward and backward pass."""
-        logger.info("Getting mock batch NOT FROM DATASET")
-        rng = get_rng(42)
+    def _get_mock_sample(self, rng: np.random.Generator) -> HeliosSample:
         output_dict = {}
         # ToDO: change to training modalities
         logger.info(f"Training modalities: {self.dataset.training_modalities}")
         if Modality.SENTINEL2_L2A.name in self.dataset.training_modalities:
             mock_sentinel2_l2a = rng.random((256, 256, 12, 12), dtype=np.float32)
             output_dict["sentinel2_l2a"] = mock_sentinel2_l2a
+        if Modality.NAIP_10.name in self.dataset.training_modalities:
+            mock_naip_10 = rng.random((1024, 1024, 1, 4), dtype=np.float32)
+            output_dict["naip_10"] = mock_naip_10
         if Modality.SENTINEL1.name in self.dataset.training_modalities:
             mock_sentinel1 = rng.random((256, 256, 12, 2), dtype=np.float32)
             output_dict[Modality.SENTINEL1.name] = mock_sentinel1
@@ -313,6 +314,11 @@ class HeliosDataLoader(DataLoaderBase):
                 (256, 256, 12, Modality.LANDSAT.num_bands), dtype=np.float32
             )
             output_dict["landsat"] = mock_landsat
+        if Modality.GSE.name in self.dataset.training_modalities:
+            mock_gse = rng.random(
+                (256, 256, 1, Modality.GSE.num_bands), dtype=np.float32
+            )
+            output_dict["gse"] = mock_gse
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
@@ -320,19 +326,26 @@ class HeliosDataLoader(DataLoaderBase):
         timestamps = np.concatenate([days, months, years], axis=1)  # shape: (12, 3)
 
         output_dict["timestamps"] = timestamps
+        return HeliosSample(**output_dict)
 
+    def get_mock_batch(self) -> HeliosSample:
+        """Get a mock batch, for dry-run of forward and backward pass."""
+        logger.info("Getting mock batch NOT FROM DATASET")
+        rng = get_rng(42)
+        batch_size = self.global_batch_size // self.dp_world_size
         patch_size = 1
         collated_sample = self.collator(
             [
                 (
                     patch_size,
-                    HeliosSample(**output_dict).subset(
+                    self._get_mock_sample(rng).subset(
                         patch_size,
                         max_tokens_per_instance=1500,
                         sampled_hw_p=6,
                         current_length=12,
                     ),
                 )
+                for num in range(batch_size)
             ]
         )
         return collated_sample

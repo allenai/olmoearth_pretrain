@@ -4,7 +4,7 @@ import json
 import logging
 import multiprocessing as mp
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import h5py
@@ -47,6 +47,9 @@ class ConvertToH5pyConfig(Config):
         None  # Chunking configuration. None: disabled. True: auto (data_item.shape). tuple: specific shape.
     )
     tile_size: int = IMAGE_TILE_SIZE
+    required_modality_names: list[str] = field(
+        default_factory=lambda: list()
+    )  # Samples without all of these are skipped
 
     def build(self) -> "ConvertToH5py":
         """Build the ConvertToH5py object."""
@@ -61,6 +64,9 @@ class ConvertToH5pyConfig(Config):
             shuffle=self.shuffle,
             chunk_options=self.chunk_options,
             tile_size=self.tile_size,
+            required_modalities=get_modality_specs_from_names(
+                self.required_modality_names
+            ),
         )
 
 
@@ -84,6 +90,7 @@ class ConvertToH5py:
         shuffle: bool | None = None,
         chunk_options: tuple | bool | None = None,
         tile_size: int = IMAGE_TILE_SIZE,
+        required_modalities: list[ModalitySpec] = [],
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -99,7 +106,9 @@ class ConvertToH5py:
                          True: auto-chunk (chunks will match dataset shape).
                          tuple: specify a chunk shape. If tuple rank differs from data rank,
                                 it's adjusted (padded with full dimension sizes or truncated).
-            tile_size: The size of the tile to split the image into.
+            tile_size: The size of the tile to split the image into. It is based on the IMAGE_TILE_SIZE, so
+                higher-resolution modalities like NAIP would be split up correspondingly.
+            required_modalities: Samples without all of these modalities will be skipped.
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
@@ -110,6 +119,7 @@ class ConvertToH5py:
         self.shuffle = shuffle
         self.chunk_options = chunk_options
         self.h5py_dir: UPath | None = None
+        self.required_modalities = required_modalities
         if IMAGE_TILE_SIZE % tile_size != 0:
             raise ValueError(
                 f"Tile size {tile_size} must be a factor of {IMAGE_TILE_SIZE}"
@@ -293,13 +303,18 @@ class ConvertToH5py:
 
             if modality.is_spatial:
                 # Calculate row and column indices for grid
-                row = (sublock_index // self.num_subtiles_per_dim) * self.tile_size
-                col = (sublock_index % self.num_subtiles_per_dim) * self.tile_size
+                if image.shape[0] != image.shape[1]:
+                    raise ValueError("Expected image width to match image height")
+                if image.shape[0] % self.num_subtiles_per_dim != 0:
+                    raise ValueError(
+                        f"Got image size {image.shape[0]} which is not multiple of subtile count {self.num_subtiles_per_dim}"
+                    )
+                tile_size = image.shape[0] // self.num_subtiles_per_dim
+                row = (sublock_index // self.num_subtiles_per_dim) * tile_size
+                col = (sublock_index % self.num_subtiles_per_dim) * tile_size
                 logger.info(f"Sublock index: {sublock_index}, row: {row}, col: {col}")
                 logger.info(f"Image shape: {image.shape}")
-                image = image[
-                    row : row + self.tile_size, col : col + self.tile_size, ...
-                ]
+                image = image[row : row + tile_size, col : col + tile_size, ...]
                 logger.info(f"Image shape after slicing: {image.shape}")
             sample_dict[modality.name] = image
 
@@ -426,11 +441,19 @@ class ConvertToH5py:
             logger.warning("h5py_dir is already set, ignoring new value")
             return
 
+        required_modalities_suffix = ""
+        if self.required_modalities:
+            required_modalities_suffix = "_required_" + "_".join(
+                sorted([modality.name for modality in self.required_modalities])
+            )
         h5py_dir = (
             self.tile_path
             / f"{self.h5py_folder}{self.compression_settings_suffix}{self.image_tile_size_suffix}"
-            / "_".join(
-                sorted([modality.name for modality in self.supported_modalities])
+            / (
+                "_".join(
+                    sorted([modality.name for modality in self.supported_modalities])
+                )
+                + required_modalities_suffix
             )
             / str(num_samples)
         )
@@ -465,6 +488,14 @@ class ConvertToH5py:
                 if not modality.ignore_when_parsing
             ):
                 logger.info("Skipping sample because it has unsupported modalities")
+                continue
+            if any(
+                modality not in sample.modalities
+                for modality in self.required_modalities
+            ):
+                logger.info(
+                    "Skipping sample because it does not have a required modality"
+                )
                 continue
 
             if sample.time_span != TimeSpan.YEAR:

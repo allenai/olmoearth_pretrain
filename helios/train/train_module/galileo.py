@@ -11,11 +11,10 @@ from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import Duration, ReduceType
-from olmo_core.train.train_module.transformer import (
-    TransformerActivationCheckpointingConfig,
-)
 
-from helios.data.constants import Modality
+from helios.data.constants import (
+    Modality,
+)
 from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
@@ -99,7 +98,6 @@ class GalileoTrainModule(HeliosTrainModule):
         rank_microbatch_size: The rank microbatch size in instances.
         compile_model: Whether to compile to the model.
         dp_config: Data parallel configuration for the model.
-        ac_config: Activation checkpointing configuration for the model.
         mae_loss_config: Optional loss config for masked auto-encoding.
         compile_loss: Whether to compile the loss function.
         autocast_precision: Enable AMP with this data type.
@@ -128,7 +126,6 @@ class GalileoTrainModule(HeliosTrainModule):
         mae_loss_config: LossConfig | None = None,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
-        ac_config: TransformerActivationCheckpointingConfig | None = None,
         compile_loss: bool = False,
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
@@ -140,6 +137,7 @@ class GalileoTrainModule(HeliosTrainModule):
         warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
         contrastive_config: LossConfig | None = None,
+        find_unused_parameters: bool = True,
     ):
         """Initialize the training module.
 
@@ -154,7 +152,6 @@ class GalileoTrainModule(HeliosTrainModule):
             rank_microbatch_size: The rank microbatch size in instances.
             compile_model: Whether to compile to the model.
             dp_config: Data parallel configuration for the model.
-            ac_config: Activation checkpointing configuration for the model.
             mae_loss_config: Optional loss config for masked auto-encoding.
             compile_loss: Whether to compile the loss function.
             autocast_precision: Enable AMP with this data type.
@@ -169,6 +166,7 @@ class GalileoTrainModule(HeliosTrainModule):
             warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
             contrastive_config: An optional contrastive configration for the model.
+            find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
         """
         super().__init__(
             model=model,
@@ -177,7 +175,6 @@ class GalileoTrainModule(HeliosTrainModule):
             rank_microbatch_size=rank_microbatch_size,
             compile_model=compile_model,
             dp_config=dp_config,
-            ac_config=ac_config,
             compile_loss=compile_loss,
             autocast_precision=autocast_precision,
             max_grad_norm=max_grad_norm,
@@ -186,6 +183,7 @@ class GalileoTrainModule(HeliosTrainModule):
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
             warmup_duration=warmup_duration,
+            find_unused_parameters=find_unused_parameters,
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg_a = token_exit_cfg_a
@@ -255,6 +253,7 @@ class GalileoTrainModule(HeliosTrainModule):
                 masked_batch_a = self.masking_strategy_a.apply_mask(
                     microbatch, patch_size
                 )
+
                 masked_batch_b = self.masking_strategy_b.apply_mask(
                     microbatch, patch_size
                 )
@@ -287,51 +286,22 @@ class GalileoTrainModule(HeliosTrainModule):
                         )
                         / num_microbatches
                     )
-
                 if self.contrastive_loss is not None:
                     contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
                     logger.info(f"contrastive loss: {contrastive_loss}")
-                    if (
-                        torch.isnan(contrastive_loss).any()
-                        or torch.isinf(contrastive_loss).any()
-                    ):
-                        logger.warning(
-                            f"contrastive loss is nan or inf: {contrastive_loss} not adding to total loss. "
-                            f"rank: {self.local_rank}, epoch: {self.trainer.epoch}, "
-                            f"step: {self.trainer.global_step}"
-                        )
-                    else:
-                        loss += contrastive_loss
-                        total_batch_con += (
-                            get_local_tensor(contrastive_loss.detach())
-                            / num_microbatches
-                        )
+                    loss += contrastive_loss
+                    total_batch_con += (
+                        get_local_tensor(contrastive_loss.detach()) / num_microbatches
+                    )
 
                 loss = loss / num_microbatches
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
-                # Skip bad batches
-                # this does not work with fsdp need skip step optimizer instead of loss
-                if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}. "
-                        f"Skipping batch on rank {self.local_rank}, "
-                        f"step {self.trainer.global_step}, epoch {self.trainer.epoch}"
-                    )
-                    if self.is_fsdp:
-                        raise ValueError(
-                            "FSDP does not support skipping bad batches as the backwards pass will not sync correctly"
-                        )
-                    break
-                del latent_a, latent_b
                 loss.backward()
 
-        # what happens if both batches are bad?
         if dry_run:
             return
-        # Remember to detach the loss before recording
 
-        # check if each metric is nan or inf and if so turn to float('inf') tensor
         total_batch_loss = torch.nan_to_num(total_batch_loss, nan=float("inf"))
         total_batch_reg = torch.nan_to_num(total_batch_reg, nan=float("inf"))
         total_batch_con = torch.nan_to_num(total_batch_con, nan=float("inf"))

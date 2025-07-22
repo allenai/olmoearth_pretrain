@@ -8,7 +8,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -41,7 +45,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -72,7 +80,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -103,7 +115,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -134,7 +150,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -165,7 +185,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -196,7 +220,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -227,7 +255,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -258,7 +290,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -289,7 +325,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -320,7 +360,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -351,7 +395,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
@@ -382,7 +430,11 @@
             "vv",
             "vh"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "nodata_vals": [
+            -32768,
+            -32768
+          ]
         }
       ],
       "data_source": {
