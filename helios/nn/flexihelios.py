@@ -11,8 +11,14 @@ from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
+from torch.nn.functional import one_hot
 
-from helios.data.constants import Modality, ModalitySpec
+from helios.data.constants import (
+    MISSING_VALUE,
+    NUM_WORLDCOVER_CLASSES,
+    Modality,
+    ModalitySpec,
+)
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.nn.attention import Block
 from helios.nn.encodings import (
@@ -348,6 +354,10 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         modality_spec = Modality.get(modality)
         # Based on the modality name we choose the way to embed the data
 
+        channel_set_multiplier = 1
+        if modality == Modality.WORLDCOVER.name:
+            channel_set_multiplier = NUM_WORLDCOVER_CLASSES
+
         # I likely will need to know about what the embedding strategy is in the forward as well
         # Static modality
         if modality_spec.get_tile_resolution() == 0:
@@ -355,7 +365,8 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             return nn.ModuleDict(
                 {
                     self._get_embedding_module_name(modality, idx): nn.Linear(
-                        len(channel_set_idxs), self.embedding_size
+                        channel_set_multiplier * len(channel_set_idxs),
+                        self.embedding_size,
                     )
                     for idx, channel_set_idxs in enumerate(
                         modality_spec.bandsets_as_indices()
@@ -366,7 +377,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             return nn.ModuleDict(
                 {
                     self._get_embedding_module_name(modality, idx): FlexiPatchEmbed(
-                        in_chans=len(channel_set_idxs),
+                        in_chans=channel_set_multiplier * len(channel_set_idxs),
                         embedding_size=self.embedding_size,
                         patch_size_at_16=self.max_patch_size,
                         modality_spec=modality_spec,
@@ -376,6 +387,32 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     )
                 }
             )
+
+    @staticmethod
+    def worldcover_to_one_hot(x: torch.Tensor) -> torch.Tensor:
+        """Transform worldcover from ints to one hot."""
+        org_dtype = x.dtype
+        x[x == 95] = (
+            110  # == NUM_WORLDCOVER_CLASSES / 10, so that its cleanly divisible by 10
+        )
+        # TODO: remove this assert if we have some runs where it passes.
+        assert torch.isin(
+            x,
+            torch.tensor(
+                [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, MISSING_VALUE],
+                device=x.device,
+                dtype=x.dtype,
+            ),
+        ).all(), f"Got {x.unique()} values in world cover"
+        logger.debug("worldcover values: ", x.unique())
+        return (
+            one_hot(
+                torch.clamp((x / 10).long() - 1, min=0),
+                num_classes=NUM_WORLDCOVER_CLASSES,
+            )
+            .squeeze(-2)
+            .to(dtype=org_dtype)
+        )
 
     def apply_embedding_to_modality(
         self, modality: str, input_data: MaskedHeliosSample, patch_size: int
@@ -403,9 +440,13 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     idx,
                 ]
                 modality_specific_kwargs = {"patch_size": patch_size}
+
             # Now apply the embedding to the patchified data
             if (token_mask == MaskValue.ONLINE_ENCODER.value).any():
                 patchified_data = modality_data[..., channel_set_indices]
+                if modality == Modality.WORLDCOVER.name:
+                    # one hot encode the patchified data
+                    patchified_data = self.worldcover_to_one_hot(patchified_data)
                 embedding_module = self.per_modality_embeddings[modality][
                     self._get_embedding_module_name(modality, idx)
                 ]

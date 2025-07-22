@@ -23,6 +23,10 @@ MISSING_VALUE = -99999
 # Default maximum sequence length.
 MAX_SEQUENCE_LENGTH = 12
 
+# We model the missing data value (0) as a
+# seperate class, so consider there are 12 classes
+NUM_WORLDCOVER_CLASSES = 12
+
 
 def get_resolution(resolution_factor: int) -> float | int:
     """Compute the resolution.
