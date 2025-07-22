@@ -414,8 +414,8 @@ class HeliosSample(NamedTuple):
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
 
-    def subset_time(self, num_t: int) -> "HeliosSample":
-        """Subset the HeliosSample in time only.
+    def subset_time_batched(self, num_t: int) -> "HeliosSample":
+        """Subset a batched HeliosSample in time only.
 
         Args:
             num_t: desired number of timesteps to pick. Must be <= the number
@@ -426,13 +426,13 @@ class HeliosSample(NamedTuple):
         for attribute, modality in self.as_dict(ignore_nones=True).items():
             assert modality is not None
             if attribute == "timestamps":
-                new_data_dict[attribute] = modality[start_t : start_t + num_t]
+                new_data_dict[attribute] = modality[:, start_t : start_t + num_t]
                 continue
             modality_spec = Modality.get(attribute)
             if modality_spec.is_spacetime_varying:
-                new_data_dict[attribute] = modality[:, :, start_t : start_t + num_t]
+                new_data_dict[attribute] = modality[:, :, :, start_t : start_t + num_t]
             elif modality_spec.is_time_only_varying:
-                new_data_dict[attribute] = modality[start_t : start_t + num_t]
+                new_data_dict[attribute] = modality[:, start_t : start_t + num_t]
             else:
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
@@ -472,7 +472,7 @@ def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSa
     else:
         # Otherwise (1/2 probability), we randomly pick a num_t.
         num_t = 1 + np.random.choice(collated_sample.time)
-    collated_sample = collated_sample.subset_time(num_t)
+    collated_sample = collated_sample.subset_time_batched(num_t)
 
     return patch_size, collated_sample
 
