@@ -117,7 +117,7 @@ class PatchDiscriminationLossNew(Loss):
 
     name = "PatchDisc"
 
-    def __init__(self, tau: float = 0.1, pred2unit: bool = False, weight: float = 1.0):
+    def __init__(self, tau: float = 1.0, pred2unit: bool = False, weight: float = 1.0):
         """Initialize patch discrimination loss.
 
         Args:
@@ -159,8 +159,8 @@ class PatchDiscriminationLossNew(Loss):
             pred_std = pred.std(1, keepdims=True)
             pred = (pred - pred_mu) / (pred_std + 1e-4)
 
-        pred = F.normalize(pred, p=2, dim=-1)
-        target = F.normalize(target, p=2, dim=-1)
+        # pred = F.normalize(pred, p=2, dim=-1)
+        # target = F.normalize(target, p=2, dim=-1)
 
         count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
         losses = []
@@ -181,7 +181,7 @@ class PatchDiscriminationLossNew(Loss):
                 score_sample.flatten(0, 1),
                 labels.flatten(0, 1),
                 reduction="none",
-            ) * (self.tau * 2)
+            )
             loss = loss.mean()
             losses.append(loss)
             start = end
