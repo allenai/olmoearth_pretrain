@@ -6,13 +6,13 @@ import wandb
 
 WANDB_ENTITY = "eai-ai2"
 METRICS = [
-    "m-eurosat",
-    "m-so2sat",
-    "m-brick-kiln",
-    "m-bigearthnet",
-    "m-sa-crop-type",
-    "m-cashew-plant",
-    "sickle-sentinel1",
+    "m_eurosat",
+    "m_so2sat",
+    "m_brick_kiln",
+    "m_bigearthnet",
+    "m_sa_crop_type",
+    "m_cashew_plant",
+    "sickle_sentinel1",
     "sickle_landsat",
     "sickle_sentinel1_landsat",
     "pastis_sentinel1",
