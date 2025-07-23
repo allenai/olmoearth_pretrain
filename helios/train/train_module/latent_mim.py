@@ -437,19 +437,28 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 )
             loss, similarities_dict = self.loss_fn(decoded, target_output)
             logger.info(f"Similarities dict: {similarities_dict}")
+            import time
+            time.sleep(10)
             if not dry_run:
                 # record all the similarities for every modality
                 for key, per_modality_dict in similarities_dict.items():
-                    for modality, value in per_modality_dict.items():
-                        if modality == "latlon":
-                            continue
-                        name = f"similarity/{key}_{modality}"
-                        logger.info(f"Recording similarity metric {name} with value {value}")
+                    if not isinstance(per_modality_dict, dict):
                         self.trainer.record_metric(
-                            name,
-                            value,
+                            f"similarity/{key}",
+                            per_modality_dict,
                             ReduceType.mean,
                         )
+                    else:
+                        for modality, value in per_modality_dict.items():
+                            if modality == "latlon":
+                                continue
+                            name = f"similarity/{key}_{modality}"
+                            logger.info(f"Recording similarity metric {name} with value {value}")
+                            self.trainer.record_metric(
+                                name,
+                                value,
+                                ReduceType.mean,
+                            )
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output

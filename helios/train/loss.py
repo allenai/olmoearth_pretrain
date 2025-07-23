@@ -186,6 +186,12 @@ class PatchDiscriminationLossNew(Loss):
         intra_modality_negative_means = {modality: [] for modality in predictions.modalities}
         intra_modality_negative_mins = {modality: [] for modality in predictions.modalities}
         intra_modality_negative_maxs = {modality: [] for modality in predictions.modalities}
+        modality_hard_negative_similarities_means = {modality: [] for modality in predictions.modalities}
+        modality_hard_negative_similarities_mins = {modality: [] for modality in predictions.modalities}
+        modality_hard_negative_similarities_maxs = {modality: [] for modality in predictions.modalities}
+        hard_negative_similarities_means = []
+        hard_negative_similarities_mins = []
+        hard_negative_similarities_maxs = []
         # I also want to record and track the predicted similarities for all the modality combinations
         for c in count:
             end = start + c
@@ -201,6 +207,21 @@ class PatchDiscriminationLossNew(Loss):
                 torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
             )
             logger.info(f"Score sample shape: {score_sample.shape}")
+            # I want to get a mask that allows me to seperate things where the random projections are like > 0.9 the same
+            target_scores = torch.einsum("npd,nqd->npq", target_sample, target_sample)
+            # I want the negatives where the target scores are higher than 0.9 and I want to log the similarities in that case
+            # Are the predicted ones still high similarity or is a different minimum found
+            positive_mask = torch.eye(target_scores.shape[1], dtype=torch.bool, device=pred.device)[None]
+            negative_mask = ~positive_mask
+            target_scores_mask = target_scores > 0.9
+            target_scores_mask = target_scores_mask & negative_mask
+            logger.info(f"Target scores mask shape: {target_scores_mask.shape}")
+            logger.info(f"Target scores mask sum: {target_scores_mask.sum()}")
+            # I want to get the scores where the target scores mask is true
+            target_scores_mask_scores = score_sample[target_scores_mask]
+            hard_negative_similarities_means.append(target_scores_mask_scores.mean())
+            hard_negative_similarities_mins.append(target_scores_mask_scores.min())
+            hard_negative_similarities_maxs.append(target_scores_mask_scores.max())
             labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
             loss = F.cross_entropy(
                 score_sample.flatten(0, 1),
@@ -238,6 +259,22 @@ class PatchDiscriminationLossNew(Loss):
                     intra_modality_mask = torch.einsum("bn,bm->bnm", torch.ones_like(modality_mask), modality_mask) & ~modality_mask_2d
                     logger.info(f"Intra modality mask shape: {intra_modality_mask.shape}")
                     intra_modality_negative_scores = score_sample[intra_modality_mask]
+                    # modality_hard_negative_mask = target_scores_mask & modality_mask_2d
+                    # logger.info(f"Modality hard negative mask num elements: {modality_hard_negative_mask.sum()}")
+                    # if modality_hard_negative_mask.sum() > 0:
+                    #     modality_hard_negative_scores = score_sample[modality_hard_negative_mask]
+                    #     modality_hard_negative_mean = modality_hard_negative_scores.mean()
+                    #     modality_hard_negative_mins = modality_hard_negative_scores.min()
+                    #     modality_hard_negative_maxs = modality_hard_negative_scores.max()
+                    #     logger.info(f"Modality hard negative mean: {modality_hard_negative_mean} min: {modality_hard_negative_mins} max: {modality_hard_negative_maxs}")
+                    #     modality_hard_negative_similarities_means[modality].append(modality_hard_negative_mean)
+                    #     modality_hard_negative_similarities_mins[modality].append(modality_hard_negative_mins)
+                    #     modality_hard_negative_similarities_maxs[modality].append(modality_hard_negative_maxs)
+                    # else:
+                    #     logger.info(f"No modality hard negative scores for modality: {modality}")
+                    #     modality_hard_negative_similarities_means[modality].append(torch.tensor(0))
+                    #     modality_hard_negative_similarities_mins[modality].append(torch.tensor(0))
+                    #     modality_hard_negative_similarities_maxs[modality].append(torch.tensor(0))
                     logger.info(f"Intra modality negative scores shape: {intra_modality_negative_scores.shape}")
                     # get the mean median and std min and max of the intra modality negative scores
                     intra_modality_negative_mean = intra_modality_negative_scores.mean()
@@ -281,6 +318,10 @@ class PatchDiscriminationLossNew(Loss):
             intra_modality_negative_means[modality] = torch.tensor(intra_modality_negative_means[modality]).mean()
             intra_modality_negative_mins[modality] = torch.tensor(intra_modality_negative_mins[modality]).mean()
             intra_modality_negative_maxs[modality] = torch.tensor(intra_modality_negative_maxs[modality]).mean()
+
+        hard_negative_similarities_means = torch.tensor(hard_negative_similarities_means).mean()
+        hard_negative_similarities_mins = torch.tensor(hard_negative_similarities_mins).mean()
+        hard_negative_similarities_maxs = torch.tensor(hard_negative_similarities_maxs).mean()
         similarities_dict = {
             "inter_modality_positive_means": per_modality_positive_means,
             "inter_modality_negative_means": per_modality_negative_means,
@@ -290,7 +331,13 @@ class PatchDiscriminationLossNew(Loss):
             "inter_modality_negative_maxs": per_modality_negative_maxs,
             "intra_modality_negative_means": intra_modality_negative_means,
             "intra_modality_negative_mins": intra_modality_negative_mins,
-            "intra_modality_negative_maxs": intra_modality_negative_maxs
+            "intra_modality_negative_maxs": intra_modality_negative_maxs,
+            "hard_negative_similarities_means": hard_negative_similarities_means,
+            "hard_negative_similarities_mins": hard_negative_similarities_mins,
+            "hard_negative_similarities_maxs": hard_negative_similarities_maxs,
+            # "modality_hard_negative_similarities_means": modality_hard_negative_similarities_means,
+            # "modality_hard_negative_similarities_mins": modality_hard_negative_similarities_mins,
+            # "modality_hard_negative_similarities_maxs": modality_hard_negative_similarities_maxs
         }
         # I want to plot the mean min max of how similar the positives are over time
 
