@@ -117,7 +117,13 @@ class PatchDiscriminationLossNew(Loss):
 
     name = "PatchDisc"
 
-    def __init__(self, tau: float = 0.1, pred2unit: bool = False, weight: float = 1.0):
+    def __init__(
+        self,
+        tau: float = 0.1,
+        pred2unit: bool = False,
+        weight: float = 1.0,
+        similarity_threshold: float = 0.99,
+    ):
         """Initialize patch discrimination loss.
 
         Args:
@@ -127,10 +133,13 @@ class PatchDiscriminationLossNew(Loss):
                 from within a sample (True) or using all other instances in a batch (False).
                 If this is False, then this is the AllDisc loss from the Galileo paper
             weight: the weight to apply to this loss
+            similarity_threshold: we will ignore target tokens which are similar above this
+                threshold. Setting it to 1 will mean this term is ignored.
         """
         self.tau = tau
         self.pred2unit = pred2unit
         self.weight = weight
+        self.similarity_threshold = similarity_threshold
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -177,6 +186,25 @@ class PatchDiscriminationLossNew(Loss):
                 torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
             )
             labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
+
+            if self.similarity_threshold < 1:
+                # remove the bz dimension for now
+                target_similarities = torch.einsum(
+                    "npd,nqd->npq", target_sample, target_sample
+                )[0]
+                target_similarities_thresholded = (
+                    target_similarities >= self.similarity_threshold
+                )
+                # unmask the diagonal, and re add the bz dimension
+                target_similarities_thresholded.fill_diagonal_(0)
+                target_similarities_thresholded = (
+                    target_similarities_thresholded.unsqueeze(0)
+                )
+                # this will essentially set the loss of the similar patches to 0
+                score_sample[target_similarities_thresholded] = -torch.finfo(
+                    score_sample.dtype
+                ).max
+
             loss = F.cross_entropy(
                 score_sample.flatten(0, 1),
                 labels.flatten(0, 1),
