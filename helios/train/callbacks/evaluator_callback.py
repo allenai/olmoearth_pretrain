@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 
 from helios.evals.datasets import EvalDatasetPartition, get_eval_dataset
 from helios.evals.datasets.configs import DATASET_TO_CONFIG, TaskType
+from helios.evals.datasets.normalize import NormMethod
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
 from helios.evals.knn import run_knn
@@ -43,6 +44,7 @@ class DownstreamTaskConfig:
     eval_mode: str | None = None
     probe_type: str = "linear"
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
+    norm_method: str = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
 
 
 class DownstreamEvaluator:
@@ -82,7 +84,7 @@ class DownstreamEvaluator:
         self.eval_mode = task.eval_mode
         self.probe_type = task.probe_type
         self.partition = task.partition
-
+        self.norm_method = task.norm_method
         if self.eval_mode is None:
             self.eval_mode = (
                 "knn"
@@ -137,6 +139,7 @@ class DownstreamEvaluator:
         self, data_loader: DataLoader
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Get the embeddings for the given data loader."""
+        print(f"Getting embeddings for {self.dataset} with norm method {self.norm_method}")
         return get_embeddings(
             data_loader=data_loader,
             task_type=self.config.task_type,
@@ -144,6 +147,7 @@ class DownstreamEvaluator:
             patch_size=self.patch_size,
             pooling_type=self.pooling_type,
             concat_features=(self.probe_type == ProbeType.ATTNPOOL),
+            apply_imagenet_normalization=self.norm_method == NormMethod.NO_NORM,
         )
 
     def val(self) -> float:

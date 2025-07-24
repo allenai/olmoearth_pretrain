@@ -167,10 +167,9 @@ class GeobenchDataset(Dataset):
         ), f"All datasets must have 13 channels, not {x.shape[-1]}"
         if self.multiply_by_10_000:
             x = x * 10_000
-        # Hacking this comment to allow imagenet normalization for dinov2
         # Normalize using the downstream task's normalization stats
-        # if not self.norm_stats_from_pretrained:
-        #     x = torch.tensor(normalize_bands(x, self.mean, self.std, self.norm_method))
+        if not self.norm_stats_from_pretrained:
+            x = torch.tensor(normalize_bands(x, self.mean, self.std, self.norm_method))
         # check if label is an object or a number
         if not (isinstance(label, int) or isinstance(label, list)):
             label = label.data
@@ -185,12 +184,10 @@ class GeobenchDataset(Dataset):
             EVAL_TO_HELIOS_S2_BANDS,
         ]
         # Normalize using the pretrained dataset's normalization stats
-        # if self.norm_stats_from_pretrained:
-        #     s2 = torch.tensor(
-        #         self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, s2)
-        #     )
-        # still need to convert to tensor
-        s2 = torch.tensor(s2)
+        if self.norm_stats_from_pretrained:
+            s2 = torch.tensor(
+                self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, s2)
+            )
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
         masked_sample = MaskedHeliosSample.from_heliossample(
             HeliosSample(sentinel2_l2a=s2.float(), timestamps=timestamp.long())

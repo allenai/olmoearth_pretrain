@@ -234,6 +234,7 @@ def train_probe(
                     batch_emb
                 )  # (bsz, num_patches, logits_per_patch) or (bsz, n_cls)
                 logits = outputs["logits"]
+                # logger.info(f"logits: {logits.shape}")
                 if task_type == TaskType.SEGMENTATION:
                     logits = rearrange(
                         logits,
