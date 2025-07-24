@@ -161,6 +161,11 @@ class PatchDiscriminationLossNew(Loss):
 
         # pred = F.normalize(pred, p=2, dim=-1)
         # target = F.normalize(target, p=2, dim=-1)
+        # pred = torch.renorm(pred, p=2, dim=-1, maxnorm=
+        logger.warning("pred norm")
+        logger.warning(torch.linalg.norm(pred, p=2, dim=-1))
+        logger.warning("target norm")
+        logger.warning(torch.linalg.norm(target, p=2, dim=-1))
 
         count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
         losses = []
