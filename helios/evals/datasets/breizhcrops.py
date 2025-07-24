@@ -148,8 +148,8 @@ class BreizhCropsDataset(Dataset):
             :,
             :,
             :,
-            EVAL_TO_HELIOS_S2_BANDS,
-        ]
+            INPUT_TO_OUTPUT_BAND_MAPPING,
+        ][:, :, :, EVAL_TO_HELIOS_S2_BANDS]
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
 

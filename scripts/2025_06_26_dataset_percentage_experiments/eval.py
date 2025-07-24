@@ -216,6 +216,34 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             epochs=50,
         ),
+        "cropharvest_Togo_12": DownstreamTaskConfig(
+            dataset="cropharvest_Togo_12",
+            embedding_batch_size=128,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(20),
+            input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+            patch_size=1,
+            eval_mode="linear_probe",
+            probe_lr=0.1,
+            epochs=50,
+        ),
+        # example of "in season" cropland mapping - 6 indicates only the
+        # first 6 timesteps are passed to the model
+        "cropharvest_People's Republic of China_6": DownstreamTaskConfig(
+            dataset="cropharvest_People's Republic of China_6",
+            embedding_batch_size=128,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(20),
+            input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+            patch_size=1,
+            eval_mode="linear_probe",
+            probe_lr=0.1,
+            epochs=50,
+        ),
     }
     trainer_config = (
         TrainerConfig(
