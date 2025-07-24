@@ -61,14 +61,14 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
-        "m_eurosat": DownstreamTaskConfig(
-            dataset="m-eurosat",
-            embedding_batch_size=128,
-            num_workers=0,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False, #True, #False,
-            eval_interval=Duration.epochs(5),
-        ),
+        # "m_eurosat": DownstreamTaskConfig(
+        #     dataset="m-eurosat",
+        #     embedding_batch_size=128,
+        #     num_workers=0,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=False, #True, #False,
+        #     eval_interval=Duration.epochs(5),
+        # ),
         # "m_bigearthnet": DownstreamTaskConfig(
         #     dataset="m-bigearthnet",
         #     embedding_batch_size=64,
@@ -169,18 +169,18 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         #     probe_lr=0.1,
         #     eval_interval=Duration.epochs(10),
         # ),
-        # "pastis_sentinel2": DownstreamTaskConfig(
-        #     dataset="pastis",
-        #     embedding_batch_size=32,
-        #     probe_batch_size=8,
-        #     num_workers=2,
-        #     pooling_type=PoolingType.MEAN,
-        #     norm_stats_from_pretrained=True,
-        #     probe_lr=0.1,
-        #     eval_interval=Duration.epochs(50),
-        #     input_modalities=[Modality.SENTINEL2_L2A.name],
-        #     epochs=50,
-        # ),
+        "pastis_sentinel2": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+        ),
         # # "pastis_sentinel1": DownstreamTaskConfig(
         # #     dataset="pastis",
         # #     embedding_batch_size=32,

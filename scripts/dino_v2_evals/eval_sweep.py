@@ -36,7 +36,7 @@ imagenet_args = " ".join(
         "--trainer.callbacks.downstream_evaluator.tasks.m_brick_kiln.norm_method=no_norm",
         "--trainer.callbacks.downstream_evaluator.tasks.m_cashew-plant.norm_method=no_norm",
         "--trainer.callbacks.downstream_evaluator.tasks.mados.norm_method=no_norm",
-        "--trainer.callbacks.downstream_evaluator.tasks.m_bigearthnet.norm_method=no_norm",
+        "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.norm_method=no_norm",
         "--trainer.callbacks.downstream_evaluator.tasks.m_eurosat.norm_stats_from_pretrained=False",
         "--trainer.callbacks.downstream_evaluator.tasks.m_bigearthnet.norm_stats_from_pretrained=False",
         "--trainer.callbacks.downstream_evaluator.tasks.m_so2sat.norm_stats_from_pretrained=False",
@@ -76,7 +76,7 @@ helios_args = " ".join(
 for lr in LP_LRs:
     for norm_mode in Normalization_MODES:
         print(f"Running with {norm_mode} normalization and {lr} learning rate")
-        run_name = f"dino_v2_eval_norm{norm_mode}_{lr}"
+        run_name = f"1_dino_v2_eval_norm{norm_mode}_{lr}"
         args = lr_args.format(lr=lr)
         if norm_mode == "imagenet":
             args += imagenet_args
@@ -88,4 +88,3 @@ for lr in LP_LRs:
         cmd = f"python3 scripts/dino_v2_evals/dino_v2_eval.py launch {run_name}  ai2/saturn-cirrascale  --launch.priority=high {args} --launch.task_name=eval"
         print(cmd)
         subprocess.run(cmd, shell=True)  # nosec
-        break
