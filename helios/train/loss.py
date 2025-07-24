@@ -122,7 +122,7 @@ class PatchDiscriminationLossNew(Loss):
         tau: float = 0.1,
         pred2unit: bool = False,
         weight: float = 1.0,
-        similarity_threshold: float = 0.99,
+        similarity_threshold: float = 1,
     ):
         """Initialize patch discrimination loss.
 
