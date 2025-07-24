@@ -406,6 +406,43 @@ class L1Loss(Loss):
         return F.l1_loss(pred, target)
 
 
+@LOSS_REGISTRY.register("smoothl1")
+class SmoothL1Loss(Loss):
+    """Loss function for L1 (mean average error)."""
+
+    name = "SmoothL1"
+
+    def __init__(self, beta: float = 1.0, weight: float = 1.0):
+        """Initialize patch discrimination loss.
+
+        Args:
+            beta: the beta
+            weight: the weight to apply to this loss
+        """
+        self.beta = beta
+        self.weight = weight
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute smooth L1 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+        pred = all_preds[all_masks == MaskValue.DECODER.value]
+        target = all_targets[all_masks == MaskValue.DECODER.value]
+
+        return self.weight * F.smooth_l1_loss(pred, target, beta=self.beta)
+
+
 @LOSS_REGISTRY.register("l2")
 class L2Loss(Loss):
     """Loss function for L2 (mean squared error)."""
