@@ -36,6 +36,8 @@ logger = logging.getLogger("__main__")
 # X_MEAN = d["mean"].tolist()
 # X_STD = d["std"].tolist()
 # ```
+# these are the mean and standard deviation for the
+# full cropharvest arrays (all the bands described in .cropharvest_package.bands import BANDS)
 X_MEAN = np.array(
     [
         -11.402222508898584,
