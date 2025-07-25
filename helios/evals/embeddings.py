@@ -51,7 +51,6 @@ def get_embeddings(
     model = model.to(device="cuda")
     device = next(model.parameters()).device
     total_samples = len(data_loader)
-    image_size = 0
     with torch.no_grad():
         for i, (masked_helios_sample, label) in enumerate(data_loader):
             masked_helios_sample_dict = masked_helios_sample.as_dict(return_none=False)
