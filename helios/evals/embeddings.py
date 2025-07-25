@@ -1,13 +1,15 @@
 """Embeddings from models."""
 
 import logging
-
+import math
 import torch
+
 from torch.utils.data import DataLoader
 
 from helios.evals.datasets.configs import TaskType
 from helios.nn.flexihelios import Encoder, PoolingType, TokensAndMasks
 from helios.train.masking import MaskedHeliosSample
+from helios.data.constants import Modality
 from einops import rearrange, repeat
 import torch.nn.functional as F
 from helios.evals.panopticon.panopticon import PanopticonWrapper
@@ -49,6 +51,7 @@ def get_embeddings(
     model = model.to(device="cuda")
     device = next(model.parameters()).device
     total_samples = len(data_loader)
+    image_size = 0
     with torch.no_grad():
         for i, (masked_helios_sample, label) in enumerate(data_loader):
             masked_helios_sample_dict = masked_helios_sample.as_dict(return_none=False)
@@ -63,6 +66,7 @@ def get_embeddings(
             masked_helios_sample = MaskedHeliosSample.from_dict(
                 masked_helios_sample_dict
             )
+            spatial_pool = task_type == TaskType.SEGMENTATION
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 # TODO: Model expects masked helios sample we need to pass empty masks
                 # Likely we want to have a flag that checks for eval mode and passes empty masks
@@ -70,20 +74,27 @@ def get_embeddings(
                 #     masked_helios_sample, patch_size=patch_size
                 # )[0]  # (bsz, dim)
                 # I need to make this agnostic to the input modality
-                batch_embeddings = model(masked_helios_sample)
+                if spatial_pool:
+                    # Intermediate features are not yet working because of some bug internal to the model
+                    batch_embeddings = model.forward_features(masked_helios_sample)["x_norm_patchtokens"]
+                    num_tokens = batch_embeddings.shape[1]
+                    height = int(math.sqrt(num_tokens))
+                    batch_embeddings = rearrange(batch_embeddings, "b (h w) d -> b h w d", h=height, w=height)
+                    print(f"shape of batch_embeddings: {batch_embeddings.shape}")
+                else:
+                    batch_embeddings = model(masked_helios_sample)
                 # cls_token = batch_embeddings_dict['x_norm_clstoken']
                 # batch_embeddings = (cls_token + batch_embeddings) / 2
 
                 # dict_keys(['x_norm_clstoken', 'x_norm_regtokens', 'x_norm_patchtokens', 'x_prenorm', 'masks'])
-            spatial_pool = task_type == TaskType.SEGMENTATION
-            if spatial_pool:
-                batch_embeddings = batch_embeddings_dict['x_norm_patchtokens']
-                patch_size = 14
-                height = image_size // patch_size # Number of patches in the height dimension
-                batch_embeddings = rearrange(batch_embeddings, "b (h w) d -> b h w d", h=height, w=height)
-                logger.info(f"batch_embeddings: {batch_embeddings.shape}")
-            else:
-                pass
+            # if spatial_pool:
+            #     # batch_embeddings = batch_embeddings_dict['x_norm_patchtokens']
+            #     # patch_size = 14
+            #     # height = image_size // patch_size # Number of patches in the height dimension
+            #     # batch_embeddings = rearrange(batch_embeddings, "b (h w) d -> b h w d", h=height, w=height)
+            #     # logger.info(f"batch_embeddings: {batch_embeddings.shape}")
+            # else:
+            #     pass
                 # batch_embeddings = batch_embeddings_dict['x_norm_patchtokens'].mean(dim=1) #["x_norm_clstoken"]
             # Concat features across modalities in space averaged across time
             # averaged_embeddings = batch_embeddings.pool_unmasked_tokens(

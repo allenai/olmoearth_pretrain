@@ -107,8 +107,6 @@ class PanopticonWrapper(nn.Module):
             if band == "B10":
                 # skipping B10 band for this eval I think because the helios dataloader skips it
                 continue
-            print(band)
-            print(sensor_config["bands"][band])
             chn_ids.append(sensor_config["bands"][band]["gaussian"]["mu"])
         chn_ids = torch.tensor(chn_ids, dtype=torch.float32, device=self.device)
         chn_ids = repeat(chn_ids, "c -> b c", b=batch_size)
@@ -178,6 +176,62 @@ class PanopticonWrapper(nn.Module):
         embeddings = self.model(panopticon_input)
         logger.info(f"Model output shape: {embeddings.shape}")
         return embeddings
+
+    def get_intermediate_layers(self, masked_helios_sample: MaskedHeliosSample, n: list[int], return_class_token: bool = False) -> list[torch.Tensor]:
+        """Get intermediate layers from the panopticon model.
+
+        Args:
+            masked_helios_sample: Input MaskedHeliosSample object
+            n: List of layer indices to return
+            return_class_token: Whether to return the class token
+
+        Returns:
+            List of intermediate layers
+        """
+        # Currently seems to not be working
+        print(f" is chunked blocks: {self.model.chunked_blocks}")
+        panopticon_input = self.prepare_input(masked_helios_sample)
+        embeddings = self.model.get_intermediate_layers(panopticon_input, n, return_class_token)
+        return embeddings
+
+    def get_intermediate_layers(
+        self,
+        x: torch.Tensor,
+        n: int | list[int] = 1,  # Layers or n last layers to take
+        reshape: bool = False,
+        return_class_token: bool = False,
+        norm=True,
+    ) -> torch.Tensor | tuple[torch.Tensor]:
+        if self.model.chunked_blocks:
+            outputs = self.model._get_intermediate_layers_chunked(x, n)
+        else:
+            outputs = self.model._get_intermediate_layers_not_chunked(x, n)
+        if norm:
+            outputs = [self.model.norm(out) for out in outputs]
+        print(f"outputs: {outputs}")
+        class_tokens = [out[:, 0] for out in outputs]
+        outputs = [out[:, 1 + self.model.num_register_tokens :] for out in outputs]
+        if reshape:
+            B, _, w, h = x.shape
+            outputs = [
+                out.reshape(B, w // self.patch_size, h // self.patch_size, -1).permute(0, 3, 1, 2).contiguous()
+                for out in outputs
+            ]
+        if return_class_token:
+            return tuple(zip(outputs, class_tokens))
+        return tuple(outputs)
+
+
+    def forward_features(self, masked_helios_sample: MaskedHeliosSample) -> dict[str, torch.Tensor]:
+        """Forward pass through the panopticon model.
+
+        Args:
+            x_dict: Input dictionary with 'imgs' and 'chn_ids' keys
+
+        Returns:
+        """
+        panopticon_input = self.prepare_input(masked_helios_sample)
+        return self.model.forward_features(panopticon_input)
 
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         """Make the wrapper callable."""

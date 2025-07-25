@@ -61,14 +61,14 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
-        "m_eurosat": DownstreamTaskConfig(
-            dataset="m-eurosat",
-            embedding_batch_size=128,
-            num_workers=0,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False, #True, #False,
-            eval_interval=Duration.epochs(5),
-        ),
+        # "m_eurosat": DownstreamTaskConfig(
+        #     dataset="m-eurosat",
+        #     embedding_batch_size=128,
+        #     num_workers=0,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=False, #True, #False,
+        #     eval_interval=Duration.epochs(5),
+        # ),
         # "m_bigearthnet": DownstreamTaskConfig(
         #     dataset="m-bigearthnet",
         #     embedding_batch_size=64,
@@ -93,16 +93,16 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         #     norm_stats_from_pretrained=False, #True,
         #     eval_interval=Duration.epochs(5),
         # ),
-        # "mados": DownstreamTaskConfig(
-        #     dataset="mados",
-        #     embedding_batch_size=128,
-        #     probe_batch_size=128,
-        #     num_workers=8,
-        #     pooling_type=PoolingType.MEAN,
-        #     norm_stats_from_pretrained=False,
-        #     probe_lr=0.01,
-        #     eval_interval=Duration.epochs(10),
-        # ),
+        "mados": DownstreamTaskConfig(
+            dataset="mados",
+            embedding_batch_size=128,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(10),
+        ),
         # "sen1floods11": DownstreamTaskConfig(
         #     dataset="sen1floods11",
         #     embedding_batch_size=128,
