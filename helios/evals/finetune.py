@@ -16,9 +16,9 @@ from torch.utils.data import DataLoader
 
 from helios.evals.datasets import get_eval_dataset
 from helios.evals.datasets.configs import (
-    DATASET_TO_CONFIG,
     EvalDatasetConfig,
     TaskType,
+    dataset_to_config,
 )
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.metrics import mean_iou
@@ -61,7 +61,7 @@ def finetune_and_eval_cls(
     Returns:
         The validation accuracy of the finetuned model.
     """
-    task_config = DATASET_TO_CONFIG[task_name]
+    task_config = dataset_to_config(task_name)
     if task_config.task_type != TaskType.CLASSIFICATION:
         raise ValueError(f"Task {task_name} is not a classification task")
 
@@ -142,7 +142,7 @@ def finetune_and_eval_seg(
     Returns:
         The validation mean IoU of the finetuned model.
     """
-    task_config = DATASET_TO_CONFIG[task_name]
+    task_config = dataset_to_config(task_name)
     if task_config.task_type != TaskType.SEGMENTATION:
         raise ValueError(f"Task {task_name} is not a segmentation task")
 
@@ -612,9 +612,7 @@ def sweep_lr(
         num_runs: The number of runs to sweep the learning rate over.
         device: The device to use for training.
     """
-    if task_name not in DATASET_TO_CONFIG:
-        raise ValueError(f"Task {task_name} not found")
-    task_config = DATASET_TO_CONFIG[task_name]
+    task_config = dataset_to_config(task_name)
     task_type = task_config.task_type
 
     final_scores = {}

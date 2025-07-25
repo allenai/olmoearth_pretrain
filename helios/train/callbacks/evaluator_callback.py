@@ -13,7 +13,7 @@ from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader
 
 from helios.evals.datasets import EvalDatasetPartition, get_eval_dataset
-from helios.evals.datasets.configs import DATASET_TO_CONFIG, TaskType
+from helios.evals.datasets.configs import TaskType, dataset_to_config
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
 from helios.evals.knn import run_knn
@@ -64,7 +64,7 @@ class DownstreamEvaluator:
             device: Device to evaluate on.
         """
         self.evaluation_name = evaluation_name
-        self.config = DATASET_TO_CONFIG[task.dataset]
+        self.config = dataset_to_config(task.dataset)
         self.trainer = trainer
         self.device = device
         # Add all task attributes to self
@@ -266,14 +266,17 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
         evaluators: list[DownstreamEvaluator] = []
         # Check that probe_lr is set for segmentation tasks
         for evaluation_name, task in self.tasks.items():
-            config = DATASET_TO_CONFIG[task.dataset]
+            config = dataset_to_config(task.dataset)
             if config.task_type == TaskType.SEGMENTATION:
                 if task.probe_lr is None:
                     raise ValueError(f"probe_lr cannot be None for {task.dataset}")
 
             # Check that input_modalities is only set for multimodal tasks
             if (
-                task.dataset not in ["pastis", "sickle"]
+                not (
+                    (task.dataset in ["pastis", "sickle"])
+                    or task.dataset.startswith("cropharvest")
+                )
                 and len(task.input_modalities) > 0
             ):
                 raise ValueError(
