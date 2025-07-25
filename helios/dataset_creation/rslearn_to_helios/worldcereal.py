@@ -39,6 +39,24 @@ def _fill_nones_with_zeros(ndarrays: list[np.ndarray | None]) -> np.ndarray | No
     return np.concatenate(return_list, axis=0)
 
 
+def confidence_to_probabilities(x: np.ndarray) -> np.ndarray:
+    """From eq.1 of the worldcereal paper.
+
+    As a complementary product of the binary prediction,
+    the models also provide binary class probabilities which we
+    used to assess the pixel-based model's confidence in its prediction.
+    Unconfident model predictions are characterized by binary probabilities
+    close to 0.5, while confident model predictions are close to 0 or 1.
+    Therefore, we defined model confidence as a value between 0 and 100, computed
+    using Eq. (1):
+
+    confidence = ((probability - 0.5) / 0.5) * 100
+
+    This function reverses eq. (1) to go back to a probability.
+    """
+    return ((x / 100) / 2) + 0.5
+
+
 def convert_worldcereal(window_path: UPath, helios_path: UPath) -> None:
     """Add WorldCereal data for this window to the Helios dataset.
 
