@@ -36,8 +36,7 @@ def _fill_nones_with_zeros(ndarrays: list[np.ndarray | None]) -> np.ndarray | No
             return_list.append(x)
         else:
             return_list.append(filler.copy())
-    # concatenate along the final (channel) dimension
-    return np.concatenate(return_list, axis=-1)
+    return np.concatenate(return_list, axis=0)
 
 
 def convert_worldcereal(window_path: UPath, helios_path: UPath) -> None:
