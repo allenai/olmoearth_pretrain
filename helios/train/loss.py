@@ -181,7 +181,7 @@ class PatchDiscriminationLossNew(Loss):
                 score_sample.flatten(0, 1),
                 labels.flatten(0, 1),
                 reduction="none",
-                label_smoothing=0.1,
+                label_smoothing=0.01,
             )
             loss = loss.mean()
             losses.append(loss)
