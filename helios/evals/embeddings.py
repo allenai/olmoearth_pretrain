@@ -13,6 +13,7 @@ from helios.data.constants import Modality
 from einops import rearrange, repeat
 import torch.nn.functional as F
 from helios.evals.panopticon.panopticon import PanopticonWrapper
+from helios.evals.dinov2.dinov2 import DINOv2Wrapper
 from torchvision import transforms
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ def get_embeddings(
     torch.hub._validate_not_a_forked_repo=lambda a,b,c: True
     # torchhub_id = "dinov2_vitb14"
     # model = torch.hub.load("facebookresearch/dinov2", torchhub_id)
-    model = PanopticonWrapper()
+    model = DINOv2Wrapper(apply_imagenet_normalization=apply_imagenet_normalization, use_cls_token=True)
 
     model = model.eval()
     # move model to GPU
@@ -68,12 +69,6 @@ def get_embeddings(
             spatial_pool = task_type == TaskType.SEGMENTATION
             is_multi_timestep = masked_helios_sample.timestamps.shape[1] > 1
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                # TODO: Model expects masked helios sample we need to pass empty masks
-                # Likely we want to have a flag that checks for eval mode and passes empty masks
-                # batch_embeddings: TokensAndMasks = model(
-                #     masked_helios_sample, patch_size=patch_size
-                # )[0]  # (bsz, dim)
-                # I need to make this agnostic to the input modality
                 if spatial_pool:
                     # Intermediate features are not yet working because of some bug internal to the model
                     batch_embeddings = model.forward_features(masked_helios_sample)
@@ -81,25 +76,6 @@ def get_embeddings(
                 else:
                     batch_embeddings = model(masked_helios_sample)
                     print(f"shape of batch_embeddings: {batch_embeddings.shape}")
-                # cls_token = batch_embeddings_dict['x_norm_clstoken']
-                # batch_embeddings = (cls_token + batch_embeddings) / 2
-
-                # dict_keys(['x_norm_clstoken', 'x_norm_regtokens', 'x_norm_patchtokens', 'x_prenorm', 'masks'])
-            # if spatial_pool:
-            #     # batch_embeddings = batch_embeddings_dict['x_norm_patchtokens']
-            #     # patch_size = 14
-            #     # height = image_size // patch_size # Number of patches in the height dimension
-            #     # batch_embeddings = rearrange(batch_embeddings, "b (h w) d -> b h w d", h=height, w=height)
-            #     # logger.info(f"batch_embeddings: {batch_embeddings.shape}")
-            # else:
-            #     pass
-                # batch_embeddings = batch_embeddings_dict['x_norm_patchtokens'].mean(dim=1) #["x_norm_clstoken"]
-            # Concat features across modalities in space averaged across time
-            # averaged_embeddings = batch_embeddings.pool_unmasked_tokens(
-            #     pooling_type,
-            #     spatial_pooling=spatial_pool,
-            #     concat_features=concat_features,
-            # )
             averaged_embeddings = batch_embeddings
             embeddings.append(averaged_embeddings.cpu())
             labels.append(label)
