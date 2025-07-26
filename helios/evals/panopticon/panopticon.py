@@ -11,6 +11,8 @@ from helios.train.masking import MaskedHeliosSample
 from helios.nn.flexihelios import PoolingType
 from helios.data.constants import Modality
 import math
+from olmo_core.config import Config
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -281,3 +283,11 @@ class PanopticonWrapper(nn.Module):
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         """Make the wrapper callable."""
         return self.forward(masked_helios_sample)
+
+
+@dataclass
+class PanopticonConfig(Config):
+    """olmo_core style config for PanopticonWrapper."""
+    torchhub_id: str = "panopticon_vitb14"
+    patch_size: int = 14
+    device: str = "cuda"
