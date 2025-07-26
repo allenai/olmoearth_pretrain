@@ -153,6 +153,7 @@ class PatchDiscriminationLossNew(Loss):
         pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
         target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
         bs, nt, _ = pred.shape
+        loss = F.smooth_l1_loss(pred, target, beta=0.1)
 
         # if self.pred2unit:
         #     pred_mu = pred.mean(1, keepdims=True)
@@ -186,7 +187,7 @@ class PatchDiscriminationLossNew(Loss):
             loss = loss.mean()
             losses.append(loss)
             start = end
-        loss = torch.stack(losses).mean()
+        loss += torch.stack(losses).mean()
         return self.weight * loss
 
 
