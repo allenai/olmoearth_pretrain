@@ -34,6 +34,32 @@ logger = logging.getLogger(__name__)
 GEOBENCH_DIR = UPath("/weka/dfive-default/presto-geobench/dataset/geobench")
 
 
+def _landsathelios2geobench_name(band_name: str) -> str:
+    """Transform Helios Landsat band name to Geobench Landsat band name."""
+    # transforms are documented here:
+    # https://github.com/ServiceNow/geo-bench/blob/main/geobench/dataset.py#L350
+    transform = {
+        "B1": "01 - Coastal aerosol",
+        "B2": "02 - Blue",
+        "B3": "03 - Green",
+        "B4": "04 - Red",
+        "B5": "05 - NIR",
+        "B6": "06 - SWIR1",
+        "B7": "07 - SWIR2",
+        # B8 is the panchromatic band. Geobech does not include it.
+        # its wavelength most overlaps with B3, so this is what we
+        # will treat as B8 from the GeoBench dataset.
+        "B8": "03 - Green",
+        "B9": "09 - Cirrus",
+        "B10": "10 - Tirs1",
+        "B11": "10 - Tirs1",
+    }
+    return transform[band_name]
+
+
+GEOBENCH_L8_BAND_NAMES = [_landsathelios2geobench_name(b) for b in EVAL_L8_BAND_NAMES]
+
+
 class GeobenchDataset(Dataset):
     """GeoBench dataset, returning data in the Helios format."""
 
@@ -109,11 +135,11 @@ class GeobenchDataset(Dataset):
         imputed_band_info = impute_normalization_stats(
             task.band_stats,
             config.imputes,
-            all_bands=EVAL_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES,
+            all_bands=GEOBENCH_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES,
         )
         self.mean, self.std = self._get_norm_stats(
             imputed_band_info,
-            all_bands=EVAL_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES,
+            all_bands=GEOBENCH_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES,
         )
         self.active_indices = range(int(len(self.dataset)))
         self.norm_method = norm_method
@@ -183,7 +209,7 @@ class GeobenchDataset(Dataset):
             x_list,
             self.band_names,
             self.config.imputes,
-            all_bands=EVAL_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES,
+            all_bands=GEOBENCH_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES,
         )
 
         x = np.stack(x_list, axis=2)  # (h, w, 13)
