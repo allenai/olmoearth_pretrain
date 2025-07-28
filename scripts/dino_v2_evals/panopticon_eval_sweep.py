@@ -75,6 +75,6 @@ for lr in LP_LRs:
         elif norm_mode == "helios":
             args += helios_args
         # change to launch and saturn when we are ready to launch
-        cmd = f"python3 scripts/dino_v2_evals/panopticon.py launch {run_name}  ai2/titan-cirrascale  --launch.priority=high {args} --launch.task_name=eval"
+        cmd = f"python3 scripts/dino_v2_evals/panopticon_eval.py launch {run_name}  ai2/titan-cirrascale  --launch.priority=high {args} --launch.task_name=eval"
         print(cmd)
         subprocess.run(cmd, shell=True)  # nosec

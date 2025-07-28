@@ -197,27 +197,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             checkpointer=checkpointer_config,
         )
         .with_callback("wandb", wandb_callback)
-        .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
-        .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
-        .with_callback("config_saver", ConfigSaverCallback())
-        .with_callback(
-            "downstream_evaluator",
-            DownstreamEvaluatorCallbackConfig(
-                tasks=EVAL_TASKS,
-            ),
-        )
-        .with_callback("garbage_collector", garbage_collector_callback)
-        .with_callback("beaker", BeakerCallback())
-        .with_callback(
-            "checkpointer",
-            CheckpointerCallback(
-                save_interval=PERMANENT_SAVE_INTERVAL,
-                ephemeral_save_interval=EPHERMERAL_SAVE_INTERVAL,
-            ),
-        )
-    )
-    return trainer_config
-
+        .witf
 
 def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
     """Build the visualize config for an experiment."""
