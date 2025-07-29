@@ -5,6 +5,7 @@ Updating the checkpointer to allow for partial loading of the model
 from __future__ import annotations
 from olmo_core.train import checkpoint
 from dataclasses import dataclass
+from cached_path import cached_path
 
 import logging
 from concurrent.futures import Future
@@ -21,6 +22,50 @@ import torch.nn as nn
 from rich.progress import track
 from torch.distributed.checkpoint.default_planner import DefaultSavePlanner
 from torch.distributed.checkpoint.metadata import Metadata, TensorStorageMetadata
+import json
+import logging
+import os
+import re
+import tempfile
+from concurrent.futures import Future
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, ClassVar, Dict, Generator, Optional, Tuple, Union
+
+import torch
+import torch.distributed as dist
+from cached_path import cached_path
+from torch.distributed.checkpoint.metadata import Metadata
+
+from olmo_core.aliases import PathOrStr
+from olmo_core.config import Config
+from olmo_core.distributed.checkpoint import (
+    async_save_state_dict,
+    get_checkpoint_metadata,
+    load_state_dict,
+    save_state_dict,
+)
+from olmo_core.exceptions import OLMoConfigurationError
+
+from olmo_core.io import (
+    clear_directory,
+    dir_is_empty,
+    file_exists,
+    is_url,
+    list_directory,
+    normalize_path,
+    upload,
+)
+from olmo_core.exceptions import OLMoConfigurationError
+from olmo_core.distributed.utils import (
+    barrier,
+    get_fs_local_rank,
+    get_rank,
+    is_distributed,
+    scatter_object,
+)
+from olmo_core.distributed.checkpoint.filesystem import RemoteFileSystemReader
 
 @torch.no_grad()
 def load_state_dict(
@@ -57,6 +102,12 @@ class HeliosCheckpointerConfig(checkpoint.CheckpointerConfig):
     """
     Config for the Helios checkpointer
     """
+    def build(self, process_group: Optional[dist.ProcessGroup] = None, **kwargs) -> "HeliosCheckpointer":
+        kwargs = {**self.as_dict(exclude_none=True, recurse=False), **kwargs}
+        work_dir = kwargs.pop("work_dir", None)
+        if work_dir is None:
+            raise OLMoConfigurationError("'work_dir' must be provided to build a Checkpointer")
+        return HeliosCheckpointer(work_dir=Path(work_dir), process_group=process_group, **kwargs)
 
 @dataclass
 class HeliosCheckpointer(checkpoint.Checkpointer):
@@ -66,7 +117,7 @@ class HeliosCheckpointer(checkpoint.Checkpointer):
 
     def load(
         self,
-        dir: PathOrStr,
+        dir: str,
         train_module: TrainModule,
         *,
         load_trainer_state: Optional[bool] = None,
