@@ -87,8 +87,9 @@ def build_train_module_config(
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     scheduler = WSD(
-        decay_steps=100000,
+        decay_steps=250000,
         decay_fraction=None,
+        decay_min_lr=0.00001,
     )
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
@@ -96,11 +97,11 @@ def build_train_module_config(
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "random",  # "modality_cross_random",
+                "type": "modality_cross_random",
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
-                # "allow_encoding_decoding_same_bandset": True,
-                # "min_decoded_bandsets": None,
+                "allow_encoding_decoding_same_bandset": True,
+                "min_decoded_bandsets": None,
                 # "only_decode_modalities": [
                 #     Modality.OPENSTREETMAP_RASTER.name,
                 #     Modality.WORLDCOVER.name,
@@ -161,7 +162,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(75)
+    MAX_DURATION = Duration.epochs(150)
     METRICS_COLLECT_INTERVAL = 10
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
@@ -294,7 +295,7 @@ def build_common_components_no_maps_ssl(*args: Any) -> CommonComponents:
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
-        Modality.LATLON.name,
+        # Modality.LATLON.name,
         # Modality.SRTM.name,
     ]
     return CommonComponents(
