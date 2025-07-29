@@ -9,7 +9,6 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import WSD
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -86,11 +85,12 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    scheduler = WSD(
-        decay_steps=250000,
-        decay_fraction=None,
-        decay_min_lr=0.00001,
-    )
+    # scheduler = WSD(
+    #     decay_steps=250000,
+    #     decay_fraction=None,
+    #     decay_min_lr=0.00001,
+    # )
+    scheduler = None
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         warmup_duration=Duration.steps(8000),
