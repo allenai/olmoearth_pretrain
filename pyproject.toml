@@ -42,3 +42,6 @@ testpaths = [
 addopts = [
     "--import-mode=importlib",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"helios/evals/datasets/cropharvest_package/*" = ["D"]

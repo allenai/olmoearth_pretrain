@@ -313,6 +313,11 @@ class HeliosDataLoader(DataLoaderBase):
                 (256, 256, 12, Modality.LANDSAT.num_bands), dtype=np.float32
             )
             output_dict["landsat"] = mock_landsat
+        if Modality.GSE.name in self.dataset.training_modalities:
+            mock_gse = rng.random(
+                (256, 256, 1, Modality.GSE.num_bands), dtype=np.float32
+            )
+            output_dict["gse"] = mock_gse
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))

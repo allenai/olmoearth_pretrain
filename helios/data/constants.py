@@ -389,6 +389,19 @@ class Modality:
         ignore_when_parsing=True,
     )
 
+    GSE = ModalitySpec(
+        name="gse",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [f"A{idx:02d}" for idx in range(64)],
+                16,
+            ),
+        ],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     @classmethod
     def get(self, name: str) -> ModalitySpec:
         """Get the ModalitySpec with the specified name."""

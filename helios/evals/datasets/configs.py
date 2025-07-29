@@ -106,4 +106,21 @@ DATASET_TO_CONFIG = {
         height_width=32,
     ),
 }
-ALL_DATASETS = list(DATASET_TO_CONFIG.keys())
+
+
+def dataset_to_config(dataset: str) -> EvalDatasetConfig:
+    """Retrieve the correct config for a given dataset."""
+    if dataset in DATASET_TO_CONFIG:
+        return DATASET_TO_CONFIG[dataset]
+    elif dataset.startswith("cropharvest"):
+        return EvalDatasetConfig(
+            task_type=TaskType.CLASSIFICATION,
+            imputes=[
+                ("02 - Blue", "01 - Coastal aerosol"),
+                ("11 - SWIR", "10 - SWIR - Cirrus"),
+            ],
+            num_classes=2,
+            is_multilabel=False,
+        )
+    else:
+        raise ValueError(f"Unrecognized dataset: {dataset}")

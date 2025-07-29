@@ -91,6 +91,8 @@ class TokensAndMasks(NamedTuple):
     naip_mask: Tensor | None = None
     naip_10: Tensor | None = None
     naip_10_mask: Tensor | None = None
+    gse: Tensor | None = None
+    gse_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:

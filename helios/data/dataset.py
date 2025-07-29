@@ -55,6 +55,7 @@ class HeliosSample(NamedTuple):
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
     # naip_10 is currently 4x the height/width of sentinel2_l2a.
     naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
+    gse: ArrayTensor | None = None  # [B, H, W, 1, len(GSE_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
