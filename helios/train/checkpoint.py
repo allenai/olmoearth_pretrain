@@ -2,10 +2,9 @@
 Updating the checkpointer to allow for partial loading of the model
 """
 
+from __future__ import annotations
 from olmo_core.train import checkpoint
 from dataclasses import dataclass
-
-from __future__ import annotations
 
 import logging
 from concurrent.futures import Future
@@ -25,12 +24,12 @@ from torch.distributed.checkpoint.metadata import Metadata, TensorStorageMetadat
 
 @torch.no_grad()
 def load_state_dict(
-    dir: PathOrStr,
+    dir: str,
     state_dict: Dict[str, Any],
     *,
     process_group: Optional[dist.ProcessGroup] = None,
     pre_download: bool = False,
-    work_dir: Optional[PathOrStr] = None,
+    work_dir: Optional[str] = None,
     thread_count: Optional[int] = None,
 ):
     """

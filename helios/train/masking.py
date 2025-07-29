@@ -1643,6 +1643,7 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
             )
             if mask is None:
                 continue
+            # assumes there are never any missing tokens
             mask[:] = MaskValue.DECODER.value
 
         return masked_sample

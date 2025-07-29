@@ -17,13 +17,13 @@ from olmo_core.train.callbacks import (
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
 )
-from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
+from helios.train.checkpoint import HeliosCheckpointerConfig
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.evals.linear_probe import ProbeType
@@ -167,7 +167,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     WANDB_PROJECT = "2025_07_10_no_map_ssl"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
-    checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
+    checkpointer_config = HeliosCheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = HeliosWandBCallback(
         name=common.run_name,
         project=WANDB_PROJECT,

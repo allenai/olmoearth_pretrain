@@ -350,13 +350,16 @@ class HeliosTrainModule(TrainModule):
 
     def state_dict_to_load(self, metadata: Metadata) -> dict[str, Any]:
         """Get the state dict to load."""
+        # at this level we need to filter out the keys that we don't want to load
         load_opts = self.state_dict_load_opts
-        return self._get_state_dict(load_opts)
+        state_dict = self._get_state_dict(load_opts)
+        return state_dict
 
     def state_dict_to_save(self) -> dict[str, Any]:
         """Get the state dict to save."""
         return self._get_state_dict(self.state_dict_save_opts)
 
+    # this is really setting the state_dict model
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load the state dict."""
         dist_cp_sd.set_model_state_dict(
@@ -482,13 +485,14 @@ class HeliosTrainModule(TrainModule):
                 config_dict = json.load(f)
                 model_config = Config.from_dict(config_dict["model"])
             model = model_config.build()
-            # Check if any keys are missing
-            for key in self.model.state_dict().keys():
-                if key not in model.state_dict():
-                    logger.info("Key %s not in checkpoint", key)
-                    raise RuntimeError("Model and checkpoint are not compatible")
-            logger.info("Model and checkpoint are compatible")
-
+            # Add flag to Check if any keys are missing from the model that are in the checkpoint if strict is False
+            # and the allow missing keys in checkpoint is true
+            # for key in self.model.state_dict().keys():
+            #     if key not in model.state_dict():
+            #         logger.info("Key %s not in checkpoint", key)
+            #         raise RuntimeError("Model and checkpoint are not compatible")
+            # logger.info("Model and checkpoint are compatible")
+        print(f"state dict options: {sd_options}")
         model_state_dict = dist_cp_sd.get_model_state_dict(
             self.model, options=sd_options
         )
