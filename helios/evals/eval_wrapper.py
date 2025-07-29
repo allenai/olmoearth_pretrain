@@ -11,6 +11,9 @@ from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.flexihelios import FlexiHeliosBase
 from helios.evals.panopticon.panopticon import Panopticon
 from helios.evals.dinov2.dinov2 import DINOv2
+from logging import getLogger
+
+logger = getLogger(__name__)
 
 
 
@@ -69,9 +72,9 @@ class PanopticonEvalWrapper(EvalWrapper):
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         if self.spatial_pool:
             # Intermediate features are not yet working because of some bug internal to the model
-            batch_embeddings = self.model.forward_features(masked_helios_sample)
+            batch_embeddings = self.model.forward_features(masked_helios_sample, pooling=self.pooling_type)
         else:
-            batch_embeddings = self.model(masked_helios_sample)
+            batch_embeddings = self.model(masked_helios_sample, pooling=self.pooling_type)
         return batch_embeddings
 
 
@@ -92,13 +95,13 @@ def get_eval_wrapper(model: nn.Module, **kwargs) -> EvalWrapper:
     Factory function to get the appropriate eval wrapper for a given model.
     """
     if isinstance(model, FlexiHeliosBase):
-        print("Using HeliosEvalWrapper")
+        logger.info("Using HeliosEvalWrapper")
         return HeliosEvalWrapper(model=model, **kwargs)
     elif isinstance(model, Panopticon):
-        print("Using PanopticonEvalWrapper")
+        logger.info("Using PanopticonEvalWrapper")
         return PanopticonEvalWrapper(model=model, **kwargs)
     elif isinstance(model, DINOv2):
-        print("Using DINOv2EvalWrapper")
+        logger.info("Using DINOv2EvalWrapper")
         return DINOv2EvalWrapper(model=model, **kwargs)
     else:
         raise NotImplementedError(f"No EvalWrapper for model type {type(model)}")
