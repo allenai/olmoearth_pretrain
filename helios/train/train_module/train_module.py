@@ -22,7 +22,7 @@ from olmo_core.distributed.utils import get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
-from olmo_core.train.common import Duration, ReduceType
+from olmo_core.train.common import ReduceType
 from olmo_core.train.train_module import EvalBatchSizeUnit, EvalBatchSpec, TrainModule
 from olmo_core.utils import gc_cuda, get_default_device
 from torch import nn
@@ -149,7 +149,6 @@ class HeliosTrainModule(TrainModule):
         optim_config: OptimConfig,
         transform_config: TransformConfig,
         rank_microbatch_size: int,
-        warmup_duration: Duration | None = None,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
         compile_loss: bool = False,
@@ -168,7 +167,6 @@ class HeliosTrainModule(TrainModule):
             optim_config: The corresponding optimizer config.
             transform_config: The transform configuration for the model.
             rank_microbatch_size: The rank batch size in instances.
-            warmup_duration: The warmup duration.
             compile_model: Whether to compile to the model.
             dp_config: Data parallel configuration for the model.
             compile_loss: Whether to compile the loss function.
@@ -206,8 +204,6 @@ class HeliosTrainModule(TrainModule):
             )
         else:
             self.world_mesh = None
-
-        self.warmup_duration = warmup_duration
 
         # Maybe compile.
         if compile_model:
@@ -325,16 +321,6 @@ class HeliosTrainModule(TrainModule):
                 f"global batch size ({self.trainer.global_batch_size:,d}) must be divisible by "
                 f"micro-batch size ({self.rank_microbatch_size:,d}) x DP world size ({ws})"
             )
-        if self.scheduler is not None:
-            if hasattr(self.scheduler, "warmup_steps"):
-                assert (
-                    self.warmup_duration is not None
-                ), "warmup_duration must be set if using a scheduler with warmup steps"
-                logger.info("Converting warmup duration to steps")
-                warmup_steps = self.trainer.convert_duration_to_steps(
-                    self.warmup_duration
-                )
-                self.scheduler.warmup_steps = warmup_steps
         if self.trainer.data_loader.min_patch_size != self.model.encoder.min_patch_size:
             raise ValueError(
                 f"min_patch_size of dataloader ({self.trainer.data_loader.min_patch_size}) must match min_patch_size of model ({self.model.encoder.min_patch_size})"

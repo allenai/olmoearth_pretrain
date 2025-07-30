@@ -10,7 +10,7 @@ from olmo_core.distributed.parallel import DataParallelConfig
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
-from olmo_core.train.common import Duration, ReduceType
+from olmo_core.train.common import ReduceType
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
@@ -49,7 +49,6 @@ class MAETrainModuleConfig(HeliosTrainModuleConfig):
         default_factory=lambda: {modality: 0 for modality in Modality.names()}
     )
     max_grad_norm: float = 1.0
-    warmup_duration: Duration = field(default_factory=lambda: Duration.epochs(2))
 
     def build(
         self,
@@ -92,7 +91,6 @@ class MAETrainModule(HeliosTrainModule):
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
         token_exit_cfg: The token exit configuration for the model.
-        warmup_duration: The warmup duration for the model.
         regularizer_config: An optional regularizer configuration for the model.
         find_unused_parameters: Whether to find unused parameters in the model.
     """
@@ -114,7 +112,6 @@ class MAETrainModule(HeliosTrainModule):
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
-        warmup_duration: Duration = Duration.epochs(2),
         mae_loss_config: LossConfig | None = None,
         latent_mim_loss_config: LossConfig | None = None,
         regularizer_config: LossConfig | None = None,
@@ -142,7 +139,6 @@ class MAETrainModule(HeliosTrainModule):
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
             token_exit_cfg: The token exit configuration for the model.
-            warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
             find_unused_parameters: Whether to find unused parameters in the model.
         """
@@ -160,7 +156,6 @@ class MAETrainModule(HeliosTrainModule):
             device=device,
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
-            warmup_duration=warmup_duration,
             find_unused_parameters=find_unused_parameters,  # Must be true so that we can deal with missing modalities
         )
         self.masking_strategy = masking_config.build()
