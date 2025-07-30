@@ -39,6 +39,8 @@ EVAL_L8_BAND_NAMES = [
     "B11",
 ]
 
+EVAL_SRTM_BAND_NAMES = ["srtm"]
+
 
 # Get the corresponding index from either Sentinel2 L1C or L2A band names
 def _eval_s2_band_index_from_helios_name(
@@ -81,3 +83,6 @@ EVAL_TO_HELIOS_S1_BANDS = [
 EVAL_TO_HELIOS_L8_BANDS = [
     _eval_l8_band_index_from_helios_name(b) for b in Modality.LANDSAT.band_order
 ]
+
+# one to one mapping
+EVAL_TO_HELIOS_SRTM_BANDS = [0]

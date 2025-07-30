@@ -626,6 +626,9 @@ class HeliosDataset(Dataset):
                 size=int(len(self.sample_indices) * self.dataset_percentage),
                 replace=False,
             )
+            logger.info(
+                f"Picked {len(self.sample_indices)} samples from {num_samples} samples"
+            )
         self.latlon_distribution = self.latlon_distribution[self.sample_indices]
 
     def get_geographic_distribution(self) -> np.ndarray:

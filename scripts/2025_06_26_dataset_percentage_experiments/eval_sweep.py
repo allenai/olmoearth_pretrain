@@ -20,11 +20,13 @@ lr_args = " ".join(
     ]
 )
 checkpoints = [
-    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_1.0/step440000",
-    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_0.0625/step100000",
-    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_0.5/step360000",
-    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_0.25/step190000",
-    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_0.125/step220000",
+    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_0.0004/step375000",
+    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_.0001/step195000",
+    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_.0004/step420000",
+    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_.0078125/step450000",
+    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_.015625/step450000",
+    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_.0625/step450000",
+    "/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_.125/step450000",
 ]
 
 parser = argparse.ArgumentParser()
@@ -41,6 +43,9 @@ for checkpoint in checkpoints:
             + checkpoint.split("/")[-1]
             + f"_eval_{probe_lr}"
         )
+        if "0.0004" in run_name:
+            # the value should be 0.00004 for the ds percentage
+            run_name = run_name.replace("0.0004", "0.00004")
         start_command = "python3" if run_cmd == "launch" else "torchrun"
         formatted_lr_args = lr_args.format(lr=probe_lr)
         print(formatted_lr_args)
