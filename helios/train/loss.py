@@ -273,7 +273,7 @@ class PatchDiscriminationLoss(Loss):
         scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
         count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
         if self.mask_other_samples:
-            logit_mask = torch.full_like(scores, -torch.finfo(scores.dtype).max)
+            logit_mask = torch.full_like(scores, torch.finfo(scores.dtype).min)
             start = 0
             for c in count:
                 end = start + c
