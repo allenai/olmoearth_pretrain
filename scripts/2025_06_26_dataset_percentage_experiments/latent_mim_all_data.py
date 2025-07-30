@@ -137,6 +137,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
+        num_dataset_repeats_per_epoch=int(0.25 / common.dataset_percentage),
     )
 
 
@@ -184,7 +185,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "v0.2_sweep"
+    WANDB_PROJECT = "2025_07_18_dataset_percentage_experiments"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -216,6 +217,24 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
+        ),
+        "mados": DownstreamTaskConfig(
+            dataset="mados",
+            embedding_batch_size=128,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            probe_lr=0.1,
+            eval_interval=Duration.steps(10000),
+        ),
+        "m-so2sat": DownstreamTaskConfig(
+            dataset="m-so2sat",
+            embedding_batch_size=128,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.steps(10000),
         ),
     }
     trainer_config = (

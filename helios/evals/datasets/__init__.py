@@ -6,7 +6,7 @@ from olmo_core.config import StrEnum
 from torch.utils.data import Dataset
 
 from .breizhcrops import BREIZHCROPS_DIR, BreizhCropsDataset
-from .configs import ALL_DATASETS
+from .cropharvest import CROPHARVEST_DIR, CropHarvestDataset
 from .floods_dataset import FLOODS_DIR, Sen1Floods11Dataset
 from .geobench_dataset import GEOBENCH_DIR, GeobenchDataset
 from .mados_dataset import MADOS_DIR, MADOSDataset
@@ -36,11 +36,11 @@ def get_eval_dataset(
     partition: str = EvalDatasetPartition.TRAIN1X,
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
-    if eval_dataset not in ALL_DATASETS:
-        raise ValueError(f"Unrecognized dataset {eval_dataset}")
-
     if input_modalities:
-        if eval_dataset not in ["pastis", "sickle"]:
+        if not (
+            eval_dataset.startswith("cropharvest")
+            or (eval_dataset in ["pastis", "sickle"])
+        ):
             raise ValueError(
                 f"input_modalities is only supported for multimodal tasks, got {eval_dataset}"
             )
@@ -93,6 +93,23 @@ def get_eval_dataset(
             split=split,
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
+            input_modalities=input_modalities,
+        )
+    elif eval_dataset.startswith("cropharvest"):
+        # e.g. "cropharvest_Togo_12"
+        try:
+            _, country, timesteps = eval_dataset.split("_")
+        except ValueError:
+            raise ValueError(
+                "CropHarvest tasks should have the following naming format: cropharvest_<country>_<timesteps> (e.g. 'cropharvest_Togo_12')"
+            )
+        return CropHarvestDataset(
+            cropharvest_dir=CROPHARVEST_DIR,
+            country=country,
+            split=split,
+            partition=partition,
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            timesteps=int(timesteps),
             input_modalities=input_modalities,
         )
     else:
