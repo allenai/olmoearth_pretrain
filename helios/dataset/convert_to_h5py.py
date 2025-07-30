@@ -36,6 +36,8 @@ from helios.dataset.utils import get_modality_specs_from_names
 
 logger = logging.getLogger(__name__)
 
+mp.set_start_method("spawn", force=True)
+
 
 @dataclass
 class ConvertToH5pyConfig(Config):
@@ -185,7 +187,8 @@ class ConvertToH5py:
         total_sample_indices = len(samples)
 
         if self.multiprocessed_h5_creation:
-            num_processes = max(1, mp.cpu_count() - 4)
+            # Processes may go to sleep state if we use too many processes
+            num_processes = max(1, mp.cpu_count() - 10)
             logger.info(f"Creating H5 dataset using {num_processes} processes")
             with mp.Pool(processes=num_processes) as pool:
                 # Process samples in parallel and track progress with tqdm
@@ -327,7 +330,7 @@ class ConvertToH5py:
         """Process samples before the filtering process."""
         total_sample_indices = len(samples)
         if self.multiprocessed_sample_processing:
-            num_processes = max(1, mp.cpu_count() - 4)
+            num_processes = max(1, mp.cpu_count() - 10)
             logger.info(f"Processing samples using {num_processes} processes")
             with mp.Pool(processes=num_processes) as pool:
                 # Process samples in parallel and track progress with tqdm
