@@ -51,7 +51,7 @@ from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
-MAX_PATCH_SIZE = 1
+MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
 
@@ -72,7 +72,7 @@ def my_build_common_components(
         Modality.SRTM.name,
         Modality.LANDSAT.name,
         Modality.OPENSTREETMAP_RASTER.name,
-        # Modality.ERA5_10.name,
+        Modality.ERA5_10.name,
     ]
     return config
 
@@ -128,7 +128,7 @@ def build_train_module_config(
                     Modality.WORLDCOVER.name,
                     Modality.SRTM.name,
                     Modality.OPENSTREETMAP_RASTER.name,
-                    # Modality.ERA5_10.name,
+                    Modality.ERA5_10.name,
                 ],
             }
         ),
@@ -172,6 +172,16 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         # presto
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469728",
+            training_modalities=common.training_modalities,
+        ),
+        # osm_sampling
+        HeliosDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1138828",
+            training_modalities=common.training_modalities,
+        ),
+        # osmbig
+        HeliosDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1291656",
             training_modalities=common.training_modalities,
         ),
     ]
