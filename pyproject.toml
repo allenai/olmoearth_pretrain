@@ -29,13 +29,7 @@ dependencies = {file = ["requirements.txt"]}
 dataset_creation = { file = ["requirements_dataset_creation.txt"] }
 dev = { file = ["requirements-dev.txt"] }
 evals = { file = ["requirements-evals.txt"] }
-beaker = ["beaker-py==1.34.1"]
-all = [
-    "helios[dataset_creation]",
-    "helios[dev]",
-    "helios[evals]",
-    "helios[beaker]",
-]
+beaker = { file = ["requirements-beaker.txt"] }
 
 [tool.ruff]
 fix = true
