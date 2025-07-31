@@ -1,0 +1,63 @@
+processing_level: 'SR'
+
+srf_filename: rfs_wv23_recon.npy
+
+# Worldview-2 and Worldview-3_VNIR
+# In the corresponding dataset, either of the two above satellites are used. However, since
+# their bands have the same properties, we use the same file for both
+bands:
+  B01:
+    name: 'coastal'
+    gaussian:
+      mu: 427.911967712222
+      sigma: 17.620786889126904
+    GSD: 1.24
+
+  B02:
+    name: 'blue'
+    gaussian:
+      mu: 482.40648216687816
+      sigma: 22.189227543486883
+    GSD: 1.24
+
+  B03:
+    name: 'green'
+    gaussian:
+      mu: 545.1346759174888
+      sigma: 27.270655243664613
+    GSD: 1.24
+
+  B04:
+    name: 'yellow'
+    gaussian:
+      mu: 604.6891589644367
+      sigma: 15.166919163740687
+    GSD: 1.24
+
+  B05:
+    name: 'red'
+    gaussian:
+      mu: 660.5315665213377
+      sigma: 23.075009737550587
+    GSD: 1.24
+
+  B06:
+    name: 'red edge'
+    gaussian:
+      mu: 723.1823149413602
+      sigma: 15.151759763702627
+    GSD: 1.24
+
+  B07:
+    name: 'nir1'
+    gaussian:
+      mu: 823.9274208290032
+      sigma: 42.09302701870739
+    GSD: 1.24
+
+  B08:
+    name: 'nir2'
+    gaussian:
+      mu: 906.4611534199017
+      sigma: 36.61665833552878
+    GSD: 1.24
