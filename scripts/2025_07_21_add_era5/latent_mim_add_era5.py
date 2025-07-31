@@ -126,8 +126,8 @@ def build_train_module_config(
                 "decode_ratio": 0.5,
                 "decoded_modalities": [
                     Modality.WORLDCOVER.name,
-                    Modality.SRTM.name,
-                    Modality.OPENSTREETMAP_RASTER.name,
+                    # Modality.SRTM.name,
+                    # Modality.OPENSTREETMAP_RASTER.name,
                     # Modality.ERA5_10.name,
                 ],
             }
