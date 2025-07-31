@@ -123,12 +123,12 @@ def build_train_module_config(
             strategy_config={
                 "type": "random_fixed_modality",
                 "encode_ratio": 0.5,
-                "decode_ratio": 0.5,
+                "decode_ratio": 1.0,
                 "decoded_modalities": [
-                    Modality.WORLDCOVER.name,
-                    Modality.SRTM.name,
-                    Modality.OPENSTREETMAP_RASTER.name,
-                    # Modality.ERA5_10.name,
+                    # Modality.WORLDCOVER.name,
+                    # Modality.SRTM.name,
+                    # Modality.OPENSTREETMAP_RASTER.name,
+                    Modality.ERA5_10.name,
                 ],
             }
         ),
