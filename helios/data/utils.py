@@ -163,3 +163,48 @@ def plot_modality_data_distribution(modality: str, modality_data: dict) -> plt.F
         ax.grid(True, linestyle="--", alpha=0.5)
     fig.tight_layout()
     return fig
+
+def haversine_distance_radians(
+    lat1: np.ndarray, lon1: np.ndarray, lat2: np.ndarray, lon2: np.ndarray
+) -> np.ndarray:
+    """Calculate the haversine distance between two arrays of points in meters.
+
+    Parameters
+    ----------
+    lat1 : np.ndarray
+        The latitude of the first array of coordinates (in degrees).
+    lon1 : np.ndarray
+        The longitude of the first array of coordinates (in degrees).
+    lat2 : np.ndarray
+        The latitude of the second array of coordinates (in degrees).
+    lon2 : np.ndarray
+        The longitude of the second array of coordinates (in degrees).
+
+    Returns
+    -------
+    np.ndarray
+        The haversine distance between the two arrays of coordinates in meters.
+    """
+
+    # Earth's radius in meters
+    R = 6371000  # meters
+
+    # Convert degrees to radians
+    lat1_rad = np.radians(lat1)
+    lon1_rad = np.radians(lon1)
+    lat2_rad = np.radians(lat2)
+    lon2_rad = np.radians(lon2)
+
+    # Differences in coordinates
+    delta_lat = lat2_rad - lat1_rad
+    delta_lon = lon2_rad - lon1_rad
+
+    # Haversine formula
+    a = (
+        np.sin(delta_lat / 2) ** 2
+        + np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(delta_lon / 2) ** 2
+    )
+    c = 2 * np.arcsin(np.sqrt(a))
+
+    distances = R * c
+    return distances
