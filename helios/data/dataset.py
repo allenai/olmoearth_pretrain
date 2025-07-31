@@ -461,6 +461,7 @@ class HeliosDataset(Dataset):
         cache_dir: UPath | None = None,
         samples_per_sec: float | None = None,
         dataset_percentage: float = 1.0,
+        dist_from_anchor_m: float = 1000000,
     ):
         """Initialize the dataset.
 
@@ -512,7 +513,7 @@ class HeliosDataset(Dataset):
 
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
-
+        self.dist_from_anchor_m: float = dist_from_anchor_m
     @property
     def fingerprint_version(self) -> str:
         """The version of the fingerprint."""
@@ -638,20 +639,14 @@ class HeliosDataset(Dataset):
         logger.info(f"Latlon distribution: {self.latlon_distribution.shape}")
         # calculate the haversine distance between the france point and the latlon distribution
         distance = haversine_distance_radians(france_point[:, 0], france_point[:, 1], self.latlon_distribution[:, 0], self.latlon_distribution[:, 1])
-        # get indices of the all the points less than 100km away distance is in meters
-        # do less than 500km then less than 250km then less than 100km then less than 50km then less than 10km
-        closest_indices = np.where(distance < 500000)[0]
-        # count the number of indices
-        logger.info(f"Number of points less than 500km away: {len(closest_indices)}")
-        closest_indices = np.where(distance < 250000)[0]
-        logger.info(f"Number of points less than 250km away: {len(closest_indices)}")
-        closest_indices = np.where(distance < 100000)[0]
-        logger.info(f"Number of points less than 100km away: {len(closest_indices)}")
-        closest_indices = np.where(distance < 50000)[0]
-        logger.info(f"Number of points less than 50km away: {len(closest_indices)}")
-        closest_indices = np.where(distance < 10000)[0]
-        logger.info(f"Number of points less than 10km away: {len(closest_indices)}")
-        # get the furthest point in the closest_indices_10km
+        # filter latlon distribution and sample indices to points less than dist_from_anchor_m
+        closest_indices = np.where(distance < self.dist_from_anchor_m)[0]
+        logger.info(f"Number of points less than {self.dist_from_anchor_m}m away: {len(closest_indices)}")
+        self.sample_indices = self.sample_indices[closest_indices]
+        self.latlon_distribution = self.latlon_distribution[closest_indices]
+        # log the number of points after filtering
+        logger.info(f"Number of points after filtering: {len(self.sample_indices)}")
+
 
 
 
@@ -930,6 +925,7 @@ class HeliosDatasetConfig(Config):
     cache_dir: str | None = None
     samples_per_sec: float | None = None
     dataset_percentage: float = 1.0
+    dist_from_anchor_m: float = 1000000
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
