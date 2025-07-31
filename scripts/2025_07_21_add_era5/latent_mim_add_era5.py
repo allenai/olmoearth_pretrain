@@ -123,11 +123,11 @@ def build_train_module_config(
             strategy_config={
                 "type": "random_fixed_modality",
                 "encode_ratio": 0.5,
-                "decode_ratio": 0.0,
+                "decode_ratio": 0.5,
                 "decoded_modalities": [
-                    # Modality.WORLDCOVER.name,
-                    # Modality.SRTM.name,
-                    # Modality.OPENSTREETMAP_RASTER.name,
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                    Modality.OPENSTREETMAP_RASTER.name,
                     Modality.ERA5_10.name,
                 ],
             }
@@ -149,7 +149,7 @@ def build_train_module_config(
         # ),
         loss_config=LossConfig(
             loss_config={
-                "type": "patch_discrimination_new",
+                "type": "adjusted_patch_discrimination",
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
@@ -184,11 +184,11 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     dataset_configs = [
-        # presto
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469728",
-            training_modalities=common.training_modalities,
-        ),
+        # # presto
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469728",
+        #     training_modalities=common.training_modalities,
+        # ),
         # osm_sampling
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1138828",
