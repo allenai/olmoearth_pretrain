@@ -1,11 +1,14 @@
 """Normalizer for the Helios dataset."""
 
 import json
+import logging
 from enum import Enum
 
 import numpy as np
 
 from helios.data.constants import ModalitySpec
+
+logger = logging.getLogger(__name__)
 
 
 class Strategy(Enum):

@@ -87,6 +87,15 @@ SRTM can also be processed on one machine:
     rslearn dataset ingest --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
     rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
 
+For Google Satellite Embedding v1, use the commands below. It will start Google Earth
+Engine export tasks which should take ~20 seconds each, and can be monitored from the
+GCP console. The prepare step will download a CSV containing the geometry of all of the
+Images in the GEE ImageCollection.
+
+    cp data/rslearn_dataset_configs/config_google_satembedding.json $DATASET_PATH/config.json
+    rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64
+    rslearn dataset materialize --root $DATASET_PATH --workers 32 --load-workers 128 --group res_10 --no-use-initial-job --ignore-errors
+
 The steps above can be performed in a Beaker session:
 
 ```
@@ -116,6 +125,7 @@ Now we convert the data to Helios format.
     python -m helios.dataset_creation.rslearn_to_helios.sentinel2_l2a --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.srtm --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.worldcover --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
+    python -m helios.dataset_creation.rslearn_to_helios.gse --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
 
 
 Landsat
@@ -196,3 +206,4 @@ into the per-modality CSVs:
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality sentinel2_l2a --time_span year
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality srtm
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality worldcover
+    python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality gse

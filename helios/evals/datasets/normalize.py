@@ -5,12 +5,14 @@ import numpy as np
 from .constants import EVAL_S2_BAND_NAMES
 
 
-def impute_normalization_stats(band_info: dict, imputes: list[tuple[str, str]]) -> dict:
+def impute_normalization_stats(
+    band_info: dict,
+    imputes: list[tuple[str, str]],
+    all_bands: list[str] = EVAL_S2_BAND_NAMES,
+) -> dict:
     """For certain eval sets, the normalization stats (band_info) may be incomplete.
 
-    This function imputes it so that len(new_band_info) == len(EVAL_S2_BAND_NAMES).
-
-    A TODO is to extend this for non-S2 cases.
+    This function imputes it so that len(new_band_info) == len(all_bands).
     """
     # band_info is a dictionary with band names as keys and statistics (mean / std) as values
     if not imputes:
@@ -18,7 +20,7 @@ def impute_normalization_stats(band_info: dict, imputes: list[tuple[str, str]]) 
 
     names_list = list(band_info.keys())
     new_band_info: dict = {}
-    for band_name in EVAL_S2_BAND_NAMES:
+    for band_name in all_bands:
         new_band_info[band_name] = {}
         if band_name in names_list:
             # we have the band, so use it

@@ -18,6 +18,7 @@ def get_embeddings(
     model: Encoder,
     patch_size: int,
     pooling_type: PoolingType = PoolingType.MAX,
+    concat_features: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Get embeddings from model for the data in data_loader."""
     embeddings = []
@@ -48,8 +49,11 @@ def get_embeddings(
                 )[0]  # (bsz, dim)
 
             spatial_pool = True if task_type == TaskType.SEGMENTATION else False
+            # Concat features across modalities in space averaged across time
             averaged_embeddings = batch_embeddings.pool_unmasked_tokens(
-                pooling_type, spatial_pooling=spatial_pool
+                pooling_type,
+                spatial_pooling=spatial_pool,
+                concat_features=concat_features,
             )
             embeddings.append(averaged_embeddings.cpu())
             labels.append(label)

@@ -61,6 +61,7 @@ class HeliosDataLoader(DataLoaderBase):
         drop_last: bool = True,
         persistent_workers: bool = True,
         multiprocessing_context: str = "spawn",
+        num_dataset_repeats_per_epoch: int = 1,
     ):
         """Initialize the HeliosDataLoader."""
         super().__init__(
@@ -88,14 +89,25 @@ class HeliosDataLoader(DataLoaderBase):
         self._global_indices: np.ndarray | None = None
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = multiprocessing_context
+        self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
         if self.num_workers > 0 and self.multiprocessing_context == "forkserver":
             # Overhead of loading modules on import by preloading them
             mp.set_forkserver_preload(["torch", "rasterio"])
 
     @property
+    def total_unique_batches(self) -> int:
+        """The total number of unique batches in an epoch."""
+        return len(self.dataset) // (self.global_batch_size)
+
+    @property
+    def total_unique_size(self) -> int:
+        """The total number of unique instances in an epoch."""
+        return self.total_unique_batches * self.global_batch_size
+
+    @property
     def total_batches(self) -> int:
         """The total number of batches in an epoch."""
-        return len(self.dataset) // (self.global_batch_size)
+        return self.total_unique_batches * self.num_dataset_repeats_per_epoch
 
     @property
     def total_size(self) -> int:
@@ -125,13 +137,15 @@ class HeliosDataLoader(DataLoaderBase):
         if self.shuffle:
             # Deterministically shuffle based on epoch and seed
             rng = get_rng(self.seed + self.epoch)  # type: ignore
-
-        indices: np.ndarray
-        indices = np.arange(len(self.dataset), dtype=np.uint32)
-        if rng is not None:
-            rng.shuffle(indices)
-        # Remove tail of data to make it evenly divisible
-        indices = indices[: self.total_size]
+        indices_list = []
+        for _ in range(self.num_dataset_repeats_per_epoch):
+            indices = np.arange(len(self.dataset), dtype=np.uint32)
+            if rng is not None:
+                rng.shuffle(indices)
+            # Remove tail of data to make it evenly divisible
+            cropped_indices = indices[: self.total_unique_size]
+            indices_list.append(cropped_indices)
+        indices = np.concatenate(indices_list)
         return indices
 
     def build_and_save_global_indices(self, in_memory: bool = False) -> None:
@@ -215,7 +229,6 @@ class HeliosDataLoader(DataLoaderBase):
         instances_per_batch = self.global_batch_size
         indices = indices.reshape(-1, instances_per_batch)
 
-        # Offset by the number of batches already processed.
         if self.batches_processed > 0:  # type: ignore
             indices = indices[self.batches_processed :]  # type: ignore
 
@@ -223,7 +236,7 @@ class HeliosDataLoader(DataLoaderBase):
         if (worker_info := self.worker_info) is not None:
             indices = indices[worker_info.id :: worker_info.num_workers]
 
-        # Finally slice batches into micro batches for the local DP rank.
+        # Finally step batches into micro batches for the local DP rank.
         indices = indices[:, self.dp_rank :: self.dp_world_size].reshape((-1,))
         return indices
 
@@ -283,10 +296,7 @@ class HeliosDataLoader(DataLoaderBase):
                 parts.append(f"{key}{value}")
         return "_".join(parts)
 
-    def get_mock_batch(self) -> HeliosSample:
-        """Get a mock batch, for dry-run of forward and backward pass."""
-        logger.info("Getting mock batch NOT FROM DATASET")
-        rng = get_rng(42)
+    def _get_mock_sample(self, rng: np.random.Generator) -> HeliosSample:
         output_dict = {}
         # ToDO: change to training modalities
         logger.info(f"Training modalities: {self.dataset.training_modalities}")
@@ -316,6 +326,11 @@ class HeliosDataLoader(DataLoaderBase):
                 (256, 256, 12, Modality.LANDSAT.num_bands), dtype=np.float32
             )
             output_dict["landsat"] = mock_landsat
+        if Modality.GSE.name in self.dataset.training_modalities:
+            mock_gse = rng.random(
+                (256, 256, 1, Modality.GSE.num_bands), dtype=np.float32
+            )
+            output_dict["gse"] = mock_gse
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
@@ -323,19 +338,26 @@ class HeliosDataLoader(DataLoaderBase):
         timestamps = np.concatenate([days, months, years], axis=1)  # shape: (12, 3)
 
         output_dict["timestamps"] = timestamps
+        return HeliosSample(**output_dict)
 
+    def get_mock_batch(self) -> HeliosSample:
+        """Get a mock batch, for dry-run of forward and backward pass."""
+        logger.info("Getting mock batch NOT FROM DATASET")
+        rng = get_rng(42)
+        batch_size = self.global_batch_size // self.dp_world_size
         patch_size = 1
         collated_sample = self.collator(
             [
                 (
                     patch_size,
-                    HeliosSample(**output_dict).subset(
+                    self._get_mock_sample(rng).subset(
                         patch_size,
                         max_tokens_per_instance=1500,
                         sampled_hw_p=6,
                         current_length=12,
                     ),
                 )
+                for num in range(batch_size)
             ]
         )
         return collated_sample
@@ -481,6 +503,7 @@ class HeliosDataLoaderConfig(Config):
     prefetch_factor: int | None = None
     target_device_type: str | None = None
     drop_last: bool = True
+    num_dataset_repeats_per_epoch: int = 1
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -522,4 +545,5 @@ class HeliosDataLoaderConfig(Config):
             max_patch_size=self.max_patch_size,
             sampled_hw_p_list=self.sampled_hw_p_list,
             token_budget=self.token_budget,
+            num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
         )
