@@ -514,6 +514,7 @@ class HeliosDataset(Dataset):
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
         self.dist_from_anchor_m: float = dist_from_anchor_m
+
     @property
     def fingerprint_version(self) -> str:
         """The version of the fingerprint."""
@@ -638,18 +639,21 @@ class HeliosDataset(Dataset):
         logger.info(f"France point: {france_point.shape}")
         logger.info(f"Latlon distribution: {self.latlon_distribution.shape}")
         # calculate the haversine distance between the france point and the latlon distribution
-        distance = haversine_distance_radians(france_point[:, 0], france_point[:, 1], self.latlon_distribution[:, 0], self.latlon_distribution[:, 1])
+        distance = haversine_distance_radians(
+            france_point[:, 0],
+            france_point[:, 1],
+            self.latlon_distribution[:, 0],
+            self.latlon_distribution[:, 1],
+        )
         # filter latlon distribution and sample indices to points less than dist_from_anchor_m
         closest_indices = np.where(distance < self.dist_from_anchor_m)[0]
-        logger.info(f"Number of points less than {self.dist_from_anchor_m}m away: {len(closest_indices)}")
+        logger.info(
+            f"Number of points less than {self.dist_from_anchor_m}m away: {len(closest_indices)}"
+        )
         self.sample_indices = self.sample_indices[closest_indices]
         self.latlon_distribution = self.latlon_distribution[closest_indices]
         # log the number of points after filtering
         logger.info(f"Number of points after filtering: {len(self.sample_indices)}")
-
-
-
-
 
     def get_geographic_distribution(self) -> np.ndarray:
         """Get the geographic distribution of the dataset.
@@ -925,7 +929,7 @@ class HeliosDatasetConfig(Config):
     cache_dir: str | None = None
     samples_per_sec: float | None = None
     dataset_percentage: float = 1.0
-    dist_from_anchor_m: float = 1000000
+    dist_from_anchor_m: float = 250000
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
