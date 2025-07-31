@@ -72,7 +72,7 @@ def my_build_common_components(
         Modality.SRTM.name,
         Modality.LANDSAT.name,
         Modality.OPENSTREETMAP_RASTER.name,
-        Modality.ERA5_10.name,
+        # Modality.ERA5_10.name,
     ]
     return config
 
@@ -119,34 +119,34 @@ def build_train_module_config(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         warmup_duration=Duration.steps(8000),
         rank_microbatch_size=64,
+        masking_config=MaskingConfig(
+            strategy_config={
+                "type": "random_fixed_modality",
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
+                "decoded_modalities": [
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    # Modality.ERA5_10.name,
+                ],
+            }
+        ),
         # masking_config=MaskingConfig(
         #     strategy_config={
-        #         "type": "random_fixed_modality",
+        #         "type": "modality_cross_random",
         #         "encode_ratio": 0.5,
         #         "decode_ratio": 0.5,
-        #         "decoded_modalities": [
-        #             # Modality.WORLDCOVER.name,
-        #             # Modality.SRTM.name,
-        #             # Modality.OPENSTREETMAP_RASTER.name,
+        #         "allow_encoding_decoding_same_bandset": True,
+        #         "min_decoded_bandsets": 6,
+        #         "only_decode_modalities": [
+        #             Modality.OPENSTREETMAP_RASTER.name,
+        #             Modality.WORLDCOVER.name,
+        #             Modality.SRTM.name,
         #             Modality.ERA5_10.name,
         #         ],
         #     }
         # ),
-        masking_config=MaskingConfig(
-            strategy_config={
-                "type": "modality_cross_random",
-                "encode_ratio": 0.5,
-                "decode_ratio": 0.5,
-                "allow_encoding_decoding_same_bandset": True,
-                "min_decoded_bandsets": 6,
-                # "only_decode_modalities": [
-                #     Modality.OPENSTREETMAP_RASTER.name,
-                #     Modality.WORLDCOVER.name,
-                #     Modality.SRTM.name,
-                #     Modality.ERA5_10.name,
-                # ],
-            }
-        ),
         loss_config=LossConfig(
             loss_config={
                 "type": "patch_discrimination_new",
