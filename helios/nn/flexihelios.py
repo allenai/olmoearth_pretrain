@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any, NamedTuple
 
 import torch
+import math
 from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor, nn
@@ -1476,6 +1477,8 @@ class Predictor(FlexiHeliosBase):
         )
         # THIS is the learnable mask token
         self.mask_token = nn.Parameter(torch.zeros(decoder_embedding_size))
+        self.loss_tau = nn.Parameter(torch.tensor(math.log(10)))
+        self.loss_bias = nn.Parameter(torch.tensor(-10.0))
 
         self.input_norm = nn.LayerNorm(encoder_embedding_size)
         self.norm = nn.LayerNorm(decoder_embedding_size)
@@ -1785,7 +1788,7 @@ class Predictor(FlexiHeliosBase):
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         super().apply_fsdp(**fsdp_kwargs)
-        fully_shard(self, **fsdp_kwargs)
+        fully_shard(self, **fsdp_kwargs, ignored_params={self.loss_tau, self.loss_bias})
 
 
 @dataclass

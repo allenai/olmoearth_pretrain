@@ -183,7 +183,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
-        return self.base_loss.compute(pred, targets)
+        return self.base_loss.compute(pred, targets, tau=self.model.decoder.loss_tau, bias=self.model.decoder.loss_bias)
 
     def train_batch(
         self, batch: tuple[int, HeliosSample], dry_run: bool = False

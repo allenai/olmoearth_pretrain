@@ -378,6 +378,58 @@ class AdjustedPatchDiscriminationLoss(Loss):
         return loss
 
 
+@LOSS_REGISTRY.register("siplip_patch_discrimination")
+class SiplipPatchDiscriminationLoss(Loss):
+    """Loss function for Siplip patch discrimination task."""
+
+    name = "SiplipPatchDisc"
+
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute Siplip patch discrimination loss between predictions and targets."""
+        # These need to be learnable parameters
+        tau = kwargs.get("tau")
+        bias = kwargs.get("bias")
+
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+        decoder_mask = all_masks == MaskValue.DECODER.value
+        pred = all_preds[decoder_mask].unsqueeze(dim=0)
+        target = all_targets[decoder_mask].unsqueeze(dim=0)
+        pred = F.normalize(pred, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+        bs, nt, _ = pred.shape
+        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+        losses = []
+        start = 0
+        for c in count:
+            end = start + c
+            if c == 0:
+                # we will occasionally get a sample with no decoded values due to missing data this will let us skip it
+                logger.warning("No decoded values for this sample")
+                continue
+            pred_sample = pred[:, start:end, :]
+            target_sample = target[:, start:end, :]
+            score_sample = (
+                torch.einsum("npd,nqd->npq", pred_sample, target_sample)* -1*tau + bias
+            )
+            labels = torch.eye(c, dtype=score_sample.dtype, device=pred.device)[None]
+            score_sample = rearrange(score_sample, "b p q -> b (p q)")
+            labels = rearrange(labels, "b p q -> b (p q)")
+            loss = F.binary_cross_entropy_with_logits(score_sample, labels)
+            losses.append(loss)
+            start = end
+
+        loss = torch.stack(losses).mean()
+        logger.info(f"tau: {tau}, bias: {bias}, loss: {loss}")
+        return loss
+
+
+
+
+
 @LOSS_REGISTRY.register("l1")
 class L1Loss(Loss):
     """Loss function for L1 (mean average error)."""
