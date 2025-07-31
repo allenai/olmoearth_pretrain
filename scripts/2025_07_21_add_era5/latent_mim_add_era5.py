@@ -148,9 +148,7 @@ def build_train_module_config(
         #     }
         # ),
         loss_config=LossConfig(
-            loss_config={
-                "type": "adjusted_patch_discrimination",
-            }
+            loss_config={"type": "adjusted_patch_discrimination", "mu": 0.0}
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
