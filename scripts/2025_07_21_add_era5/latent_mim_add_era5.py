@@ -139,12 +139,12 @@ def build_train_module_config(
                 "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
                 "min_decoded_bandsets": 6,
-                "only_decode_modalities": [
-                    Modality.OPENSTREETMAP_RASTER.name,
-                    Modality.WORLDCOVER.name,
-                    Modality.SRTM.name,
-                    Modality.ERA5_10.name,
-                ],
+                # "only_decode_modalities": [
+                #     Modality.OPENSTREETMAP_RASTER.name,
+                #     Modality.WORLDCOVER.name,
+                #     Modality.SRTM.name,
+                #     Modality.ERA5_10.name,
+                # ],
             }
         ),
         loss_config=LossConfig(
