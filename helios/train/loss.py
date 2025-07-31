@@ -360,7 +360,9 @@ class AdjustedPatchDiscriminationLoss(Loss):
             neg_scores = neg_scores * weight.detach()
 
             # Reconstruct the sim_matrix
-            sim_matrix = torch.zeros(1, c, c, device=pred.device)
+            sim_matrix = torch.zeros(
+                1, c, c, device=pred.device, dtype=neg_scores.dtype
+            )
             sim_matrix.diagonal(dim1=-2, dim2=-1).copy_(pos_scores)
             sim_matrix.masked_scatter_(mask, neg_scores)
 
