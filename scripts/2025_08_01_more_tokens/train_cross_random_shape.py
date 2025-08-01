@@ -32,10 +32,10 @@ from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, 
 from helios.internal.utils import MODEL_SIZE_ARGS
 from helios.nn.flexihelios import (
     EncoderConfig,
+    PredictorConfig,
     PoolingType,
 )
 from helios.nn.latent_mim import LatentMIMConfig
-from helios.nn.pooled_modality_predictor import PooledModalityPredictorConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -66,7 +66,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
     )
-    decoder_config = PooledModalityPredictorConfig(
+    decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
         decoder_embedding_size=model_size["decoder_embedding_size"],
         depth=model_size["decoder_depth"],
@@ -89,12 +89,12 @@ def build_train_module_config(
     # effectively constant learning rate
     scheduler = WSD(
         decay_steps=1000,
+        warmup_steps=8000,
         decay_fraction=None,
         decay_min_lr=0.0001,
     )
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        warmup_duration=Duration.steps(8000),
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
