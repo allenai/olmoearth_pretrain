@@ -100,6 +100,7 @@ class HeliosConcatDatasetConfig(Config):
     """Configuration for the HeliosConcatDataset."""
 
     dataset_configs: list[Config]
+    max_t_bound: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -112,6 +113,8 @@ class HeliosConcatDatasetConfig(Config):
         logging.info(f"concatenating {len(self.dataset_configs)} sub datasets")
         datasets: list[Dataset] = []
         for dataset_config in self.dataset_configs:
+            # set max_t_bound for each dataset
+            dataset_config.max_t_bound = self.max_t_bound
             dataset = dataset_config.build()
             # Dataset must be prepared before passing to HeliosConcatDataset so it has
             # a defined length.

@@ -341,6 +341,7 @@ class HeliosSample(NamedTuple):
         sampled_hw_p: int,
         current_length: int,
         missing_timesteps_masks: dict[str, Any] = {},
+        max_t_bound: int | None = None,
     ) -> "HeliosSample":
         """Subset a HelioSample that is unbatched ie no batch dimension.
 
@@ -369,6 +370,9 @@ class HeliosSample(NamedTuple):
         max_t = self._get_max_t_within_token_budget(
             sampled_hw_p, max_tokens_per_instance
         )
+        if max_t_bound is not None:
+            max_t = min(max_t, max_t_bound)
+
         sampled_hw = sampled_hw_p * patch_size
         start_h = np.random.choice(self.height - sampled_hw + 1)
         start_w = np.random.choice(self.width - sampled_hw + 1)
@@ -460,6 +464,7 @@ class HeliosDataset(Dataset):
         cache_dir: UPath | None = None,
         samples_per_sec: float | None = None,
         dataset_percentage: float = 1.0,
+        max_t_bound: int | None = None,
     ):
         """Initialize the dataset.
 
@@ -502,7 +507,7 @@ class HeliosDataset(Dataset):
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
         self.max_sequence_length = max_sequence_length
-
+        self.max_t_bound = max_t_bound
         if samples_per_sec is None:
             self.sec_per_sample = None
         else:
@@ -866,6 +871,7 @@ class HeliosDataset(Dataset):
             sampled_hw_p=args.sampled_hw_p,
             current_length=current_length,
             missing_timesteps_masks=missing_timesteps_masks,
+            max_t_bound=self.max_t_bound,
         )
 
         sample_dict = subset_sample.as_dict(ignore_nones=True)
@@ -905,6 +911,7 @@ class HeliosDatasetConfig(Config):
     cache_dir: str | None = None
     samples_per_sec: float | None = None
     dataset_percentage: float = 1.0
+    max_t_bound: int | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
