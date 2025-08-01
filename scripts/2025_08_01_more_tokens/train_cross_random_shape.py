@@ -32,8 +32,8 @@ from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, 
 from helios.internal.utils import MODEL_SIZE_ARGS
 from helios.nn.flexihelios import (
     EncoderConfig,
-    PredictorConfig,
     PoolingType,
+    PredictorConfig,
 )
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.callbacks import (
@@ -136,7 +136,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         global_batch_size=512,
         token_budget=1500,
         prefetch_factor=4,
-        sampled_hw_p_list=list(range(5, 13)),
+        sampled_hw_p_list=list(range(12, 13)),
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
