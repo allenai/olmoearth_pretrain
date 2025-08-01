@@ -98,6 +98,9 @@ class HeliosEvalWrapper(EvalWrapper):
 
             if self.spatial_pool:
                 # B H W T C
+                if pooled_tokens.shape[1] == 1 and pooled_tokens.ndim == 3:
+                    # unsqueeze to get a W H C T
+                    pooled_tokens = pooled_tokens.unsqueeze(1)
                 pooled_tokens = reduce(pooled_tokens, "b h w ... d -> b h w d", self.pooling_type)
             else:
                 # Take the mean of all dims excetp the first and last

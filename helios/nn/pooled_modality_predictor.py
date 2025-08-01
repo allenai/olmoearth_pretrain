@@ -495,8 +495,8 @@ class DimsToPool(StrEnum):
     TEMPORAL = "temporal" # 2
     SPATIAL = "spatial"
     MODALITY_TEMPORAL = "modality_temporal" # 3
-    MODALITY_SPATIAL = "modality_spatial"
-    TEMPORAL_SPATIAL = "temporal_spatial"
+    # MODALITY_SPATIAL = "modality_spatial"
+    # TEMPORAL_SPATIAL = "temporal_spatial"
     ALL = "all" # 4
 
 # Try doing each seperately first then 1 predictor for each
