@@ -44,6 +44,7 @@ class DownstreamTaskConfig:
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
     eval_mode: str | None = None
     probe_type: str = "linear"
+    use_pooled_tokens: bool = False
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: str = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
 
@@ -86,6 +87,7 @@ class DownstreamEvaluator:
         self.probe_type = task.probe_type
         self.partition = task.partition
         self.norm_method = task.norm_method
+        self.use_pooled_tokens = task.use_pooled_tokens
         if self.eval_mode is None:
             self.eval_mode = (
                 "knn"
@@ -154,6 +156,7 @@ class DownstreamEvaluator:
             "patch_size": self.patch_size,
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
+            "use_pooled_tokens": self.use_pooled_tokens,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(

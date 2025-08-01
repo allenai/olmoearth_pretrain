@@ -4,6 +4,7 @@ import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
+from enum import StrEnum
 from typing import Any, NamedTuple
 
 import torch
@@ -47,12 +48,11 @@ def return_modalities_from_dict(
 
 
 
-class PoolingType(str, Enum):
+class PoolingType(StrEnum):
     """Strategy for pooling the tokens."""
 
     MAX = "max"
     MEAN = "mean"
-    ENCODER_MODALITY = "encoder_modality" # using the tokens pooled across modality in the encoder
 
 
 class TokensAndMasks(NamedTuple):
