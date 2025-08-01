@@ -84,6 +84,7 @@ class AttnPool(nn.Module):
         # True indicates that the token should take part in attention
         x = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)  # [B, head, 1, D_head]
         x = rearrange(x, "b h 1 d -> b (h d)")
+        # Is the final norm before this in the encoder harming
         # Not sure if we want this norm but it more closely matches what we are doign before where all tokens are normalize
         x = self.out_norm(self.linear(x))
         return x
