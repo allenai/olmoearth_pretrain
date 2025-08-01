@@ -147,8 +147,13 @@ def build_train_module_config(
         #         ],
         #     }
         # ),
+        # loss_config=LossConfig(
+        #     loss_config={"type": "adjusted_patch_discrimination", "mu": 0.7}
+        # ),
         loss_config=LossConfig(
-            loss_config={"type": "adjusted_patch_discrimination", "mu": 0.7}
+            loss_config={
+                "type": "patch_discrimination_new",
+            }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
@@ -171,7 +176,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         global_batch_size=512,
         token_budget=1500,
         prefetch_factor=4,
-        sampled_hw_p_list=list(range(5, 13)),
+        sampled_hw_p_list=list(range(1, 2)),  # try only temporal tokens
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
