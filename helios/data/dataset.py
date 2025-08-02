@@ -633,15 +633,16 @@ class HeliosDataset(Dataset):
                 f"Picked {len(self.sample_indices)} samples from {num_samples} samples"
             )
         self.latlon_distribution = self.latlon_distribution[self.sample_indices]
-        france_point = (49.442279, 6.217787)
+        # france_point = (49.442279, 6.217787)
+        seattle_point = (47.6062, -122.3321)
         # repeat the france point into a numpy array for the length of the latlon distribution
-        france_point = np.tile(france_point, (len(self.latlon_distribution), 1))
-        logger.info(f"France point: {france_point.shape}")
+        seattle_point = np.tile(seattle_point, (len(self.latlon_distribution), 1))
+        logger.info(f"Seattle point: {seattle_point.shape}")
         logger.info(f"Latlon distribution: {self.latlon_distribution.shape}")
         # calculate the haversine distance between the france point and the latlon distribution
         distance = haversine_distance_radians(
-            france_point[:, 0],
-            france_point[:, 1],
+            seattle_point[:, 0],
+            seattle_point[:, 1],
             self.latlon_distribution[:, 0],
             self.latlon_distribution[:, 1],
         )
