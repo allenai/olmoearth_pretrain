@@ -26,7 +26,6 @@ from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
-from helios.evals.linear_probe import ProbeType
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
 from helios.internal.utils import MODEL_SIZE_ARGS
@@ -136,7 +135,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         global_batch_size=512,
         token_budget=1500,
         prefetch_factor=4,
-        sampled_hw_p_list=list(range(16, 17)),
+        sampled_hw_p_list=list(range(5, 13)),
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
@@ -221,29 +220,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
             eval_interval=Duration.steps(10000),
-        ),
-        "mados_attnpool": DownstreamTaskConfig(
-            dataset="mados",
-            embedding_batch_size=128,
-            probe_batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            probe_lr=0.01,
-            epochs=50,
-            eval_interval=Duration.steps(10000),
-            probe_type=ProbeType.ATTNPOOL,
-        ),
-        "m_cashew_plant_attnpool": DownstreamTaskConfig(
-            dataset="m-cashew-plant",
-            embedding_batch_size=32,
-            probe_batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.steps(10000),
-            probe_type=ProbeType.ATTNPOOL,
         ),
     }
     trainer_config = (
