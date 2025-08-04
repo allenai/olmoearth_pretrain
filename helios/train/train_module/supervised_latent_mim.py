@@ -235,6 +235,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
                 if probe_output.shape[-3] != modality_bandset.shape[-2]:
+                    # this is in case patch_size < max_patch_size
                     probe_output = rearrange(
                         F.interpolate(
                             rearrange(probe_output, "b h w c -> b c h w"),
@@ -257,29 +258,29 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 )
                 filtered_modality_bandset = flat_modality_bandset[target_mask]
                 filtered_targets = probe_output.flatten(end_dim=-2)[target_mask, :]
-                if len(filtered_modality_bandset) > 0:
-                    modality_loss = loss_fn(
-                        filtered_targets,
-                        filtered_modality_bandset,
-                    )
-                    if torch.isnan(modality_loss).any():
-                        logger.warning(f"NaN in unsupervised loss for {modality}")
-                    else:
-                        loss += supervisory_weight * modality_loss
-                        total_batch_sup += (
-                            get_local_tensor(modality_loss.detach())
-                            * supervisory_weight
-                        )
-                        if total_batch_acc is not None:
-                            batch_acc = get_local_tensor(
-                                cls.accuracy_score(
-                                    filtered_targets,
-                                    filtered_modality_bandset,
-                                )
-                            )
-                            total_batch_acc[f"{modality}_{idx}"] += batch_acc
-                else:
+                if len(filtered_modality_bandset) == 0:
                     logger.info(f"All values missing for {modality}")
+                    continue
+                modality_loss = loss_fn(
+                    filtered_targets,
+                    filtered_modality_bandset,
+                )
+                if torch.isnan(modality_loss).any():
+                    logger.warning(f"NaN in unsupervised loss for {modality}")
+                    continue
+                loss += supervisory_weight * modality_loss
+                total_batch_sup += (
+                    get_local_tensor(modality_loss.detach()) * supervisory_weight
+                )
+                if total_batch_acc is not None:
+                    batch_acc = get_local_tensor(
+                        cls.accuracy_score(
+                            filtered_targets,
+                            filtered_modality_bandset,
+                        ).detach()
+                    )
+                    total_batch_acc[f"{modality}_{idx}"] += batch_acc
+
         return loss, total_batch_sup, total_batch_acc
 
     def train_batch(
