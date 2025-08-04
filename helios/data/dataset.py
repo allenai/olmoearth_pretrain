@@ -411,11 +411,11 @@ class HeliosSample(NamedTuple):
                 new_data_dict[attribute] = modality[start_t : start_t + max_t]
                 continue
             modality_spec = Modality.get(attribute)
-            # logging modality shape
-            logger.info(
-                f"Subsetting {attribute} with shape {modality.shape} "
-                f"and start_t={start_t}, max_t={max_t}, sampled_hw={sampled_hw}"
-            )
+            # # logging modality shape
+            # logger.info(
+            #     f"Subsetting {attribute} with shape {modality.shape} "
+            #     f"and start_t={start_t}, max_t={max_t}, sampled_hw={sampled_hw}"
+            # )
             if modality_spec.is_spacetime_varying:
                 new_data_dict[attribute] = modality[
                     hh * modality_spec.image_tile_size_factor,
