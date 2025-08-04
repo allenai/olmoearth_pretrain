@@ -1,11 +1,9 @@
 ai2-olmo-core @ git+https://github.com/allenai/OLMo-core.git@ebe0b1981b81576ce7a87362501dc84c6d9adb3f # Pin here until >2.1.0 is released.
 cartopy
 class-registry
-# datasets==3.6.0
 einops>=0.7.0
 gcsfs
 hdf5plugin
-# huggingface-hub>=0.24.0 # Force huggingface hub version to be higher
 matplotlib
 numpy
 pandas>=2.2 # Force this higher than 1.x
