@@ -373,8 +373,6 @@ class HeliosSample(NamedTuple):
         )
         sampled_hw = sampled_hw_p * patch_size
 
-        # Even at patch_size = 8, at least 16x16 pixels
-
         # # Let's try to sample either horizontally or vertically
         # # To get larger spatial extent
         # orientation = np.random.choice(["horizontal", "vertical"])
@@ -407,7 +405,6 @@ class HeliosSample(NamedTuple):
         start_t = np.random.choice(valid_start_ts)
 
         new_data_dict: dict[str, ArrayTensor] = {}
-
         for attribute, modality in self.as_dict(ignore_nones=True).items():
             assert modality is not None
             if attribute == "timestamps":
@@ -419,12 +416,12 @@ class HeliosSample(NamedTuple):
                     hh * modality_spec.image_tile_size_factor,
                     ww * modality_spec.image_tile_size_factor,
                     start_t : start_t + max_t,
-                ]
+                ].reshape(len(h_indices), len(w_indices), max_t, -1)
             elif modality_spec.is_space_only_varying:
                 new_data_dict[attribute] = modality[
                     hh * modality_spec.image_tile_size_factor,
                     ww * modality_spec.image_tile_size_factor,
-                ]
+                ].reshape(len(h_indices), len(w_indices), -1)
             elif modality_spec.is_time_only_varying:
                 new_data_dict[attribute] = modality[start_t : start_t + max_t]
             elif modality_spec.is_static_in_space_and_time:
