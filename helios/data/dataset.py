@@ -393,8 +393,8 @@ class HeliosSample(NamedTuple):
         # start_h = np.random.choice(self.height - sampled_hw + 1)
         # start_w = np.random.choice(self.width - sampled_hw + 1)
 
-        h_indices = np.random.choice(self.height + 1, size=sampled_hw, replace=False)
-        w_indices = np.random.choice(self.width + 1, size=sampled_hw, replace=False)
+        h_indices = np.random.choice(self.height, size=sampled_hw, replace=False)
+        w_indices = np.random.choice(self.width, size=sampled_hw, replace=False)
         hh, ww = np.meshgrid(h_indices, w_indices, indexing="ij")  # shape: [N, N]
         hh = hh.flatten()
         ww = ww.flatten()
