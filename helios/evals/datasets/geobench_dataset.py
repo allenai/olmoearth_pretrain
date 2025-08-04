@@ -158,6 +158,9 @@ class GeobenchDataset(Dataset):
         if dataset == "m-so2sat":
             logging.info(f"self.multiply_by_10_000 set to True for {dataset}")
             self.multiply_by_10_000 = True
+        if self.multiply_by_10_000:
+            self.mean = self.mean * 10_000
+            self.std = self.std * 10_000
 
     @staticmethod
     def _get_norm_stats(
@@ -229,7 +232,6 @@ class GeobenchDataset(Dataset):
             ), f"Instances must have {len(EVAL_S2_BAND_NAMES)} channels, not {x.shape[-1]}"
         if self.multiply_by_10_000:
             x = x * 10_000
-
         # Normalize using the downstream task's normalization stats
         if not self.norm_stats_from_pretrained:
             x = torch.tensor(normalize_bands(x, self.mean, self.std, self.norm_method))

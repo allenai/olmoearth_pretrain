@@ -10,7 +10,7 @@ from olmo_core.distributed.parallel import DataParallelConfig
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
-from olmo_core.train.common import Duration, ReduceType
+from olmo_core.train.common import ReduceType
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
@@ -48,7 +48,6 @@ class ContrastiveLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     token_exit_cfg: dict[str, int] = field(
         default_factory=lambda: {modality: 0 for modality in Modality.names()}
     )
-    warmup_duration: Duration = field(default_factory=lambda: Duration.epochs(2))
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
@@ -98,7 +97,6 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
         ema_decay: tuple[float, float] = (0.996, 1.0),
-        warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
@@ -125,7 +123,6 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
             state_dict_load_opts: Override state dict options for loading.
             ema_decay: EMA decay rate for target encoder, as a tuple of (start_ema_decay, end_ema_decay)
             token_exit_cfg: The token exit configuration for the model.
-            warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
@@ -144,7 +141,6 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
             device=device,
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
-            warmup_duration=warmup_duration,
             find_unused_parameters=find_unused_parameters,
         )
         self.start_ema, self.end_ema = ema_decay

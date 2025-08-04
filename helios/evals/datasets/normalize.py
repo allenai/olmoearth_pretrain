@@ -1,5 +1,7 @@
 """Shared normalization functions for eval sets."""
 
+from enum import StrEnum
+
 import numpy as np
 
 from .constants import EVAL_S2_BAND_NAMES
@@ -37,32 +39,47 @@ def impute_normalization_stats(
     return new_band_info
 
 
+class NormMethod(StrEnum):
+    """Normalization methods."""
+
+    NORM_NO_CLIP = "norm_no_clip"
+    NORM_YES_CLIP = "norm_yes_clip"
+    NORM_YES_CLIP_INT = "norm_yes_clip_int"
+    STANDARDIZE = "standardize"
+    NO_NORM = "no_norm"
+
+
 def normalize_bands(
-    image: np.ndarray, means: np.array, stds: np.array, method: str = "norm_no_clip"
+    image: np.ndarray,
+    means: np.array,
+    stds: np.array,
+    method: str = NormMethod.NORM_NO_CLIP,
 ) -> np.ndarray:
     """Normalize an image with given mean and std arrays, and a normalization method."""
     original_dtype = image.dtype
-
-    if method == "standardize":
+    if method == NormMethod.NO_NORM:
+        print("No normalization")
+        # If the normalization method is model specific we may want to defer normalization to the model e.g dinoV2
+        return image
+    elif method == NormMethod.STANDARDIZE:
         image = (image - means) / stds
     else:
         min_value = means - stds
         max_value = means + stds
         image = (image - min_value) / (max_value - min_value)
 
-        if method == "norm_yes_clip":
+        if method == NormMethod.NORM_YES_CLIP:
             image = np.clip(image, 0, 1)
-        elif method == "norm_yes_clip_int":
+        elif method == NormMethod.NORM_YES_CLIP_INT:
             # same as clipping between 0 and 1 but rounds to the nearest 1/255
             image = image * 255  # scale
             image = np.clip(image, 0, 255).astype(np.uint8)  # convert to 8-bit integers
             image = (
                 image.astype(original_dtype) / 255
             )  # back to original_dtype between 0 and 1
-        elif method == "norm_no_clip":
+        elif method == NormMethod.NORM_NO_CLIP:
             pass
         else:
-            raise ValueError(
-                f"norm type must be norm_yes_clip, norm_yes_clip_int, norm_no_clip, or standardize, not {method}"
-            )
+            valid_methods = [m.value for m in NormMethod]
+            raise ValueError(f"norm type must be one of {valid_methods}, not {method}")
     return image

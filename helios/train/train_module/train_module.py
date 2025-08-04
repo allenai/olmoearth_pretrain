@@ -22,7 +22,7 @@ from olmo_core.distributed.utils import get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
-from olmo_core.train.common import Duration, ReduceType
+from olmo_core.train.common import ReduceType
 from olmo_core.train.train_module import EvalBatchSizeUnit, EvalBatchSpec, TrainModule
 from olmo_core.utils import gc_cuda, get_default_device
 from torch import nn
@@ -149,7 +149,6 @@ class HeliosTrainModule(TrainModule):
         optim_config: OptimConfig,
         transform_config: TransformConfig,
         rank_microbatch_size: int,
-        warmup_duration: Duration | None = None,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
         compile_loss: bool = False,
@@ -168,7 +167,6 @@ class HeliosTrainModule(TrainModule):
             optim_config: The corresponding optimizer config.
             transform_config: The transform configuration for the model.
             rank_microbatch_size: The rank batch size in instances.
-            warmup_duration: The warmup duration.
             compile_model: Whether to compile to the model.
             dp_config: Data parallel configuration for the model.
             compile_loss: Whether to compile the loss function.
@@ -185,10 +183,11 @@ class HeliosTrainModule(TrainModule):
         self.model = model
 
         self.transform = transform_config.build()
-        logger.info(
-            "Number of encoder parameters: %d",
-            sum(p.numel() for p in self.model.encoder.parameters()),
-        )
+        if hasattr(self.model, "encoder"):
+            logger.info(
+                "Number of encoder parameters: %d",
+                sum(p.numel() for p in self.model.encoder.parameters()),
+            )
         if hasattr(self.model, "decoder") and self.model.decoder is not None:
             logger.info(
                 "Number of decoder parameters: %d",
@@ -206,8 +205,6 @@ class HeliosTrainModule(TrainModule):
             )
         else:
             self.world_mesh = None
-
-        self.warmup_duration = warmup_duration
 
         # Maybe compile.
         if compile_model:
@@ -325,16 +322,9 @@ class HeliosTrainModule(TrainModule):
                 f"global batch size ({self.trainer.global_batch_size:,d}) must be divisible by "
                 f"micro-batch size ({self.rank_microbatch_size:,d}) x DP world size ({ws})"
             )
-        if self.scheduler is not None:
-            if hasattr(self.scheduler, "warmup_steps"):
-                assert (
-                    self.warmup_duration is not None
-                ), "warmup_duration must be set if using a scheduler with warmup steps"
-                logger.info("Converting warmup duration to steps")
-                warmup_steps = self.trainer.convert_duration_to_steps(
-                    self.warmup_duration
-                )
-                self.scheduler.warmup_steps = warmup_steps
+        if not hasattr(self.model, "encoder"):
+            # hack to allow DInov2 and panopticon for EVAL
+            return
         if self.trainer.data_loader.min_patch_size != self.model.encoder.min_patch_size:
             raise ValueError(
                 f"min_patch_size of dataloader ({self.trainer.data_loader.min_patch_size}) must match min_patch_size of model ({self.model.encoder.min_patch_size})"
@@ -392,41 +382,9 @@ class HeliosTrainModule(TrainModule):
         # Maybe adjust learning rate.
         if self.scheduler is not None:
             for group_idx, group in enumerate(self.optimizer.param_groups):
-                if (lr_field := self.scheduler.lr_field) not in group and (
-                    initial_lr_field := self.scheduler.initial_lr_field
-                ) not in group:
-                    group_fields_list = "\n - ".join(
-                        [f"{k}: {v}" for k, v in group.items() if k != "params"]
-                    )
-                    raise RuntimeError(
-                        f"learning rate field '{lr_field}' and initial learning rate field "
-                        f"'{initial_lr_field}' not found in optimizer param group {group_idx} "
-                        f"with {len(group['params'])} parameter(s):\n"
-                        f" - {group_fields_list}"
-                    )
-
-                # Ensure 'initial_lr' is set.
-                if group.get(self.scheduler.initial_lr_field) is None:
-                    group[self.scheduler.initial_lr_field] = group["lr"]
-
-                # Set new LR.
-                new_lr = self.scheduler.get_lr(
-                    group[self.scheduler.initial_lr_field],
-                    self.trainer.global_step,
-                    self.trainer.max_steps,
-                )
-
-                if isinstance(
-                    current_lr := group.get(self.scheduler.lr_field), torch.Tensor
-                ):
-                    current_lr.fill_(new_lr)
-                else:
-                    group[self.scheduler.lr_field] = new_lr
-
+                new_lr = self.scheduler.set_lr(group, self.trainer)
                 self.trainer.record_metric(
-                    f"LR (group {group_idx})",
-                    group[self.scheduler.lr_field],
-                    namespace="optim",
+                    f"LR (group {group_idx})", new_lr, namespace="optim"
                 )
 
         # Step optimizer.

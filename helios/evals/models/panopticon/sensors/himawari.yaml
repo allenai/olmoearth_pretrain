@@ -1,0 +1,9 @@
+instrument: 'ABI'
+processing_level: 'NA'
+# rough values
+bands:
+  B14:
+    name: 'Clean IR Longwave Band'
+    gaussian:
+      mu: 10400
+      sigma: 250
