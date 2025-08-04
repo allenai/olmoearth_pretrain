@@ -397,6 +397,9 @@ class HeliosSample(NamedTuple):
 
         h_indices = np.random.choice(self.height + 1, size=sampled_hw, replace=False)
         w_indices = np.random.choice(self.width + 1, size=sampled_hw, replace=False)
+        hh, ww = np.meshgrid(h_indices, w_indices, indexing="ij")  # shape: [N, N]
+        hh = hh.flatten()
+        ww = ww.flatten()
 
         valid_start_ts = self._get_valid_start_ts(
             missing_timesteps_masks, max_t, current_length
@@ -413,14 +416,14 @@ class HeliosSample(NamedTuple):
             modality_spec = Modality.get(attribute)
             if modality_spec.is_spacetime_varying:
                 new_data_dict[attribute] = modality[
-                    h_indices * modality_spec.image_tile_size_factor,
-                    w_indices * modality_spec.image_tile_size_factor,
+                    hh * modality_spec.image_tile_size_factor,
+                    ww * modality_spec.image_tile_size_factor,
                     start_t : start_t + max_t,
                 ]
             elif modality_spec.is_space_only_varying:
                 new_data_dict[attribute] = modality[
-                    h_indices * modality_spec.image_tile_size_factor,
-                    w_indices * modality_spec.image_tile_size_factor,
+                    hh * modality_spec.image_tile_size_factor,
+                    ww * modality_spec.image_tile_size_factor,
                 ]
             elif modality_spec.is_time_only_varying:
                 new_data_dict[attribute] = modality[start_t : start_t + max_t]
