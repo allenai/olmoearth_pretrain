@@ -3,6 +3,7 @@
 import logging
 from copy import deepcopy
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import torch
 import torch.nn as nn
@@ -19,6 +20,16 @@ from helios.nn.utils import DistributedMixins
 from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
+
+
+class ModelOutput(NamedTuple):
+    """Model outputs from a LatentMIM nn.Module."""
+
+    latent: TokensAndMasks
+    decoded: TokensAndMasks
+    latent_projected_and_pooled: torch.Tensor
+    reconstructed: TokensAndMasks | None
+    probe_outputs: dict[str, torch.Tensor]
 
 
 class LatentMIM(nn.Module, DistributedMixins):
@@ -45,15 +56,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         for p in self.target_encoder.parameters():
             p.requires_grad = False
 
-    def forward(
-        self, x: MaskedHeliosSample, patch_size: int
-    ) -> tuple[
-        TokensAndMasks,
-        TokensAndMasks,
-        torch.Tensor,
-        TokensAndMasks | None,
-        dict[str, torch.Tensor],
-    ]:
+    def forward(self, x: MaskedHeliosSample, patch_size: int) -> ModelOutput:
         """Forward pass for the Latent MIM Style.
 
         Returns:
@@ -70,7 +73,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
         decoded = self.decoder(latent, timestamps=x.timestamps, patch_size=patch_size)
-        return (
+        return ModelOutput(
             latent,
             decoded,
             latent_projected_and_pooled,

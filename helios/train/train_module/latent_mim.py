@@ -258,7 +258,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
     ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, _, reconstructed, _ = self.model(batch, patch_size)
+            output = self.model(batch, patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 target_output, _, _ = self.model.target_encoder.forward(
@@ -266,7 +266,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
-            loss = self.loss_fn(decoded, target_output)
+            loss = self.loss_fn(output.decoded, target_output)
             if self.mae_loss is not None:
-                loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output
+                loss += self.mae_loss.compute(output.reconstructed, batch)
+            return loss, output.latent, output.decoded, target_output
