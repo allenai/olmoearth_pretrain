@@ -12,9 +12,6 @@ from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import Duration, ReduceType
-from olmo_core.train.train_module.transformer import (
-    TransformerActivationCheckpointingConfig,
-)
 from torch.nn import functional as F
 
 from helios.data.constants import MISSING_VALUE, Modality
@@ -95,7 +92,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         rank_microbatch_size: The rank microbatch size in instances.
         compile_model: Whether to compile to the model.
         dp_config: Data parallel configuration for the model.
-        ac_config: Activation checkpointing configuration for the model.
         loss_fn: Loss function to use.
         compile_loss: Whether to compile the loss function.
         autocast_precision: Enable AMP with this data type.
@@ -105,10 +101,10 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
         token_exit_cfg: The token exit configuration for the model.
-        warmup_duration: The warmup duration for the model.
         supervisory_modalities: bandsets which should only be used for supervision
         supervisory_weight: weight to apply to the supervisory losses
         compute_accuracies: Whether to compute accuracies too
+        find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
     """
 
     def __init__(
@@ -123,7 +119,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         mae_loss_config: LossConfig | None = None,
         compile_model: bool = False,
         dp_config: DataParallelConfig | None = None,
-        ac_config: TransformerActivationCheckpointingConfig | None = None,
         compile_loss: bool = False,
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
@@ -132,11 +127,11 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
         ema_decay: tuple[float, float] = (0.996, 1.0),
-        warmup_duration: Duration = Duration.epochs(2),
         regularizer_config: LossConfig | None = None,
         supervisory_modalities: list[str] = [Modality.WORLDCOVER.name],
         supervisory_weight: float = 0.1,
         compute_accuracies: bool = False,
+        find_unused_parameters: bool = True,
     ):
         """Initialize the training module.
 
@@ -149,7 +144,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             rank_microbatch_size: The rank microbatch size in instances.
             compile_model: Whether to compile to the model.
             dp_config: Data parallel configuration for the model.
-            ac_config: Activation checkpointing configuration for the model.
             loss_fn: Loss function to use.
             compile_loss: Whether to compile the loss function.
             autocast_precision: Enable AMP with this data type.
@@ -161,11 +155,11 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             ema_decay: EMA decay rate for target encoder, as a tuple of (start_ema_decay, end_ema_decay)
             token_exit_cfg: The token exit configuration for the model.
             mae_loss_config: Optional loss config for masked auto-encoding.
-            warmup_duration: The warmup duration for the model.
             regularizer_config: An optional regularizer configuration for the model.
             supervisory_modalities: Which modalities to use as supervision
             supervisory_weight: weight to apply to the supervisory losses
             compute_accuracies: Whether to compute accuracies too
+            find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
         """
         super().__init__(
             model=model,
@@ -174,7 +168,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             rank_microbatch_size=rank_microbatch_size,
             compile_model=compile_model,
             dp_config=dp_config,
-            ac_config=ac_config,
             compile_loss=compile_loss,
             autocast_precision=autocast_precision,
             max_grad_norm=max_grad_norm,
@@ -182,7 +175,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             device=device,
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
-            warmup_duration=warmup_duration,
+            find_unused_parameters=find_unused_parameters,
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg = token_exit_cfg
