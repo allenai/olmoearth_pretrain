@@ -98,8 +98,8 @@ def build_train_module_config(
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "modality_cross_random",
-                "encode_ratio": 0.75,
-                "decode_ratio": 0.25,
+                "encode_ratio": 0.25,
+                "decode_ratio": 0.75,
                 "allow_encoding_decoding_same_bandset": True,
             }
         ),
