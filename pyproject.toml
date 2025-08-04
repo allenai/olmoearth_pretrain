@@ -30,6 +30,7 @@ dataset_creation = { file = ["requirements_dataset_creation.txt"] }
 dev = { file = ["requirements-dev.txt"] }
 evals = { file = ["requirements-evals.txt"] }
 beaker = { file = ["requirements-beaker.txt"] }
+all = { file = ["requirements-dev.txt", "requirements-evals.txt", "requirements-beaker.txt"] }
 
 [tool.ruff]
 fix = true
