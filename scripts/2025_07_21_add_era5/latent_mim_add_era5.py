@@ -67,11 +67,11 @@ def my_build_common_components(
     config.training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
-        # Modality.WORLDCOVER.name,
-        # Modality.LATLON.name,
-        # Modality.SRTM.name,
+        Modality.WORLDCOVER.name,
+        Modality.LATLON.name,
+        Modality.SRTM.name,
         Modality.LANDSAT.name,
-        # Modality.OPENSTREETMAP_RASTER.name,
+        Modality.OPENSTREETMAP_RASTER.name,
         Modality.ERA5_10.name,
     ]
     return config
@@ -119,27 +119,27 @@ def build_train_module_config(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         warmup_duration=Duration.steps(8000),
         rank_microbatch_size=64,
-        # masking_config=MaskingConfig(
-        #     strategy_config={
-        #         "type": "random_fixed_modality",
-        #         "encode_ratio": 1.0,
-        #         "decode_ratio": 0.0,
-        #         "decoded_modalities": [
-        #             Modality.WORLDCOVER.name,
-        #             Modality.SRTM.name,
-        #             Modality.OPENSTREETMAP_RASTER.name,
-        #             # Modality.ERA5_10.name,
-        #         ],
-        #     }
-        # ),
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "modality_cross_random",
+                "type": "random_fixed_modality",
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
-                "allow_encoding_decoding_same_bandset": True,
+                "decoded_modalities": [
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    Modality.ERA5_10.name,
+                ],
             }
         ),
+        # masking_config=MaskingConfig(
+        #     strategy_config={
+        #         "type": "modality_cross_random",
+        #         "encode_ratio": 0.5,
+        #         "decode_ratio": 0.5,
+        #         "allow_encoding_decoding_same_bandset": True,
+        #     }
+        # ),
         # loss_config=LossConfig(
         #     loss_config={"type": "adjusted_patch_discrimination", "mu": 0.7}
         # ),
@@ -169,7 +169,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         global_batch_size=512,
         token_budget=1500,
         prefetch_factor=4,
-        sampled_hw_p_list=list(range(5, 6)),  # try only temporal tokens
+        sampled_hw_p_list=list(range(5, 13)),  # try only temporal tokens
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
