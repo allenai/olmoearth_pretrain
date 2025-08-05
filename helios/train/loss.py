@@ -274,7 +274,10 @@ class ModalityPatchDiscriminationLossNew(Loss):
                 loss = loss.mean()
                 losses.append(loss)
                 start = end
-            # Get per-modality loss and add to the total loss
+            if len(losses) == 0:
+                # If no losses were computed, skip this modality
+                logger.warning("No decoded values for this modality")
+                continue
             loss = torch.stack(losses).mean()
             total_loss += loss
 
