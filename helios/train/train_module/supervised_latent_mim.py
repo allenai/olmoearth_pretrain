@@ -279,8 +279,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     filtered_targets,
                     filtered_modality_bandset,
                 )
-                print(modality)
-                print(modality_loss)
+                print(modality, modality_loss)
                 if torch.isnan(modality_loss).any():
                     logger.warning(f"NaN in unsupervised loss for {modality}")
                     continue
