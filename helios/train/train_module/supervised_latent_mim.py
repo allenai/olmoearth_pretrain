@@ -231,7 +231,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 loss_fn = torch.nn.CrossEntropyLoss()
             else:
                 loss_fn = torch.nn.MSELoss()
-
             for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
                 modality_bandset = modality_tensor[:, :, :, 0, bands]
 
@@ -253,16 +252,17 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         "b c h w -> b h w c",
                     )
 
-                if (modality in cls.CLASSIFICATION_MODALITIES) and (len(bands) > 1):
-                    # then we need to turn it into indices
-                    modality_bandset = torch.argmax(
-                        modality_bandset, dim=-1, keepdim=True
-                    )
+                if modality in cls.CLASSIFICATION_MODALITIES:
+                    if len(bands) > 1:
+                        # then we need to turn it into indices
+                        modality_bandset = torch.argmax(
+                            modality_bandset, dim=-1, keepdim=True
+                        )
                     modality_bandset = modality_bandset.long()
                 # keep the final dimension, which will be 1 for categorical inputs
                 flat_modality_bandset = modality_bandset.flatten(end_dim=-2).to(
                     probe_output.device
-                )[:, 0]
+                )
                 target_mask = torch.logical_and(
                     # we assume all the bands in the band set have the same missing value
                     spatial_mask.flatten(),
