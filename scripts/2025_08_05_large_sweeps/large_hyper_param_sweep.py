@@ -26,12 +26,17 @@ for lr in LRs:
         decode_ratio = 1 - encode_ratio
         for weight_decay in WEIGHT_DECAYS:
             for decoder_depth in DECODER_DEPTHS:
-                run_name = f"1_large_hyper_param_sweep_lr_{lr}_mask_ratio_{mask_ratio}_weight_decay_{weight_decay}_decoder_depth_{decoder_depth}"
+                # I need to fix flash attn as well
+                if mask_ratio == 0.5:
+                    rank_microbatch_size = 32
+                else:
+                    rank_microbatch_size = 64
+                run_name = f"1_large_hyper_param_sweep_lr_{lr}_mask_ratio_{mask_ratio}_weight_decay_{weight_decay}_decoder_depth_{decoder_depth}_rank_microbatch_size_{rank_microbatch_size}"
                 run_cmd = "launch"
                 start_command = "python3" if run_cmd == "launch" else "torchrun"
                 cmd = (
                     f"{start_command} scripts/2025_08_05_large_sweeps/train_cross_large_no_maps.py "
-                    f"{run_cmd} {run_name} {cluster} --launch.priority=high --launch.num_gpus=8 --model.decoder_config.depth={decoder_depth} --train_module.optim_config.lr={lr} --train_module.masking_config.strategy_config.encode_ratio={encode_ratio} --train_module.masking_config.strategy_config.decode_ratio={decode_ratio} --train_module.optim_config.weight_decay={weight_decay}"
+                    f"{run_cmd} {run_name} {cluster} --launch.priority=high --launch.num_gpus=8 --model.decoder_config.depth={decoder_depth} --train_module.optim_config.lr={lr} --train_module.masking_config.strategy_config.encode_ratio={encode_ratio} --train_module.masking_config.strategy_config.decode_ratio={decode_ratio} --train_module.optim_config.weight_decay={weight_decay} --train_module.rank_microbatch_size={rank_microbatch_size}"
                 )
                 print(cmd)
                 subprocess.run(cmd, shell=True)  # nosec
