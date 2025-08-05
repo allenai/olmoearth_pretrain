@@ -233,7 +233,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 loss_fn = torch.nn.MSELoss()
             for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
                 modality_bandset = modality_tensor[:, :, :, 0, bands]
-                print(modality, modality_bandset.dtype)
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
@@ -277,13 +276,10 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 if len(filtered_modality_bandset) == 0:
                     logger.info(f"All values missing for {modality}")
                     continue
-                print(modality)
-                print(filtered_preds.dtype, filtered_modality_bandset.dtype)
                 modality_loss = loss_fn(
                     filtered_preds,
                     filtered_modality_bandset,
                 )
-                print(modality, modality_loss, modality_loss.dtype)
                 if torch.isnan(modality_loss).any():
                     logger.warning(f"NaN in unsupervised loss for {modality}")
                     continue
@@ -318,7 +314,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
 
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
-        print(self.model.encoder)
         self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
@@ -365,7 +360,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 batch_sup, batch_acc = self.supervisory_losses(
                     supervisory_modalities, probe_outputs, self.compute_accuracies
                 )
-                print(batch_sup, loss)
                 if batch_sup is not None:
                     loss += self.supervisory_weight * batch_sup
                     total_batch_sup += batch_sup
