@@ -251,7 +251,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         ),
                         "b c h w -> b h w c",
                     )
-
                 if modality in cls.CLASSIFICATION_MODALITIES:
                     if len(bands) > 1:
                         # then we need to turn it into indices
@@ -270,6 +269,10 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 )
                 filtered_modality_bandset = flat_modality_bandset[target_mask]
                 filtered_targets = probe_output.flatten(end_dim=-2)[target_mask, :]
+
+                if modality in cls.CLASSIFICATION_MODALITIES:
+                    filtered_modality_bandset = filtered_modality_bandset[..., 0]
+
                 if len(filtered_modality_bandset) == 0:
                     logger.info(f"All values missing for {modality}")
                     continue
