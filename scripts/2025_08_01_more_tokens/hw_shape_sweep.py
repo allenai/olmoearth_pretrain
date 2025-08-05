@@ -16,19 +16,25 @@ cluster = args.cluster
 # HW max 16 min 12
 # max size 128 however you can crack it
 
-HW_LIST = [[8, 9, 10, 11, 12], [12]]
+
+def format_hw_list(hw_list):
+    # I want the format to  be a signle str of "\[1,2,3,4,5,6,7,8,9,10,11,12\]"
+    return f"[{','.join(map(str, hw_list))}]"
+
+
+HW_LIST = [format_hw_list(range(8, 13)), format_hw_list([12])]
 
 # Run 1
 for hw_list in HW_LIST:
     run_name = f"1_hw_shape_sweep_min_{hw_list[0]}_max_{hw_list[-1]}"
-    run_cmd = f"python scripts/2025_08_01_more_tokens/train_cross_random_shape.py launch {run_name} {cluster} --launch.priority=high --launch.num_gpus=8 --data_loader.sampled_hw_p_list={hw_list}"
+    run_cmd = f"python scripts/2025_08_01_more_tokens/train_cross_random_shape.py launch {run_name} {cluster} --launch.priority=high --launch.num_gpus=8 --data_loader.sampled_hw_p_list={format_hw_list(hw_list)}"
     print(run_cmd)
     subprocess.run(run_cmd, shell=True)  # nosec
 
 # launch just the first run with nccl_debug
 for hw_list in HW_LIST:
     run_name = f"1_hw_shape_sweep_min_{hw_list[0]}_max_{hw_list[-1]}_debug"
-    run_cmd = f"python scripts/2025_08_01_more_tokens/train_cross_random_shape.py launch {run_name} {cluster} --launch.priority=high --launch.num_gpus=8 --data_loader.sampled_hw_p_list={hw_list} --common.nccl_debug=True"
+    run_cmd = f"python scripts/2025_08_01_more_tokens/train_cross_random_shape.py launch {run_name} {cluster} --launch.priority=high --launch.num_gpus=8 --data_loader.sampled_hw_p_list={format_hw_list(hw_list)} --common.nccl_debug=True"
     print(run_cmd)
     subprocess.run(run_cmd, shell=True)  # nosec
     break
