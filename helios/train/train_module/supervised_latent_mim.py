@@ -359,6 +359,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 batch_sup, batch_acc = self.supervisory_losses(
                     supervisory_modalities, probe_outputs, self.compute_accuracies
                 )
+                print(batch_sup, loss)
                 if batch_sup is not None:
                     loss += self.supervisory_weight * batch_sup
                     total_batch_sup += batch_sup
