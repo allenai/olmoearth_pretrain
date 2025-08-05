@@ -314,6 +314,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
 
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
+        print(self.model.encoder)
         self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
