@@ -9,6 +9,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
+from olmo_core.optim.scheduler import ConstantWithWarmup
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -85,9 +86,9 @@ def build_train_module_config(
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     # effectively constant learning rate
-    # scheduler = ConstantWithWarmup(
-    #     warmup_steps=8000,
-    # )
+    scheduler = ConstantWithWarmup(
+        warmup_steps=8000,
+    )
     scheduler = None
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),

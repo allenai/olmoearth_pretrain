@@ -408,10 +408,14 @@ class PASTISRDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[MaskedHeliosSample, torch.Tensor]:
         """Return a single PASTIS data instance."""
         image_idx = self.indices[idx]
-        s2_image = torch.load(self.s2_images_dir / f"{image_idx}.pt")
+        s2_image: np.ndarray = torch.load(
+            self.s2_images_dir / f"{image_idx}.pt"
+        ).numpy()
         s2_image = einops.rearrange(s2_image, "t c h w -> h w t c")  # (64, 64, 12, 13)
 
-        s1_image = torch.load(self.s1_images_dir / f"{image_idx}.pt")
+        s1_image: np.ndarray = torch.load(
+            self.s1_images_dir / f"{image_idx}.pt"
+        ).numpy()
         s1_image = einops.rearrange(s1_image, "t c h w -> h w t c")  # (64, 64, 12, 2)
 
         labels = self.labels[idx]  # (64, 64)
@@ -420,10 +424,10 @@ class PASTISRDataset(Dataset):
         # If using norm stats from pretrained we should normalize before we rearrange
         if not self.norm_stats_from_pretrained:
             s2_image = normalize_bands(
-                s2_image.numpy(), self.s2_means, self.s2_stds, self.norm_method
+                s2_image, self.s2_means, self.s2_stds, self.norm_method
             )
             s1_image = normalize_bands(
-                s1_image.numpy(), self.s1_means, self.s1_stds, self.norm_method
+                s1_image, self.s1_means, self.s1_stds, self.norm_method
             )
 
         s2_image = s2_image[:, :, :, EVAL_TO_HELIOS_S2_BANDS]
@@ -448,9 +452,11 @@ class PASTISRDataset(Dataset):
         sample_dict = {"timestamps": timestamps}
 
         if Modality.SENTINEL1.name in self.input_modalities:
-            sample_dict[Modality.SENTINEL1.name] = torch.tensor(s1_image).float()
+            sample_dict[Modality.SENTINEL1.name] = torch.from_numpy(s1_image).float()
         if Modality.SENTINEL2_L2A.name in self.input_modalities:
-            sample_dict[Modality.SENTINEL2_L2A.name] = torch.tensor(s2_image).float()
+            sample_dict[Modality.SENTINEL2_L2A.name] = torch.from_numpy(
+                s2_image
+            ).float()
 
         if not sample_dict:
             raise ValueError(f"No valid modalities found in: {self.input_modalities}")
