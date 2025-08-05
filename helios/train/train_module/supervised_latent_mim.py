@@ -233,7 +233,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 loss_fn = torch.nn.MSELoss()
             for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
                 modality_bandset = modality_tensor[:, :, :, 0, bands]
-
+                print(modality, modality_bandset.dtype)
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
@@ -275,6 +275,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 if len(filtered_modality_bandset) == 0:
                     logger.info(f"All values missing for {modality}")
                     continue
+                print(modality)
+                print(filtered_targets.dtype, filtered_modality_bandset.dtype)
                 modality_loss = loss_fn(
                     filtered_targets,
                     filtered_modality_bandset,
