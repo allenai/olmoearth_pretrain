@@ -251,6 +251,7 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
         start_time = time.monotonic()
         val_result = evaluator.val()
+        # Is this the metric that is reversed
         self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
         eval_time = time.monotonic() - start_time
         self.trainer.record_metric(f"eval_time/{evaluator.evaluation_name}", eval_time)
