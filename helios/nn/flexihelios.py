@@ -147,8 +147,14 @@ class TokensAndMasks(NamedTuple):
     def _flatten(x: Tensor) -> Tensor:
         return rearrange(x, "b ... d -> b (...) d")
 
-    def flatten_tokens_and_masks(self) -> tuple[Tensor, Tensor]:
+    def flatten_tokens_and_masks(
+        self, return_lists: bool = False
+    ) -> tuple[Tensor, Tensor]:
         """Return the flattened tokens and masks.
+
+        Args:
+            return_lists: If True, return the original lists before concatenation.
+                          If False, return concatenated tensors.
 
         Tokens will have shape [B, T, D] and masks will have shape [B, T]
         """
@@ -165,6 +171,11 @@ class TokensAndMasks(NamedTuple):
                 masked_attr = masked_attr.unsqueeze(dim=-1)
                 flattened_x.append(self._flatten(attr))
                 flattened_masks.append(self._flatten(masked_attr))
+
+        if return_lists:
+            # Remove the extra dimension from the masks
+            flattened_masks = [mask[:, :, 0] for mask in flattened_masks]
+            return flattened_x, flattened_masks
 
         x = torch.cat(flattened_x, dim=1)
         masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
