@@ -13,7 +13,7 @@ args = parser.parse_args()
 cluster = args.cluster
 
 LRs = [0.0001, 0.00005]
-MASK_RATIOS = [0.5]  # Left out 0.1 # 0.05 OOMed so turned off fused adamw
+MASK_RATIOS = [0.25]  # Left out 0.1 # 0.05 OOMed so turned off fused adamw
 WEIGHT_DECAYS = [0.02, 0.05]
 # fixing decoder depth for now
 DECODER_DEPTHS = [4]  # [4, 8]
@@ -31,7 +31,7 @@ for lr in LRs:
                     rank_microbatch_size = 32
                 else:
                     rank_microbatch_size = 64
-                run_name = f"1_large_hyper_param_sweep_lr_{lr}_mask_ratio_{mask_ratio}_weight_decay_{weight_decay}_decoder_depth_{decoder_depth}_rank_microbatch_size_{rank_microbatch_size}"
+                run_name = f"2_large_hyper_param_sweep_lr_{lr}_mask_ratio_{mask_ratio}_weight_decay_{weight_decay}_decoder_depth_{decoder_depth}_rank_microbatch_size_{rank_microbatch_size}"
                 run_cmd = "launch"
                 start_command = "python3" if run_cmd == "launch" else "torchrun"
                 cmd = (
