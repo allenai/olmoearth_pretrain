@@ -18,10 +18,11 @@ cluster = args.cluster
 
 
 def format_hw_list(hw_list):
-    # I want the format to  be a signle str of "\[1,2,3,4,5,6,7,8,9,10,11,12\]"
-    return str(hw_list)
+    # Format as \[1,2,3,…\] so shell sees escaped brackets
+    return "\\[" + ",".join(str(x) for x in hw_list) + "\\]"
 
 
+print(format_hw_list(list(range(8, 13))))
 HW_LIST = [list(range(8, 13)), [12]]
 
 # Run 1
