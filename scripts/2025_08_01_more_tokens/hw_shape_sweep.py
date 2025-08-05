@@ -22,7 +22,7 @@ def format_hw_list(hw_list):
     return str(hw_list)
 
 
-HW_LIST = [format_hw_list(range(8, 13)), format_hw_list([12])]
+HW_LIST = [list(range(8, 13)), [12]]
 
 # Run 1
 for hw_list in HW_LIST:
