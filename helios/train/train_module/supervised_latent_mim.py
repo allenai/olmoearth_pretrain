@@ -272,7 +272,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
 
                 if modality in cls.CLASSIFICATION_MODALITIES:
                     filtered_modality_bandset = filtered_modality_bandset[..., 0]
-
                 if len(filtered_modality_bandset) == 0:
                     logger.info(f"All values missing for {modality}")
                     continue

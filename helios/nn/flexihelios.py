@@ -299,7 +299,7 @@ class TokensAndMasks(NamedTuple):
             spatial_tokens_t = (spatial_tokens_t * expanded_mask) + (
                 ~expanded_mask * fill_value
             )
-            return spatial_tokens_t.max(dim=-2).values, ~mask_to_return
+            return spatial_tokens_t.max(dim=-2).values, mask_to_return
         else:
             zeroed_spatial_tokens = spatial_tokens_t * expanded_mask
             num_tokens_per_spatial_patch = repeat(
@@ -309,7 +309,7 @@ class TokensAndMasks(NamedTuple):
             )
             return zeroed_spatial_tokens.sum(
                 dim=-2
-            ) / num_tokens_per_spatial_patch, ~mask_to_return
+            ) / num_tokens_per_spatial_patch, mask_to_return
 
 
 class ProjectAndAggregate(nn.Module):
