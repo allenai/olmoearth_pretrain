@@ -91,7 +91,6 @@ def build_train_module_config(
     scheduler = None
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        warmup_duration=Duration.steps(8000),  # olmo_core reversion
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
