@@ -19,7 +19,7 @@ cluster = args.cluster
 
 def format_hw_list(hw_list):
     # I want the format to  be a signle str of "\[1,2,3,4,5,6,7,8,9,10,11,12\]"
-    return f"[{','.join(map(str, hw_list))}]"
+    return str(hw_list)
 
 
 HW_LIST = [format_hw_list(range(8, 13)), format_hw_list([12])]
