@@ -16,7 +16,7 @@ cluster = args.cluster
 # HW max 16 min 12
 # max size 128 however you can crack it
 
-HW_LIST = [list(range(8, 13)), [12]]
+HW_LIST = [[8, 9, 10, 11, 12], [12]]
 
 # Run 1
 for hw_list in HW_LIST:
