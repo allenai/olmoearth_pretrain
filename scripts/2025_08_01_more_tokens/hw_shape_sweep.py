@@ -27,7 +27,7 @@ HW_LIST = [list(range(5, 13)), list(range(8, 13)), [12]]
 
 # Run 1
 for hw_list in HW_LIST:
-    run_name = f"2_hw_shape_sweep_min_{hw_list[0]}_max_{hw_list[-1]}"
+    run_name = f"3_hw_shape_sweep_min_{hw_list[0]}_max_{hw_list[-1]}"
     run_cmd = f"python scripts/2025_08_01_more_tokens/train_cross_random_shape.py launch {run_name} {cluster} --launch.priority=high --launch.num_gpus=8 --data_loader.sampled_hw_p_list={format_hw_list(hw_list)} --train_module.rank_microbatch_size=32"
     print(run_cmd)
     subprocess.run(run_cmd, shell=True)  # nosec
