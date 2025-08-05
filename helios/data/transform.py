@@ -2,7 +2,7 @@
 
 import random
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
@@ -148,7 +148,7 @@ class TransformConfig(Config):
     """Configuration for the transform."""
 
     transform_type: str = "no_transform"
-    transform_kwargs: dict[str, Any] = {}
+    transform_kwargs: dict[str, Any] = field(default_factory=lambda: {})
 
     def validate(self) -> None:
         """Validate the configuration."""
