@@ -107,7 +107,10 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
     """
 
     # other modalities are regressions and will use an L2 loss
-    CLASSIFICATION_MODALITIES = [Modality.WORLDCOVER, Modality.OPENSTREETMAP_RASTER]
+    CLASSIFICATION_MODALITIES = [
+        Modality.WORLDCOVER.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+    ]
 
     def __init__(
         self,
