@@ -813,9 +813,9 @@ class TestTokensAndMasks:
         for h in range(mask_max.shape[1]):
             for w in range(mask_max.shape[2]):
                 if h == 0 and w == 0:
-                    assert mask_max[:, h, w] == 1
-                else:
                     assert mask_max[:, h, w] == 0
+                else:
+                    assert mask_max[:, h, w] == 1
 
         for h in range(pooled_max.shape[1]):
             for w in range(pooled_max.shape[2]):
@@ -870,9 +870,9 @@ class TestTokensAndMasks:
         for h in range(mask.shape[1]):
             for w in range(mask.shape[2]):
                 if h == 0 and w == 0:
-                    assert mask[:, h, w] == 1
-                else:
                     assert mask[:, h, w] == 0
+                else:
+                    assert mask[:, h, w] == 1
 
         for h in range(pooled.shape[1]):
             for w in range(pooled.shape[2]):
