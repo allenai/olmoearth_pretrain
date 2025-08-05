@@ -234,6 +234,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
 
         # Accumulate to the total loss
         total_loss = 0
+        total_decoded_modalities = 0
         for all_preds, all_masks, all_targets in zip(
             modality_preds, modality_masks, modality_targets
         ):
@@ -280,8 +281,9 @@ class ModalityPatchDiscriminationLossNew(Loss):
                 continue
             loss = torch.stack(losses).mean()
             total_loss += loss
+            total_decoded_modalities += 1
 
-        return self.weight * total_loss
+        return self.weight * total_loss / total_decoded_modalities
 
 
 @LOSS_REGISTRY.register("patch_discrimination")
