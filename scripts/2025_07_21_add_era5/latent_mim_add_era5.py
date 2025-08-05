@@ -122,8 +122,8 @@ def build_train_module_config(
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "random_fixed_modality",
-                "encode_ratio": 0.5,
-                "decode_ratio": 0.5,
+                "encode_ratio": 1.0,
+                "decode_ratio": 0.0,
                 "decoded_modalities": [
                     Modality.WORLDCOVER.name,
                     Modality.SRTM.name,

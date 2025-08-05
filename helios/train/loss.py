@@ -197,7 +197,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
     It does not support all discrimination loss.
     """
 
-    name = "ModalityPatchDiscAveraged"
+    name = "ModalityPatchDisc"
 
     def __init__(self, tau: float = 0.1, pred2unit: bool = False, weight: float = 1.0):
         """Initialize patch discrimination loss.
@@ -283,7 +283,8 @@ class ModalityPatchDiscriminationLossNew(Loss):
             total_loss += loss
             total_decoded_modalities += 1
 
-        return self.weight * total_loss / total_decoded_modalities
+        return self.weight * total_loss
+        #  / total_decoded_modalities
 
 
 @LOSS_REGISTRY.register("patch_discrimination")
