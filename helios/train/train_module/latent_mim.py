@@ -11,6 +11,7 @@ from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
+from olmo_core.distributed.checkpoint import load_model_and_optim_state
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
@@ -175,6 +176,13 @@ class LatentMIMTrainModule(HeliosTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
+        load_model_and_optim_state('/weka/dfive-default/helios/checkpoints/joer/lmim_newolmo_longwarmup/step49500/model_and_optim/', self.model)
+        with torch.no_grad():
+            for p, tp in zip(
+                self.model.encoder.parameters(), self.model.target_encoder.parameters()
+            ):
+                tp.data.mul_(0).add_(p.data, alpha=1)
+
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
