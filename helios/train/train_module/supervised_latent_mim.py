@@ -258,6 +258,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                             modality_bandset, dim=-1, keepdim=True
                         )
                     modality_bandset = modality_bandset.long()
+                else:
+                    modality_bandset = modality_bandset.to(dtype=probe_output.dtype)
                 # keep the final dimension, which will be 1 for categorical inputs
                 flat_modality_bandset = modality_bandset.flatten(end_dim=-2).to(
                     probe_output.device
@@ -268,7 +270,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     (flat_modality_bandset[..., 0] != MISSING_VALUE),
                 )
                 filtered_modality_bandset = flat_modality_bandset[target_mask]
-                filtered_targets = probe_output.flatten(end_dim=-2)[target_mask, :]
+                filtered_preds = probe_output.flatten(end_dim=-2)[target_mask, :]
 
                 if modality in cls.CLASSIFICATION_MODALITIES:
                     filtered_modality_bandset = filtered_modality_bandset[..., 0]
@@ -276,9 +278,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     logger.info(f"All values missing for {modality}")
                     continue
                 print(modality)
-                print(filtered_targets.dtype, filtered_modality_bandset.dtype)
+                print(filtered_preds.dtype, filtered_modality_bandset.dtype)
                 modality_loss = loss_fn(
-                    filtered_targets,
+                    filtered_preds,
                     filtered_modality_bandset,
                 )
                 print(modality, modality_loss, modality_loss.dtype)
@@ -293,7 +295,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 if (modality in cls.CLASSIFICATION_MODALITIES) and compute_accuracies:
                     batch_acc = get_local_tensor(
                         cls.accuracy_score(
-                            filtered_targets,
+                            filtered_preds,
                             filtered_modality_bandset,
                         ).detach()
                     )
