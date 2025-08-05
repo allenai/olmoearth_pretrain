@@ -61,6 +61,12 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
+SUPERVISORY_MODALITIES = [
+    Modality.WORLDCOVER.name,
+    Modality.GSE.name,
+    Modality.OPENSTREETMAP_RASTER.name,
+]
+
 
 def my_build_common_components(
     script: str,
@@ -98,6 +104,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,
+        probe_modalities=SUPERVISORY_MODALITIES,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -129,11 +136,7 @@ def build_train_module_config(
                 "decode_ratio": 0.1,
             }
         ),
-        supervisory_modalities=[
-            Modality.WORLDCOVER.name,
-            Modality.GSE.name,
-            Modality.OPENSTREETMAP_RASTER.name,
-        ],
+        supervisory_modalities=SUPERVISORY_MODALITIES,
         loss_config=LossConfig(
             loss_config={
                 "type": "patch_discrimination_new",
