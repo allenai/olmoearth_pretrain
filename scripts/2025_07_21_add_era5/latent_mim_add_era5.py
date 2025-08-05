@@ -122,8 +122,8 @@ def build_train_module_config(
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "random_fixed_modality",
-                "encode_ratio": 1.0,
-                "decode_ratio": 0.0,
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
                 "decoded_modalities": [
                     Modality.WORLDCOVER.name,
                     Modality.SRTM.name,
@@ -148,10 +148,15 @@ def build_train_module_config(
         #         "type": "patch_discrimination_new",
         #     }
         # ),
+        # loss_config=LossConfig(
+        #     loss_config={
+        #         "type": "modality_patch_discrimination_new",
+        #     },
+        # ),
         loss_config=LossConfig(
             loss_config={
-                "type": "modality_patch_discrimination_new",
-            },
+                "type": "modality_all_discrimination",
+            }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
