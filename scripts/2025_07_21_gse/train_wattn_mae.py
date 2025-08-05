@@ -38,6 +38,7 @@ from helios.internal.experiment import (
 from helios.internal.utils import MODEL_SIZE_ARGS
 from helios.nn.flexihelios import (
     PoolingType,
+    ReconstructorConfig,
 )
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.nn.st_model import STEncoderConfig, STPredictorConfig
@@ -55,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
-DECODER_DEPTH = 2
+DECODER_DEPTH = 4
 
 
 def my_build_common_components(
@@ -123,6 +124,13 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
+        reconstructor_config=ReconstructorConfig(
+            supported_modality_names=[
+                m for m in common.training_modalities if m != Modality.LATLON.name
+            ],
+            max_patch_size=MAX_PATCH_SIZE,
+            decoder_config=decoder_config,
+        ),
     )
     return model_config
 
@@ -139,7 +147,7 @@ def build_train_module_config(
             strategy_config={
                 "type": "random_fixed_modality",
                 "encode_ratio": 0.5,
-                "decode_ratio": 0.0,
+                "decode_ratio": 0.5,
                 "decoded_modalities": [
                     Modality.WORLDCOVER.name,
                     Modality.SRTM.name,
