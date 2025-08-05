@@ -260,7 +260,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     )
                     modality_bandset = modality_bandset.long()
 
-                flat_modality_bandset = modality_bandset.flatten().to(
+                # keep the final dimension, which will be 1 for categorical inputs
+                flat_modality_bandset = modality_bandset.flatten(end_dim=-2).to(
                     probe_output.device
                 )
                 target_mask = torch.logical_and(
