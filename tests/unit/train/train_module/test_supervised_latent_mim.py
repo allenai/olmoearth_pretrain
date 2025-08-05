@@ -49,19 +49,8 @@ class TestSupervisedLatentMIMUnit:
             ),
         }
         print(probe_outputs["mask"])
-        org_loss = torch.tensor(0).float()
-        org_sup_loss = torch.tensor(0).float()
-        org_sup_acc = {"worldcover_0": torch.tensor(0).float()}
-        loss, org_sup_loss, org_sup_acc = (
-            SupervisedLatentMIMTrainModule.supervisory_losses(
-                supervisory_modalities,
-                probe_outputs,
-                org_loss,
-                org_sup_loss,
-                org_sup_acc,
-                supervisory_weight=1.0,
-            )
+        org_sup_loss, org_sup_acc = SupervisedLatentMIMTrainModule.supervisory_losses(
+            supervisory_modalities, probe_outputs, compute_accuracies=True
         )
-        assert loss == 0
         assert org_sup_loss == 0
         assert org_sup_acc["worldcover_0"] == 1
