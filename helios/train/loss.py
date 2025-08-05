@@ -283,8 +283,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
             total_loss += loss
             total_decoded_modalities += 1
 
-        return self.weight * total_loss
-        # / total_decoded_modalities
+        return self.weight * total_loss / total_decoded_modalities
 
 
 @LOSS_REGISTRY.register("patch_discrimination")
