@@ -28,14 +28,14 @@ HW_LIST = [list(range(8, 13)), [12]]
 # Run 1
 for hw_list in HW_LIST:
     run_name = f"1_hw_shape_sweep_min_{hw_list[0]}_max_{hw_list[-1]}"
-    run_cmd = f"python scripts/2025_08_01_more_tokens/train_cross_random_shape.py launch {run_name} {cluster} --launch.priority=high --launch.num_gpus=8 --data_loader.sampled_hw_p_list={format_hw_list(hw_list)}"
+    run_cmd = f"python scripts/2025_08_01_more_tokens/train_cross_random_shape.py launch {run_name} {cluster} --launch.priority=high --launch.num_gpus=8 --data_loader.sampled_hw_p_list={format_hw_list(hw_list)} --train_module.rank_microbatch_size=32"
     print(run_cmd)
     subprocess.run(run_cmd, shell=True)  # nosec
 
 # launch just the first run with nccl_debug
 for hw_list in HW_LIST:
     run_name = f"1_hw_shape_sweep_min_{hw_list[0]}_max_{hw_list[-1]}_debug"
-    run_cmd = f"python scripts/2025_08_01_more_tokens/train_cross_random_shape.py launch {run_name} {cluster} --launch.priority=high --launch.num_gpus=8 --data_loader.sampled_hw_p_list={format_hw_list(hw_list)} --common.nccl_debug=True"
+    run_cmd = f"python scripts/2025_08_01_more_tokens/train_cross_random_shape.py launch {run_name} {cluster} --launch.priority=high --launch.num_gpus=8 --data_loader.sampled_hw_p_list={format_hw_list(hw_list)} --common.nccl_debug=True --train_module.rank_microbatch_size=32"
     print(run_cmd)
     subprocess.run(run_cmd, shell=True)  # nosec
     break
