@@ -9,7 +9,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import WSD
+from olmo_core.optim.scheduler import ConstantWithWarmup
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -86,11 +86,8 @@ def build_train_module_config(
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     # effectively constant learning rate
-    scheduler = WSD(
-        decay_steps=1000,
+    scheduler = ConstantWithWarmup(
         warmup_steps=8000,
-        decay_fraction=None,
-        decay_min_lr=0.0001,
     )
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
@@ -135,7 +132,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         global_batch_size=512,
         token_budget=6000,
         prefetch_factor=4,
-        sampled_hw_p_list=list(range(12, 24)),
+        sampled_hw_p_list=list(range(5, 13)),
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
