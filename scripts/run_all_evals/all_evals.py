@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import sys
+from logging import getLogger
 
 from olmo_core.train.callbacks import (
     BeakerCallback,
@@ -30,9 +31,12 @@ from helios.train.callbacks import (
 )
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 
+logger = getLogger(__name__)
+
 
 def load_user_module(path):
     """Load the user module from the given path."""
+    logger.info(f"Loading user module from {path}")
     spec = importlib.util.spec_from_file_location("user_module", path)
     user_mod = importlib.util.module_from_spec(spec)
     sys.modules["user_module"] = user_mod
