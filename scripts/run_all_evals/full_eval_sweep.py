@@ -82,8 +82,6 @@ def main():
             )
             print(cmd)
             subprocess.run(cmd, shell=True)  # nosec
-            break
-        break
 
 
 if __name__ == "__main__":

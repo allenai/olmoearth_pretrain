@@ -26,7 +26,7 @@ from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.common import build_common_components
+from helios.internal.common import build_common_components as build_common_components_og
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
 from helios.internal.utils import MODEL_SIZE_ARGS
 from helios.nn.flexihelios import (
@@ -301,9 +301,9 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
     )
 
 
-def build_common_components_no_maps_ssl(*args: Any) -> CommonComponents:
+def build_common_components(*args: Any) -> CommonComponents:
     """Build the common components for an experiment."""
-    common = build_common_components(*args)
+    common = build_common_components_og(*args)
     # return common
     NO_MAPS_SSL_MODALITIES = [
         Modality.SENTINEL2_L2A.name,
@@ -322,7 +322,7 @@ def build_common_components_no_maps_ssl(*args: Any) -> CommonComponents:
 
 if __name__ == "__main__":
     main(
-        common_components_builder=build_common_components_no_maps_ssl,
+        common_components_builder=build_common_components,
         model_config_builder=build_model_config,
         train_module_config_builder=build_train_module_config,
         dataset_config_builder=build_dataset_config,
