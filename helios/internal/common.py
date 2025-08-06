@@ -121,7 +121,8 @@ def build_launch_config(
         ),
     ]
     # Propagate the train module path to the experiment if set
-    if train_script_path := os.environ.get("TRAIN_SCRIPT_PATH") is not None:
+    train_script_path = os.environ.get("TRAIN_SCRIPT_PATH")
+    if train_script_path is not None:
         logger.info(f"Propagating train script path to experiment: {train_script_path}")
         env_vars.append(BeakerEnvVar(name="TRAIN_SCRIPT_PATH", value=train_script_path))
 
