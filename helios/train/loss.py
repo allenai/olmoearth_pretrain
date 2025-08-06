@@ -377,6 +377,7 @@ class AdjustedPatchDiscriminationLoss(Loss):
         return loss
 
 
+@LOSS_REGISTRY.register("per_modality_patch_discrimination")
 class PerModalityPatchDiscriminationLoss(Loss):
     """Loss function for adjusted patch discrimination task.
 
