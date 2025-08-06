@@ -1,7 +1,7 @@
 """Launch script for evaluation allowing you to easily run all the evals for your model by just pointing at your training script."""
 
-import argparse
 import importlib.util
+import os
 import sys
 
 from olmo_core.train.callbacks import (
@@ -176,7 +176,7 @@ EVAL_TASKS = {
     ),
     # example of "in season" cropland mapping - 6 indicates only the
     # first 6 timesteps are passed to the model
-    "cropharvest_People's_Republic_of_China_6": DownstreamTaskConfig(
+    "cropharvest_Peoples_Republic_of_China_6": DownstreamTaskConfig(
         dataset="cropharvest_People's Republic of China_6",
         embedding_batch_size=128,
         num_workers=2,
@@ -189,7 +189,7 @@ EVAL_TASKS = {
         probe_lr=0.1,
         epochs=50,
     ),
-    "cropharvest_People's_Republic_of_China_6_sentinel1": DownstreamTaskConfig(
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": DownstreamTaskConfig(
         dataset="cropharvest_People's Republic of China_6",
         embedding_batch_size=128,
         num_workers=2,
@@ -215,7 +215,7 @@ EVAL_TASKS = {
         probe_lr=0.1,
         epochs=50,
     ),
-    "cropharvest_People's_Republic_of_China_6_sentinel2_sentinel1_sentinel2": DownstreamTaskConfig(
+    "cropharvest_Peoples_Republic_of_China_6_sentinel2_sentinel1_sentinel2": DownstreamTaskConfig(
         dataset="cropharvest_People's Republic of China_6",
         embedding_batch_size=128,
         num_workers=2,
@@ -289,18 +289,10 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
 
 
 if __name__ == "__main__":
-    pre = argparse.ArgumentParser(add_help=False)
-    pre.add_argument(
-        "--module-path",
-        "-m",
-        type=str,
-        required=True,
-        help="path to .py that defines the same builders as dino_v2",
-    )
-    # 2) Grab that one, leave everything else untouched in `rest`
-    args, rest = pre.parse_known_args()
-    sys.argv = sys.argv[:1] + rest
-    user_mod = load_user_module(args.module_path)
+    module_path = os.environ.get("TRAIN_SCRIPT_PATH")
+    if module_path is None:
+        raise ValueError("TRAIN_SCRIPT_PATH environment variable must be set")
+    user_mod = load_user_module(module_path)
 
     # 3) Inject all of the builder names into your namespace
     build_common_components = user_mod.build_common_components

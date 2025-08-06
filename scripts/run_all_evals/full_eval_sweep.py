@@ -76,7 +76,7 @@ def main():
             elif norm_mode == "helios":
                 cmd_args += helios_args
             cmd = (
-                f"python3 scripts/run_all_evals/all_evals.py -m {module_path} "
+                f"TRAIN_SCRIPT_PATH={module_path} python3 scripts/run_all_evals/all_evals.py "
                 f"launch {run_name} {cluster} --launch.priority=high {cmd_args} "
                 f"--launch.task_name=eval --trainer.load_path={checkpoint_path}"
             )
