@@ -1001,7 +1001,7 @@ class SpatialAttnProbe(nn.Module):
 
     def forward(
         self, x: TokensAndMasks, patch_size: int, input_res: int
-    ) -> torch.Tensor:
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         """Forward."""
         gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
         spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
@@ -1016,11 +1016,11 @@ class SpatialAttnProbe(nn.Module):
         )
         q = mask_expanded + spatial_embed
         feat_tokens, feat_masks = x.flatten_tokens_and_masks()
-        present_tokens = feat_tokens[feat_masks == MaskValue.ONLINE_ENCODER]
+        # feat_masks has shape[B, N_f], we want [B, N_q, N_f]
+        print(q.shape, feat_tokens.shape, repeat(feat_masks, "b f -> b q f", q=q.shape[1]).shape, repeat(feat_masks, "b f -> b q f", q=q.shape[1])[:, None, None].shape)
+        spatial_tokens = self.attention(x=q, y=feat_tokens, attn_mask=repeat(feat_masks, "b f -> b q f", q=q.shape[1]))
 
-        spatial_tokens = self.attention(x=q, y=present_tokens)
-
-        return self.apply_probes(spatial_tokens, patch_size)
+        return self.apply_probes(spatial_tokens, patch_size), spatial_tokens
 
 
 class FlexiHeliosBase(nn.Module):
@@ -1577,7 +1577,7 @@ class Encoder(FlexiHeliosBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         always_pass_none_mask_to_transformer: bool = False,
-    ) -> tuple[TokensAndMasks, torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[TokensAndMasks, torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
         """Process masked input samples into token representations.
 
         Args:
@@ -1607,7 +1607,7 @@ class Encoder(FlexiHeliosBase):
         return (
             output,
             self.project_and_aggregate(output),
-            self.probe_with_attn(output, patch_size, input_res),
+            *self.probe_with_attn(output, patch_size, input_res),
         )
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:

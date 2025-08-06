@@ -40,7 +40,7 @@ class MAE(nn.Module, DistributedMixins):
         self, x: MaskedHeliosSample, patch_size: int
     ) -> tuple[TokensAndMasks, TokensAndMasks | None, TokensAndMasks | None]:
         """Forward pass for the MAE Module."""
-        latent, _, _ = self.encoder(x, patch_size=patch_size)
+        latent, _, _, _ = self.encoder(x, patch_size=patch_size)
         decoded = self.decoder and self.decoder(
             latent, timestamps=x.timestamps, patch_size=patch_size
         )

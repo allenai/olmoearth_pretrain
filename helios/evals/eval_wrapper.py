@@ -8,7 +8,7 @@ from torch import nn
 
 from helios.evals.datasets.configs import TaskType
 from helios.evals.models import DINOv2, Panopticon
-from helios.nn.flexihelios import FlexiHeliosBase, PoolingType, TokensAndMasks
+from helios.nn.flexihelios import FlexiHeliosBase, PoolingType
 from helios.nn.st_model import STBase
 from helios.train.masking import MaskedHeliosSample
 
@@ -75,16 +75,19 @@ class HeliosEvalWrapper(EvalWrapper):
 
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         """Forward pass through the model produces the embedding specified by initialization."""
-        batch_embeddings: TokensAndMasks = self.model(
+        batch_embeddings, _, probe_outputs, spatial_attn_embeddings = self.model(
             masked_helios_sample, patch_size=self.patch_size
-        )[0]  # (bsz, dim)
-        # Concat features across modalities in space averaged across time
-        tokens_and_masks = batch_embeddings.pool_unmasked_tokens(
-            self.pooling_type,
-            spatial_pooling=self.spatial_pool,
-            concat_features=self.concat_features,
         )
-        return tokens_and_masks
+        if len(probe_outputs) == 0:
+            # not in supervised mode, so the spatial_attn_embeddings aren't learned
+            return batch_embeddings.pool_unmasked_tokens(
+                self.pooling_type,
+                spatial_pooling=self.spatial_pool,
+                concat_features=self.concat_features,
+            )
+        else:
+            # spatial_attn_embeddings has shape [B, H, W, D]
+            return torch.mean(spatial_attn_embeddings, dim=[1, 2])
 
 
 class PanopticonEvalWrapper(EvalWrapper):
