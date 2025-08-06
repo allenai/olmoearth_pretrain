@@ -121,7 +121,7 @@ def build_train_module_config(
         max_grad_norm=1.0,
         scheduler=ConstantWithWarmup(warmup=8000),
         ema_decay=(1.0, 1.0),
-        initial_weights="/weka/dfive-default/helios/checkpoints/joer/lmim_baseline/step168000/",
+        initial_weights="/weka/dfive-default/helios/checkpoints/joer/lmim_baseline/step160000/",
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
             param_dtype=DType.bfloat16,
