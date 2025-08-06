@@ -500,6 +500,7 @@ class HeliosDataset(Dataset):
         samples_per_sec: float | None = None,
         dataset_percentage: float = 1.0,
         dist_from_anchor_m: float = 1000000,
+        anchor_point_list: list[tuple[float, float]] | None = None,
     ):
         """Initialize the dataset.
 
@@ -522,6 +523,8 @@ class HeliosDataset(Dataset):
                 throttling only applies when reading from the h5py_dir, not the
                 cache_dir (if set).
             dataset_percentage: The percentage of the dataset to use.
+            dist_from_anchor_m: The distance from the anchor point to use for filtering.
+            anchor_point_list: The list of anchor points to use for filtering.
 
         Returns:
             None
@@ -552,6 +555,7 @@ class HeliosDataset(Dataset):
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
         self.dist_from_anchor_m: float = dist_from_anchor_m
+        self.anchor_point_list: list[tuple[float, float]] | None = anchor_point_list
 
     @property
     def fingerprint_version(self) -> str:
@@ -660,6 +664,34 @@ class HeliosDataset(Dataset):
         self.latlon_distribution = self.get_geographic_distribution()
         self.sample_indices = np.arange(num_samples)
         self._filter_sample_indices_for_training()
+        if self.anchor_point_list is not None:
+            indices_to_keep = []
+            for anchor_point in self.anchor_point_list:
+                # repeat the anchor point into a numpy array for the length of the latlon distribution
+                anchor_point_arr = np.tile(
+                    anchor_point, (len(self.latlon_distribution), 1)
+                )
+                logger.info(f"Anchor point: {anchor_point_arr.shape}")
+                logger.info(f"Latlon distribution: {self.latlon_distribution.shape}")
+                # calculate the haversine distance between the anchor point and the latlon distribution
+                distance = haversine_distance_radians(
+                    anchor_point_arr[:, 0],
+                    anchor_point_arr[:, 1],
+                    self.latlon_distribution[:, 0],
+                    self.latlon_distribution[:, 1],
+                )
+                # filter latlon distribution and sample indices to points less than dist_from_anchor_m
+                closest_indices = np.where(distance < self.dist_from_anchor_m)[0]
+                logger.info(
+                    f"Number of points less than {self.dist_from_anchor_m}m away: {len(closest_indices)}"
+                )
+                indices_to_keep.append(closest_indices)
+            indices_to_keep = np.concatenate(indices_to_keep)
+            self.sample_indices = self.sample_indices[indices_to_keep]
+            self.latlon_distribution = self.latlon_distribution[indices_to_keep]
+            # log the number of points after filtering
+            logger.info(f"Number of points after filtering: {len(self.sample_indices)}")
+
         # randomly pick dataset percentage fraction of the sample indices
         if self.dataset_percentage < 1.0:
             self.sample_indices = np.random.choice(
@@ -671,28 +703,6 @@ class HeliosDataset(Dataset):
                 f"Picked {len(self.sample_indices)} samples from {num_samples} samples"
             )
         self.latlon_distribution = self.latlon_distribution[self.sample_indices]
-        france_point = (49.442279, 6.217787)
-        # seattle_point = (47.6062, -122.3321)
-        # repeat the france point into a numpy array for the length of the latlon distribution
-        france_point = np.tile(france_point, (len(self.latlon_distribution), 1))
-        logger.info(f"France point: {france_point.shape}")
-        logger.info(f"Latlon distribution: {self.latlon_distribution.shape}")
-        # calculate the haversine distance between the france point and the latlon distribution
-        distance = haversine_distance_radians(
-            france_point[:, 0],
-            france_point[:, 1],
-            self.latlon_distribution[:, 0],
-            self.latlon_distribution[:, 1],
-        )
-        # filter latlon distribution and sample indices to points less than dist_from_anchor_m
-        closest_indices = np.where(distance < self.dist_from_anchor_m)[0]
-        logger.info(
-            f"Number of points less than {self.dist_from_anchor_m}m away: {len(closest_indices)}"
-        )
-        self.sample_indices = self.sample_indices[closest_indices]
-        self.latlon_distribution = self.latlon_distribution[closest_indices]
-        # log the number of points after filtering
-        logger.info(f"Number of points after filtering: {len(self.sample_indices)}")
 
     def get_geographic_distribution(self) -> np.ndarray:
         """Get the geographic distribution of the dataset.
@@ -704,6 +714,10 @@ class HeliosDataset(Dataset):
         if self.latlon_distribution_path.exists():
             with self.latlon_distribution_path.open("rb") as f:
                 return np.load(f)
+        else:
+            raise ValueError(
+                f"Latlon distribution file {self.latlon_distribution_path} does not exist"
+            )
 
     def __len__(self) -> int:
         """Get the length of the dataset."""
