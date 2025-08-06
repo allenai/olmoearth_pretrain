@@ -2,12 +2,15 @@
 
 import random
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
+import torch
 import torchvision.transforms.v2.functional as F
 from class_registry import ClassRegistry
 from einops import rearrange
 from olmo_core.config import Config
+from torch.distributions import Beta
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
@@ -110,11 +113,44 @@ class FlipAndRotateSpace(Transform):
         return HeliosSample(**new_data_dict)
 
 
+@TRANSFORM_REGISTRY.register("mixup")
+class Mixup(Transform):
+    """Apply mixup.
+
+    https://arxiv.org/abs/1710.09412
+
+    To run this, use the following kwargs when launching a training job:
+    --train_module.transform_config.transform_type=mixup
+    --train_module.transform_config.transform_kwargs={"alpha": 1.3}
+    """
+
+    def __init__(self, alpha: float) -> None:
+        """Apply mixup.
+
+        Args:
+            alpha: the alpha value to use when creating the Beta distribution to sample from
+        """
+        self.alpha = alpha
+        self.dist = Beta(torch.tensor([alpha]), torch.tensor([alpha]))
+
+    def apply(self, batch: HeliosSample) -> HeliosSample:
+        """Apply mixup."""
+        other_microbatch = batch.rotate()
+
+        lam = float(self.dist.sample())
+        if lam >= 0.5:
+            ts_to_keep = other_microbatch.timestamps
+        else:
+            ts_to_keep = batch.timestamps
+        return batch.scale(1 - lam).add(other_microbatch.scale(lam), ts_to_keep)
+
+
 @dataclass
 class TransformConfig(Config):
     """Configuration for the transform."""
 
     transform_type: str = "no_transform"
+    transform_kwargs: dict[str, Any] = field(default_factory=lambda: {})
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -124,4 +160,6 @@ class TransformConfig(Config):
     def build(self) -> Transform:
         """Build the transform."""
         self.validate()
-        return TRANSFORM_REGISTRY.get_class(self.transform_type)()
+        return TRANSFORM_REGISTRY.get_class(self.transform_type)(
+            **self.transform_kwargs
+        )
