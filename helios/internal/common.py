@@ -1,7 +1,7 @@
 """Common utiities for laucnhing experiments on beaker."""
 
 import logging
-
+import os
 from olmo_core.internal.common import get_beaker_username
 from olmo_core.launch.beaker import (
     BeakerEnvSecret,
@@ -107,6 +107,21 @@ def build_launch_config(
             # pytorch_upgrade = "pip install --upgrade --pre --no-cache-dir torch==2.8.0.dev20250528+cu128 torchvision==0.22.0.dev20250528+cu128 --index-url https://download.pytorch.org/whl/nightly/cu128"
 
     beaker_user = get_beaker_username()
+    # Propagate the train module path to the experiment if set
+    env_vars = [
+        BeakerEnvVar(name="NCCL_DEBUG", value="DETAIL" if nccl_debug else "WARN"),
+        BeakerEnvVar(
+            name="TORCH_NCCL_TRACE_BUFFER_SIZE",
+            value="1000000000" if nccl_debug else "0",
+        ),
+        BeakerEnvVar(name="NCCL_BLOCKING_WAIT", value="1" if nccl_debug else "0"),
+        BeakerEnvVar(
+            name="GOOGLE_APPLICATION_CREDENTIALS", value="/etc/gcp_credentials.json"
+        ),
+    ]
+    if train_script_path := os.environ.get("TRAIN_SCRIPT_PATH") is not None:
+        env_vars.append(BeakerEnvVar(name="TRAIN_SCRIPT_PATH", value=train_script_path))
+
     return HeliosBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",
         budget=budget,
@@ -122,24 +137,18 @@ def build_launch_config(
         shared_filesystem=True,  # We only use Weka for now
         allow_dirty=False,
         priority=BeakerPriority.high,
-        env_vars=[
-            BeakerEnvVar(name="NCCL_DEBUG", value="DETAIL" if nccl_debug else "WARN"),
-            BeakerEnvVar(
-                name="TORCH_NCCL_TRACE_BUFFER_SIZE",
-                value="1000000000" if nccl_debug else "0",
-            ),
-            BeakerEnvVar(name="NCCL_BLOCKING_WAIT", value="1" if nccl_debug else "0"),
-            BeakerEnvVar(
-                name="GOOGLE_APPLICATION_CREDENTIALS", value="/etc/gcp_credentials.json"
-            ),
-        ],
+        env_vars=env_vars,
         env_secrets=[
             BeakerEnvSecret(name="BEAKER_TOKEN", secret=f"{beaker_user}_BEAKER_TOKEN"),
             BeakerEnvSecret(
                 name="WANDB_API_KEY", secret=f"{beaker_user}_WANDB_API_KEY"
             ),  # nosec
-            BeakerEnvSecret(name="GITHUB_TOKEN", secret=f"{beaker_user}_GITHUB_TOKEN"),  # nosec
-            BeakerEnvSecret(name="GCP_CREDENTIALS", secret="HELIOS_GCP_CREDENTIALS"),  # nosec
+            BeakerEnvSecret(
+                name="GITHUB_TOKEN", secret=f"{beaker_user}_GITHUB_TOKEN"
+            ),  # nosec
+            BeakerEnvSecret(
+                name="GCP_CREDENTIALS", secret="HELIOS_GCP_CREDENTIALS"
+            ),  # nosec
         ],
         setup_steps=[
             # Write GCP credentials.
