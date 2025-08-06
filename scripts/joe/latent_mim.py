@@ -60,9 +60,9 @@ MIN_PATCH_SIZE = 1
 
 model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
+
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-
     model_config = LatentMIMConfig(
         encoder_config=EncoderConfig(
             embedding_size=model_size["encoder_embedding_size"],
@@ -110,18 +110,18 @@ def build_train_module_config(
         ),
         # token_exit_cfg={modality: 0 for modality in common.training_modalities},
         token_exit_cfg={
-           Modality.SENTINEL2_L2A.name: model_size["encoder_depth"],
-           Modality.LATLON.name: model_size["encoder_depth"],
-           Modality.SENTINEL1.name: model_size["encoder_depth"],
-           Modality.WORLDCOVER.name: 0,
-           Modality.SRTM.name: model_size["encoder_depth"] // 2,
-           Modality.OPENSTREETMAP_RASTER.name: 0,
-           Modality.LANDSAT.name: model_size["encoder_depth"],
+            Modality.SENTINEL2_L2A.name: model_size["encoder_depth"],
+            Modality.LATLON.name: model_size["encoder_depth"],
+            Modality.SENTINEL1.name: model_size["encoder_depth"],
+            Modality.WORLDCOVER.name: 0,
+            Modality.SRTM.name: model_size["encoder_depth"] // 2,
+            Modality.OPENSTREETMAP_RASTER.name: 0,
+            Modality.LANDSAT.name: model_size["encoder_depth"],
         },
-
         max_grad_norm=1.0,
         scheduler=ConstantWithWarmup(warmup=8000),
         ema_decay=(1.0, 1.0),
+        initial_weights="/weka/dfive-default/helios/checkpoints/joer/lmim_baseline/step168000/",
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
             param_dtype=DType.bfloat16,
