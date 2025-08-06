@@ -225,7 +225,6 @@ EVAL_TASKS = {
         input_modalities=[
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
-            Modality.SENTINEL2_L2A.name,
         ],
         patch_size=1,
         eval_mode="linear_probe",
@@ -301,7 +300,6 @@ if __name__ == "__main__":
     # 2) Grab that one, leave everything else untouched in `rest`
     args, rest = pre.parse_known_args()
     sys.argv = sys.argv[:1] + rest
-    print(f"sys.argv: {sys.argv}")
     user_mod = load_user_module(args.module_path)
 
     # 3) Inject all of the builder names into your namespace
