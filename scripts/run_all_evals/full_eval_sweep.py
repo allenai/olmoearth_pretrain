@@ -1,4 +1,7 @@
-"""Run an evaluation sweep for DINOv2."""
+"""Run an evaluation sweep for an arbitrary helios checkpoint.
+
+e.g. python3 scripts/run_all_evals/full_eval_sweep.py --cluster=ai2/saturn-cirrascale --checkpoint_path=/weka/dfive-default/helios/checkpoints/henryh/latent_mim_cross_only_dec_wc_osm_srtm_dataset_percentage_sweep_.0078125/step450000  --module_path=scripts/2025_06_26_dataset_percentage_experiments/latent_mim_all_data.py
+"""
 
 import argparse
 import os
@@ -55,30 +58,37 @@ def main():
     parser.add_argument(
         "--module_path", type=str, required=True, help="Path to module .py"
     )
+    parser.add_argument(
+        "--project_name", type=str, required=False, help="Wandb project name"
+    )
     args = parser.parse_args()
 
     cluster = args.cluster
     checkpoint_path = args.checkpoint_path
     module_path = args.module_path
+    project_name = args.project_name
     print(
         f"Running with checkpoint path {checkpoint_path} and module path {module_path} on cluster {cluster}"
     )
     for lr in LP_LRs:
         for norm_mode in Normalization_MODES:
             print(f"Running with {norm_mode} normalization and {lr} learning rate")
-
-            parent_dir = os.path.basename(os.path.dirname(checkpoint_path))
-            base_run_name = f"test_{parent_dir}_{norm_mode}_lr{lr}"
-            run_name = base_run_name[:100]
+            # crop the parent dirname if needed
+            parent_dir = os.path.basename(os.path.dirname(checkpoint_path))[:100]
+            base_run_name = f"{parent_dir}_{norm_mode}_lr{lr}"
+            run_name = base_run_name
             cmd_args = lr_args.format(lr=lr)
             if norm_mode == "dataset":
                 cmd_args += dataset_args
             elif norm_mode == "helios":
                 cmd_args += helios_args
+
+            if project_name is None:
+                project_name = "helios_in_loop_evals"
             cmd = (
                 f"TRAIN_SCRIPT_PATH={module_path} python3 scripts/run_all_evals/all_evals.py "
                 f"launch {run_name} {cluster} --launch.priority=high {cmd_args} "
-                f"--launch.task_name=eval --trainer.load_path={checkpoint_path}"
+                f"--launch.task_name=eval --trainer.load_path={checkpoint_path} --trainer.callbacks.wandb.project={project_name}"
             )
             print(cmd)
             subprocess.run(cmd, shell=True)  # nosec
