@@ -100,7 +100,7 @@ class HeliosConcatDatasetConfig(Config):
     """Configuration for the HeliosConcatDataset."""
 
     dataset_configs: list[Config]
-    anchor_point: tuple[float, float] | None = None
+    anchor_point_list: list[tuple[float, float]] | None = None
     dist_from_anchor_m: float | None = None
 
     def validate(self) -> None:
@@ -114,10 +114,10 @@ class HeliosConcatDatasetConfig(Config):
         logging.info(f"concatenating {len(self.dataset_configs)} sub datasets")
         datasets: list[Dataset] = []
         for dataset_config in self.dataset_configs:
-            if self.anchor_point is not None:
-                assert self.dist_from_anchor_m is not None
-                dataset_config.anchor_point = self.anchor_point
-                dataset_config.dist_from_anchor_m = self.dist_from_anchor_m
+            if self.anchor_point_list is not None:
+                assert self.dist_from_anchor_m_list is not None
+                dataset_config.anchor_point_list = self.anchor_point_list
+                dataset_config.dist_from_anchor_m = self.dist_from_anchor_m_list
             dataset = dataset_config.build()
             # Dataset must be prepared before passing to HeliosConcatDataset so it has
             # a defined length.

@@ -142,6 +142,9 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     )
 
 
+france_point = (49.442279, 6.217787)
+
+
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     dataset_configs = [
@@ -171,7 +174,11 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
             training_modalities=common.training_modalities,
         ),
     ]
-    return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
+    return HeliosConcatDatasetConfig(
+        dataset_configs=dataset_configs,
+        anchor_point_list=[france_point],
+        dist_from_anchor_m=1000_000,
+    )
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
