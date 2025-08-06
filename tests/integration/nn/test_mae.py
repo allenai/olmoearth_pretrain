@@ -161,7 +161,7 @@ def test_mae_with_loss(
     loss_mim = PatchDiscriminationLossNew()
     with torch.no_grad():
         logger.info("target encoder running here")
-        target_output, _ = mae.encoder.forward(
+        target_output, _, _ = mae.encoder.forward(
             x.unmask(),
             patch_size=patch_size,
             token_exit_cfg={

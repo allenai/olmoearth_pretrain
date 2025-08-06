@@ -2,7 +2,7 @@
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, NamedTuple
 
@@ -12,7 +12,7 @@ from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
 
-from helios.data.constants import Modality, ModalitySpec
+from helios.data.constants import NUM_WORLDCOVER_CLASSES, Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.nn.attention import Block
 from helios.nn.encodings import (
@@ -119,13 +119,13 @@ class TokensAndMasks(NamedTuple):
             Dictionary representation of the namedtuple.
         """
         return_dict = {}
-        for field in self._fields:
-            val = getattr(self, field)
+        for field_name in self._fields:
+            val = getattr(self, field_name)
             if return_none:
-                return_dict[field] = val
+                return_dict[field_name] = val
             else:
                 if val is not None:
-                    return_dict[field] = val
+                    return_dict[field_name] = val
         return return_dict
 
     @property
@@ -253,6 +253,63 @@ class TokensAndMasks(NamedTuple):
                 return spatial_average_t.mean(dim=-1)
             else:
                 return spatial_average_t.max(dim=-1).values
+
+    def spatial_pool_with_mask(
+        self, pooling_type: PoolingType = PoolingType.MAX
+    ) -> tuple[Tensor, Tensor]:
+        """Like pool_unmasked_tokens(..., spatial_pooling=True) but supports mixed masking per modality.
+
+        To support this, this function also returns a mask describing which spatial locations have tokens.
+
+        Returns:
+        output: tensor of shape [B, P_W, P_H, D]
+        mask: tensor of shape [B, P_W, P_H] describing which elements in output contain tokens.
+            1s indicate the token is present, 0s indicate it is missing.
+        """
+        spatial_tokens = []
+        spatial_mask = []
+        for attr_name in self.modalities:
+            if Modality.get(attr_name).is_spatial:
+                mask_attr_name = self.get_masked_modality_name(attr_name)
+                masked_attr = getattr(self, mask_attr_name)
+                if masked_attr is None:
+                    continue
+                attr = getattr(self, attr_name)
+                # collapse the time and band set dimensions
+                spatial_mask.append(
+                    rearrange(masked_attr, "b ph pw t ba -> b ph pw (t ba)")
+                )
+                spatial_tokens.append(
+                    rearrange(attr, "b ph pw t ba d -> b ph pw (t ba) d")
+                )
+
+        spatial_mask_t = (
+            torch.concat(spatial_mask, dim=-1) == MaskValue.ONLINE_ENCODER.value
+        )
+        mask_to_return = spatial_mask_t.max(dim=-1).values
+        spatial_tokens_t = torch.concat(spatial_tokens, dim=-2)
+        expanded_mask = repeat(
+            spatial_mask_t,
+            "b ph pw ba -> b ph pw ba d",
+            d=spatial_tokens_t.shape[-1],
+        )
+        if pooling_type == PoolingType.MAX:
+            fill_value = spatial_tokens_t.min() - 1
+
+            spatial_tokens_t = (spatial_tokens_t * expanded_mask) + (
+                ~expanded_mask * fill_value
+            )
+            return spatial_tokens_t.max(dim=-2).values, mask_to_return
+        else:
+            zeroed_spatial_tokens = spatial_tokens_t * expanded_mask
+            num_tokens_per_spatial_patch = repeat(
+                torch.clip(spatial_mask_t.sum(-1), min=1),
+                "b ph pw -> b ph pw d",
+                d=zeroed_spatial_tokens.shape[-1],
+            )
+            return zeroed_spatial_tokens.sum(
+                dim=-2
+            ) / num_tokens_per_spatial_patch, mask_to_return
 
 
 class ProjectAndAggregate(nn.Module):
@@ -1069,6 +1126,8 @@ class Encoder(FlexiHeliosBase):
         aggregate_then_project: bool = True,
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
+        probe_modalities: list[str] | None = None,
+        probe_dims: list[int] = [],
         qk_norm: bool = False,
     ):
         """Initialize the encoder.
@@ -1092,6 +1151,10 @@ class Encoder(FlexiHeliosBase):
             use_flash_attn: Whether to use flash attention
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
+            probe_modalities: a list of modalities for which we will output linear probe predictions
+                per spatial patch.
+            probe_dims: the hidden dimensions to use for the probe. If an empty list is passed,
+                only a linear layer is applied
             qk_norm: Whether to apply normalization to Q and K in attention
         """
         super().__init__(
@@ -1126,6 +1189,34 @@ class Encoder(FlexiHeliosBase):
         if frozen_patch_embeddings:
             for p in self.patch_embeddings.parameters():
                 p.requires_grad = False
+
+        if probe_modalities is not None:
+            probes: dict[str, nn.Module] = {}
+            # TODO - right now this assumes a resolution factor of 1. Needs to be fixed to handle (e.g.) NAIP
+            output_hw = self.max_patch_size**2
+            for modality_name in probe_modalities:
+                modality = Modality.get(modality_name)
+                if modality_name == Modality.WORLDCOVER.name:
+                    multiplier = NUM_WORLDCOVER_CLASSES
+                else:
+                    multiplier = 1
+                for idx, band_set in enumerate(modality.band_sets):
+                    probe_dims = [self.embedding_size] + probe_dims
+                    layers: list[nn.Module] = []
+                    for i in range(len(probe_dims) - 1):
+                        layers.extend(
+                            [nn.Linear(probe_dims[i], probe_dims[i + 1]), nn.GELU()]
+                        )
+                    layers.append(
+                        nn.Linear(
+                            probe_dims[-1],
+                            output_hw * len(band_set.bands) * multiplier,
+                        )
+                    )
+                    probes[f"{modality_name}_{idx}"] = nn.Sequential(*layers)
+            self.probes = nn.ModuleDict(probes)
+        else:
+            self.probes = {}
 
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
@@ -1363,6 +1454,37 @@ class Encoder(FlexiHeliosBase):
         tokens_per_modality_dict.update(original_masks_dict)
         return tokens_per_modality_dict
 
+    def apply_probes(
+        self, x: TokensAndMasks, patch_size: int
+    ) -> dict[str, torch.Tensor]:
+        """Apply linear probes for supervised learning."""
+        if len(self.probes) == 0:
+            return {}
+        else:
+            output_dict = {}
+            # TODO: Should this be configurable? In Galileo experiments, MEAN did better than MAX
+            spatial_tokens, spatial_mask = x.spatial_pool_with_mask(
+                pooling_type=PoolingType.MEAN
+            )  # spatial tokens has shape B, PH, PW, T, D
+            # mask is now the same shape as the raw input
+            output_dict["mask"] = repeat(
+                spatial_mask, "b h w -> b (h p1) (w p2)", p1=patch_size, p2=patch_size
+            )
+            for probe_name, probe in self.probes.items():
+                probe_output = probe(
+                    spatial_tokens
+                )  # B, Ph, PW, T, H * W * len(bandsets)
+                num_classes = probe_output.shape[-1] // (self.max_patch_size**2)
+                probe_output = rearrange(
+                    probe_output,
+                    "b h w (c i j) -> b (h i) (w j) c",
+                    i=self.max_patch_size,
+                    j=self.max_patch_size,
+                    c=num_classes,
+                )
+                output_dict[probe_name] = probe_output
+            return output_dict
+
     # TODO: we want to have a single API for the encoder and decoder
     def forward(
         self,
@@ -1371,7 +1493,7 @@ class Encoder(FlexiHeliosBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         always_pass_none_mask_to_transformer: bool = False,
-    ) -> tuple[TokensAndMasks, torch.Tensor]:
+    ) -> tuple[TokensAndMasks, torch.Tensor, dict[str, torch.Tensor]]:
         """Process masked input samples into token representations.
 
         Args:
@@ -1398,7 +1520,11 @@ class Encoder(FlexiHeliosBase):
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        return output, self.project_and_aggregate(output)
+        return (
+            output,
+            self.project_and_aggregate(output),
+            self.apply_probes(output, patch_size),
+        )
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
@@ -1808,6 +1934,8 @@ class EncoderConfig(Config):
     aggregate_then_project: bool = True
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
+    probe_modalities: list[str] | None = None
+    probe_dims: list[int] = field(default_factory=lambda: [])
     qk_norm: bool = False
 
     def validate(self) -> None:

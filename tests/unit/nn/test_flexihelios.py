@@ -730,7 +730,6 @@ class TestTokensAndMasks:
             sentinel1=sentinel_1_mean,
             sentinel1_mask=sentinel_1_mask_mean,
         )
-
         # Test mean pooling
         pooled_mean = t_and_m_mean.pool_unmasked_tokens(
             PoolingType.MEAN, spatial_pooling=True
@@ -779,6 +778,120 @@ class TestTokensAndMasks:
         assert len(modalities) == 2  # s2, s1
         assert set(modalities) == set(["sentinel2_l2a", "sentinel1"])
 
+    def test_spatial_pool_with_mask_max(self) -> None:
+        """Test TokensAndMasks.spatial_pool_with_mask."""
+        b, h, w, t, b_s, d = 1, 2, 2, 3, 3, 128
+
+        # Setup for max pooling
+        sentinel_2 = repeat(
+            torch.tensor([[1.0, 3.0], [1.0, 1.0]], requires_grad=True),
+            "h w -> b h w t b_s d",
+            b=b,
+            t=t,
+            b_s=b_s,
+            d=d,
+        )
+        sentinel_2_mask_max = torch.zeros((b, h, w, t, b_s)).long()
+        # top corner of sentinel 2 is masked
+        sentinel_2_mask_max[:, 0, 0, :, :] = 1
+        sentinel_2_mask_max[:, 0, 1, :, :] = 1
+        # s1 should be ignored since its masked
+        sentinel_1_max = torch.ones((b, h, w, t, b_s, d)) * 2
+        sentinel_1_mask_max = torch.ones((b, h, w, t, b_s)).long()
+        sentinel_1_mask_max[:, 0, 1, :, :] = 0
+        t_and_m_max = TokensAndMasks(
+            sentinel2_l2a=sentinel_2,
+            sentinel2_l2a_mask=sentinel_2_mask_max,
+            sentinel1=sentinel_1_max,
+            sentinel1_mask=sentinel_1_mask_max,
+        )
+        # Test max pooling
+        pooled_max, mask_max = t_and_m_max.spatial_pool_with_mask(PoolingType.MAX)
+        assert pooled_max.shape == (b, h, w, d)
+        assert mask_max.shape == (b, h, w)
+        # check the top corner is masked, but nowhere else
+        for h in range(mask_max.shape[1]):
+            for w in range(mask_max.shape[2]):
+                if h == 0 and w == 0:
+                    assert mask_max[:, h, w] == 0
+                else:
+                    assert mask_max[:, h, w] == 1
+
+        for h in range(pooled_max.shape[1]):
+            for w in range(pooled_max.shape[2]):
+                if h == 0 and w == 0:
+                    # skip
+                    continue
+                if h == 0 and w == 1:
+                    # should be sentinel 1
+                    assert (pooled_max[:, h, w] == 2).all()
+                else:
+                    assert (
+                        pooled_max[:, h, w] == 1
+                    ).all()  # check the 3 tokens have been ignored
+        sentinel_2.retain_grad()
+        pooled_max.sum().backward()
+        assert sentinel_2.grad is not None
+
+    def test_spatial_pool_with_mask_mean(self) -> None:
+        """Test TokensAndMasks.spatial_pool_with_mask."""
+        b, h, w, t, b_s, d = 1, 2, 2, 3, 3, 128
+
+        # Setup for max pooling
+        # also test the gradients flow back
+        sentinel_2 = repeat(
+            torch.tensor([[1.0, 3.0], [1.0, 1.0]], requires_grad=True),
+            "h w -> b h w t b_s d",
+            b=b,
+            t=t,
+            b_s=b_s,
+            d=d,
+        )
+        sentinel_2_mask = torch.zeros((b, h, w, t, b_s)).long()
+        # top corner of sentinel 2 is masked
+        sentinel_2_mask[:, 0, 0, :, :] = 1
+        sentinel_2_mask[:, 0, 1, :, :] = 1
+        # s1 should be ignored since its masked
+        sentinel_1 = torch.ones((b, h, w, t, b_s, d)) * 2
+        sentinel_1_mask = torch.ones((b, h, w, t, b_s)).long()
+        sentinel_1_mask[:, 0, 1, :, :] = 0
+        sentinel_1_mask[:, 1, 1, :, :] = 0
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2,
+            sentinel2_l2a_mask=sentinel_2_mask,
+            sentinel1=sentinel_1,
+            sentinel1_mask=sentinel_1_mask,
+        )
+        # Test max pooling
+        pooled, mask = t_and_m.spatial_pool_with_mask(PoolingType.MEAN)
+        assert pooled.shape == (b, h, w, d)
+        assert mask.shape == (b, h, w)
+        # check the top corner is masked, but nowhere else
+        for h in range(mask.shape[1]):
+            for w in range(mask.shape[2]):
+                if h == 0 and w == 0:
+                    assert mask[:, h, w] == 0
+                else:
+                    assert mask[:, h, w] == 1
+
+        for h in range(pooled.shape[1]):
+            for w in range(pooled.shape[2]):
+                if h == 0 and w == 0:
+                    # skip
+                    continue
+                elif h == 0 and w == 1:
+                    # should be sentinel 1
+                    assert (pooled[:, h, w] == 2).all()
+                elif h == 1 and w == 1:
+                    assert (pooled[:, h, w] == 1.5).all()
+                else:
+                    assert (
+                        pooled[:, h, w] == 1
+                    ).all()  # check the 3 tokens have been ignored
+        sentinel_2.retain_grad()
+        pooled.sum().backward()
+        assert sentinel_2.grad is not None
+
 
 class TestProjectionAndAggregation:
     """Test ProjectAndAggregate."""
@@ -801,6 +914,3 @@ class TestProjectionAndAggregation:
                 )
                 # for now, lets just check it all runs properly
                 _ = layer(t_and_m)
-
-
-# TODO: write a unit test for the FlexiPatchEmbeddings

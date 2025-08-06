@@ -12,11 +12,13 @@ from olmo_core.train.config import TrainerConfig
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample, collate_helios
 from helios.data.transform import TransformConfig
-from helios.nn.flexihelios import EncoderConfig, PredictorConfig, ReconstructorConfig
+from helios.nn.flexihelios import EncoderConfig, PredictorConfig
 from helios.nn.latent_mim import LatentMIM, LatentMIMConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from helios.train.train_module.supervised_latent_mim import (
+    SupervisedLatentMIMTrainModuleConfig,
+)
 
 torch.set_default_device("cpu")
 logger = logging.getLogger(__name__)
@@ -30,13 +32,14 @@ def supported_modalities() -> list:
         Modality.get("sentinel1"),
         Modality.get("worldcover"),
         Modality.get("latlon"),
+        Modality.get("gse"),
     ]
 
 
 @pytest.fixture
 def supported_modality_names() -> list[str]:
     """Return the supported modality names for the test."""
-    return ["sentinel2_l2a", "sentinel1", "worldcover", "latlon"]
+    return ["sentinel2_l2a", "sentinel1", "worldcover", "latlon", "gse"]
 
 
 @pytest.fixture
@@ -54,6 +57,7 @@ def latent_mim_model(
         depth=2,
         drop_path=0.1,
         max_sequence_length=12,
+        probe_modalities=[Modality.WORLDCOVER.name],
     )
 
     # Create predictor config
@@ -69,19 +73,10 @@ def latent_mim_model(
         output_embedding_size=None,
     )
 
-    reconstructor_config = ReconstructorConfig(
-        supported_modality_names=[
-            m for m in supported_modality_names if m != Modality.LATLON.name
-        ],
-        max_patch_size=8,
-        decoder_config=predictor_config,
-    )
-
     # Create LatentMIM config
     latent_mim_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=predictor_config,
-        reconstructor_config=reconstructor_config,
     )
 
     # Build the model
@@ -104,7 +99,7 @@ def optim_config() -> AdamWConfig:
 @pytest.fixture
 def train_module_config(
     optim_config: AdamWConfig,
-) -> LatentMIMTrainModuleConfig:
+) -> SupervisedLatentMIMTrainModuleConfig:
     """Create a LatentMIMTrainModuleConfig for testing."""
     token_exit_cfg = {modality: 0 for modality in Modality.names()}
     loss_cfg = {"type": "patch_discrimination"}
@@ -114,16 +109,17 @@ def train_module_config(
     )
 
     # Create the config with all required parameters
-    config = LatentMIMTrainModuleConfig(
+    config = SupervisedLatentMIMTrainModuleConfig(
         optim_config=optim_config,
         rank_microbatch_size=3,
         loss_config=LossConfig(loss_config=loss_cfg),
-        mae_loss_config=LossConfig(loss_config={"type": "mae"}),
         masking_config=MaskingConfig(strategy_config=masking_cfg),
         token_exit_cfg=token_exit_cfg,
         ema_decay=(0.996, 1.0),
         max_grad_norm=1.0,
         transform_config=transform_cfg,
+        supervisory_modalities=[Modality.WORLDCOVER.name],
+        supervisory_weight=1.0,
     )
     return config
 
@@ -167,7 +163,7 @@ class MockTrainer:
 def test_train_batch_without_missing_modalities(
     samples_without_missing_modalities: list[tuple[int, HeliosSample]],
     latent_mim_model: LatentMIM,
-    train_module_config: LatentMIMTrainModuleConfig,
+    train_module_config: SupervisedLatentMIMTrainModuleConfig,
     set_random_seeds: None,
 ) -> None:
     """Test train batch without missing modalities."""
@@ -184,8 +180,8 @@ def test_train_batch_without_missing_modalities(
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
-            mock_trainer._metrics["train/PatchDisc+MAE"],
-            torch.tensor(3.5),
+            mock_trainer._metrics["train/PatchDisc"],
+            torch.tensor(4.5),
             atol=1e-1,
         )
 
@@ -193,7 +189,7 @@ def test_train_batch_without_missing_modalities(
 def test_train_batch_with_missing_modalities(
     samples_with_missing_modalities: list[tuple[int, HeliosSample]],
     latent_mim_model: LatentMIM,
-    train_module_config: LatentMIMTrainModuleConfig,
+    train_module_config: SupervisedLatentMIMTrainModuleConfig,
     set_random_seeds: None,
 ) -> None:
     """Test train batch with missing modalities."""
@@ -211,7 +207,7 @@ def test_train_batch_with_missing_modalities(
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
-            mock_trainer._metrics["train/PatchDisc+MAE"],
-            torch.tensor(3.3),
+            mock_trainer._metrics["train/PatchDisc"],
+            torch.tensor(4.5),
             atol=1e-1,
         )

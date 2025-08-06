@@ -414,6 +414,21 @@ class HeliosSample(NamedTuple):
                 new_data_dict[attribute] = modality
         return HeliosSample(**new_data_dict)
 
+    def pop(
+        self, modalities: list[str] | None
+    ) -> tuple["HeliosSample", dict[str, ArrayTensor]]:
+        """Pop off the given modalities - returns the HeliosSample and the removed modalities."""
+        if modalities is None:
+            return self, {}
+        new_sample = {}
+        popped_modalities = {}
+        for modality_name, modality in self.as_dict(ignore_nones=True).items():
+            if modality_name in modalities:
+                popped_modalities[modality_name] = modality
+            else:
+                new_sample[modality_name] = modality
+        return HeliosSample(**new_sample), popped_modalities
+
     def scale(self, s: float) -> "HeliosSample":
         """Multiply a HeliosSample by a float."""
         return HeliosSample(
@@ -920,6 +935,22 @@ class HeliosDataset(Dataset):
                     continue
                 logger.info(f"Normalizing {modality_name}")
                 modality_data = sample_dict[modality_name]
+                if modality_name == Modality.WORLDCOVER.name:
+                    # don't normalize world cover, since we will  one hot encode it
+                    logger.info(
+                        f"Skipping normalization for {modality_name} because it is worldcover"
+                    )
+                    # We tried replacing masked values with "permanant water", since this is commonly
+                    # where they occur (e.g. in the line below). This lead to worse results, but was
+                    # not extensively tested
+                    # modality_data[modality_data == 0] = 80
+                    modality_data[modality_data == 95] = 110
+                    modality_data = modality_data / 10  # now we should be to classes
+                    # keep missing values
+                    modality_data[modality_data == MISSING_VALUE / 10] = MISSING_VALUE
+                    sample_dict[modality_name] = modality_data.astype(self.dtype)
+                    continue
+                logger.info(f"Normalizing {modality_name}")
                 missing_mask = modality_data == MISSING_VALUE
                 normalized_data = self.normalize_image(
                     Modality.get(modality_name), modality_data
