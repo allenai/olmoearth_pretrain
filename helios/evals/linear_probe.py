@@ -119,6 +119,7 @@ def train_and_eval_probe(
     patch_size: int,
     batch_size: int,
     epochs: int = 50,
+    warmup_fraction: float = 0.1,
     eval_interval: int = 1,
     probe_type: ProbeType = ProbeType.LINEAR,
 ) -> float:
@@ -169,6 +170,7 @@ def train_and_eval_probe(
                 else data_loader
             ),
             lr=lr,
+            warmup_fraction=warmup_fraction,
             epochs=end_epoch,
             total_epochs=epochs,
             current_epoch=start_epoch,
@@ -210,6 +212,7 @@ def train_probe(
     lr: float,
     current_epoch: int,
     epochs: int,
+    warmup_fraction: float,
     total_epochs: int,
     num_classes: int,
     patch_size: int,
@@ -258,7 +261,7 @@ def train_probe(
                 optimizer=opt,
                 epoch=epoch + (i / len(data_loader)),
                 total_epochs=total_epochs,
-                warmup_epochs=int(total_epochs * 0.1),
+                warmup_epochs=int(total_epochs * warmup_fraction),
                 max_lr=lr,
                 min_lr=1.0e-5,  # maybe this is too low and should just be 10x smaller
             )
