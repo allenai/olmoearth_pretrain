@@ -2,6 +2,7 @@
 
 import subprocess
 import argparse
+import sys
 
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 lr_args = " ".join(
@@ -19,16 +20,18 @@ lr_args = " ".join(
     ]
 )
 checkpoints = {
-    "base": "/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5/step320000"
+    #"base": "/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5/step320000",
+    "detect": "/weka/dfive-default/ryanp/scratch/detect_all_v2_helios_encoder"
 }
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--cluster", type=str, default="ai2/titan-cirrascale", help="Cluster to run on"
 )
+parser.add_argument("--local", action="store_true", help="Run locally with torchrun")
 args = parser.parse_args()
 
-run_cmd = "launch"
+run_cmd = "launch" if not args.local else "train"
 for ckpt_name, checkpoint in checkpoints.items():
     for probe_lr in LP_LRs:
         run_name = f"{ckpt_name}__lr{probe_lr}"
@@ -38,3 +41,6 @@ for ckpt_name, checkpoint in checkpoints.items():
         print(cmd)
         subprocess.run(cmd, shell=True)  # nosec
         print()
+        if args.local:
+            print("Stopping early...")
+            sys.exit(0)
