@@ -982,6 +982,7 @@ class HeliosDatasetConfig(Config):
     cache_dir: str | None = None
     samples_per_sec: float | None = None
     dataset_percentage: float = 1.0
+    anchor_point_list: list | None = None
     dist_from_anchor_m: float = 1000_000
 
     def get_numpy_dtype(self) -> np.dtype:

@@ -100,7 +100,7 @@ class HeliosConcatDatasetConfig(Config):
     """Configuration for the HeliosConcatDataset."""
 
     dataset_configs: list[Config]
-    anchor_point_list: list[tuple[float, float]] | None = None
+    anchor_point_list: list | None = None
     dist_from_anchor_m: float | None = None
 
     def validate(self) -> None:

@@ -142,7 +142,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     )
 
 
-france_point = (49.442279, 6.217787)
+france_point = [49.442279, 6.217787]
 
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
