@@ -2,6 +2,7 @@
 
 import logging
 import os
+
 from olmo_core.internal.common import get_beaker_username
 from olmo_core.launch.beaker import (
     BeakerEnvSecret,
@@ -119,6 +120,7 @@ def build_launch_config(
             name="GOOGLE_APPLICATION_CREDENTIALS", value="/etc/gcp_credentials.json"
         ),
     ]
+    # Propagate the train module path to the experiment if set
     if train_script_path := os.environ.get("TRAIN_SCRIPT_PATH") is not None:
         env_vars.append(BeakerEnvVar(name="TRAIN_SCRIPT_PATH", value=train_script_path))
 
@@ -143,12 +145,8 @@ def build_launch_config(
             BeakerEnvSecret(
                 name="WANDB_API_KEY", secret=f"{beaker_user}_WANDB_API_KEY"
             ),  # nosec
-            BeakerEnvSecret(
-                name="GITHUB_TOKEN", secret=f"{beaker_user}_GITHUB_TOKEN"
-            ),  # nosec
-            BeakerEnvSecret(
-                name="GCP_CREDENTIALS", secret="HELIOS_GCP_CREDENTIALS"
-            ),  # nosec
+            BeakerEnvSecret(name="GITHUB_TOKEN", secret=f"{beaker_user}_GITHUB_TOKEN"),  # nosec
+            BeakerEnvSecret(name="GCP_CREDENTIALS", secret="HELIOS_GCP_CREDENTIALS"),  # nosec
         ],
         setup_steps=[
             # Write GCP credentials.
