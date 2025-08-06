@@ -11,6 +11,7 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.config import Config, DType
+from olmo_core.distributed.checkpoint import load_model_and_optim_state
 from olmo_core.distributed.parallel import (
     DataParallelConfig,
     DataParallelType,
@@ -31,6 +32,7 @@ from torch.distributed.fsdp import FSDPModule
 from torch.distributed.tensor import DTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
+from upath import UPath
 
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
@@ -56,6 +58,7 @@ class HeliosTrainModuleConfig(Config):
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
         find_unused_parameters: Whether to find unused parameters for DDP.
+        initial_weights: Checkpoint with initial weights to load.
     """
 
     # Training settings
@@ -83,6 +86,7 @@ class HeliosTrainModuleConfig(Config):
     state_dict_save_opts: dict[str, Any] | None = None
     state_dict_load_opts: dict[str, Any] | None = None
     regularizer_config: LossConfig | None = None
+    initial_weights: str | None = None
 
     def prepare_kwargs(self) -> dict[str, Any]:
         """Prepare the kwargs for the train module."""
@@ -101,6 +105,8 @@ class HeliosTrainModuleConfig(Config):
             kwargs["state_dict_load_opts"] = dist_cp_sd.StateDictOptions(
                 **state_dict_load_opts
             )
+        if self.initial_weights is not None:
+            kwargs["initial_weights"] = UPath(self.initial_weights)
         return kwargs
 
     def build(
@@ -141,6 +147,7 @@ class HeliosTrainModule(TrainModule):
         device: The device to train on.
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
+        initial_weights: Checkpoint to load initial weights from.
     """
 
     def __init__(
@@ -159,6 +166,7 @@ class HeliosTrainModule(TrainModule):
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
+        initial_weights: UPath | None = None,
     ):
         """Initialize the training module.
 
@@ -177,6 +185,7 @@ class HeliosTrainModule(TrainModule):
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
+            initial_weights: Checkpoint to load initial weights from.
         """
         super().__init__()
 
@@ -246,6 +255,14 @@ class HeliosTrainModule(TrainModule):
         # Materialize and init parameters.
         logger.info("Initializing model weights...")
         # model.init_weights(max_seq_len=max_sequence_length, device=self.device)
+        if initial_weights is not None:
+            load_model_and_optim_state(initial_weights / "model_and_optim", self.model)
+            with torch.no_grad():
+                for p, tp in zip(
+                    self.model.encoder.parameters(),
+                    self.model.target_encoder.parameters(),
+                ):
+                    tp.data.mul_(0).add_(p.data, alpha=1)
 
         # Build optimizer(s).
         logger.info("Building optimizer(s)...")

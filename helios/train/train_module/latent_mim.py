@@ -11,7 +11,7 @@ from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
-from olmo_core.distributed.checkpoint import load_model_and_optim_state
+from upath import UPath
 
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
@@ -119,6 +119,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
+        initial_weights: UPath | None = None,
     ):
         """Initialize the training module.
 
@@ -144,6 +145,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
             mae_loss_config: Optional loss config for masked auto-encoding.
             regularizer_config: An optional regularizer configuration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
+            initial_weights: Checkpoint to load initial weights from.
         """
         super().__init__(
             model=model,
@@ -160,6 +162,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
             find_unused_parameters=find_unused_parameters,
+            initial_weights=initial_weights,
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg = token_exit_cfg
@@ -176,13 +179,6 @@ class LatentMIMTrainModule(HeliosTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
-        load_model_and_optim_state('/weka/dfive-default/helios/checkpoints/joer/lmim_newolmo_longwarmup/step49500/model_and_optim/', self.model)
-        with torch.no_grad():
-            for p, tp in zip(
-                self.model.encoder.parameters(), self.model.target_encoder.parameters()
-            ):
-                tp.data.mul_(0).add_(p.data, alpha=1)
-
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
