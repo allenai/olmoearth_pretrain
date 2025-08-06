@@ -21,3 +21,8 @@ Targeting specific Beaker host example:
 ```
 python scripts/X.py launch [name] ai2/titan-cirrascale --launch.hostnames=["titan-cs-aus-465.reviz.ai2.in","titan-cs-aus-466.reviz.ai2.in"]
 ```
+
+To add mixup, add the following CLI arguments:
+```
+--train_module.transform_config.transform_type=mixup --train_module.transform_config.transform_kwargs={"alpha": 1.3}
+```
