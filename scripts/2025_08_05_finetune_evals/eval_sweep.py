@@ -24,7 +24,7 @@ checkpoints = {
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "--cluster", type=str, default="local"#"ai2/titan-cirrascale", help="Cluster to run on"
+    "--cluster", type=str, default="ai2/titan-cirrascale", help="Cluster to run on"
 )
 args = parser.parse_args()
 
