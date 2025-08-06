@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import os
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from logging import getLogger
@@ -447,12 +448,25 @@ class HeliosTrainModule(TrainModule):
                     raise RuntimeError("Model and checkpoint are not compatible")
             logger.info("Model and checkpoint are compatible")
 
-        model_state_dict = dist_cp_sd.get_model_state_dict(
-            self.model, options=sd_options
-        )
-        optim_state_dict = dist_cp_sd.get_optimizer_state_dict(
-            self.model, self.optimizer, options=sd_options
-        )
+        try:
+            model_state_dict = dist_cp_sd.get_model_state_dict(
+                self.model, options=sd_options
+            )
+            optim_state_dict = dist_cp_sd.get_optimizer_state_dict(
+                self.model, self.optimizer, options=sd_options
+            )
+
+        except Exception as e:
+            logger.warning(f"Error getting state dict: {e}")
+            logger.info("Falling back to non-distributed checkpoint load")
+            state_dict_path = os.path.join(
+                self.trainer.load_path, "checkpoints/last.ckpt"
+            )
+            state_dict = torch.load(state_dict_path)
+            logger.info(state_dict.keys())
+            model_state_dict = state_dict["model"]
+            optim_state_dict = state_dict["optim"]
+
         return {
             "model": model_state_dict,
             "optim": optim_state_dict,
