@@ -19,7 +19,7 @@ from olmo_core.train.callbacks import (
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
 )
-from olmo_core.train.checkpoint import CheckpointerConfig
+from helios.train.checkpoint import HeliosCheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
@@ -49,7 +49,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     WANDB_PROJECT = "2025_08_05_finetune_evals"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
-    checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
+    checkpointer_config = HeliosCheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = HeliosWandBCallback(
         name=common.run_name,
         project=WANDB_PROJECT,
