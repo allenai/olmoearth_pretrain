@@ -2,11 +2,6 @@
 
 import logging
 
-from olmo_core.config import DType
-from olmo_core.distributed.parallel.data_parallel import (
-    DataParallelConfig,
-    DataParallelType,
-)
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import WSD
 from olmo_core.train.callbacks import (
@@ -25,14 +20,10 @@ from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
+from helios.evals.models import DINOv2Config
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
-from helios.internal.utils import MODEL_SIZE_ARGS
-from helios.nn.flexihelios import (
-    EncoderConfig,
-    PoolingType,
-    PredictorConfig,
-)
+from helios.nn.flexihelios import PoolingType
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -52,31 +43,7 @@ MIN_PATCH_SIZE = 1
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-
-    encoder_config = EncoderConfig(
-        embedding_size=model_size["encoder_embedding_size"],
-        num_heads=model_size["encoder_num_heads"],
-        depth=model_size["encoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        supported_modality_names=common.training_modalities,
-        max_patch_size=MAX_PATCH_SIZE,
-        drop_path=0.1,
-        max_sequence_length=12,
-    )
-    decoder_config = PredictorConfig(
-        encoder_embedding_size=model_size["encoder_embedding_size"],
-        decoder_embedding_size=model_size["decoder_embedding_size"],
-        depth=model_size["decoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        num_heads=model_size["decoder_num_heads"],
-        supported_modality_names=common.training_modalities,
-        max_sequence_length=12,
-    )
-    model_config = LatentMIMConfig(
-        encoder_config=encoder_config,
-        decoder_config=decoder_config,
-    )
+    model_config = DINOv2Config()
     return model_config
 
 
@@ -115,11 +82,7 @@ def build_train_module_config(
         max_grad_norm=1.0,
         scheduler=scheduler,
         ema_decay=(1.0, 1.0),
-        dp_config=DataParallelConfig(
-            name=DataParallelType.fsdp,
-            param_dtype=DType.bfloat16,
-            reduce_dtype=DType.float32,
-        ),
+        dp_config=None,  # FSDP is not supported for DINOv2
     )
 
 
@@ -137,7 +100,6 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
-        num_dataset_repeats_per_epoch=int(0.25 / common.dataset_percentage),
     )
 
 
@@ -150,30 +112,30 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
             training_modalities=common.training_modalities,
             dataset_percentage=common.dataset_percentage,
         ),
-        # osm_sampling
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
-            training_modalities=common.training_modalities,
-            dataset_percentage=common.dataset_percentage,
-        ),
-        # osmbig
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928",
-            training_modalities=common.training_modalities,
-            dataset_percentage=common.dataset_percentage,
-        ),
-        # presto_neighbor
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/3507748",
-            training_modalities=common.training_modalities,
-            dataset_percentage=common.dataset_percentage,
-        ),
-        # worldcover_sampling
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/6370580",
-            training_modalities=common.training_modalities,
-            dataset_percentage=common.dataset_percentage,
-        ),
+        # # osm_sampling
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
+        #     training_modalities=common.training_modalities,
+        #     dataset_percentage=common.dataset_percentage,
+        # ),
+        # # osmbig
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928",
+        #     training_modalities=common.training_modalities,
+        #     dataset_percentage=common.dataset_percentage,
+        # ),
+        # # presto_neighbor
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/3507748",
+        #     training_modalities=common.training_modalities,
+        #     dataset_percentage=common.dataset_percentage,
+        # ),
+        # # worldcover_sampling
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/6370580",
+        #     training_modalities=common.training_modalities,
+        #     dataset_percentage=common.dataset_percentage,
+        # ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
@@ -185,7 +147,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2025_07_18_dataset_percentage_experiments"
+    WANDB_PROJECT = "v0.2_sweep"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -217,24 +179,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
-        ),
-        "mados": DownstreamTaskConfig(
-            dataset="mados",
-            embedding_batch_size=128,
-            probe_batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            probe_lr=0.1,
-            eval_interval=Duration.steps(10000),
-        ),
-        "m-so2sat": DownstreamTaskConfig(
-            dataset="m-so2sat",
-            embedding_batch_size=128,
-            num_workers=4,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(10000),
         ),
     }
     trainer_config = (

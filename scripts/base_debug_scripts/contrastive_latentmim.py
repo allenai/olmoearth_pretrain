@@ -48,7 +48,6 @@ USE_4_X_128_DATASET = False
 TOTAL_EPOCHS = 300
 if USE_4_X_128_DATASET:
     TOTAL_EPOCHS = TOTAL_EPOCHS // 4
-WARMUP_FRACTION = 0.0667  # changed from 20 warmup epochs / 300 total
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -110,15 +109,13 @@ def build_train_module_config(
     )
     token_exit_cfg = {modality: 0 for modality in common.training_modalities}
 
-    WARMUP_EPOCHS = int(TOTAL_EPOCHS * WARMUP_FRACTION)
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
-    scheduler = CosWithWarmup()
+    scheduler = CosWithWarmup(warmup=8000)
     train_module_config = ContrastiveLatentMIMTrainModuleConfig(
         optim_config=optim_config,
         masking_config=masking_config,
-        warmup_duration=Duration.epochs(WARMUP_EPOCHS),
         loss_config=loss_config,
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         token_exit_cfg=token_exit_cfg,

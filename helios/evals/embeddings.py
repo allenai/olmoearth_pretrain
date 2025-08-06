@@ -5,27 +5,20 @@ import logging
 import torch
 from torch.utils.data import DataLoader
 
-from helios.evals.datasets.configs import TaskType
-from helios.nn.flexihelios import Encoder, PoolingType, TokensAndMasks
+from helios.evals.eval_wrapper import EvalWrapper
 from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
 
 
 def get_embeddings(
-    data_loader: DataLoader,
-    task_type: TaskType,
-    model: Encoder,
-    patch_size: int,
-    pooling_type: PoolingType = PoolingType.MAX,
-    concat_features: bool = False,
+    data_loader: DataLoader, model: EvalWrapper
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Get embeddings from model for the data in data_loader."""
     embeddings = []
     labels = []
-
-    model = model.eval()
-    device = next(model.parameters()).device
+    model.eval()
+    device = model.device
     total_samples = len(data_loader)
     with torch.no_grad():
         for i, (masked_helios_sample, label) in enumerate(data_loader):
@@ -35,29 +28,18 @@ def get_embeddings(
                     masked_helios_sample_dict[key] = val.to(device=device)
                 else:
                     masked_helios_sample_dict[key] = val.to(
-                        device=device, dtype=torch.bfloat16
+                        device=device,
                     )
 
             masked_helios_sample = MaskedHeliosSample.from_dict(
                 masked_helios_sample_dict
             )
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                # TODO: Model expects masked helios sample we need to pass empty masks
-                # Likely we want to have a flag that checks for eval mode and passes empty masks
-                batch_embeddings: TokensAndMasks = model(
-                    masked_helios_sample, patch_size=patch_size
-                )[0]  # (bsz, dim)
+                batch_embeddings = model(masked_helios_sample)
 
-            spatial_pool = True if task_type == TaskType.SEGMENTATION else False
-            # Concat features across modalities in space averaged across time
-            averaged_embeddings = batch_embeddings.pool_unmasked_tokens(
-                pooling_type,
-                spatial_pooling=spatial_pool,
-                concat_features=concat_features,
-            )
-            embeddings.append(averaged_embeddings.cpu())
+            embeddings.append(batch_embeddings.cpu())
             labels.append(label)
-            logger.debug(f"Processed {i} / {total_samples}")
+            logger.info(f"Processed {i} / {total_samples}")
 
     embeddings = torch.cat(embeddings, dim=0)  # (N, dim)
     labels = torch.cat(labels, dim=0)  # (N)

@@ -46,7 +46,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2025_06_30_dataset_percentage__eval"
+    WANDB_PROJECT = "2025_07_10_dataset_percentage_eval"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -59,7 +59,15 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
-        "m-eurosat": DownstreamTaskConfig(
+        "m_forestnet": DownstreamTaskConfig(
+            dataset="m-forestnet",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            eval_interval=Duration.epochs(5),
+        ),
+        "m_eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
             embedding_batch_size=128,
             num_workers=0,
@@ -67,7 +75,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
-        "m-bigearthnet": DownstreamTaskConfig(
+        "m_bigearthnet": DownstreamTaskConfig(
             dataset="m-bigearthnet",
             embedding_batch_size=64,
             num_workers=4,
@@ -75,7 +83,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
-        "m-so2sat": DownstreamTaskConfig(
+        "m_so2sat": DownstreamTaskConfig(
             dataset="m-so2sat",
             embedding_batch_size=128,
             num_workers=4,
@@ -83,7 +91,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
-        "m-brick-kiln": DownstreamTaskConfig(
+        "m_brick_kiln": DownstreamTaskConfig(
             dataset="m-brick-kiln",
             embedding_batch_size=128,
             num_workers=4,

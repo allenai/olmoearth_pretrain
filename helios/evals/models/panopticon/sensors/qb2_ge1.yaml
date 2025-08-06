@@ -1,0 +1,34 @@
+instrument: '4-band'
+processing_level: 'SR'
+
+# QuickBird-2 and GeoEye-1
+# In the corresponding dataset, either of qb2 or ge1 are used. However, since
+# their bands have the same properties, we use the same file for both
+bands:
+  B01:
+    name: 'blue'
+    gaussian:
+      mu: 482.417803
+      sigma: 45.029733
+    GSD: 1.24
+
+  B02:
+    name: 'green'
+    gaussian:
+      mu: 547.272289
+      sigma: 58.295452
+    GSD: 1.24
+
+  B03:
+    name: 'red'
+    gaussian:
+      mu: 665.031763
+      sigma: 35.775908
+    GSD: 1.24
+
+  B04:
+    name: 'nir'
+    gaussian:
+      mu: 840.773239
+      sigma: 83.700732
+    GSD: 1.24
