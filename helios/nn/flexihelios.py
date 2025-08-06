@@ -145,13 +145,19 @@ class TokensAndMasks(NamedTuple):
     def _flatten(x: Tensor) -> Tensor:
         return rearrange(x, "b ... d -> b (...) d")
 
-    def flatten_tokens_and_masks(self) -> tuple[Tensor, Tensor]:
+    def flatten_tokens_and_masks(
+        self, modality: str | None = None
+    ) -> tuple[Tensor, Tensor]:
         """Return the flattened tokens and masks.
 
         Tokens will have shape [B, T, D] and masks will have shape [B, T]
         """
         flattened_x, flattened_masks = [], []
-        for attr_name in self.modalities:
+        if modality is None:
+            all_modalities = self.modalities
+        else:
+            all_modalities = [modality]
+        for attr_name in all_modalities:
             mask_attr_name = self.get_masked_modality_name(attr_name)
             attr = getattr(self, attr_name)
             masked_attr = getattr(self, mask_attr_name)
@@ -163,7 +169,8 @@ class TokensAndMasks(NamedTuple):
                 masked_attr = masked_attr.unsqueeze(dim=-1)
                 flattened_x.append(self._flatten(attr))
                 flattened_masks.append(self._flatten(masked_attr))
-
+        if len(flattened_x) == 0:
+            raise ValueError(f"No tokens for {all_modalities}")
         x = torch.cat(flattened_x, dim=1)
         masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
         return x, masks
