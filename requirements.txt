@@ -1,24 +1,26 @@
-ai2-olmo-core==2.1.0
+ai2-olmo-core @ git+https://github.com/allenai/OLMo-core.git@abc12e50ba756c21e575452cfc6f150dafa9509e # Pin here until >2.1.0 is released.
 albumentations
 beaker-py==1.34.1
-breizhcrops
+breizhcrops==0.0.4.1 # Force the latest available
 cartopy
 class-registry
 datasets==3.6.0
 einops>=0.7.0
 gcsfs
-geobench
+geobench @ git+https://github.com/ServiceNow/geo-bench.git  # Unreleased relaxed dependencies
 GitPython>=3.0,<4.0
 hdf5plugin
+huggingface-hub>=0.24.0 # Force huggingface hub version to be higher
 interrogate
 matplotlib
 numpy
-pandas
+pandas>=2.2 # Force this higher than 1.x
 pandera
 pre-commit
 pytest
 rasterio
 rioxarray
+shapely>=2 # temporary hack to force shapely 2.x
 torch>=2.7
 torchvision
 universal_pathlib>=0.2.5

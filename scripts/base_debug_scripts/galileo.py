@@ -50,7 +50,6 @@ USE_4_X_128_DATASET = False
 TOTAL_EPOCHS = 300
 if USE_4_X_128_DATASET:
     TOTAL_EPOCHS = TOTAL_EPOCHS // 4
-WARMUP_FRACTION = 0.0667  # changed from 20 warmup epochs / 300 total
 
 tiny_model_args = MODEL_SIZE_ARGS["tiny"]
 MAX_SEQUENCE_LENGTH = 12
@@ -141,15 +140,13 @@ def build_train_module_config(
             f"All modalities must be in token_exit_cfg_a: {common.training_modalities}"
         )
     token_exit_cfg_b = {modality: 0 for modality in common.training_modalities}
-    WARMUP_EPOCHS = int(TOTAL_EPOCHS * WARMUP_FRACTION)
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
-    scheduler = CosWithWarmup()
+    scheduler = CosWithWarmup(warmup=8000)
     train_module_config = GalileoTrainModuleConfig(
         # TODO: change name to optim config
         optim_config=optim_config,
-        warmup_duration=Duration.epochs(WARMUP_EPOCHS),
         masking_config_a=masking_config_a,
         masking_config_b=masking_config_b,
         loss_config_a=loss_config_a,

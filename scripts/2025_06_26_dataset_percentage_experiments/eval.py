@@ -59,6 +59,14 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
+        "m_forestnet": DownstreamTaskConfig(
+            dataset="m-forestnet",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            eval_interval=Duration.epochs(5),
+        ),
         "m_eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
             embedding_batch_size=128,

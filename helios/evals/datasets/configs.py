@@ -66,6 +66,19 @@ DATASET_TO_CONFIG = {
         is_multilabel=False,
         height_width=256,
     ),
+    "m-forestnet": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[
+            # src (we have), tgt (we want), using the geobench L8 names
+            # we don't need to impute B8 since our
+            # _landsathelios2geobench_name implicitly does it for us,
+            ("02 - Blue", "01 - Coastal aerosol"),
+            ("07 - SWIR2", "09 - Cirrus"),
+            ("07 - SWIR2", "10 - Tirs1"),
+        ],
+        num_classes=12,
+        is_multilabel=False,
+    ),
     "mados": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[

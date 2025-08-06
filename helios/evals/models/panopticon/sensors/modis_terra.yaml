@@ -1,0 +1,99 @@
+instrument: 'MSI'  # You may want to update this based on the actual instrument
+processing_level: 'L1C'  # You may want to update this based on the actual processing level
+
+bands:
+  B01:
+    name: 'Band 1'  # You may want to provide a descriptive name
+    gaussian:
+      mu: 411.633593
+      sigma: 14.652
+
+  B02:
+    name: 'Band 2' # coastal aerosol
+    gaussian:
+      mu: 442.155
+      sigma: 8.434933
+
+  B03:
+    name: 'Band 3'
+    gaussian:
+      mu: 466.122
+      sigma: 18.894
+
+  B04:
+    name: 'Band 4' # ~ blue
+    gaussian:
+      mu: 487.078
+      sigma: 10.633
+
+  B05:
+    name: 'Band 5'
+    gaussian:
+      mu: 529.783
+      sigma: 10.782657
+
+  B06:
+    name: 'Band 6'
+    gaussian:
+      mu: 546.981
+      sigma: 10.331
+
+  B07:
+    name: 'Band 7' # green
+    gaussian:
+      mu: 554.026
+      sigma: 17.766939
+
+  B08:
+    name: 'Band 8'
+    gaussian:
+      mu: 644.898
+      sigma: 34.650989
+
+  B09:
+    name: 'Band 9' # red
+    gaussian:
+      mu: 665.695
+      sigma: 10.117
+
+  B10:
+    name: 'Band 10'
+    gaussian:
+      mu: 677.068
+      sigma: 9.007702
+
+  B11:
+    name: 'Band 11'
+    gaussian:
+      mu: 746.736
+      sigma: 9.952
+
+  B12:
+    name: 'Band 12'
+    gaussian:
+      mu: 857.323
+      sigma: 34.696136
+
+  B13:
+    name: 'Band 13'
+    gaussian:
+      mu: 866.55
+      sigma: 13.421421
+
+  B14:
+    name: 'Band 14'
+    gaussian:
+      mu: 1241.597
+      sigma: 23.356
+
+  B15:
+    name: 'Band 15'
+    gaussian:
+      mu: 1627.972
+      sigma: 27.593
+
+  B16:
+    name: 'Band 16'
+    gaussian:
+      mu: 2113.124
+      sigma: 47.341375

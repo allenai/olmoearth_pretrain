@@ -1,9 +1,9 @@
 """Eval sweep."""
 
 import argparse
-import subprocess  # nosec
 
-LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
+# LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
+LP_LRs = [0.1]
 
 lr_args = " ".join(
     [
@@ -51,4 +51,4 @@ for checkpoint in checkpoints:
         print(formatted_lr_args)
         cmd = f"{start_command} scripts/2025_06_26_dataset_percentage_experiments/eval.py {run_cmd} {run_name} {args.cluster} --launch.priority=high {formatted_lr_args} --trainer.load_path={checkpoint} --launch.task_name=eval"
         print(cmd)
-        subprocess.run(cmd, shell=True)  # nosec
+        # subprocess.run(cmd, shell=True)  # nosec
