@@ -143,6 +143,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 
 france_point = [49.442279, 6.217787]
+togo_point = [8.6195, 0.8248]
 
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
@@ -176,7 +177,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     ]
     return HeliosConcatDatasetConfig(
         dataset_configs=dataset_configs,
-        anchor_point_list=[france_point],
+        anchor_point_list=[togo_point],
         dist_from_anchor_m=1000_000,
     )
 
