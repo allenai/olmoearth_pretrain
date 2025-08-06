@@ -114,7 +114,7 @@ class ModalityAllDiscriminationLoss(Loss):
     Discriminates across patches using all samples in a batch.
     """
 
-    name = "ModalityAllDisc"
+    name = "ModalityAllDiscAveraged"
 
     def __init__(self, tau: float = 0.1, pred2unit: bool = False):
         """Initialize all patch discrimination loss.
@@ -182,7 +182,7 @@ class ModalityAllDiscriminationLoss(Loss):
             total_decoded_modalities += 1
             total_loss += loss
 
-        return total_loss
+        return total_loss / total_decoded_modalities
 
 
 @LOSS_REGISTRY.register("patch_discrimination_new")
