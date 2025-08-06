@@ -1,7 +1,6 @@
 """Latent mim cross random masking."""
 
 import logging
-from typing import Any
 
 from olmo_core.config import DType
 from olmo_core.distributed.parallel.data_parallel import (
@@ -9,7 +8,6 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import WSD
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -23,7 +21,6 @@ from upath import UPath
 
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
-from helios.train.checkpoint import HeliosCheckpointerConfig
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.evals.linear_probe import ProbeType
@@ -42,6 +39,7 @@ from helios.train.callbacks import (
     HeliosWandBCallback,
 )
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
+from helios.train.checkpoint import HeliosCheckpointerConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
@@ -86,13 +84,9 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    scheduler = WSD(
-        decay_steps=100000,
-        decay_fraction=None,
-    )
+    scheduler = None
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        warmup_duration=Duration.steps(8000),
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
@@ -282,7 +276,6 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
         output_dir=str(UPath(common.save_folder) / "visualizations"),
         std_multiplier=2.0,
     )
-
 
 
 if __name__ == "__main__":
