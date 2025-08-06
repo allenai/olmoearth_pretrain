@@ -55,10 +55,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cluster", type=str, required=True, help="Cluster name")
     parser.add_argument(
-        "--checkpoint-path", type=str, required=True, help="Checkpoint path"
+        "--checkpoint_path", type=str, required=True, help="Checkpoint path"
     )
     parser.add_argument(
-        "--module-path", type=str, required=True, help="Path to module .py"
+        "--module_path", type=str, required=True, help="Path to module .py"
     )
     args = parser.parse_args()
 
@@ -71,6 +71,7 @@ def main():
     for lr in LP_LRs:
         for norm_mode in Normalization_MODES:
             print(f"Running with {norm_mode} normalization and {lr} learning rate")
+            # need to gen run name from checkpoint path
             run_name = f"eval_{norm_mode}_lr{lr}"
             cmd_args = lr_args.format(lr=lr)
             if norm_mode == "dataset":

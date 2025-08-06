@@ -300,6 +300,8 @@ if __name__ == "__main__":
     )
     # 2) Grab that one, leave everything else untouched in `rest`
     args, rest = pre.parse_known_args()
+    sys.argv = sys.argv[:1] + rest
+    print(f"sys.argv: {sys.argv}")
     user_mod = load_user_module(args.module_path)
 
     # 3) Inject all of the builder names into your namespace
