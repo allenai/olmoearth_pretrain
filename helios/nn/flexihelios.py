@@ -1031,7 +1031,11 @@ class SpatialAttnProbe(nn.Module):
                 q=q.shape[1],
             ),
         )
-        return self.apply_probes(spatial_tokens, h_w=x.h_at_10), spatial_tokens
+        probe_outputs = self.apply_probes(spatial_tokens, h_w=x.h_at_10)
+        spatial_tokens = rearrange(
+            spatial_tokens, "b (h w) d -> b h w d", h=x.h_at_10, w=x.h_at_10
+        )
+        return probe_outputs, spatial_tokens
 
 
 class FlexiHeliosBase(nn.Module):

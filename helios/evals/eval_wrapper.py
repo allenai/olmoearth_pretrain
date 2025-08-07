@@ -87,10 +87,11 @@ class HeliosEvalWrapper(EvalWrapper):
             )
         else:
             if self.spatial_pool:
-                # spatial_attn_embeddings has shape [B, H, W, D]
-                return torch.mean(spatial_attn_embeddings, dim=[1, 2])
-            else:
+                # spatial_attn_embeddings has shape [B, H, W, D]. This is what
+                # we return for the spatial pool
                 return spatial_attn_embeddings
+            else:
+                return torch.mean(spatial_attn_embeddings, dim=[1, 2])
 
 
 class PanopticonEvalWrapper(EvalWrapper):
