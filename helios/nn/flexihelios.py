@@ -975,7 +975,7 @@ class SpatialAttnProbe(nn.Module):
         else:
             self.probes = {}
 
-    def apply_probes(self, x: torch.Tensor, patch_size: int) -> dict[str, torch.Tensor]:
+    def apply_probes(self, x: torch.Tensor, h_w: int) -> dict[str, torch.Tensor]:
         """Apply linear probes for supervised learning."""
         if len(self.probes) == 0:
             return {}
@@ -986,7 +986,9 @@ class SpatialAttnProbe(nn.Module):
                 num_classes = probe_output.shape[-1] // (self.max_patch_size**2)
                 probe_output = rearrange(
                     probe_output,
-                    "b h w (c i j) -> b (h i) (w j) c",
+                    "b (h w) (c i j) -> b (h i) (w j) c",
+                    h=h_w,
+                    w=h_w,
                     i=self.max_patch_size,
                     j=self.max_patch_size,
                     c=num_classes,
@@ -1001,8 +1003,11 @@ class SpatialAttnProbe(nn.Module):
 
     def forward(
         self, x: TokensAndMasks, patch_size: int, input_res: int
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None]:
         """Forward."""
+        if len(self.probes) == 0:
+            return {}, None
+
         gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
         spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
             # we assume x is square, h == w
@@ -1017,10 +1022,16 @@ class SpatialAttnProbe(nn.Module):
         q = mask_expanded + spatial_embed
         feat_tokens, feat_masks = x.flatten_tokens_and_masks()
         # feat_masks has shape[B, N_f], we want [B, N_q, N_f]
-        print(q.shape, feat_tokens.shape, repeat(feat_masks, "b f -> b q f", q=q.shape[1]).shape, repeat(feat_masks, "b f -> b q f", q=q.shape[1])[:, None, None].shape)
-        spatial_tokens = self.attention(x=q, y=feat_tokens, attn_mask=repeat(feat_masks, "b f -> b q f", q=q.shape[1]))
-
-        return self.apply_probes(spatial_tokens, patch_size), spatial_tokens
+        spatial_tokens = self.attention(
+            x=q,
+            y=feat_tokens,
+            attn_mask=repeat(
+                feat_masks == MaskValue.ONLINE_ENCODER.value,
+                "b f -> b q f",
+                q=q.shape[1],
+            ),
+        )
+        return self.apply_probes(spatial_tokens, h_w=x.h_at_10), spatial_tokens
 
 
 class FlexiHeliosBase(nn.Module):
@@ -1577,7 +1588,9 @@ class Encoder(FlexiHeliosBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         always_pass_none_mask_to_transformer: bool = False,
-    ) -> tuple[TokensAndMasks, torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
+    ) -> tuple[
+        TokensAndMasks, torch.Tensor, dict[str, torch.Tensor], torch.Tensor | None
+    ]:
         """Process masked input samples into token representations.
 
         Args:
@@ -1604,10 +1617,14 @@ class Encoder(FlexiHeliosBase):
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
+        probe_output, spatial_queries = self.probe_with_attn(
+            output, patch_size, input_res
+        )
         return (
             output,
             self.project_and_aggregate(output),
-            *self.probe_with_attn(output, patch_size, input_res),
+            probe_output,
+            spatial_queries,
         )
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
