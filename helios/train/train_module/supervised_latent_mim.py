@@ -261,6 +261,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 if modality in cls.CLASSIFICATION_MODALITIES:
                     modality_bandset = modality_bandset[..., 0]
                     continue
+                print(modality, probe_output.device, modality_bandset.device)
                 modality_loss = loss_fn(
                     probe_output,
                     modality_bandset,
