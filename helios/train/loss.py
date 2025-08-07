@@ -189,6 +189,66 @@ class PatchDiscriminationLossNew(Loss):
         return self.weight * loss
 
 
+@LOSS_REGISTRY.register("barlow_cross_correlation")
+class BarlowCrossCorrelationLoss(Loss):
+    """Loss function for patch discrimination task.
+
+    This has lower memory consumption than the old patch discrimination loss.
+    It does not support all discrimination loss.
+    """
+
+    name = "BarlowCrossCorrelation"
+
+    def __init__(self, lambda_weight: float = 0.005, pred2unit: bool = False, weight: float = 1.0):
+        """Initialize patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            mask_other_samples: whether to apply the contrastive loss drawing samples
+                from within a sample (True) or using all other instances in a batch (False).
+                If this is False, then this is the AllDisc loss from the Galileo paper
+            weight: the weight to apply to this loss
+        """
+        self.lambda_weight = lambda_weight
+        self.pred2unit = pred2unit
+        self.weight = weight
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute patch discrimination loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        # implement the barlow twin cross correlation loss
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+
+        # Samples may have different number of tokens
+        # TODO: Skip unqueeze and the for loop when mask_other_samples is True
+        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        bs, nt, _ = pred.shape
+        # add optional batch normalization here as well
+
+        # Maybe we should just do this spatially
+        cross_correlation_matrix = torch.einsum("npd,nqd->npq", pred, target) / nt
+
+        corr_diff = (cross_correlation_matrix - torch.eye(nt, device=pred.device)).pow(2)
+        diag_matrix = torch.eye(nt, device=pred.device)
+        # fill the zeros with lambda_weight
+        diag_matrix = diag_matrix.masked_fill(diag_matrix == 0, self.lambda_weight)
+        off_diagonal_loss = (corr_diff * diag_matrix).sum(dim=-1).mean()
+        return self.weight * off_diagonal_loss
+
+
 @LOSS_REGISTRY.register("patch_discrimination")
 class PatchDiscriminationLoss(Loss):
     """Loss function for patch discrimination task."""
