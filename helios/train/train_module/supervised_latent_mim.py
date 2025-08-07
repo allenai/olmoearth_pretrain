@@ -258,19 +258,19 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                             modality_bandset, dim=-1, keepdim=True
                         )
                     modality_bandset = modality_bandset.long()
-                else:
-                    modality_bandset = modality_bandset.to(dtype=probe_output.dtype)
-                if modality in cls.CLASSIFICATION_MODALITIES:
                     modality_bandset = modality_bandset[..., 0]
+                    print(modality, probe_output.shape, modality_bandset.shape, modality_bandset.max())
                     modality_loss = loss_fn(
                         probe_output.flatten(end_dim=-2),
                         modality_bandset.flatten(),
                     )
                 else:
+                    modality_bandset = modality_bandset.to(dtype=probe_output.dtype)
                     modality_loss = loss_fn(
                         probe_output,
                         modality_bandset,
                     )
+
                 if torch.isnan(modality_loss).any():
                     logger.warning(f"NaN in unsupervised loss for {modality}")
                     continue
@@ -287,7 +287,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                             ).detach()
                         )
                     else:
-                        batch_acc = modality_loss.detach()
+                        batch_acc = get_local_tensor(modality_loss).detach()
                     accuracies_to_return[f"{modality}_{idx}"] = batch_acc
         return loss_to_return, accuracies_to_return
 
