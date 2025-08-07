@@ -688,7 +688,6 @@ class HeliosDataset(Dataset):
                 indices_to_keep.append(closest_indices)
             indices_to_keep = np.concatenate(indices_to_keep)
             self.sample_indices = self.sample_indices[indices_to_keep]
-            self.latlon_distribution = self.latlon_distribution[indices_to_keep]
             # log the number of points after filtering
             logger.info(f"Number of points after filtering: {len(self.sample_indices)}")
 
