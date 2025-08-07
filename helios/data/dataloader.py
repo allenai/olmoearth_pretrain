@@ -313,16 +313,16 @@ class HeliosDataLoader(DataLoaderBase):
             mock_sentinel1 = rng.random((128, 128, time_dimension, 2), dtype=np.float32)
             output_dict[Modality.SENTINEL1.name] = mock_sentinel1
         if Modality.WORLDCOVER.name in self.dataset.training_modalities:
-            mock_worldcover = rng.random((128, 128, time_dimension, 1), dtype=np.float32)
+            mock_worldcover = rng.random((128, 128, 1, 1), dtype=np.float32)
             output_dict["worldcover"] = mock_worldcover
         if Modality.LATLON.name in self.dataset.training_modalities:
             mock_latlon = rng.random((2,), dtype=np.float32)
             output_dict["latlon"] = mock_latlon
         if Modality.OPENSTREETMAP_RASTER.name in self.dataset.training_modalities:
-            mock_openstreetmap_raster = rng.random((128, 128, time_dimension, 30), dtype=np.float32)
+            mock_openstreetmap_raster = rng.random((128, 128, 1, 30), dtype=np.float32)
             output_dict["openstreetmap_raster"] = mock_openstreetmap_raster
         if Modality.SRTM.name in self.dataset.training_modalities:
-            mock_srtm = rng.random((128, 128, time_dimension, 1), dtype=np.float32)
+            mock_srtm = rng.random((128, 128, 1, 1), dtype=np.float32)
             output_dict["srtm"] = mock_srtm
         if Modality.LANDSAT.name in self.dataset.training_modalities:
             mock_landsat = rng.random(
@@ -331,15 +331,15 @@ class HeliosDataLoader(DataLoaderBase):
             output_dict["landsat"] = mock_landsat
         if Modality.GSE.name in self.dataset.training_modalities:
             mock_gse = rng.random(
-                (128, 128, time_dimension, Modality.GSE.num_bands), dtype=np.float32
+                (128, 128, 1, Modality.GSE.num_bands), dtype=np.float32
             )
             output_dict["gse"] = mock_gse
         end_time = time.time()
         logger.info(f"Time taken to create mock sample: {end_time - start_time} seconds")
-        days = rng.integers(0, 25, (12, 1))
-        months = rng.integers(0, 12, (12, 1))
-        years = rng.integers(2018, 2020, (12, 1))
-        timestamps = np.concatenate([days, months, years], axis=1)  # shape: (12, 3)
+        days = rng.integers(0, 25, (time_dimension, 1))
+        months = rng.integers(0, 12, (time_dimension, 1))
+        years = rng.integers(2018, 2020, (time_dimension, 1))
+        timestamps = np.concatenate([days, months, years], axis=1)  # shape: (time_dimension, 3)
 
         output_dict["timestamps"] = timestamps
         return HeliosSample(**output_dict)
