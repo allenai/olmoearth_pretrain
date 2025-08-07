@@ -371,29 +371,30 @@ class HeliosSample(NamedTuple):
         max_t = self._get_max_t_within_token_budget(
             sampled_hw_p, max_tokens_per_instance
         )
-        sampled_hw = sampled_hw_p * patch_size
+        # sampled_hw = sampled_hw_p * patch_size
 
-        # # Version 2: CutMix patches
-        # height_p, width_p = self.height // patch_size, self.width // patch_size
-        # h_p_indices = np.random.choice(height_p, size=sampled_hw_p, replace=False)
-        # w_p_indices = np.random.choice(width_p, size=sampled_hw_p, replace=False)
-        # h_indices = [
-        #     i
-        #     for h_p in h_p_indices
-        #     for i in range(h_p * patch_size, (h_p + 1) * patch_size)
-        # ]
-        # w_indices = [
-        #     i
-        #     for w_p in w_p_indices
-        #     for i in range(w_p * patch_size, (w_p + 1) * patch_size)
-        # ]
+        # Version 2: CutMix patches
+        height_p, width_p = self.height // patch_size, self.width // patch_size
+        h_p_indices = np.random.choice(height_p, size=sampled_hw_p, replace=False)
+        w_p_indices = np.random.choice(width_p, size=sampled_hw_p, replace=False)
+        h_indices = [
+            i
+            for h_p in h_p_indices
+            for i in range(h_p * patch_size, (h_p + 1) * patch_size)
+        ]
+        w_indices = [
+            i
+            for w_p in w_p_indices
+            for i in range(w_p * patch_size, (w_p + 1) * patch_size)
+        ]
 
         # # # Version 1: CutMix pixels
         # # h_indices = np.random.choice(self.height, size=sampled_hw, replace=False)
         # # w_indices = np.random.choice(self.width, size=sampled_hw, replace=False)
-        # hh, ww = np.meshgrid(h_indices, w_indices, indexing="ij")  # shape: [N, N]
-        # # hh = hh.flatten()
-        # # ww = ww.flatten()
+        # hh = hh.flatten()
+        # ww = ww.flatten()
+
+        hh, ww = np.meshgrid(h_indices, w_indices, indexing="ij")  # shape: [N, N]
 
         valid_start_ts = self._get_valid_start_ts(
             missing_timesteps_masks, max_t, current_length
@@ -401,30 +402,6 @@ class HeliosSample(NamedTuple):
         start_t = np.random.choice(valid_start_ts)
 
         new_data_dict: dict[str, ArrayTensor] = {}
-        # for attribute, modality in self.as_dict(ignore_nones=True).items():
-        #     assert modality is not None
-        #     if attribute == "timestamps":
-        #         new_data_dict[attribute] = modality[start_t : start_t + max_t]
-        #         continue
-        #     modality_spec = Modality.get(attribute)
-        #     if modality_spec.is_spacetime_varying:
-        #         new_data_dict[attribute] = modality[
-        #             hh * modality_spec.image_tile_size_factor,
-        #             ww * modality_spec.image_tile_size_factor,
-        #             start_t : start_t + max_t,
-        #         ]  # .reshape(len(h_indices), len(w_indices), max_t, -1)
-        #     elif modality_spec.is_space_only_varying:
-        #         new_data_dict[attribute] = modality[
-        #             hh * modality_spec.image_tile_size_factor,
-        #             ww * modality_spec.image_tile_size_factor,
-        #         ]  # .reshape(len(h_indices), len(w_indices), 1, -1)
-        #     elif modality_spec.is_time_only_varying:
-        #         new_data_dict[attribute] = modality[start_t : start_t + max_t]
-        #     elif modality_spec.is_static_in_space_and_time:
-        #         new_data_dict[attribute] = modality
-
-        start_h = np.random.choice(self.height - sampled_hw + 1)
-        start_w = np.random.choice(self.width - sampled_hw + 1)
 
         for attribute, modality in self.as_dict(ignore_nones=True).items():
             assert modality is not None
@@ -434,31 +411,56 @@ class HeliosSample(NamedTuple):
             modality_spec = Modality.get(attribute)
             if modality_spec.is_spacetime_varying:
                 new_data_dict[attribute] = modality[
-                    start_h * modality_spec.image_tile_size_factor : (
-                        start_h + sampled_hw
-                    )
-                    * modality_spec.image_tile_size_factor,
-                    start_w * modality_spec.image_tile_size_factor : (
-                        start_w + sampled_hw
-                    )
-                    * modality_spec.image_tile_size_factor,
+                    hh * modality_spec.image_tile_size_factor,
+                    ww * modality_spec.image_tile_size_factor,
                     start_t : start_t + max_t,
                 ]
             elif modality_spec.is_space_only_varying:
                 new_data_dict[attribute] = modality[
-                    start_h * modality_spec.image_tile_size_factor : (
-                        start_h + sampled_hw
-                    )
-                    * modality_spec.image_tile_size_factor,
-                    start_w * modality_spec.image_tile_size_factor : (
-                        start_w + sampled_hw
-                    )
-                    * modality_spec.image_tile_size_factor,
+                    hh * modality_spec.image_tile_size_factor,
+                    ww * modality_spec.image_tile_size_factor,
                 ]
             elif modality_spec.is_time_only_varying:
                 new_data_dict[attribute] = modality[start_t : start_t + max_t]
             elif modality_spec.is_static_in_space_and_time:
                 new_data_dict[attribute] = modality
+
+        # start_h = np.random.choice(self.height - sampled_hw + 1)
+        # start_w = np.random.choice(self.width - sampled_hw + 1)
+
+        # for attribute, modality in self.as_dict(ignore_nones=True).items():
+        #     assert modality is not None
+        #     if attribute == "timestamps":
+        #         new_data_dict[attribute] = modality[start_t : start_t + max_t]
+        #         continue
+        #     modality_spec = Modality.get(attribute)
+        #     if modality_spec.is_spacetime_varying:
+        #         new_data_dict[attribute] = modality[
+        #             start_h * modality_spec.image_tile_size_factor : (
+        #                 start_h + sampled_hw
+        #             )
+        #             * modality_spec.image_tile_size_factor,
+        #             start_w * modality_spec.image_tile_size_factor : (
+        #                 start_w + sampled_hw
+        #             )
+        #             * modality_spec.image_tile_size_factor,
+        #             start_t : start_t + max_t,
+        #         ]
+        #     elif modality_spec.is_space_only_varying:
+        #         new_data_dict[attribute] = modality[
+        #             start_h * modality_spec.image_tile_size_factor : (
+        #                 start_h + sampled_hw
+        #             )
+        #             * modality_spec.image_tile_size_factor,
+        #             start_w * modality_spec.image_tile_size_factor : (
+        #                 start_w + sampled_hw
+        #             )
+        #             * modality_spec.image_tile_size_factor,
+        #         ]
+        #     elif modality_spec.is_time_only_varying:
+        #         new_data_dict[attribute] = modality[start_t : start_t + max_t]
+        #     elif modality_spec.is_static_in_space_and_time:
+        #         new_data_dict[attribute] = modality
 
         return HeliosSample(**new_data_dict)
 
