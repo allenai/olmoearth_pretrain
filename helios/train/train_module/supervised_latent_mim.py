@@ -273,7 +273,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     )
                 else:
                     # something funky is happening with GSE
-                    print(modality_bandset)
+                    print(modality_bandset[0], probe_output[0])
                     modality_bandset = modality_bandset.to(dtype=probe_output.dtype)
                     modality_loss = loss_fn(
                         probe_output,
