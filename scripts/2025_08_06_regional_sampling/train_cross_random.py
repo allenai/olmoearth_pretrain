@@ -177,7 +177,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     ]
     return HeliosConcatDatasetConfig(
         dataset_configs=dataset_configs,
-        anchor_point_list=[togo_point],
+        anchor_point_list=[togo_point, france_point],
         dist_from_anchor_m=1000_000,
     )
 
