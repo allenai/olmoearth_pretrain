@@ -274,16 +274,17 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     loss_to_return = modality_loss
                 else:
                     loss_to_return += modality_loss
-
-                if (modality in cls.CLASSIFICATION_MODALITIES) and compute_accuracies:
-                    batch_acc = get_local_tensor(
-                        cls.accuracy_score(
-                            probe_output,
-                            modality_bandset,
-                        ).detach()
-                    )
+                if compute_accuracies:
+                    if modality in cls.CLASSIFICATION_MODALITIES:
+                        batch_acc = get_local_tensor(
+                            cls.accuracy_score(
+                                probe_output,
+                                modality_bandset,
+                            ).detach()
+                        )
+                    else:
+                        batch_acc = modality_loss.detach()
                     accuracies_to_return[f"{modality}_{idx}"] = batch_acc
-
         return loss_to_return, accuracies_to_return
 
     def train_batch(

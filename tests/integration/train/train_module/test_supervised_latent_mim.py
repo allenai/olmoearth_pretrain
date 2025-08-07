@@ -57,7 +57,7 @@ def latent_mim_model(
         depth=2,
         drop_path=0.1,
         max_sequence_length=12,
-        probe_modalities=[Modality.WORLDCOVER.name],
+        probe_modalities=[Modality.WORLDCOVER.name, Modality.GSE.name],
     )
 
     # Create predictor config
@@ -118,7 +118,7 @@ def train_module_config(
         ema_decay=(0.996, 1.0),
         max_grad_norm=1.0,
         transform_config=transform_cfg,
-        supervisory_modalities=[Modality.WORLDCOVER.name],
+        supervisory_modalities=[Modality.WORLDCOVER.name, Modality.GSE.name],
         supervisory_weight=1.0,
     )
     return config
@@ -181,7 +181,7 @@ def test_train_batch_without_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(2.1),
+            torch.tensor(3.0),
             atol=1e-1,
         )
 
@@ -208,6 +208,6 @@ def test_train_batch_with_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(2.0),
+            torch.tensor(3.0),
             atol=1e-1,
         )
