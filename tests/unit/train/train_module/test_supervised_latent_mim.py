@@ -4,6 +4,7 @@ import torch
 from einops import repeat
 from torch.nn.functional import one_hot
 
+from helios.data.constants import MISSING_VALUE
 from helios.train.train_module.supervised_latent_mim import (
     SupervisedLatentMIMTrainModule,
 )
@@ -19,7 +20,7 @@ class TestSupervisedLatentMIMUnit:
         b = 1
         supervisory_modalities = {
             "worldcover": repeat(
-                torch.tensor([[1, 2], [3, 4]]),
+                torch.tensor([[1, 2], [3, MISSING_VALUE]]),
                 "h w -> b (h p1) (w p2) t d",
                 b=b,
                 p1=batch_patch_size,

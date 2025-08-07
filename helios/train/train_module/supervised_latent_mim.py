@@ -271,7 +271,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 filtered_preds = probe_output.flatten(end_dim=-2)[target_mask, :]
 
                 if modality in cls.CLASSIFICATION_MODALITIES:
-                    modality_bandset = modality_bandset[..., 0]
+                    filtered_modality_bandset = filtered_modality_bandset[..., 0]
                 modality_loss = loss_fn(
                     filtered_preds,
                     filtered_modality_bandset,
@@ -288,8 +288,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     if modality in cls.CLASSIFICATION_MODALITIES:
                         batch_acc = get_local_tensor(
                             cls.accuracy_score(
-                                probe_output,
-                                modality_bandset,
+                                filtered_preds,
+                                filtered_modality_bandset,
                             ).detach()
                         )
                     else:
