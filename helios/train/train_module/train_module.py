@@ -256,8 +256,10 @@ class HeliosTrainModule(TrainModule):
         logger.info("Initializing model weights...")
         # model.init_weights(max_seq_len=max_sequence_length, device=self.device)
         if initial_weights is not None:
-            load_model_and_optim_state(initial_weights / "model_and_optim", self.model)
             with torch.no_grad():
+                load_model_and_optim_state(
+                    initial_weights / "model_and_optim", self.model
+                )
                 for p, tp in zip(
                     self.model.encoder.parameters(),
                     self.model.target_encoder.parameters(),
