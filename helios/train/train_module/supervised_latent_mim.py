@@ -211,7 +211,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         """Compute accuracy score with missing values."""
         argmax_pred = pred.argmax(dim=-1)
         matches = argmax_pred == targets
-        return sum(matches) / len(matches)
+        return sum(matches.flatten()) / len(matches.flatten())
 
     @classmethod
     def supervisory_losses(
@@ -262,11 +262,15 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     modality_bandset = modality_bandset.to(dtype=probe_output.dtype)
                 if modality in cls.CLASSIFICATION_MODALITIES:
                     modality_bandset = modality_bandset[..., 0]
-                    continue
-                modality_loss = loss_fn(
-                    probe_output,
-                    modality_bandset,
-                )
+                    modality_loss = loss_fn(
+                        probe_output.flatten(end_dim=-2),
+                        modality_bandset.flatten(),
+                    )
+                else:
+                    modality_loss = loss_fn(
+                        probe_output,
+                        modality_bandset,
+                    )
                 if torch.isnan(modality_loss).any():
                     logger.warning(f"NaN in unsupervised loss for {modality}")
                     continue
