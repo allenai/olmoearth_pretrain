@@ -196,7 +196,7 @@ class CosineSimilarityLoss(Loss):
     It does not support all discrimination loss.
     """
 
-    name = "PatchDisc"
+    name = "CosineSimilarity"
 
     def __init__(self, tau: float = 0.1, pred2unit: bool = False, weight: float = 1.0):
         """Initialize patch discrimination loss.
@@ -260,6 +260,7 @@ class CosineSimilarityLoss(Loss):
             losses.append(loss)
             start = end
         loss = torch.stack(losses).mean()
+        logger.info(f"Cosine similarity loss: {loss}")
         return self.weight * loss
 
 @LOSS_REGISTRY.register("barlow_cross_correlation")
