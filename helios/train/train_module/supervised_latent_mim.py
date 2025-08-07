@@ -263,9 +263,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         raise ValueError(
                             f"For {modality} got max value {modality_bandset.max()} but output indices {probe_output.shape[-1]}"
                         )
-                    elif modality_bandset.min() <= 0:
+                    elif modality_bandset.min() < 0:
                         raise ValueError(
-                            f"For {modality} got min value {modality_bandset.min()} >= 0"
+                            f"For {modality} got min value {modality_bandset.min()} <= 0"
                         )
                     modality_loss = loss_fn(
                         probe_output.flatten(end_dim=-2),
