@@ -23,9 +23,24 @@ from helios.train.train_module.train_module import (
     HeliosTrainModule,
     HeliosTrainModuleConfig,
 )
+from torch.nn import functional as F
 from helios.train.utils import split_batch
 
 logger = getLogger(__name__)
+
+def avgpool_to_match(fine, coarse):
+    B, Hf, Wf, T, M, D = fine.shape
+    _, Hc, Wc, _, _, _ = coarse.shape
+    fh = Hf // Hc
+    fw = Wf // Wc
+    assert Hf == Hc * fh and Wf == Wc * fw
+
+    # Move features into channels, pool over H/W, then reshape back
+    x = fine.permute(0, 3, 4, 5, 1, 2).reshape(B * T * M * D, 1, Hf, Wf)
+    logger.info(f"x.shape: {x.shape} fine.shape: {fine.shape}")
+    x = F.avg_pool2d(x, kernel_size=(fh, fw), stride=(fh, fw))
+    x = x.reshape(B, T, M, D, Hc, Wc).permute(0, 4, 5, 1, 2, 3)
+    return x  # [B, Hc, Wc, T, M, D]
 
 
 @dataclass
@@ -261,11 +276,33 @@ class LatentMIMTrainModule(HeliosTrainModule):
             latent, decoded, _, reconstructed = self.model(batch, patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
-                target_output, _ = self.model.target_encoder.forward(
-                    batch.unmask(),
-                    patch_size=patch_size,
-                    token_exit_cfg=token_exit_cfg,
-                )
+                outputs_per_patch_size = []
+                patch_sizes = [2, 8]
+                for patch_size in patch_sizes:
+                    target_output, _ = self.model.target_encoder.forward(
+                        batch.unmask(),
+                        patch_size=patch_size,
+                        token_exit_cfg=token_exit_cfg,
+                    )
+                    outputs_per_patch_size.append(target_output)
+                # aggregate the more fine grained patches to the bigger patch size via mean pooling
+                data_patch_size_2 = outputs_per_patch_size[0].sentinel2_l2a
+                data_patch_size_8 = outputs_per_patch_size[1].sentinel2_l2a
+                logger.info(f"data_patch_size_2.shape: {data_patch_size_2.shape}, data_patch_size_8.shape: {data_patch_size_8.shape}")
+                pooled_data_patch_size_8 = avgpool_to_match(data_patch_size_2, data_patch_size_8)
+                # log the shapes of both data
+                assert data_patch_size_8.shape == pooled_data_patch_size_8.shape, f"data_patch_size_2.shape: {data_patch_size_2.shape}, pooled_data_patch_size_8.shape: {pooled_data_patch_size_8.shape}"
+                flattened_data_patch_size_8 = rearrange(data_patch_size_8, "b ... d -> b (...) d")
+                flattened_pooled_data_patch_size_8 = rearrange(pooled_data_patch_size_8, "b ... d -> b (...) d")
+                assert flattened_data_patch_size_8.shape == flattened_pooled_data_patch_size_8.shape, f"flattened_data_patch_size_8.shape: {flattened_data_patch_size_8.shape}, flattened_pooled_data_patch_size_8.shape: {flattened_pooled_data_patch_size_8.shape}"
+                # calculate the cosine similarity between the flattened data and the flattened pooled data
+                cosine_similarity = F.cosine_similarity(flattened_data_patch_size_8, flattened_pooled_data_patch_size_8, dim=-1)
+                logger.info(f"cosine_similarity.shape: {cosine_similarity.shape}")
+                logger.info(f"cosine_similarity mean: {cosine_similarity.mean()}")
+                logger.info(f"cosine_similarity std: {cosine_similarity.std()}")
+                logger.info(f"cosine_similarity min: {cosine_similarity.min()}")
+                logger.info(f"cosine_similarity max: {cosine_similarity.max()}")
+            # compute the loss for each patch size
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)

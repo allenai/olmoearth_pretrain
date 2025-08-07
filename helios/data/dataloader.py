@@ -300,35 +300,36 @@ class HeliosDataLoader(DataLoaderBase):
         output_dict = {}
         # ToDO: change to training modalities
         logger.info(f"Training modalities: {self.dataset.training_modalities}")
+        standard_hw = 64
         if Modality.SENTINEL2_L2A.name in self.dataset.training_modalities:
-            mock_sentinel2_l2a = rng.random((256, 256, 12, 12), dtype=np.float32)
+            mock_sentinel2_l2a = rng.random((standard_hw, standard_hw, 12, 12), dtype=np.float32)
             output_dict["sentinel2_l2a"] = mock_sentinel2_l2a
         if Modality.NAIP_10.name in self.dataset.training_modalities:
             mock_naip_10 = rng.random((1024, 1024, 1, 4), dtype=np.float32)
             output_dict["naip_10"] = mock_naip_10
         if Modality.SENTINEL1.name in self.dataset.training_modalities:
-            mock_sentinel1 = rng.random((256, 256, 12, 2), dtype=np.float32)
+            mock_sentinel1 = rng.random((standard_hw, standard_hw, 12, 2), dtype=np.float32)
             output_dict[Modality.SENTINEL1.name] = mock_sentinel1
         if Modality.WORLDCOVER.name in self.dataset.training_modalities:
-            mock_worldcover = rng.random((256, 256, 1, 1), dtype=np.float32)
+            mock_worldcover = rng.random((standard_hw, standard_hw, 1, 1), dtype=np.float32)
             output_dict["worldcover"] = mock_worldcover
         if Modality.LATLON.name in self.dataset.training_modalities:
             mock_latlon = rng.random((2,), dtype=np.float32)
             output_dict["latlon"] = mock_latlon
         if Modality.OPENSTREETMAP_RASTER.name in self.dataset.training_modalities:
-            mock_openstreetmap_raster = rng.random((256, 256, 1, 30), dtype=np.float32)
+            mock_openstreetmap_raster = rng.random((standard_hw, standard_hw, 1, 30), dtype=np.float32)
             output_dict["openstreetmap_raster"] = mock_openstreetmap_raster
         if Modality.SRTM.name in self.dataset.training_modalities:
-            mock_srtm = rng.random((256, 256, 1, 1), dtype=np.float32)
+            mock_srtm = rng.random((standard_hw, standard_hw, 1, 1), dtype=np.float32)
             output_dict["srtm"] = mock_srtm
         if Modality.LANDSAT.name in self.dataset.training_modalities:
             mock_landsat = rng.random(
-                (256, 256, 12, Modality.LANDSAT.num_bands), dtype=np.float32
+                (standard_hw, standard_hw, 12, Modality.LANDSAT.num_bands), dtype=np.float32
             )
             output_dict["landsat"] = mock_landsat
         if Modality.GSE.name in self.dataset.training_modalities:
             mock_gse = rng.random(
-                (256, 256, 1, Modality.GSE.num_bands), dtype=np.float32
+                (standard_hw, standard_hw, 1, Modality.GSE.num_bands), dtype=np.float32
             )
             output_dict["gse"] = mock_gse
 
@@ -345,7 +346,9 @@ class HeliosDataLoader(DataLoaderBase):
         logger.info("Getting mock batch NOT FROM DATASET")
         rng = get_rng(42)
         batch_size = self.global_batch_size // self.dp_world_size
-        patch_size = 1
+        patch_size = 4
+        import time
+        start_time = time.time()
         collated_sample = self.collator(
             [
                 (
@@ -353,13 +356,15 @@ class HeliosDataLoader(DataLoaderBase):
                     self._get_mock_sample(rng).subset(
                         patch_size,
                         max_tokens_per_instance=1500,
-                        sampled_hw_p=6,
+                        sampled_hw_p=8,
                         current_length=12,
                     ),
                 )
                 for num in range(batch_size)
             ]
         )
+        end_time = time.time()
+        logger.info(f"Time taken to collate mock batch: {end_time - start_time} seconds")
         return collated_sample
 
     def fast_forward(self, global_step: int) -> np.ndarray:
