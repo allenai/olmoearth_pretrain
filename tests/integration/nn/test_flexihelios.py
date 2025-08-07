@@ -675,7 +675,7 @@ class TestPredictor:
                     "pos_embed",
                     "month_embed",
                     "composite_encodings.per_modality_channel_embeddings.latlon",
-                    "probe_with_attn"
+                    "probe_with_attn",
                 ]
             ):
                 assert param.grad is not None, name
@@ -767,7 +767,7 @@ class TestPredictor:
                     "month_embed",
                     "composite_encodings.per_modality_channel_embeddings.latlon",
                     "project_and_aggregate",
-                    "probe_with_attn"
+                    "probe_with_attn",
                 ]
             ):
                 assert param.grad is not None, name
@@ -886,7 +886,7 @@ def test_end_to_end_with_exit_config(
                 "month_embed",
                 "composite_encodings.per_modality_channel_embeddings.latlon",
                 "project_and_aggregate",
-                "probe_with_attn"
+                "probe_with_attn",
             ]
         ):
             assert param.grad is not None, name
