@@ -14,7 +14,7 @@ from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 from torch.nn import functional as F
 
-from helios.data.constants import Modality
+from helios.data.constants import MISSING_VALUE, Modality
 from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
@@ -251,6 +251,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         ),
                         "b c h w -> b h w c",
                     )
+
                 if modality in cls.CLASSIFICATION_MODALITIES:
                     if len(bands) > 1:
                         # then we need to turn it into indices
@@ -258,27 +259,23 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                             modality_bandset, dim=-1, keepdim=True
                         )
                     modality_bandset = modality_bandset.long()
-                    modality_bandset = modality_bandset[..., 0]
-                    if modality_bandset.max() > probe_output.shape[-1]:
-                        raise ValueError(
-                            f"For {modality} got max value {modality_bandset.max()} but output indices {probe_output.shape[-1]}"
-                        )
-                    elif modality_bandset.min() < 0:
-                        raise ValueError(
-                            f"For {modality} got min value {modality_bandset.min()} <= 0"
-                        )
-                    modality_loss = loss_fn(
-                        probe_output.flatten(end_dim=-2),
-                        modality_bandset.flatten(),
-                    )
                 else:
-                    # something funky is happening with GSE
-                    print(modality_bandset[0], probe_output[0])
                     modality_bandset = modality_bandset.to(dtype=probe_output.dtype)
-                    modality_loss = loss_fn(
-                        probe_output,
-                        modality_bandset,
-                    )
+
+                # filter out missing values from the targets
+                # keep the final dimension, which will be 1 for categorical inputs
+                flat_modality_bandset = modality_bandset.flatten(end_dim=-2)
+                target_mask = flat_modality_bandset[..., 0] != MISSING_VALUE
+
+                filtered_modality_bandset = flat_modality_bandset[target_mask]
+                filtered_preds = probe_output.flatten(end_dim=-2)[target_mask, :]
+
+                if modality in cls.CLASSIFICATION_MODALITIES:
+                    modality_bandset = modality_bandset[..., 0]
+                modality_loss = loss_fn(
+                    filtered_preds,
+                    filtered_modality_bandset,
+                )
 
                 if torch.isnan(modality_loss).any():
                     logger.warning(f"NaN in unsupervised loss for {modality}")
