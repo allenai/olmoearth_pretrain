@@ -302,36 +302,37 @@ class HeliosDataLoader(DataLoaderBase):
         import time
         start_time = time.time()
         logger.info(f"Training modalities: {self.dataset.training_modalities}")
-        time_dimension = 4
+        time_dimension = 12
+        hw_dimension = 128
         if Modality.SENTINEL2_L2A.name in self.dataset.training_modalities:
-            mock_sentinel2_l2a = rng.random((128, 128, time_dimension, 12), dtype=np.float32)
+            mock_sentinel2_l2a = rng.random((hw_dimension, hw_dimension, time_dimension, 12), dtype=np.float32)
             output_dict["sentinel2_l2a"] = mock_sentinel2_l2a
         if Modality.NAIP_10.name in self.dataset.training_modalities:
             mock_naip_10 = rng.random((1024, 1024, 1, 4), dtype=np.float32)
             output_dict["naip_10"] = mock_naip_10
         if Modality.SENTINEL1.name in self.dataset.training_modalities:
-            mock_sentinel1 = rng.random((128, 128, time_dimension, 2), dtype=np.float32)
+            mock_sentinel1 = rng.random((hw_dimension, hw_dimension, time_dimension, 2), dtype=np.float32)
             output_dict[Modality.SENTINEL1.name] = mock_sentinel1
         if Modality.WORLDCOVER.name in self.dataset.training_modalities:
-            mock_worldcover = rng.random((128, 128, 1, 1), dtype=np.float32)
+            mock_worldcover = rng.random((hw_dimension, hw_dimension, 1, 1), dtype=np.float32)
             output_dict["worldcover"] = mock_worldcover
         if Modality.LATLON.name in self.dataset.training_modalities:
             mock_latlon = rng.random((2,), dtype=np.float32)
             output_dict["latlon"] = mock_latlon
         if Modality.OPENSTREETMAP_RASTER.name in self.dataset.training_modalities:
-            mock_openstreetmap_raster = rng.random((128, 128, 1, 30), dtype=np.float32)
+            mock_openstreetmap_raster = rng.random((hw_dimension, hw_dimension, 1, 30), dtype=np.float32)
             output_dict["openstreetmap_raster"] = mock_openstreetmap_raster
         if Modality.SRTM.name in self.dataset.training_modalities:
-            mock_srtm = rng.random((128, 128, 1, 1), dtype=np.float32)
+            mock_srtm = rng.random((hw_dimension, hw_dimension, 1, 1), dtype=np.float32)
             output_dict["srtm"] = mock_srtm
         if Modality.LANDSAT.name in self.dataset.training_modalities:
             mock_landsat = rng.random(
-                (128, 128, time_dimension, Modality.LANDSAT.num_bands), dtype=np.float32
+                (hw_dimension, hw_dimension, time_dimension, Modality.LANDSAT.num_bands), dtype=np.float32
             )
             output_dict["landsat"] = mock_landsat
         if Modality.GSE.name in self.dataset.training_modalities:
             mock_gse = rng.random(
-                (128, 128, 1, Modality.GSE.num_bands), dtype=np.float32
+                (hw_dimension, hw_dimension, 1, Modality.GSE.num_bands), dtype=np.float32
             )
             output_dict["gse"] = mock_gse
         end_time = time.time()
@@ -356,7 +357,7 @@ class HeliosDataLoader(DataLoaderBase):
                     patch_size,
                     self._get_mock_sample(rng).subset(
                         patch_size,
-                        max_tokens_per_instance=1500,
+                        max_tokens_per_instance=self.token_budget,
                         sampled_hw_p=6,
                         current_length=12,
                     ),
