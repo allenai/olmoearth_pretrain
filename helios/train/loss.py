@@ -405,6 +405,62 @@ class L1Loss(Loss):
         return F.l1_loss(pred, target)
 
 
+@LOSS_REGISTRY.register("smoothl1")
+class SmoothL1Loss(Loss):
+    """Loss function for L1 (mean average error)."""
+
+    name = "SmoothL1"
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute L1 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+        pred = all_preds[all_masks == MaskValue.DECODER.value]
+        target = all_targets[all_masks == MaskValue.DECODER.value]
+
+        return F.smooth_l1_loss(pred, target)
+
+
+@LOSS_REGISTRY.register("cossim")
+class CosineSimilarityLoss(Loss):
+    """Loss function for cosine similarity."""
+
+    name = "CosineSimilarity"
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute L1 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+        pred = all_preds[all_masks == MaskValue.DECODER.value]
+        target = all_targets[all_masks == MaskValue.DECODER.value]
+
+        return F.cosine_embedding_loss(
+            pred, target, torch.ones(pred.shape[0], device=pred.device)
+        )
+
+
 @LOSS_REGISTRY.register("l2")
 class L2Loss(Loss):
     """Loss function for L2 (mean squared error)."""
