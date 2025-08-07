@@ -105,23 +105,23 @@ def build_train_module_config(
         ),
         loss_config=LossConfig(
             loss_config={
-                "type": "patch_discrimination_new",
+                "type": "cossim",
             }
         ),
         # token_exit_cfg={modality: 0 for modality in common.training_modalities},
-        token_exit_cfg={
-            Modality.SENTINEL2_L2A.name: model_size["encoder_depth"],
-            Modality.LATLON.name: model_size["encoder_depth"],
-            Modality.SENTINEL1.name: model_size["encoder_depth"],
-            Modality.WORLDCOVER.name: 0,
-            Modality.SRTM.name: model_size["encoder_depth"] // 2,
-            Modality.OPENSTREETMAP_RASTER.name: 0,
-            Modality.LANDSAT.name: model_size["encoder_depth"],
-        },
+        # token_exit_cfg={
+        #     Modality.SENTINEL2_L2A.name: model_size["encoder_depth"],
+        #     Modality.LATLON.name: model_size["encoder_depth"],
+        #     Modality.SENTINEL1.name: model_size["encoder_depth"],
+        #     Modality.WORLDCOVER.name: 0,
+        #     Modality.SRTM.name: model_size["encoder_depth"] // 2,
+        #     Modality.OPENSTREETMAP_RASTER.name: 0,
+        #     Modality.LANDSAT.name: model_size["encoder_depth"],
+        # },
         max_grad_norm=1.0,
         scheduler=ConstantWithWarmup(warmup=8000),
         ema_decay=(1.0, 1.0),
-        initial_weights="/weka/dfive-default/helios/checkpoints/joer/lmim_repro/step200000/",
+        # initial_weights="/weka/dfive-default/helios/checkpoints/joer/lmim_repro/step200000/",
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
             param_dtype=DType.bfloat16,
