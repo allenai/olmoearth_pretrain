@@ -185,7 +185,10 @@ class PatchDiscriminationLossNew(Loss):
             loss = loss.mean()
             losses.append(loss)
             start = end
-        loss = torch.stack(losses).mean()
+        if len(losses) > 0:
+            loss = torch.stack(losses).mean()
+        else:
+            loss = torch.tensor(0.0, device=pred.device)
         return self.weight * loss
 
 

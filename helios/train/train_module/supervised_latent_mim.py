@@ -432,6 +432,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
+
             loss = self.loss_fn(output.decoded, target_output)
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(output.reconstructed, batch)

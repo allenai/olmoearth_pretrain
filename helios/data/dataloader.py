@@ -299,39 +299,43 @@ class HeliosDataLoader(DataLoaderBase):
     def _get_mock_sample(self, rng: np.random.Generator) -> HeliosSample:
         output_dict = {}
         # ToDO: change to training modalities
+        import time
+        start_time = time.time()
         logger.info(f"Training modalities: {self.dataset.training_modalities}")
+        time_dimension = 4
         if Modality.SENTINEL2_L2A.name in self.dataset.training_modalities:
-            mock_sentinel2_l2a = rng.random((256, 256, 12, 12), dtype=np.float32)
+            mock_sentinel2_l2a = rng.random((128, 128, time_dimension, 12), dtype=np.float32)
             output_dict["sentinel2_l2a"] = mock_sentinel2_l2a
         if Modality.NAIP_10.name in self.dataset.training_modalities:
             mock_naip_10 = rng.random((1024, 1024, 1, 4), dtype=np.float32)
             output_dict["naip_10"] = mock_naip_10
         if Modality.SENTINEL1.name in self.dataset.training_modalities:
-            mock_sentinel1 = rng.random((256, 256, 12, 2), dtype=np.float32)
+            mock_sentinel1 = rng.random((128, 128, time_dimension, 2), dtype=np.float32)
             output_dict[Modality.SENTINEL1.name] = mock_sentinel1
         if Modality.WORLDCOVER.name in self.dataset.training_modalities:
-            mock_worldcover = rng.random((256, 256, 1, 1), dtype=np.float32)
+            mock_worldcover = rng.random((128, 128, time_dimension, 1), dtype=np.float32)
             output_dict["worldcover"] = mock_worldcover
         if Modality.LATLON.name in self.dataset.training_modalities:
             mock_latlon = rng.random((2,), dtype=np.float32)
             output_dict["latlon"] = mock_latlon
         if Modality.OPENSTREETMAP_RASTER.name in self.dataset.training_modalities:
-            mock_openstreetmap_raster = rng.random((256, 256, 1, 30), dtype=np.float32)
+            mock_openstreetmap_raster = rng.random((128, 128, time_dimension, 30), dtype=np.float32)
             output_dict["openstreetmap_raster"] = mock_openstreetmap_raster
         if Modality.SRTM.name in self.dataset.training_modalities:
-            mock_srtm = rng.random((256, 256, 1, 1), dtype=np.float32)
+            mock_srtm = rng.random((128, 128, time_dimension, 1), dtype=np.float32)
             output_dict["srtm"] = mock_srtm
         if Modality.LANDSAT.name in self.dataset.training_modalities:
             mock_landsat = rng.random(
-                (256, 256, 12, Modality.LANDSAT.num_bands), dtype=np.float32
+                (128, 128, time_dimension, Modality.LANDSAT.num_bands), dtype=np.float32
             )
             output_dict["landsat"] = mock_landsat
         if Modality.GSE.name in self.dataset.training_modalities:
             mock_gse = rng.random(
-                (256, 256, 1, Modality.GSE.num_bands), dtype=np.float32
+                (128, 128, time_dimension, Modality.GSE.num_bands), dtype=np.float32
             )
             output_dict["gse"] = mock_gse
-
+        end_time = time.time()
+        logger.info(f"Time taken to create mock sample: {end_time - start_time} seconds")
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
         years = rng.integers(2018, 2020, (12, 1))
