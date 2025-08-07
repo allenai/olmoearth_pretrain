@@ -282,75 +282,82 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
-                outputs_per_patch_size = []
-                patch_sizes = [1, patch_size]
-                for patch_size in patch_sizes:
-                    target_output_test, _ = self.model.target_encoder.forward(
-                        batch.unmask(),
-                        patch_size=patch_size,
-                        token_exit_cfg=token_exit_cfg,
-                    )
-                    outputs_per_patch_size.append(target_output_test)
-                # aggregate the more fine grained patches to the bigger patch size via mean pooling
-                for modality in target_output.modalities:
-                    if modality == "timestamps":
-                        continue
-                    data_patch_size_2 = getattr(outputs_per_patch_size[0], modality)
-                    data_patch_size_8 = getattr(outputs_per_patch_size[1], modality)
-                    logger.info(f"data_patch_size_2.shape: {data_patch_size_2.shape}, data_patch_size_8.shape: {data_patch_size_8.shape}")
-                    pooled_data_patch_size_8 = avgpool_to_match(data_patch_size_2, data_patch_size_8)
-                    # log the shapes of both data
-                    assert data_patch_size_8.shape == pooled_data_patch_size_8.shape, f"data_patch_size_2.shape: {data_patch_size_2.shape}, pooled_data_patch_size_8.shape: {pooled_data_patch_size_8.shape}"
-                    flattened_data_patch_size_8 = rearrange(data_patch_size_8, "b ... d -> b (...) d")
-                    flattened_pooled_data_patch_size_8 = rearrange(pooled_data_patch_size_8, "b ... d -> b (...) d")
-                    assert flattened_data_patch_size_8.shape == flattened_pooled_data_patch_size_8.shape, f"flattened_data_patch_size_8.shape: {flattened_data_patch_size_8.shape}, flattened_pooled_data_patch_size_8.shape: {flattened_pooled_data_patch_size_8.shape}"
-                    # calculate the cosine similarity between the flattened data and the flattened pooled data
-                    cosine_similarity = F.cosine_similarity(flattened_data_patch_size_8, flattened_pooled_data_patch_size_8, dim=-1)
-                    logger.info(f"cosine_similarity.shape: {cosine_similarity.shape}")
-                    logger.info(f"cosine_similarity mean: {cosine_similarity.mean()}")
-                    logger.info(f"cosine_similarity std: {cosine_similarity.std()}")
-                    logger.info(f"cosine_similarity min: {cosine_similarity.min()}")
-                    logger.info(f"cosine_similarity max: {cosine_similarity.max()}")
-                    # log quartiles as well
-                    quartiles = torch.quantile(cosine_similarity, torch.tensor([0.25, 0.5, 0.75]))
-                    logger.info(f"cosine_similarity quartiles: {quartiles}")
-                    # record metrics per modality
-                    self.trainer.record_metric(
-                        f"cosine_similarity/{modality}/mean",
-                        cosine_similarity.mean(),
-                        ReduceType.mean,
-                    )
-                    self.trainer.record_metric(
-                        f"cosine_similarity/{modality}/std",
-                        cosine_similarity.std(),
-                        ReduceType.mean,
-                    )
-                    self.trainer.record_metric(
-                        f"cosine_similarity/{modality}/min",
-                        cosine_similarity.min(),
-                        ReduceType.mean,
-                    )
-                    self.trainer.record_metric(
-                        f"cosine_similarity/{modality}/max",
-                        cosine_similarity.max(),
-                        ReduceType.mean,
-                    )
-                    self.trainer.record_metric(
-                        f"cosine_similarity/{modality}/q25",
-                        quartiles[0],
-                        ReduceType.mean,
-                    )
-                    self.trainer.record_metric(
-                        f"cosine_similarity/{modality}/q50",
-                        quartiles[1],
-                        ReduceType.mean,
-                    )
-                    self.trainer.record_metric(
-                        f"cosine_similarity/{modality}/q75",
-                        quartiles[2],
-                        ReduceType.mean,
-                    )
-                    logger.info(f"cosine_similarity quartiles: {torch.quantile(cosine_similarity, torch.tensor([0.25, 0.5, 0.75]))}")
+                # idea here is to see if there is meaningful variation in the tokenization and if it is better to do some sort of canconical grid
+                # the issues don't seem too bad maybe not great on occasion for s1 but not sure if it will realy make a big difference
+                # outputs_per_patch_size = []
+                # patch_sizes = [1, patch_size]
+                # for patch_size in patch_sizes:
+                #     target_output_test, _ = self.model.target_encoder.forward(
+                #         batch.unmask(),
+                #         patch_size=patch_size,
+                #         token_exit_cfg=token_exit_cfg,
+                #     )
+                #     outputs_per_patch_size.append(target_output_test)
+                # # aggregate the more fine grained patches to the bigger patch size via mean pooling
+                # for modality in target_output.modalities:
+                #     if modality == "timestamps" or modality == "latlon":
+                #         continue
+                #     data_patch_size_2 = getattr(outputs_per_patch_size[0], modality)
+                #     data_patch_size_8 = getattr(outputs_per_patch_size[1], modality)
+                #     logger.info(f"data_patch_size_2.shape: {data_patch_size_2.shape}, data_patch_size_8.shape: {data_patch_size_8.shape}")
+                #     pooled_data_patch_size_8 = avgpool_to_match(data_patch_size_2, data_patch_size_8)
+                #     # log the shapes of both data
+                #     assert data_patch_size_8.shape == pooled_data_patch_size_8.shape, f"data_patch_size_2.shape: {data_patch_size_2.shape}, pooled_data_patch_size_8.shape: {pooled_data_patch_size_8.shape}"
+                #     flattened_data_patch_size_8 = rearrange(data_patch_size_8, "b ... d -> b (...) d")
+                #     flattened_pooled_data_patch_size_8 = rearrange(pooled_data_patch_size_8, "b ... d -> b (...) d")
+                #     assert flattened_data_patch_size_8.shape == flattened_pooled_data_patch_size_8.shape, f"flattened_data_patch_size_8.shape: {flattened_data_patch_size_8.shape}, flattened_pooled_data_patch_size_8.shape: {flattened_pooled_data_patch_size_8.shape}"
+                #     # calculate the cosine similarity between the flattened data and the flattened pooled data
+                #     cosine_similarity = F.cosine_similarity(flattened_data_patch_size_8, flattened_pooled_data_patch_size_8, dim=-1)
+                #     logger.info(f"cosine_similarity.shape: {cosine_similarity.shape}")
+                #     logger.info(f"cosine_similarity mean: {cosine_similarity.mean()}")
+                #     logger.info(f"cosine_similarity std: {cosine_similarity.std()}")
+                #     logger.info(f"cosine_similarity min: {cosine_similarity.min()}")
+                #     logger.info(f"cosine_similarity max: {cosine_similarity.max()}")
+                #     # log quartiles as well
+                #     cosine_similarity = cosine_similarity.to(dtype=torch.float32, device=cosine_similarity.device)
+                #     sorted_vals, _ = torch.sort(cosine_similarity.flatten())
+                #     n = sorted_vals.numel()
+                #     def get_quantile(q):
+                #         idx = int(q * (n - 1))
+                #         return sorted_vals[idx]
+                #     quartiles = torch.stack([get_quantile(0.25), get_quantile(0.5), get_quantile(0.75)])
+                #     logger.info(f"cosine_similarity quartiles: {quartiles}")
+                #     # record metrics per modality
+                #     self.trainer.record_metric(
+                #         f"cosine_similarity/{modality}/mean",
+                #         cosine_similarity.mean(),
+                #         ReduceType.mean,
+                #     )
+                #     self.trainer.record_metric(
+                #         f"cosine_similarity/{modality}/std",
+                #         cosine_similarity.std(),
+                #         ReduceType.mean,
+                #     )
+                #     self.trainer.record_metric(
+                #         f"cosine_similarity/{modality}/min",
+                #         cosine_similarity.min(),
+                #         ReduceType.mean,
+                #     )
+                #     self.trainer.record_metric(
+                #         f"cosine_similarity/{modality}/max",
+                #         cosine_similarity.max(),
+                #         ReduceType.mean,
+                #     )
+                #     self.trainer.record_metric(
+                #         f"cosine_similarity/{modality}/q25",
+                #         quartiles[0],
+                #         ReduceType.mean,
+                #     )
+                #     self.trainer.record_metric(
+                #         f"cosine_similarity/{modality}/q50",
+                #         quartiles[1],
+                #         ReduceType.mean,
+                #     )
+                #     self.trainer.record_metric(
+                #         f"cosine_similarity/{modality}/q75",
+                #         quartiles[2],
+                #         ReduceType.mean,
+                #     )
             # compute the loss for each patch size
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None:
