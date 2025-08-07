@@ -1019,9 +1019,7 @@ class SpatialAttnProbe(nn.Module):
         mask_expanded = repeat(
             self.mask_token, "d -> b (h w) d", b=x.b, h=x.h_at_10, w=x.h_at_10
         )
-        print("mask, spatial_embed, ", mask_expanded.dtype, spatial_embed.dtype)
-        q = mask_expanded + spatial_embed
-        print("q, ", q.dtype)
+        q = mask_expanded + spatial_embed.to(dtype=mask_expanded.dtype)
         feat_tokens, feat_masks = x.flatten_tokens_and_masks()
         # feat_masks has shape[B, N_f], we want [B, N_q, N_f]
         spatial_tokens = self.attention(
