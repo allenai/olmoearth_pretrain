@@ -231,10 +231,12 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             else:
                 loss_fn = torch.nn.MSELoss()
             for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
-                modality_bandset = modality_tensor[:, :, :, 0, bands]
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
+                modality_bandset = modality_tensor[:, :, :, 0, bands].to(
+                    device=probe_output.device
+                )
                 if probe_output.shape[-3] != modality_bandset.shape[-2]:
                     # this is in case patch_size < max_patch_size
                     probe_output = rearrange(
@@ -261,7 +263,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 if modality in cls.CLASSIFICATION_MODALITIES:
                     modality_bandset = modality_bandset[..., 0]
                     continue
-                print(modality, probe_output.device, modality_bandset.device)
                 modality_loss = loss_fn(
                     probe_output,
                     modality_bandset,
