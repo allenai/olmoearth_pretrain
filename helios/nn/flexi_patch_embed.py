@@ -19,7 +19,7 @@ from helios.data.constants import ModalitySpec
 logger = logging.getLogger(__name__)
 
 
-def _gram_schmidt_preserve_norm(x):
+def gram_schmidt_preserve_norm(x):
     """Gram–Schmidt orthogonalization while preserving original norms."""
     out = torch.zeros_like(x)
     orig_norms = torch.norm(x, dim=1, keepdim=True)  # store original filter norms
