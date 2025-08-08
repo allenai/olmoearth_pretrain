@@ -13,7 +13,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import CosWithWarmup
+from olmo_core.optim.scheduler import WSD
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -140,7 +140,10 @@ def build_train_module_config(
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        scheduler=CosWithWarmup(),
+        scheduler=WSD(
+            decay_steps=0,
+            decay_fraction=None,
+        ),
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
