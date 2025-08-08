@@ -128,7 +128,7 @@ def train_and_eval_probe(
         raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
 
-    fig_dir = "/weka/dfive-default/yawenz/figures/cross_random_regional_sampling_france__1000km8gpu"
+    fig_dir = "/weka/dfive-default/yawenz/figures/latent_mim_cross_random_per_modality_patchdisc_loss"
     num_samples_task_name = {
         5820: "PASTIS_S2",
         2651: "MADOS",
