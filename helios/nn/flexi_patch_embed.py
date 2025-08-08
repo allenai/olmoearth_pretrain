@@ -97,7 +97,7 @@ class FlexiPatchEmbed(nn.Module):
             stride=self.patch_size,
             bias=bias,
         )
-        orthogonalize_conv_filters(self.proj)
+        # orthogonalize_conv_filters(self.proj)
         self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
 
         # Flexi specific attributes
