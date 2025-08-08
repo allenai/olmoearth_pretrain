@@ -936,6 +936,8 @@ class SpatialAttnProbe(nn.Module):
     ) -> None:
         """Spatial Attn Probe."""
         super().__init__()
+
+        self.input_norm = nn.LayerNorm(embedding_size)
         self.embedding_size = embedding_size
         self.max_patch_size = max_patch_size
         self.mask_token = nn.Parameter(torch.zeros(embedding_size))
@@ -1021,6 +1023,7 @@ class SpatialAttnProbe(nn.Module):
         )
         q = mask_expanded + spatial_embed.to(dtype=mask_expanded.dtype)
         feat_tokens, feat_masks = x.flatten_tokens_and_masks()
+        feat_tokens = self.input_norm(feat_tokens)
         # feat_masks has shape[B, N_f], we want [B, N_q, N_f]
         spatial_tokens = self.attention(
             x=q,
