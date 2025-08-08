@@ -835,6 +835,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self.max_decoded_bandsets = max_decoded_bandsets
         self.only_decode_modalities = only_decode_modalities
         self.always_exclude_modalities = always_exclude_modalities
+        self.never_decode_modalities = never_decode_modalities
         if len(always_exclude_modalities) > 0:
             logger.warning(
                 "always_exclude_modalities is set, this will override the encoding and decoding ratios"
@@ -935,18 +936,18 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     [encodable_modalities[i] for i in encoded_idxs]
                 )
                 # Select Indices to Decode
-                min_decoded_bandsets = min(
-                    self.min_decoded_bandsets or 1, num_present_modalities
-                )
-                max_decoded_bandsets = min(
-                    self.max_decoded_bandsets or num_present_modalities,
-                    num_present_modalities,
-                )
                 available_decodable_modality_bandsets = [
                         modality_bandset
                         for modality_bandset in present_modalities_bandsets_for_sample
                         if modality_bandset[0] not in self.never_decode_modalities
                     ]
+                min_decoded_bandsets = min(
+                    self.min_decoded_bandsets or 1, len(available_decodable_modality_bandsets)
+                )
+                max_decoded_bandsets = min(
+                    self.max_decoded_bandsets or len(available_decodable_modality_bandsets),
+                    len(available_decodable_modality_bandsets),
+                )
                 if self.allow_encoding_decoding_same_bandset:
                     # Otherwise randomly choose between min and max
                     num_decoded_bandsets = np.random.randint(
@@ -1324,6 +1325,7 @@ class ModalityCrossRandomMaskingStrategy(ModalityCrossMaskingStrategy):
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
         only_decode_modalities: list[str] = [],
+        **kwargs: Any,
     ) -> None:
         """Initialize the masking strategy."""
         random_strategy = RandomMaskingStrategy(encode_ratio, decode_ratio)
@@ -1337,6 +1339,7 @@ class ModalityCrossRandomMaskingStrategy(ModalityCrossMaskingStrategy):
             min_decoded_bandsets=min_decoded_bandsets,
             max_decoded_bandsets=max_decoded_bandsets,
             only_decode_modalities=only_decode_modalities,
+            **kwargs,
         )
 
 
