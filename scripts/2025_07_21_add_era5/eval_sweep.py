@@ -3,26 +3,29 @@
 import argparse
 import subprocess  # nosec
 
-LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
+# LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
+LP_LRs = [1e-1]
 
 lr_args = " ".join(
     [
-        "--trainer.callbacks.downstream_evaluator.tasks.m-cashew-plant.probe_lr={lr}",
+        # "--trainer.callbacks.downstream_evaluator.tasks.m-cashew-plant.probe_lr={lr}",
         "--trainer.callbacks.downstream_evaluator.tasks.mados.probe_lr={lr}",
         "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.probe_lr={lr}",
         "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr}",
-        "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr}",
-        "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr}",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr}",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr}",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}",
-        "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.probe_lr={lr}",
+        # "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr}",
+        # "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr}",
+        # "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr}",
+        # "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr}",
+        # "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}",
+        # "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.probe_lr={lr}",
     ]
 )
 checkpoints = [
-    "/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_random_decode_maps_era5_dataset_osm/step280000",
-    "/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_random_decode_maps_era5_dataset_osm/step245000",
-    "/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_random_encode_era5_decode_maps_dataset_osm/step165000",
+    # "/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_random_decode_maps_era5_dataset_osm/step280000",
+    # "/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_random_decode_maps_era5_dataset_osm/step245000",
+    # "/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_random_encode_era5_decode_maps_dataset_osm/step165000",
+    # Add checkpoints here
+    "/weka/dfive-default/helios/checkpoints/henryh/cross_random_regional_sampling_france__1000km8gpu/step340000",
 ]
 
 parser = argparse.ArgumentParser()
@@ -34,11 +37,7 @@ args = parser.parse_args()
 run_cmd = "launch"
 for checkpoint in checkpoints:
     for probe_lr in LP_LRs:
-        run_name = (
-            checkpoint.split("/")[-2][20:]
-            + checkpoint.split("/")[-1]
-            + f"_eval_{probe_lr}"
-        )
+        run_name = checkpoint.split("/")[-2] + f"_eval_{probe_lr}"
         start_command = "python3" if run_cmd == "launch" else "torchrun"
         formatted_lr_args = lr_args.format(lr=probe_lr)
         print(formatted_lr_args)

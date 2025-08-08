@@ -127,6 +127,51 @@ def train_and_eval_probe(
     if train_embeddings.shape[-1] != test_embeddings.shape[-1]:
         raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
+
+    fig_dir = "/weka/dfive-default/yawenz/figures/cross_random_regional_sampling_france__1000km8gpu"
+    num_samples_task_name = {
+        5820: "PASTIS_S2",
+        2651: "MADOS",
+        6790: "Sen1floods11",
+    }
+    if config.task_type == TaskType.SEGMENTATION:
+        # mainly use train_embeddings and train_labels
+        num_samples = train_embeddings.shape[0]
+        task_name = num_samples_task_name.get(num_samples, "Unknown")
+        task_fig_dir = f"{fig_dir}/{task_name}"
+        logger.info(f"Task name: {task_name}, Task fig dir: {task_fig_dir}")
+
+        train_embeddings_sel = train_embeddings[:100]
+        # PCA for visualization
+        from sklearn.decomposition import PCA
+
+        pca = PCA(n_components=3)
+        train_embeddings_sel = pca.fit_transform(train_embeddings_sel.cpu())
+        train_embeddings_sel = torch.tensor(train_embeddings_sel, device=device)
+        train_labels_sel = train_labels[:100]
+        for idx, item in enumerate(train_embeddings_sel):
+            # one item is a tensor of shape (H, W, 3), plot it
+            import matplotlib.pyplot as plt
+
+            plt.figure(figsize=(10, 10))
+            # Normalize to [0, 1] range for RGB display
+            item_np = item.cpu().numpy()
+            item_normalized = (item_np - item_np.min()) / (
+                item_np.max() - item_np.min()
+            )
+            plt.imshow(item_normalized)  # No cmap needed for RGB
+            plt.axis("off")  # Remove axes for cleaner look
+            plt.savefig(f"{task_fig_dir}/{idx}.png", bbox_inches="tight", dpi=150)
+            plt.close()  # Free memory
+
+        for idx, item in enumerate(train_labels_sel):
+            plt.figure(figsize=(10, 10))
+            plt.imshow(item.cpu().numpy(), cmap="viridis")
+            plt.title("Sample Label Visualization")
+            plt.colorbar()
+            plt.savefig(f"{task_fig_dir}/{idx}_label.png")
+            plt.close()
+
     if config.task_type == TaskType.SEGMENTATION:
         logits_per_patch = int(config.num_classes * patch_size * patch_size)
         if probe_type == ProbeType.ATTNPOOL:

@@ -277,7 +277,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
 
     name = "ModalityPatchDisc"
 
-    def __init__(self, tau: float = 0.15, pred2unit: bool = False, weight: float = 1.0):
+    def __init__(self, tau: float = 0.1, pred2unit: bool = False, weight: float = 1.0):
         """Initialize patch discrimination loss.
 
         Args:
