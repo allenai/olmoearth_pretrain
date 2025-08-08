@@ -133,6 +133,7 @@ def build_train_module_config(
                 ],
             }
         ),
+        warmup_duration=Duration.steps(8000),
         loss_config=LossConfig(
             loss_config={
                 "type": "patch_discrimination_new",
