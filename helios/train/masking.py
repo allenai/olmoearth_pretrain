@@ -790,6 +790,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
         only_decode_modalities: list[str] = [],
+        always_exclude_modalities: list[str] = [],
+        never_decode_modalities: list[str] = [],
     ) -> None:
         """Initialize the masking strategy.
 
@@ -809,6 +811,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 allow_encoding_decoding_same_bandset=True. If None (default), uses all available bandsets.
             only_decode_modalities: List of modality names that should only be used for decoding,
                 never for encoding. Empty list by default (all modalities can be encoded).
+            always_exclude_modalities: List of modality names that should be excluded from encoding and decoding.
+                Empty list by default (no modalities are excluded).
+            never_decode_modalities: List of modality names that should not be used for decoding,
+                even if they are present in the sample. Empty list by default (all modalities can be decoded).
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
@@ -828,6 +834,11 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self.min_decoded_bandsets = min_decoded_bandsets
         self.max_decoded_bandsets = max_decoded_bandsets
         self.only_decode_modalities = only_decode_modalities
+        self.always_exclude_modalities = always_exclude_modalities
+        if len(always_exclude_modalities) > 0:
+            logger.warning(
+                "always_exclude_modalities is set, this will override the encoding and decoding ratios"
+            )
 
     def get_sample_present_modalities_bandsets(
         self, batch: MaskedHeliosSample
@@ -840,6 +851,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         ]
         for modality in batch.modalities:
             if modality == "timestamps":
+                continue
+            if modality in self.always_exclude_modalities:
                 continue
             modality_mask_name = MaskedHeliosSample.get_masked_modality_name(modality)
             modality_mask = masked_sample_dict[modality_mask_name]
@@ -860,6 +873,9 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     present_modalities_bandsets[sample_idx].append(
                         (modality, bandset_idx)
                     )
+        logger.info(
+            f"Present modalities bandsets: {present_modalities_bandsets[:5]}"
+        )
         return present_modalities_bandsets
 
     def select_encoded_decoded_bandsets(
@@ -926,25 +942,30 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     self.max_decoded_bandsets or num_present_modalities,
                     num_present_modalities,
                 )
+                available_decodable_modality_bandsets = [
+                        modality_bandset
+                        for modality_bandset in present_modalities_bandsets_for_sample
+                        if modality_bandset[0] not in self.never_decode_modalities
+                    ]
                 if self.allow_encoding_decoding_same_bandset:
                     # Otherwise randomly choose between min and max
                     num_decoded_bandsets = np.random.randint(
                         min_decoded_bandsets, max_decoded_bandsets + 1
                     )
                     decoded_idxs = np.random.choice(
-                        len(present_modalities_bandsets_for_sample),
+                        len(available_decodable_modality_bandsets),
                         size=num_decoded_bandsets,
                         replace=False,
                     )
                     decoded_bandset_idxs = set(
                         [
-                            present_modalities_bandsets_for_sample[i]
+                            available_decodable_modality_bandsets[i]
                             for i in decoded_idxs
                         ]
                     )
                 else:
                     available_decoded_bandset_idxs = list(
-                        set(present_modalities_bandsets_for_sample)
+                        set(available_decodable_modality_bandsets)
                         - encoded_bandset_idxs
                     )
                     num_decoded_bandsets = len(available_decoded_bandset_idxs)
