@@ -308,14 +308,18 @@ class GalileoTrainModule(HeliosTrainModule):
             total_batch_loss,
             ReduceType.mean,
         )
+        loss_a_name = f"{self.masking_strategy_a.name}_masking_{self.base_loss_a.name}"
+        loss_b_name = f"{self.masking_strategy_b.name}_masking_{self.base_loss_b.name}"
+        if loss_a_name == loss_b_name:
+            loss_b_name = f"{loss_a_name}_b"
         self.trainer.record_metric(
-            f"{self.masking_strategy_a.name}_masking_{self.base_loss_a.name}",
+            f"{loss_a_name}",
             total_mask_a_loss,
             ReduceType.mean,
             namespace="train",
         )
         self.trainer.record_metric(
-            f"{self.masking_strategy_b.name}_masking_{self.base_loss_b.name}",
+            f"{loss_b_name}",
             total_mask_b_loss,
             ReduceType.mean,
             namespace="train",
