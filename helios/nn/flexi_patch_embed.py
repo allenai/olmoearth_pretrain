@@ -8,6 +8,7 @@ import logging
 from collections.abc import Iterable
 from typing import Any
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
@@ -16,6 +17,39 @@ from torch import Tensor
 from helios.data.constants import ModalitySpec
 
 logger = logging.getLogger(__name__)
+
+
+def _gram_schmidt_preserve_norm(x):
+    """Gram–Schmidt orthogonalization while preserving original norms."""
+    out = torch.zeros_like(x)
+    orig_norms = torch.norm(x, dim=1, keepdim=True)  # store original filter norms
+
+    for i in range(x.shape[0]):
+        vec = x[i]
+        for j in range(i):
+            proj = torch.dot(out[j], vec) / torch.dot(out[j], out[j]) * out[j]
+            vec = vec - proj
+        # Normalize for orthogonalization stability
+        vec = vec / (torch.norm(vec) + 1e-8)
+        out[i] = vec
+    out = out * orig_norms
+    return out
+
+
+def orthogonalize_conv_filters(conv_layer):
+    """Orthogonalize the filters of a Conv2d layer using Gram–Schmidt."""
+    with torch.no_grad():
+        w = conv_layer.weight.data  # shape: (out_channels, in_channels, kH, kW)
+        out_channels = w.shape[0]
+
+        # Flatten each filter into a vector
+        w_flat = w.view(out_channels, -1)  # (out_channels, in_channels * kH * kW)
+
+        # Apply Gram–Schmidt
+        w_ortho = gram_schmidt_preserve_norm(w_flat)
+
+        # Reshape back to original kernel shape
+        conv_layer.weight.data = w_ortho.view_as(w)
 
 
 class FlexiPatchEmbed(nn.Module):
@@ -63,6 +97,7 @@ class FlexiPatchEmbed(nn.Module):
             stride=self.patch_size,
             bias=bias,
         )
+        orthogonalize_conv_filters(self.proj)
         self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
 
         # Flexi specific attributes
