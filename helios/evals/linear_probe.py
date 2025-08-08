@@ -142,33 +142,32 @@ def train_and_eval_probe(
         logger.info(f"Task name: {task_name}, Task fig dir: {task_fig_dir}")
 
         train_embeddings_sel = train_embeddings[:100]
-        # PCA for visualization
+        emb_np = train_embeddings_sel.cpu().numpy()
+        B, H, W, D = emb_np.shape
+        emb_flat = emb_np.reshape(-1, D)  # shape: (B*H*W, D)
+        # Apply PCA on D dimension
         from sklearn.decomposition import PCA
 
         pca = PCA(n_components=3)
-        train_embeddings_sel = pca.fit_transform(train_embeddings_sel.cpu())
-        train_embeddings_sel = torch.tensor(train_embeddings_sel, device=device)
-        train_labels_sel = train_labels[:100]
-        for idx, item in enumerate(train_embeddings_sel):
-            # one item is a tensor of shape (H, W, 3), plot it
+        emb_pca = pca.fit_transform(emb_flat)  # shape: (B*H*W, 3)
+        emb_pca = emb_pca.reshape(B, H, W, 3)
+
+        for idx, item in enumerate(emb_pca):
             import matplotlib.pyplot as plt
 
             plt.figure(figsize=(10, 10))
-            # Normalize to [0, 1] range for RGB display
-            item_np = item.cpu().numpy()
-            item_normalized = (item_np - item_np.min()) / (
-                item_np.max() - item_np.min()
-            )
+            item_normalized = (item - item.min()) / (item.max() - item.min())
             plt.imshow(item_normalized)  # No cmap needed for RGB
             plt.axis("off")  # Remove axes for cleaner look
             plt.savefig(f"{task_fig_dir}/{idx}.png", bbox_inches="tight", dpi=150)
             plt.close()  # Free memory
 
-        for idx, item in enumerate(train_labels_sel):
+        train_labels_sel = train_labels[:100]
+        labels_np = train_labels_sel.cpu().numpy()
+        for idx, item in enumerate(labels_np):
             plt.figure(figsize=(10, 10))
-            plt.imshow(item.cpu().numpy(), cmap="viridis")
-            plt.title("Sample Label Visualization")
-            plt.colorbar()
+            plt.imshow(item, cmap="viridis")
+            plt.axis("off")  # Remove axes for cleaner look
             plt.savefig(f"{task_fig_dir}/{idx}_label.png")
             plt.close()
 
