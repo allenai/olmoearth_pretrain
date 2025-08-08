@@ -53,9 +53,16 @@ class SupervisedLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
 
-    supervisory_modalities: list[str] | None = None
+    # very hand wavy - it seems like the GSE loss quickly reduces to ~10% of the other losses, so
+    # we weigh it more.
+    supervisory_modalities_weights: dict[str, float] | None = field(
+        default_factory=lambda: {
+            Modality.WORLDCOVER.name: 0.1,
+            Modality.OPENSTREETMAP_RASTER.name: 0.1,
+            Modality.GSE.name: 1.0,
+        }
+    )
     compute_accuracies: bool = False
-    supervisory_weight: float = 0.1
 
     def build(
         self,
@@ -100,8 +107,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
         token_exit_cfg: The token exit configuration for the model.
-        supervisory_modalities: bandsets which should only be used for supervision
-        supervisory_weight: weight to apply to the supervisory losses
+        supervisory_modalities_weights: bandsets which should only be used for supervision and
+            their weights
         compute_accuracies: Whether to compute accuracies too
         find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
     """
@@ -133,8 +140,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
         ema_decay: tuple[float, float] = (0.996, 1.0),
         regularizer_config: LossConfig | None = None,
-        supervisory_modalities: list[str] = [Modality.WORLDCOVER.name],
-        supervisory_weight: float = 0.1,
+        supervisory_modalities_weights: dict[str, float] = {
+            Modality.WORLDCOVER.name: 0.1
+        },
         compute_accuracies: bool = False,
         find_unused_parameters: bool = True,
     ):
@@ -161,8 +169,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             token_exit_cfg: The token exit configuration for the model.
             mae_loss_config: Optional loss config for masked auto-encoding.
             regularizer_config: An optional regularizer configuration for the model.
-            supervisory_modalities: Which modalities to use as supervision
-            supervisory_weight: weight to apply to the supervisory losses
+            supervisory_modalities_weights: bandsets which should only be used for supervision and
+                their weights
             compute_accuracies: Whether to compute accuracies too
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
         """
@@ -198,9 +206,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
-        self.supervisory_modalities = supervisory_modalities
+        self.supervisory_modalities = list(supervisory_modalities_weights.keys())
         self.compute_accuracies = compute_accuracies
-        self.supervisory_weight = supervisory_weight
+        self.supervisory_modalities_weights = supervisory_modalities_weights
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -219,6 +227,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         supervisory_modalities: dict[str, torch.Tensor],
         probe_outputs: dict[str, torch.Tensor],
         compute_accuracies: bool,
+        supervisory_modalities_weights: dict[str, float],
     ) -> tuple[torch.Tensor | None, dict[str, torch.Tensor]]:
         """Compute the supervisory losses."""
         loss_to_return: torch.Tensor | None = None
@@ -281,9 +290,13 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     logger.warning(f"NaN in unsupervised loss for {modality}")
                     continue
                 if loss_to_return is None:
-                    loss_to_return = modality_loss
+                    loss_to_return = (
+                        modality_loss * supervisory_modalities_weights[modality]
+                    )
                 else:
-                    loss_to_return += modality_loss
+                    loss_to_return += (
+                        modality_loss * supervisory_modalities_weights[modality]
+                    )
                 if compute_accuracies:
                     if modality in cls.CLASSIFICATION_MODALITIES:
                         batch_acc = get_local_tensor(
@@ -356,10 +369,13 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     )
 
                 batch_sup, batch_acc = self.supervisory_losses(
-                    supervisory_modalities, probe_outputs, self.compute_accuracies
+                    supervisory_modalities,
+                    probe_outputs,
+                    self.compute_accuracies,
+                    self.supervisory_modalities_weights,
                 )
                 if batch_sup is not None:
-                    loss += self.supervisory_weight * batch_sup
+                    loss += batch_sup
                     total_batch_sup += batch_sup
                 for key, val in batch_acc.items():
                     # len(batch_acc) is only > 0 if compute_accuracies is true,

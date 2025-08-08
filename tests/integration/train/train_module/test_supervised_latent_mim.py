@@ -118,8 +118,10 @@ def train_module_config(
         ema_decay=(0.996, 1.0),
         max_grad_norm=1.0,
         transform_config=transform_cfg,
-        supervisory_modalities=[Modality.WORLDCOVER.name, Modality.GSE.name],
-        supervisory_weight=1.0,
+        supervisory_modalities_weights={
+            Modality.WORLDCOVER.name: 0.1,
+            Modality.GSE.name: 1,
+        },
     )
     return config
 

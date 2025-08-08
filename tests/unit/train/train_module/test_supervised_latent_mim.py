@@ -43,7 +43,10 @@ class TestSupervisedLatentMIMUnit:
             "gse_0": torch.randn(b, 2 * max_patch_size, 2 * max_patch_size, 64),
         }
         org_sup_loss, org_sup_acc = SupervisedLatentMIMTrainModule.supervisory_losses(
-            supervisory_modalities, probe_outputs, compute_accuracies=True
+            supervisory_modalities,
+            probe_outputs,
+            compute_accuracies=True,
+            supervisory_modalities_weights={x: 1 for x in supervisory_modalities},
         )
         assert torch.allclose(org_sup_loss, torch.tensor(1.6), atol=0.1)
         assert org_sup_acc["worldcover_0"] == 1
