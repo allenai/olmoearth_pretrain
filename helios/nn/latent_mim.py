@@ -66,7 +66,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent, latent_projected_and_pooled, probe_outputs = self.encoder(
+        latent, latent_projected_and_pooled, probe_outputs, _ = self.encoder(
             x, patch_size=patch_size
         )
         reconstructed = None

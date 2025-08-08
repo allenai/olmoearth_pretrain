@@ -195,7 +195,14 @@ class Attention(nn.Module):
             x = x.transpose(1, 2)
         elif self.fast_attn:
             if attn_mask is not None:
-                attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
+                if len(attn_mask.shape) == 2:
+                    # attn_mask has shape [B, N] and we want to expand it to [B, num_heads, N, N]
+                    attn_mask = attn_mask[:, None, None].repeat(
+                        (1, self.num_heads, n, 1)
+                    )
+                elif len(attn_mask.shape) == 3:
+                    # attn_mask has shape [B, N, N] and we want to expand it to [B, num_heads, N, N]
+                    attn_mask = attn_mask[:, None].repeat(1, self.num_heads, 1, 1)
             x = F.scaled_dot_product_attention(
                 q,
                 k,

@@ -14,7 +14,7 @@ from torch.distributed.fsdp import fully_shard
 
 from helios.data.constants import NUM_WORLDCOVER_CLASSES, Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
-from helios.nn.attention import Block
+from helios.nn.attention import Attention, Block
 from helios.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -105,6 +105,38 @@ class TokensAndMasks(NamedTuple):
                 if getattr(self, modality) is not None:
                     return getattr(self, modality).device
             raise ValueError("No data to get device from")
+
+    @property
+    def b(self) -> int:
+        """Batch size."""
+        if self.sentinel2_l2a is not None:
+            return self.sentinel2_l2a.shape[0]
+        else:
+            # look for any other modality that is not None
+            for modality in self._fields:
+                if getattr(self, modality) is not None:
+                    return getattr(self, modality).shape[0]
+            raise ValueError("No data to get bach size from")
+
+    @property
+    def h_at_10(self) -> int:
+        """Height of 10m products."""
+        if self.sentinel2_l2a is not None:
+            return self.sentinel2_l2a.shape[1]
+        else:
+            # look for any other modality that is not None
+            for modality in self._fields:
+                if modality not in [
+                    "naip",
+                    "naip_mask",
+                    "latlon",
+                    "latlon_mask",
+                    "landsat",
+                    "landsat_mask",
+                ]:
+                    if getattr(self, modality) is not None:
+                        return getattr(self, modality).shape[0]
+            raise ValueError("No data to get bach size from")
 
     # TODO: It seems like we want a lot of our named tuples to have this functionality so we should probably create a utility base class for the named tuples and double subclass
     @classmethod
@@ -889,6 +921,126 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         return output_dict
 
 
+class SpatialAttnProbe(nn.Module):
+    """Spatial Attn Probe."""
+
+    def __init__(
+        self,
+        embedding_size: int,
+        max_patch_size: int,
+        num_heads: int,
+        probe_modalities: list[str] | None = None,
+        probe_dims: list[int] = [],
+        qk_norm: bool = False,
+        use_flash_attn: bool = False,
+    ) -> None:
+        """Spatial Attn Probe."""
+        super().__init__()
+
+        self.input_norm = nn.LayerNorm(embedding_size)
+        self.embedding_size = embedding_size
+        self.max_patch_size = max_patch_size
+        self.mask_token = nn.Parameter(torch.zeros(embedding_size))
+        self.attention = Attention(
+            dim=embedding_size,
+            cross_attn=True,
+            num_heads=num_heads,
+            use_flash_attn=use_flash_attn,
+            qk_norm=qk_norm,
+        )
+
+        if probe_modalities is not None:
+            probes: dict[str, nn.Module] = {}
+            # TODO - right now this assumes a resolution factor of 1. Needs to be fixed to handle (e.g.) NAIP
+            output_hw = self.max_patch_size**2
+            for modality_name in probe_modalities:
+                modality = Modality.get(modality_name)
+                if modality_name == Modality.WORLDCOVER.name:
+                    multiplier = NUM_WORLDCOVER_CLASSES
+                else:
+                    multiplier = 1
+                for idx, band_set in enumerate(modality.band_sets):
+                    probe_dims = [self.embedding_size] + probe_dims
+                    layers: list[nn.Module] = []
+                    for i in range(len(probe_dims) - 1):
+                        layers.extend(
+                            [nn.Linear(probe_dims[i], probe_dims[i + 1]), nn.GELU()]
+                        )
+                    layers.append(
+                        nn.Linear(
+                            probe_dims[-1],
+                            output_hw * len(band_set.bands) * multiplier,
+                        )
+                    )
+                    probes[f"{modality_name}_{idx}"] = nn.Sequential(*layers)
+            self.probes = nn.ModuleDict(probes)
+        else:
+            self.probes = {}
+
+    def apply_probes(self, x: torch.Tensor, h_w: int) -> dict[str, torch.Tensor]:
+        """Apply linear probes for supervised learning."""
+        if len(self.probes) == 0:
+            return {}
+        else:
+            output_dict = {}
+            for probe_name, probe in self.probes.items():
+                probe_output = probe(x)  # B, Ph, PW, T, H * W * len(bandsets)
+                num_classes = probe_output.shape[-1] // (self.max_patch_size**2)
+                probe_output = rearrange(
+                    probe_output,
+                    "b (h w) (c i j) -> b (h i) (w j) c",
+                    h=h_w,
+                    w=h_w,
+                    i=self.max_patch_size,
+                    j=self.max_patch_size,
+                    c=num_classes,
+                )
+                output_dict[probe_name] = probe_output
+            return output_dict
+
+    @staticmethod
+    def calculate_gsd_ratio(input_res: float, patch_size: int) -> float:
+        """Calculate the Ground Sample Distance ratio."""
+        return input_res * patch_size / BASE_GSD
+
+    def forward(
+        self, x: TokensAndMasks, patch_size: int, input_res: int
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None]:
+        """Forward."""
+        if len(self.probes) == 0:
+            return {}, None
+
+        gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
+        spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
+            # we assume x is square, h == w
+            grid_size=x.h_at_10,
+            res=torch.ones(x.b, device=x.device) * gsd_ratio,
+            encoding_dim=self.embedding_size,
+            device=x.device,
+        )
+        mask_expanded = repeat(
+            self.mask_token, "d -> b (h w) d", b=x.b, h=x.h_at_10, w=x.h_at_10
+        )
+        q = mask_expanded + spatial_embed.to(dtype=mask_expanded.dtype)
+        feat_tokens, feat_masks = x.flatten_tokens_and_masks()
+        feat_tokens = self.input_norm(feat_tokens)
+        # feat_masks has shape[B, N_f], we want [B, N_q, N_f]
+        spatial_tokens = self.attention(
+            x=q,
+            y=feat_tokens,
+            attn_mask=repeat(
+                feat_masks == MaskValue.ONLINE_ENCODER.value,
+                "b f -> b q f",
+                q=q.shape[1],
+            ),
+        )
+        probe_outputs = self.apply_probes(spatial_tokens, h_w=x.h_at_10)
+        spatial_tokens = rearrange(
+            spatial_tokens, "b (h w) d -> b h w d", h=x.h_at_10, w=x.h_at_10
+        )
+        return probe_outputs, spatial_tokens
+
+
 class FlexiHeliosBase(nn.Module):
     """FlexiHeliosBase is a base class for FlexiHelios models."""
 
@@ -1189,34 +1341,15 @@ class Encoder(FlexiHeliosBase):
         if frozen_patch_embeddings:
             for p in self.patch_embeddings.parameters():
                 p.requires_grad = False
-
-        if probe_modalities is not None:
-            probes: dict[str, nn.Module] = {}
-            # TODO - right now this assumes a resolution factor of 1. Needs to be fixed to handle (e.g.) NAIP
-            output_hw = self.max_patch_size**2
-            for modality_name in probe_modalities:
-                modality = Modality.get(modality_name)
-                if modality_name == Modality.WORLDCOVER.name:
-                    multiplier = NUM_WORLDCOVER_CLASSES
-                else:
-                    multiplier = 1
-                for idx, band_set in enumerate(modality.band_sets):
-                    probe_dims = [self.embedding_size] + probe_dims
-                    layers: list[nn.Module] = []
-                    for i in range(len(probe_dims) - 1):
-                        layers.extend(
-                            [nn.Linear(probe_dims[i], probe_dims[i + 1]), nn.GELU()]
-                        )
-                    layers.append(
-                        nn.Linear(
-                            probe_dims[-1],
-                            output_hw * len(band_set.bands) * multiplier,
-                        )
-                    )
-                    probes[f"{modality_name}_{idx}"] = nn.Sequential(*layers)
-            self.probes = nn.ModuleDict(probes)
-        else:
-            self.probes = {}
+        self.probe_with_attn = SpatialAttnProbe(
+            embedding_size=embedding_size,
+            max_patch_size=max_patch_size,
+            num_heads=num_heads,
+            probe_modalities=probe_modalities,
+            probe_dims=probe_dims,
+            qk_norm=qk_norm,
+            use_flash_attn=use_flash_attn,
+        )
 
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
@@ -1454,37 +1587,6 @@ class Encoder(FlexiHeliosBase):
         tokens_per_modality_dict.update(original_masks_dict)
         return tokens_per_modality_dict
 
-    def apply_probes(
-        self, x: TokensAndMasks, patch_size: int
-    ) -> dict[str, torch.Tensor]:
-        """Apply linear probes for supervised learning."""
-        if len(self.probes) == 0:
-            return {}
-        else:
-            output_dict = {}
-            # TODO: Should this be configurable? In Galileo experiments, MEAN did better than MAX
-            spatial_tokens, spatial_mask = x.spatial_pool_with_mask(
-                pooling_type=PoolingType.MEAN
-            )  # spatial tokens has shape B, PH, PW, T, D
-            # mask is now the same shape as the raw input
-            output_dict["mask"] = repeat(
-                spatial_mask, "b h w -> b (h p1) (w p2)", p1=patch_size, p2=patch_size
-            )
-            for probe_name, probe in self.probes.items():
-                probe_output = probe(
-                    spatial_tokens
-                )  # B, Ph, PW, T, H * W * len(bandsets)
-                num_classes = probe_output.shape[-1] // (self.max_patch_size**2)
-                probe_output = rearrange(
-                    probe_output,
-                    "b h w (c i j) -> b (h i) (w j) c",
-                    i=self.max_patch_size,
-                    j=self.max_patch_size,
-                    c=num_classes,
-                )
-                output_dict[probe_name] = probe_output
-            return output_dict
-
     # TODO: we want to have a single API for the encoder and decoder
     def forward(
         self,
@@ -1493,7 +1595,9 @@ class Encoder(FlexiHeliosBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         always_pass_none_mask_to_transformer: bool = False,
-    ) -> tuple[TokensAndMasks, torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> tuple[
+        TokensAndMasks, torch.Tensor, dict[str, torch.Tensor], torch.Tensor | None
+    ]:
         """Process masked input samples into token representations.
 
         Args:
@@ -1520,10 +1624,14 @@ class Encoder(FlexiHeliosBase):
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
+        probe_output, spatial_queries = self.probe_with_attn(
+            output, patch_size, input_res
+        )
         return (
             output,
             self.project_and_aggregate(output),
-            self.apply_probes(output, patch_size),
+            probe_output,
+            spatial_queries,
         )
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:

@@ -292,8 +292,10 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
     s1_H, s1_W, s1_T, s1_C = 8, 8, 12, 2
     wc_H, wc_W, wc_T, wc_C = 8, 8, 1, 10
     na_H, na_W, na_T, na_C = 128, 128, 1, 10
+    gse_H, gse_W, gse_T, gse_C = 8, 8, 1, 64
 
     example_s2_data = np.random.randn(s2_H, s2_W, s2_T, s2_C).astype(np.float32)
+    example_gse_data = np.random.randn(gse_H, gse_W, gse_T, gse_C).astype(np.float32)
     example_s1_data = np.random.randn(s1_H, s1_W, s1_T, s1_C).astype(np.float32)
     example_wc_data = np.ones((wc_H, wc_W, wc_T, wc_C)).astype(np.float32) * 10
     example_na_data = np.random.randn(na_H, na_W, na_T, na_C).astype(np.float32)
@@ -329,6 +331,7 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
         sentinel1=example_s1_data,
         worldcover=example_wc_data,
         naip_10=example_na_data,
+        gse=example_gse_data,
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
@@ -338,6 +341,7 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
         sentinel1=missing_s1_data,
         worldcover=example_wc_data,
         naip_10=example_na_data,
+        gse=example_gse_data,
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
@@ -347,6 +351,7 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
         sentinel1=example_s1_data,
         worldcover=missing_wc_data,
         naip_10=example_na_data,
+        gse=example_gse_data,
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
@@ -363,7 +368,10 @@ def samples_without_missing_modalities(
     s1_H, s1_W, s1_T, s1_C = 8, 8, 12, 2
     wc_H, wc_W, wc_T, wc_C = 8, 8, 1, 10
     na_H, na_W, na_T, na_C = 128, 128, 1, 10
+    gse_H, gse_W, gse_T, gse_C = 8, 8, 1, 64
+
     example_s2_data = np.random.randn(s2_H, s2_W, s2_T, s2_C).astype(np.float32)
+    example_gse_data = np.random.randn(gse_H, gse_W, gse_T, gse_C).astype(np.float32)
     example_s1_data = np.random.randn(s1_H, s1_W, s1_T, s1_C).astype(np.float32)
     example_wc_data = np.ones((wc_H, wc_W, wc_T, wc_C)).astype(np.float32) * 10
     example_latlon_data = np.random.randn(2).astype(np.float32)
@@ -391,6 +399,7 @@ def samples_without_missing_modalities(
         sentinel1=example_s1_data,
         worldcover=example_wc_data,
         naip_10=example_na_data,
+        gse=example_gse_data,
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
@@ -400,6 +409,7 @@ def samples_without_missing_modalities(
         sentinel1=example_s1_data,
         worldcover=example_wc_data,
         naip_10=example_na_data,
+        gse=example_gse_data,
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
@@ -410,6 +420,7 @@ def samples_without_missing_modalities(
         worldcover=example_wc_data,
         naip_10=example_na_data,
         latlon=example_latlon_data,
+        gse=example_gse_data,
         timestamps=timestamps,
     )
 

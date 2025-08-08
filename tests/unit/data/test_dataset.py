@@ -51,7 +51,7 @@ class TestHeliosSample:
         """Test subsetting a collated sample with missing modalities."""
         sampled_hw_p = 4
         patch_size = 2
-        max_tokens_per_instance = 100
+        max_tokens_per_instance = 200
         current_length = 12
         sample: HeliosSample = samples_with_missing_modalities[1][1]
         subset_sample = sample.subset(

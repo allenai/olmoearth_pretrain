@@ -358,12 +358,12 @@ class GalileoTrainModule(HeliosTrainModule):
 
             with torch.no_grad():
                 logger.info("target encoder running here")
-                target_output_a, _ = self.model.target_encoder.forward(
+                target_output_a, _, _, _ = self.model.target_encoder.forward(
                     batch_a.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_a,
                 )
-                target_output_b, _ = self.model.target_encoder.forward(
+                target_output_b, _, _, _ = self.model.target_encoder.forward(
                     batch_b.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_b,

@@ -161,7 +161,7 @@ def test_mae_with_loss(
     loss_mim = PatchDiscriminationLossNew()
     with torch.no_grad():
         logger.info("target encoder running here")
-        target_output, _, _ = mae.encoder.forward(
+        target_output, _, _, _ = mae.encoder.forward(
             x.unmask(),
             patch_size=patch_size,
             token_exit_cfg={
@@ -183,6 +183,7 @@ def test_mae_with_loss(
                 "composite_encodings.per_modality_channel_embeddings.worldcover",
                 "patch_embeddings.per_modality_embeddings.worldcover",
                 "project_and_aggregate",
+                "probe_with_attn",
             ]
         ):
             assert param.grad is not None, name

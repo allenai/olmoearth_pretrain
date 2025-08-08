@@ -211,7 +211,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         """Compute accuracy score with missing values."""
         argmax_pred = pred.argmax(dim=-1)
         matches = argmax_pred == targets
-        return sum(matches) / len(matches)
+        return sum(matches.flatten()) / len(matches.flatten())
 
     @classmethod
     def supervisory_losses(
@@ -224,7 +224,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         loss_to_return: torch.Tensor | None = None
         accuracies_to_return: dict[str, torch.Tensor] = {}
         # TODO: this is required; is it okay to be a normal dict key?
-        spatial_mask = probe_outputs["mask"]
         for modality, modality_tensor in supervisory_modalities.items():
             modality_spec = Modality.get(modality)
             if modality in cls.CLASSIFICATION_MODALITIES:
@@ -232,10 +231,12 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             else:
                 loss_fn = torch.nn.MSELoss()
             for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
-                modality_bandset = modality_tensor[:, :, :, 0, bands]
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
+                modality_bandset = modality_tensor[:, :, :, 0, bands].to(
+                    device=probe_output.device
+                )
                 if probe_output.shape[-3] != modality_bandset.shape[-2]:
                     # this is in case patch_size < max_patch_size
                     probe_output = rearrange(
@@ -250,6 +251,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         ),
                         "b c h w -> b h w c",
                     )
+
                 if modality in cls.CLASSIFICATION_MODALITIES:
                     if len(bands) > 1:
                         # then we need to turn it into indices
@@ -259,27 +261,22 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     modality_bandset = modality_bandset.long()
                 else:
                     modality_bandset = modality_bandset.to(dtype=probe_output.dtype)
+
+                # filter out missing values from the targets
                 # keep the final dimension, which will be 1 for categorical inputs
-                flat_modality_bandset = modality_bandset.flatten(end_dim=-2).to(
-                    probe_output.device
-                )
-                target_mask = torch.logical_and(
-                    # we assume all the bands in the band set have the same missing value
-                    spatial_mask.flatten(),
-                    (flat_modality_bandset[..., 0] != MISSING_VALUE),
-                )
+                flat_modality_bandset = modality_bandset.flatten(end_dim=-2)
+                target_mask = flat_modality_bandset[..., 0] != MISSING_VALUE
+
                 filtered_modality_bandset = flat_modality_bandset[target_mask]
                 filtered_preds = probe_output.flatten(end_dim=-2)[target_mask, :]
 
                 if modality in cls.CLASSIFICATION_MODALITIES:
                     filtered_modality_bandset = filtered_modality_bandset[..., 0]
-                if len(filtered_modality_bandset) == 0:
-                    logger.info(f"All values missing for {modality}")
-                    continue
                 modality_loss = loss_fn(
                     filtered_preds,
                     filtered_modality_bandset,
                 )
+
                 if torch.isnan(modality_loss).any():
                     logger.warning(f"NaN in unsupervised loss for {modality}")
                     continue
@@ -287,16 +284,17 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     loss_to_return = modality_loss
                 else:
                     loss_to_return += modality_loss
-
-                if (modality in cls.CLASSIFICATION_MODALITIES) and compute_accuracies:
-                    batch_acc = get_local_tensor(
-                        cls.accuracy_score(
-                            filtered_preds,
-                            filtered_modality_bandset,
-                        ).detach()
-                    )
+                if compute_accuracies:
+                    if modality in cls.CLASSIFICATION_MODALITIES:
+                        batch_acc = get_local_tensor(
+                            cls.accuracy_score(
+                                filtered_preds,
+                                filtered_modality_bandset,
+                            ).detach()
+                        )
+                    else:
+                        batch_acc = get_local_tensor(modality_loss).detach()
                     accuracies_to_return[f"{modality}_{idx}"] = batch_acc
-
         return loss_to_return, accuracies_to_return
 
     def train_batch(
@@ -427,7 +425,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             output = self.model(batch, patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
-                target_output, _, _ = self.model.target_encoder.forward(
+                target_output, _, _, _ = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
