@@ -139,6 +139,9 @@ def train_and_eval_probe(
         num_samples = train_embeddings.shape[0]
         task_name = num_samples_task_name.get(num_samples, "Unknown")
         task_fig_dir = f"{fig_dir}/{task_name}"
+        import os
+
+        os.makedirs(task_fig_dir, exist_ok=True)
         logger.info(f"Task name: {task_name}, Task fig dir: {task_fig_dir}")
 
         train_embeddings_sel = train_embeddings[:100]
