@@ -47,7 +47,11 @@ from helios.train.callbacks import (
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+
+# from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from helios.train.train_module.contrastive_latentmim import (
+    ContrastiveLatentMIMTrainModuleConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,13 +113,13 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 
 def build_train_module_config(
     common: CommonComponents,
-) -> LatentMIMTrainModuleConfig:
+) -> ContrastiveLatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     scheduler = WSD(
         decay_steps=0,
         decay_fraction=None,
     )
-    return LatentMIMTrainModuleConfig(
+    return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         warmup_duration=Duration.steps(8000),
         rank_microbatch_size=64,
@@ -153,6 +157,12 @@ def build_train_module_config(
         #         "type": "modality_patch_discrimination_new",
         #     },
         # ),
+        contrastive_config=LossConfig(
+            loss_config={
+                "type": "InfoNCE",
+                "weight": 1.0,
+            }
+        ),
         loss_config=LossConfig(
             loss_config={
                 "type": "modality_patch_discrimination_new",
@@ -281,7 +291,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
             checkpointer=checkpointer_config,
-            load_path="/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_cross_random_per_modality_patchdisc_loss/step185000",
+            # load_path="/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_cross_random_per_modality_patchdisc_loss/step185000",
         )
         .with_callback("wandb", wandb_callback)
         .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
