@@ -32,7 +32,6 @@ from helios.nn.flexihelios import (
     PoolingType,
     PredictorConfig,
 )
-from helios.nn.latent_mim import LatentMIMConfig
 from helios.nn.galileo import GalileoConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -76,7 +75,7 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
     decoder_b_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
         decoder_embedding_size=model_size["decoder_embedding_size"],
-        depth=1, # model_size["decoder_depth"],
+        depth=1,  # model_size["decoder_depth"],
         mlp_ratio=model_size["mlp_ratio"],
         num_heads=model_size["decoder_num_heads"],
         supported_modality_names=common.training_modalities,
@@ -85,7 +84,7 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
     model_config = GalileoConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
-        decoder_b_config=decoder_config,
+        decoder_b_config=decoder_b_config,
     )
     return model_config
 
@@ -110,7 +109,7 @@ def build_train_module_config(
         "type": "modality_cross_random",
         "encode_ratio": 0.5,
         "decode_ratio": 0.5,
-        "min_encoded_bandsets": None, # use all encodable modalities
+        "min_encoded_bandsets": None,  # use all encodable modalities
         "allow_encoding_decoding_same_bandset": True,
         "only_decode_modalities": [
             Modality.OPENSTREETMAP_RASTER.name,
