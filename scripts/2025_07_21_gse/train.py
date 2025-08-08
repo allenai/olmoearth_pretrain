@@ -13,7 +13,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import WSD
+from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -133,7 +133,6 @@ def build_train_module_config(
                 ],
             }
         ),
-        warmup_duration=Duration.steps(8000),
         loss_config=LossConfig(
             loss_config={
                 "type": "patch_discrimination_new",
@@ -141,9 +140,8 @@ def build_train_module_config(
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        scheduler=WSD(
-            decay_steps=0,
-            decay_fraction=None,
+        scheduler=CosWithWarmup(
+            warmup_steps=8000,
         ),
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
