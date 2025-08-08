@@ -207,7 +207,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
         self.supervisory_modalities = [
-            str(x) for x in supervisory_modalities_weights.keys()
+            x for x, _ in supervisory_modalities_weights.items()
         ]
         self.compute_accuracies = compute_accuracies
         self.supervisory_modalities_weights = supervisory_modalities_weights
