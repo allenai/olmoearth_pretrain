@@ -28,6 +28,7 @@ class Galileo(nn.Module, DistributedMixins):
         self,
         encoder: torch.nn.Module,
         decoder: torch.nn.Module,
+        decoder_b: torch.nn.Module | None = None,
         reconstructor: torch.nn.Module | None = None,
     ):
         """Initialize the Galileo Style.
@@ -40,7 +41,7 @@ class Galileo(nn.Module, DistributedMixins):
         super().__init__()
         self.encoder = encoder
         self.decoder_a = decoder
-        self.decoder_b = deepcopy(decoder)
+        self.decoder_b = deepcopy(decoder) if decoder_b is None else decoder_b
         self.target_encoder = deepcopy(self.encoder)
         self.reconstructor = reconstructor
         for p in self.target_encoder.parameters():
@@ -134,6 +135,7 @@ class GalileoConfig(Config):
 
     encoder_config: Config
     decoder_config: Config
+    decoder_b_config: Config | None = None
     reconstructor_config: Config | None = None
 
     def validate(self) -> None:
@@ -161,6 +163,8 @@ class GalileoConfig(Config):
         self.validate()
         encoder = self.encoder_config.build()
         decoder = self.decoder_config.build()
+        if self.decoder_b_config is None:
+            decoder_b = self.decoder_config.build()
         reconstructor = (
             self.reconstructor_config.build()
             if self.reconstructor_config is not None
