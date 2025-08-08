@@ -122,7 +122,7 @@ def build_train_module_config(
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         warmup_duration=Duration.steps(8000),
-        rank_microbatch_size=64,
+        rank_microbatch_size=32,
         # masking_config=MaskingConfig(
         #     strategy_config={
         #         "type": "random_fixed_modality",
