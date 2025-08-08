@@ -206,9 +206,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
-        self.supervisory_modalities = [
-            x for x, _ in supervisory_modalities_weights.items()
-        ]
         self.compute_accuracies = compute_accuracies
         self.supervisory_modalities_weights = supervisory_modalities_weights
 
@@ -335,7 +332,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         total_batch_sup = torch.zeros([], device=self.device)
         if self.compute_accuracies:
             total_batch_acc = {}
-            for modality in self.supervisory_modalities:
+            for modality in self.supervisory_modalities_weights.keys():
                 for idx in range(len(Modality.get(modality).band_sets)):
                     total_batch_acc[f"{modality}_{idx}"] = torch.zeros(
                         [], device=self.device
@@ -352,7 +349,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
                 microbatch, supervisory_modalities = microbatch.pop(
-                    self.supervisory_modalities
+                    list(self.supervisory_modalities_weights.keys())
                 )
                 # TODO - mark supervisory bandsets as missing, and store the original mask
                 microbatch = self.transform.apply(microbatch).to_device(self.device)
@@ -409,7 +406,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
             ReduceType.mean,
         )
         self.trainer.record_metric(
-            f"train/supervisory_loss_{'_'.join(self.supervisory_modalities)}",
+            f"train/supervisory_loss_{'_'.join(self.supervisory_modalities_weights.keys())}",
             total_batch_sup / num_microbatches,
             ReduceType.mean,
         )
