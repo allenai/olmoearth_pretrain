@@ -123,7 +123,12 @@ def build_launch_config(
         allow_dirty=False,
         priority=BeakerPriority.high,
         env_vars=[
-            BeakerEnvVar(name="NCCL_DEBUG", value="INFO" if nccl_debug else "WARN"),
+            BeakerEnvVar(name="NCCL_DEBUG", value="DETAIL" if nccl_debug else "WARN"),
+            BeakerEnvVar(
+                name="TORCH_NCCL_TRACE_BUFFER_SIZE",
+                value="1000000000" if nccl_debug else "0",
+            ),
+            BeakerEnvVar(name="NCCL_BLOCKING_WAIT", value="1" if nccl_debug else "0"),
             BeakerEnvVar(
                 name="GOOGLE_APPLICATION_CREDENTIALS", value="/etc/gcp_credentials.json"
             ),
@@ -182,14 +187,26 @@ def build_common_components(
     if cmd == SubCmd.launch_prep:
         cmd_to_launch = SubCmd.prep
 
+    # Extract nccl_debug from overrides if present
+    nccl_debug = False
+    for override in overrides:
+        if override.startswith("--common.nccl_debug="):
+            logger.info(f"Setting nccl_debug to {override}")
+            nccl_debug = override.split("=")[1].lower() in ("true", "1", "yes")
+            break
+
     launch_config = build_launch_config(
         name=f"{run_name}-{cmd_to_launch}",
         cmd=[script, cmd_to_launch, run_name, cluster, *overrides],
         clusters=cluster,
-        nccl_debug=False,
+        nccl_debug=nccl_debug,
     )
     root_dir = get_root_dir(cluster)
     beaker_user = get_beaker_username()
+    if beaker_user is None:
+        raise ValueError(
+            "Failed to get Beaker username. Make sure you are authenticated with Beaker."
+        )
     return CommonComponents(
         run_name=run_name,
         save_folder=f"{root_dir}/checkpoints/{beaker_user.lower()}/{run_name}",

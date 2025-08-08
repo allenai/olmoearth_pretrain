@@ -127,7 +127,6 @@ def train_and_eval_probe(
     if train_embeddings.shape[-1] != test_embeddings.shape[-1]:
         raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
-
     if config.task_type == TaskType.SEGMENTATION:
         logits_per_patch = int(config.num_classes * patch_size * patch_size)
         if probe_type == ProbeType.ATTNPOOL:
@@ -234,6 +233,7 @@ def train_probe(
                     batch_emb
                 )  # (bsz, num_patches, logits_per_patch) or (bsz, n_cls)
                 logits = outputs["logits"]
+                # logger.info(f"logits: {logits.shape}")
                 if task_type == TaskType.SEGMENTATION:
                     logits = rearrange(
                         logits,

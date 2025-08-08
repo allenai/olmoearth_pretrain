@@ -46,7 +46,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2025_06_30_dataset_percentage__eval"
+    WANDB_PROJECT = "2025_07_10_dataset_percentage_eval"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -59,7 +59,15 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
-        "m-eurosat": DownstreamTaskConfig(
+        "m_forestnet": DownstreamTaskConfig(
+            dataset="m-forestnet",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            eval_interval=Duration.epochs(5),
+        ),
+        "m_eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
             embedding_batch_size=128,
             num_workers=0,
@@ -67,7 +75,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
-        "m-bigearthnet": DownstreamTaskConfig(
+        "m_bigearthnet": DownstreamTaskConfig(
             dataset="m-bigearthnet",
             embedding_batch_size=64,
             num_workers=4,
@@ -75,7 +83,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
-        "m-so2sat": DownstreamTaskConfig(
+        "m_so2sat": DownstreamTaskConfig(
             dataset="m-so2sat",
             embedding_batch_size=128,
             num_workers=4,
@@ -83,7 +91,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
-        "m-brick-kiln": DownstreamTaskConfig(
+        "m_brick_kiln": DownstreamTaskConfig(
             dataset="m-brick-kiln",
             embedding_batch_size=128,
             num_workers=4,
@@ -211,6 +219,34 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(50),
+            patch_size=1,
+            eval_mode="linear_probe",
+            probe_lr=0.1,
+            epochs=50,
+        ),
+        "cropharvest_Togo_12": DownstreamTaskConfig(
+            dataset="cropharvest_Togo_12",
+            embedding_batch_size=128,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(20),
+            input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+            patch_size=1,
+            eval_mode="linear_probe",
+            probe_lr=0.1,
+            epochs=50,
+        ),
+        # example of "in season" cropland mapping - 6 indicates only the
+        # first 6 timesteps are passed to the model
+        "cropharvest_People's Republic of China_6": DownstreamTaskConfig(
+            dataset="cropharvest_People's Republic of China_6",
+            embedding_batch_size=128,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(20),
+            input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
             patch_size=1,
             eval_mode="linear_probe",
             probe_lr=0.1,

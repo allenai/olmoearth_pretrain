@@ -134,8 +134,7 @@ class BreizhCropsDataset(Dataset):
         """Return a Breizhcrops instance."""
         x, y_true, _ = self.ds[idx]
         if self.monthly_average:
-            x = self._average_over_month(x)
-
+            x = self._average_over_month(x)  # T, C
         months = torch.from_numpy(x[:, SELECTED_BANDS[LEVEL].index("doa")])
         days = torch.ones_like(months)
         # from the Breizhcrops paper: The dataset is composed of Sentinel-2 image time series
@@ -143,13 +142,15 @@ class BreizhCropsDataset(Dataset):
         years = torch.ones_like(months) * 2017
         timestamp = torch.stack([days, months, years], dim=-1)  # t, c=3
         if not self.norm_stats_from_pretrained:
+            # The first 13 bands are the S2 bands so to apply stats we first filter to those
+            x = x[:, : len(BAND_STATS)]
             x = normalize_bands(x, self.means, self.stds, self.norm_method)
         image = repeat(x, "t c -> h w t c", w=1, h=1)[
             :,
             :,
             :,
-            EVAL_TO_HELIOS_S2_BANDS,
-        ]
+            INPUT_TO_OUTPUT_BAND_MAPPING,
+        ][:, :, :, EVAL_TO_HELIOS_S2_BANDS]
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
 

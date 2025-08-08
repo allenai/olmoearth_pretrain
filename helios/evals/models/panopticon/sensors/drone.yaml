@@ -1,0 +1,32 @@
+instrument: 'unknown'
+processing_level: 'L1C'
+source: https://www.dji.com/p4-multispectral/specs
+
+bands:
+  B01:
+    name: 'NIR'
+    gaussian:
+      mu: 840
+      sigma: 26
+    GSD: 0.2
+
+  B02:
+    name: 'Red'
+    gaussian:
+      mu: 650
+      sigma: 16
+    GSD: 0.2
+
+  B03:
+    name: 'Green'
+    gaussian:
+      mu: 560
+      sigma: 16
+    GSD: 0.2
+
+  B04:
+    name: 'Blue'
+    gaussian:
+      mu: 450
+      sigma: 16
+    GSD: 0.2

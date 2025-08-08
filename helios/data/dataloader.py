@@ -61,6 +61,7 @@ class HeliosDataLoader(DataLoaderBase):
         drop_last: bool = True,
         persistent_workers: bool = True,
         multiprocessing_context: str = "spawn",
+        num_dataset_repeats_per_epoch: int = 1,
     ):
         """Initialize the HeliosDataLoader."""
         super().__init__(
@@ -88,14 +89,25 @@ class HeliosDataLoader(DataLoaderBase):
         self._global_indices: np.ndarray | None = None
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = multiprocessing_context
+        self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
         if self.num_workers > 0 and self.multiprocessing_context == "forkserver":
             # Overhead of loading modules on import by preloading them
             mp.set_forkserver_preload(["torch", "rasterio"])
 
     @property
+    def total_unique_batches(self) -> int:
+        """The total number of unique batches in an epoch."""
+        return len(self.dataset) // (self.global_batch_size)
+
+    @property
+    def total_unique_size(self) -> int:
+        """The total number of unique instances in an epoch."""
+        return self.total_unique_batches * self.global_batch_size
+
+    @property
     def total_batches(self) -> int:
         """The total number of batches in an epoch."""
-        return len(self.dataset) // (self.global_batch_size)
+        return self.total_unique_batches * self.num_dataset_repeats_per_epoch
 
     @property
     def total_size(self) -> int:
@@ -125,13 +137,15 @@ class HeliosDataLoader(DataLoaderBase):
         if self.shuffle:
             # Deterministically shuffle based on epoch and seed
             rng = get_rng(self.seed + self.epoch)  # type: ignore
-
-        indices: np.ndarray
-        indices = np.arange(len(self.dataset), dtype=np.uint32)
-        if rng is not None:
-            rng.shuffle(indices)
-        # Remove tail of data to make it evenly divisible
-        indices = indices[: self.total_size]
+        indices_list = []
+        for _ in range(self.num_dataset_repeats_per_epoch):
+            indices = np.arange(len(self.dataset), dtype=np.uint32)
+            if rng is not None:
+                rng.shuffle(indices)
+            # Remove tail of data to make it evenly divisible
+            cropped_indices = indices[: self.total_unique_size]
+            indices_list.append(cropped_indices)
+        indices = np.concatenate(indices_list)
         return indices
 
     def build_and_save_global_indices(self, in_memory: bool = False) -> None:
@@ -215,7 +229,6 @@ class HeliosDataLoader(DataLoaderBase):
         instances_per_batch = self.global_batch_size
         indices = indices.reshape(-1, instances_per_batch)
 
-        # Offset by the number of batches already processed.
         if self.batches_processed > 0:  # type: ignore
             indices = indices[self.batches_processed :]  # type: ignore
 
@@ -223,7 +236,7 @@ class HeliosDataLoader(DataLoaderBase):
         if (worker_info := self.worker_info) is not None:
             indices = indices[worker_info.id :: worker_info.num_workers]
 
-        # Finally slice batches into micro batches for the local DP rank.
+        # Finally step batches into micro batches for the local DP rank.
         indices = indices[:, self.dp_rank :: self.dp_world_size].reshape((-1,))
         return indices
 
@@ -285,37 +298,45 @@ class HeliosDataLoader(DataLoaderBase):
 
     def _get_mock_sample(self, rng: np.random.Generator) -> HeliosSample:
         output_dict = {}
-        # ToDO: change to training modalities
-        logger.info(f"Training modalities: {self.dataset.training_modalities}")
+        standard_hw = 64
         if Modality.SENTINEL2_L2A.name in self.dataset.training_modalities:
-            mock_sentinel2_l2a = rng.random((256, 256, 12, 12), dtype=np.float32)
+            mock_sentinel2_l2a = rng.random(
+                (standard_hw, standard_hw, 12, 12), dtype=np.float32
+            )
             output_dict["sentinel2_l2a"] = mock_sentinel2_l2a
         if Modality.NAIP_10.name in self.dataset.training_modalities:
             mock_naip_10 = rng.random((1024, 1024, 1, 4), dtype=np.float32)
             output_dict["naip_10"] = mock_naip_10
         if Modality.SENTINEL1.name in self.dataset.training_modalities:
-            mock_sentinel1 = rng.random((256, 256, 12, 2), dtype=np.float32)
+            mock_sentinel1 = rng.random(
+                (standard_hw, standard_hw, 12, 2), dtype=np.float32
+            )
             output_dict[Modality.SENTINEL1.name] = mock_sentinel1
         if Modality.WORLDCOVER.name in self.dataset.training_modalities:
-            mock_worldcover = rng.random((256, 256, 1, 1), dtype=np.float32)
+            mock_worldcover = rng.random(
+                (standard_hw, standard_hw, 1, 1), dtype=np.float32
+            )
             output_dict["worldcover"] = mock_worldcover
         if Modality.LATLON.name in self.dataset.training_modalities:
             mock_latlon = rng.random((2,), dtype=np.float32)
             output_dict["latlon"] = mock_latlon
         if Modality.OPENSTREETMAP_RASTER.name in self.dataset.training_modalities:
-            mock_openstreetmap_raster = rng.random((256, 256, 1, 30), dtype=np.float32)
+            mock_openstreetmap_raster = rng.random(
+                (standard_hw, standard_hw, 1, 30), dtype=np.float32
+            )
             output_dict["openstreetmap_raster"] = mock_openstreetmap_raster
         if Modality.SRTM.name in self.dataset.training_modalities:
-            mock_srtm = rng.random((256, 256, 1, 1), dtype=np.float32)
+            mock_srtm = rng.random((standard_hw, standard_hw, 1, 1), dtype=np.float32)
             output_dict["srtm"] = mock_srtm
         if Modality.LANDSAT.name in self.dataset.training_modalities:
             mock_landsat = rng.random(
-                (256, 256, 12, Modality.LANDSAT.num_bands), dtype=np.float32
+                (standard_hw, standard_hw, 12, Modality.LANDSAT.num_bands),
+                dtype=np.float32,
             )
             output_dict["landsat"] = mock_landsat
         if Modality.GSE.name in self.dataset.training_modalities:
             mock_gse = rng.random(
-                (256, 256, 1, Modality.GSE.num_bands), dtype=np.float32
+                (standard_hw, standard_hw, 1, Modality.GSE.num_bands), dtype=np.float32
             )
             output_dict["gse"] = mock_gse
 
@@ -330,6 +351,7 @@ class HeliosDataLoader(DataLoaderBase):
     def get_mock_batch(self) -> HeliosSample:
         """Get a mock batch, for dry-run of forward and backward pass."""
         logger.info("Getting mock batch NOT FROM DATASET")
+        logger.info(f"Training modalities: {self.dataset.training_modalities}")
         rng = get_rng(42)
         batch_size = self.global_batch_size // self.dp_world_size
         patch_size = 1
@@ -490,6 +512,7 @@ class HeliosDataLoaderConfig(Config):
     prefetch_factor: int | None = None
     target_device_type: str | None = None
     drop_last: bool = True
+    num_dataset_repeats_per_epoch: int = 1
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -531,4 +554,5 @@ class HeliosDataLoaderConfig(Config):
             max_patch_size=self.max_patch_size,
             sampled_hw_p_list=self.sampled_hw_p_list,
             token_budget=self.token_budget,
+            num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
         )

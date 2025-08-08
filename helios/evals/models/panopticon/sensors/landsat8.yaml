@@ -1,0 +1,84 @@
+instrument: MSI
+processing_level: L1C
+srf_filename: landsat8_srf.npy
+
+bands:
+  B1:
+    name: 'Coastal aerosol'
+    gaussian:
+      mu: 442.6486977867469
+      sigma: 6.202668564202981
+    GSD: 30
+    img_size: 256
+
+  B2:
+    name: '02 - Blue'
+    gaussian:
+      mu: 482.626742301136
+      sigma: 22.522673410847318
+    GSD: 30
+    img_size: 256
+
+  B3:
+    name: '03 - Green'
+    gaussian:
+      mu: 560.991848338365
+      sigma: 21.835390564974098
+    GSD: 30
+    img_size: 256
+
+  B4:
+    name: '04 - Red'
+    gaussian:
+      mu: 654.2860463136833
+      sigma: 14.30803308731993
+    GSD: 30
+
+  B5:
+    name: '05 - NIR'
+    gaussian:
+      mu: 864.6129891438968
+      sigma: 11.346929217149494
+    GSD: 30
+
+  B6:
+    name: '06 - SWIR1'
+    gaussian:
+      mu: 1608.7469945334756
+      sigma: 33.925314891204984
+    GSD: 30
+
+  B7:
+    name: '07 - SWIR2'
+    gaussian:
+      mu: 2203.5048261584875
+      sigma: 76.21353457472965
+    GSD: 30
+
+  B8:
+    name: 'Panchromatic'
+    gaussian:
+      mu: 596.8190587207782
+      sigma: 62.17542606033194
+    GSD: 15
+
+  B9:
+    name: 'Cirrus'
+    gaussian:
+      mu: 1374.1802289606335
+      sigma: 8.286360980981396
+    GSD: 30
+
+  B10:
+    name: 'TIRS 1'
+    gaussian:
+      mu: 10847.467021274
+      sigma: 289.6384228505229
+    GSD: 120
+
+  B11:
+    name: 'TIRS 2'
+    gaussian:
+      mu: 12017.038582815621
+      sigma: 351.18600147726016
+    GSD: 120
