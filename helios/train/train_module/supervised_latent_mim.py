@@ -206,7 +206,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
-        self.supervisory_modalities = list(supervisory_modalities_weights.keys())
+        self.supervisory_modalities = [
+            str(x) for x in supervisory_modalities_weights.keys()
+        ]
         self.compute_accuracies = compute_accuracies
         self.supervisory_modalities_weights = supervisory_modalities_weights
 
