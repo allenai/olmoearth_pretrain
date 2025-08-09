@@ -339,6 +339,11 @@ class HeliosDataLoader(DataLoaderBase):
                 (standard_hw, standard_hw, 1, Modality.GSE.num_bands), dtype=np.float32
             )
             output_dict["gse"] = mock_gse
+        if Modality.CDL.name in self.dataset.training_modalities:
+            mock_cdl = rng.random(
+                (standard_hw, standard_hw, 1, Modality.CDL.num_bands), dtype=np.float32
+            )
+            output_dict["cdl"] = mock_cdl
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
