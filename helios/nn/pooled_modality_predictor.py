@@ -109,7 +109,6 @@ class AttnPool(nn.Module):
         # K/V: [B*, N, D] -> [2, B*, H, N, Dh]
         feat_tokens = feat_tokens.to(self.kv.weight.dtype)
         masked_mean_feat_tokens = self.masked_mean(feat_tokens, mask)
-        logger.info(f"masked_mean_feat_tokens shape: {masked_mean_feat_tokens.shape}")
         kv = self.kv(feat_tokens).reshape(Bc, N, 2, H, Dh)
         kv = rearrange(kv, "b n two h d -> two b h n d")
         k, v = torch.unbind(kv, dim=0)  # [B*, H, N, Dh] each
@@ -147,8 +146,6 @@ class AttnPool(nn.Module):
 
         # MLP + LN head
         z = self.out_norm(self.out_layer(z))
-        logger.info(f"z shape: {z.shape}")
-        logger.info(f"masked_mean_feat_tokens shape: {masked_mean_feat_tokens.shape}")
         return z + masked_mean_feat_tokens
 
 class PooledModalityPredictor(Predictor):
@@ -361,8 +358,6 @@ class PooledModalityPredictorV2(Predictor):
 
         pooled_tokens = pooled_dict["modality_pooled_tokens"]
         if self.include_encoder_encodings:
-            logger.info("Applying encoder encodings")
-            logger.info(f"pooled_tokens shape: {pooled_tokens.shape}")
             pooled_tokens = self.composite_encodings._apply_encodings_per_modality(Modality.SENTINEL2_L2A.name, pooled_tokens, timestamps, patch_size, input_res, use_modality_encodings=False)
         pooled_tokens = rearrange(pooled_tokens, "b ... d -> b (...) d")
         pooled_attn_mask = rearrange(pooled_dict["modality_pooled_masks"], "b ... -> b (...)")
