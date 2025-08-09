@@ -42,7 +42,7 @@ class AttnPool(nn.Module):
         in_dim: int,
         hidden_dim: int | None = None,
         mlp_ratio: float | None = None,
-        num_queries: int = 1,
+        num_queries: int = 3,
         gate_temperature: float = 1.0,
     ) -> None:
         super().__init__()
@@ -566,9 +566,9 @@ class DimsToPool(StrEnum):
 # in the end the pooled tokens dict should just be a more granular option depending on the task so we don't have to worry about mean max pooling average pooling or anyhting like that
 class EncoderAttnPool(Encoder):
     """Encoder that pools the tokens across modalities."""
-    def __init__(self, dims_to_pool: str, attn_pool_mlp_ratio: float | None = None, *args, **kwargs) -> None:
+    def __init__(self, dims_to_pool: str, attn_pool_mlp_ratio: float | None = None, num_queries: int = 1, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.attn_pool = AttnPool(self.embedding_size, self.embedding_size, mlp_ratio=attn_pool_mlp_ratio)
+        self.attn_pool = AttnPool(self.embedding_size, self.embedding_size, mlp_ratio=attn_pool_mlp_ratio, num_queries=num_queries)
 
         self.dims_to_pool = dims_to_pool
 
@@ -693,6 +693,7 @@ class EncoderAttnPool(Encoder):
 class EncoderAttnPoolConfig(EncoderConfig):
     """Configuration for the EncoderAttnPool."""
     dims_to_pool: DimsToPool = DimsToPool.MODALITY
+    num_queries: int = 1
     attn_pool_mlp_ratio: float | None = None
     def build(self) -> "EncoderAttnPool":
         """Build the encoder."""
