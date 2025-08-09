@@ -402,6 +402,14 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    CDL = ModalitySpec(
+        name="cdl",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["cdl"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     @classmethod
     def get(self, name: str) -> ModalitySpec:
         """Get the ModalitySpec with the specified name."""
