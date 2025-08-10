@@ -121,7 +121,7 @@ def build_train_module_config(
     )
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        warmup_duration=Duration.steps(8000),
+        # warmup_duration=Duration.steps(8000),
         rank_microbatch_size=64,
         # masking_config=MaskingConfig(
         #     strategy_config={
