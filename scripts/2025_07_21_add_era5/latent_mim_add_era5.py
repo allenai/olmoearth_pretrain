@@ -47,11 +47,11 @@ from helios.train.callbacks import (
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
+from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
-# from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
-from helios.train.train_module.contrastive_latentmim import (
-    ContrastiveLatentMIMTrainModuleConfig,
-)
+# from helios.train.train_module.contrastive_latentmim import (
+#     ContrastiveLatentMIMTrainModuleConfig,
+# )
 
 logger = logging.getLogger(__name__)
 
@@ -113,13 +113,13 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 
 def build_train_module_config(
     common: CommonComponents,
-) -> ContrastiveLatentMIMTrainModuleConfig:
+) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     # scheduler = WSD(
     #     decay_steps=0,
     #     decay_fraction=None,
     # )
-    return ContrastiveLatentMIMTrainModuleConfig(
+    return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         # warmup_duration=Duration.steps(8000),
         rank_microbatch_size=64,
@@ -157,16 +157,16 @@ def build_train_module_config(
         #         "type": "modality_patch_discrimination_new",
         #     },
         # ),
-        contrastive_config=LossConfig(
-            loss_config={
-                "type": "InfoNCE",
-                "weight": 0.5,
-            }
-        ),
+        # contrastive_config=LossConfig(
+        #     loss_config={
+        #         "type": "InfoNCE",
+        #         "weight": 0.5,
+        #     }
+        # ),
         loss_config=LossConfig(
             loss_config={
                 "type": "modality_patch_discrimination_new",
-                "tau": 0.1,
+                "tau": 0.2,
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
