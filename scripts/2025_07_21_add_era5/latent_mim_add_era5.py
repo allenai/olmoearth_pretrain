@@ -166,6 +166,7 @@ def build_train_module_config(
         loss_config=LossConfig(
             loss_config={
                 "type": "modality_patch_discrimination_new",
+                "tau": 0.15,
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
@@ -291,7 +292,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
             checkpointer=checkpointer_config,
-            # load_path="/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_cross_random_per_modality_patchdisc_loss/step185000",
         )
         .with_callback("wandb", wandb_callback)
         .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
