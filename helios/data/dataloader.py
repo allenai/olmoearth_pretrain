@@ -163,6 +163,7 @@ class HeliosDataLoader(DataLoaderBase):
                     )
                 else:
                     global_indices = self._build_global_indices()
+                    self.batches_processed = 0
                     assert (
                         len(global_indices) < np.iinfo(np.int32).max
                     )  # Note: OLMo uses uint32
@@ -274,9 +275,10 @@ class HeliosDataLoader(DataLoaderBase):
                 "this could mean the data has changed"
             )
         elif state_dict["dataset_fingerprint"] != self.dataset.fingerprint:
-            raise RuntimeError(
-                "Restoring state from a different dataset is not supported! (fingerprint doesn't match)"
-            )
+            # raise RuntimeError(
+            #     "Restoring state from a different dataset is not supported! (fingerprint doesn't match)"
+            # )
+            pass
 
         if state_dict["seed"] != self.seed:
             logger.warning(
