@@ -49,6 +49,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             nn.ReLU(),
             nn.Linear(embd // 4, embd),
         )
+
         for p in self.target_encoder.parameters():
             p.requires_grad = False
 
@@ -92,6 +93,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
+        register_fsdp_forward_method(self.encoder, "forward")
 
     def apply_compile(self) -> None:
         """Apply torch.compile to the model."""
