@@ -117,13 +117,6 @@ class MAEConfig(Config):
                 raise ValueError("Encoder embedding size must be consistent!")
         if self.reconstructor_config is not None:
             if (
-                self.encoder_config.supported_modalities
-                != self.reconstructor_config.supported_modalities
-            ):
-                raise ValueError(
-                    "Encoder and reconstructor must support the same modalities"
-                )
-            if (
                 self.encoder_config.max_sequence_length
                 != self.reconstructor_config.decoder_config.max_sequence_length
             ):
