@@ -10,6 +10,8 @@ from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
+from helios.nn.lora import TaskLoRALinear
+
 try:
     import flash_attn
 except ImportError:
@@ -110,6 +112,8 @@ class Attention(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        use_task_lora: bool = False,
+        task_lora_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the attention module.
 
@@ -123,6 +127,8 @@ class Attention(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
             use_flash_attn: Use flash attention
+            use_task_lora: Apply task-conditioned LoRA to attention output weights
+            task_lora_kwargs: Keyword arguments for task-conditioned LoRA
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -140,8 +146,14 @@ class Attention(nn.Module):
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
+
+        self.use_task_lora = use_task_lora
+        if self.use_task_lora:
+            kwargs: dict[str, Any] = task_lora_kwargs or {}
+            self.proj = TaskLoRALinear(dim, dim, **kwargs)
+        else:
+            self.proj = nn.Linear(dim, dim)
 
     def sdpa(
         self,
@@ -227,6 +239,7 @@ class Attention(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        task_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -240,6 +253,7 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            task_emb: Optional task embedding tensor of shape (B, task_dim) or (task_dim,)
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
@@ -284,7 +298,10 @@ class Attention(nn.Module):
             attn_mask=attn_mask,
         )
         x = x.transpose(1, 2).reshape(original_shape)
-        x = self.proj(x)
+        if self.use_task_lora:
+            x = self.proj(x, task_emb=task_emb)
+        else:
+            x = self.proj(x)
         x = self.proj_drop(x)
         return x
 
@@ -456,6 +473,8 @@ class Block(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        use_task_lora: bool = False,
+        task_dim: int = 768,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -473,6 +492,8 @@ class Block(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
+            use_task_lora: Whether to use task-conditioned LoRA
+            task_dim: Dimension of the task embedding
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -486,6 +507,8 @@ class Block(nn.Module):
             norm_layer=norm_layer,
             cross_attn=cross_attn,
             use_flash_attn=use_flash_attn,
+            use_task_lora=use_task_lora,
+            task_lora_kwargs={"task_dim": task_dim},
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -514,6 +537,7 @@ class Block(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        task_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -527,6 +551,7 @@ class Block(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            task_emb: Optional task embedding tensor of shape (B, task_dim) or (task_dim,)
 
         Returns:
             Output tensor of shape (B, N, C)
@@ -543,6 +568,7 @@ class Block(nn.Module):
                     max_seqlen_q=max_seqlen_q,
                     max_seqlen_k=max_seqlen_k,
                     attn_mask=attn_mask,
+                    task_emb=task_emb,
                 )
             )
         )

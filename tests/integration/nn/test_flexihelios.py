@@ -16,6 +16,7 @@ from helios.nn.flexihelios import (
     Predictor,
     TokensAndMasks,
 )
+from helios.nn.lora import TaskLoRALinear
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
@@ -565,6 +566,112 @@ class TestEncoder:
                 or ("block" in name)
             ):
                 assert param.grad is not None, name
+
+    def _force_nonzero_tasklora_generators(self, module: torch.nn.Module) -> None:
+        """Make TaskLoRALinear generators non-zero for sensitivity checks.
+
+        Args:
+            module: The module to force non-zero TaskLoRALinear generators for.
+        """
+        with torch.no_grad():
+            for m in module.modules():
+                if isinstance(m, TaskLoRALinear):
+                    la: torch.nn.Linear = m.lora_gen_a[-1]
+                    lb: torch.nn.Linear = m.lora_gen_b[-1]
+                    torch.nn.init.uniform_(la.weight, -0.1, 0.1)
+                    torch.nn.init.uniform_(la.bias, -0.1, 0.1)
+                    torch.nn.init.uniform_(lb.weight, -0.1, 0.1)
+                    torch.nn.init.uniform_(lb.bias, -0.1, 0.1)
+
+    def test_encoder_with_task_lora_end_to_end(
+        self,
+        supported_modalities: list[ModalitySpec],
+        modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    ) -> None:
+        """End-to-end encoder test with task-conditioned LoRA enabled.
+
+        Args:
+            supported_modalities: The supported modalities for the encoder.
+            modality_band_set_len_and_total_bands: The band set lengths and total bands for each modality.
+        """
+        # Small encoder with task LoRA wired in
+        task_d = 8
+        encoder = Encoder(
+            embedding_size=16,
+            max_patch_size=4,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            depth=2,
+            drop_path=0.0,
+            supported_modalities=supported_modalities,
+            max_sequence_length=12,
+            use_task_lora=True,
+            task_dim=task_d,
+        )
+
+        # Build a small MaskedHeliosSample
+        s2_sets, s2_total = modality_band_set_len_and_total_bands["sentinel2_l2a"]
+        ll_sets, ll_total = modality_band_set_len_and_total_bands["latlon"]
+        B, H, W, T, C = 1, 4, 4, 2, s2_total
+        s2 = torch.randn(B, H, W, T, C)
+        s2_mask = torch.zeros(B, H, W, T, C, dtype=torch.long)
+        latlon = torch.randn(B, ll_total)
+        latlon_mask = torch.zeros(B, ll_total, dtype=torch.float32)
+        days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+        months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+        years = torch.randint(2019, 2021, (B, T, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)
+
+        x = MaskedHeliosSample(
+            sentinel2_l2a=s2,
+            sentinel2_l2a_mask=s2_mask,
+            latlon=latlon,
+            latlon_mask=latlon_mask,
+            timestamps=timestamps,
+        )
+
+        patch_size = 2
+        input_res = 1
+        task_emb = torch.randn(task_d)
+
+        # 1) With zero-init generators, task_emb should have no effect initially
+        out_none, _ = encoder.forward(
+            x, patch_size, input_res, token_exit_cfg=None, task_emb=None
+        )
+        out_task, _ = encoder.forward(
+            x, patch_size, input_res, token_exit_cfg=None, task_emb=task_emb
+        )
+        assert torch.allclose(
+            out_none.sentinel2_l2a, out_task.sentinel2_l2a, atol=1e-6, rtol=1e-6
+        ), "Zero-init LoRA should yield identical outputs to no-task path."
+
+        # 2) After forcing non-zero LoRA generators, task_emb should change outputs
+        self._force_nonzero_tasklora_generators(encoder)
+        out_task2, _ = encoder.forward(
+            x, patch_size, input_res, token_exit_cfg=None, task_emb=task_emb
+        )
+        assert not torch.allclose(
+            out_none.sentinel2_l2a, out_task2.sentinel2_l2a
+        ), "Non-zero generators should make output depend on task_emb."
+
+        # 3) Backprop hits both base and generator params
+        loss = out_task2.sentinel2_l2a.sum()  # type: ignore
+        loss.backward()
+
+        saw_base_grad, saw_gen_grad = False, False
+        for m in encoder.modules():
+            if isinstance(m, TaskLoRALinear):
+                if m.weight.grad is not None or (
+                    m.bias is not None and m.bias.grad is not None
+                ):
+                    saw_base_grad = True
+                if any(p.grad is not None for p in m.lora_gen_a.parameters()) and any(
+                    p.grad is not None for p in m.lora_gen_b.parameters()
+                ):
+                    saw_gen_grad = True
+        assert saw_base_grad, "Expected gradients on base projection weights."
+        assert saw_gen_grad, "Expected gradients on LoRA generator parameters."
 
 
 class TestPredictor:
