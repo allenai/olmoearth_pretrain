@@ -2490,3 +2490,46 @@ class PredictorConfig(Config):
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Predictor kwargs: {kwargs}")
         return Predictor(**kwargs)
+
+
+@dataclass
+class SupervisedPredictorConfig(Config):
+    """Configuration for the Predictor."""
+
+    supported_modality_names: list[str]
+    encoder_embedding_size: int = 16
+    decoder_embedding_size: int = 16
+    depth: int = 2
+    mlp_ratio: float = 1.0
+    num_heads: int = 2
+    max_sequence_length: int = 12
+    drop_path: float = 0.0
+    learnable_channel_embeddings: bool = True
+    random_channel_embeddings: bool = False
+    output_embedding_size: int | None = None
+    use_flash_attn: bool = False
+    qk_norm: bool = False
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        if len(self.supported_modalities) == 0:
+            raise ValueError("At least one modality must be added!")
+        else:
+            for modality in self.supported_modalities:
+                if modality not in Modality.values():
+                    raise ValueError(f"Modality {modality} is not supported")
+
+    @property
+    def supported_modalities(self) -> list[ModalitySpec]:
+        """Get the supported modalities."""
+        return get_modality_specs_from_names(self.supported_modality_names)
+
+    def build(self) -> "Predictor":
+        """Build the predictor."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        # supported_modality_names is replaced by supported_modalities
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"Predictor kwargs: {kwargs}")
+        return SupervisedPredictor(**kwargs)

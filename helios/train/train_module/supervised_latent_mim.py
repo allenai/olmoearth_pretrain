@@ -18,7 +18,7 @@ from helios.data.constants import MISSING_VALUE, Modality
 from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
-from helios.nn.latent_mim import LatentMIM
+from helios.nn.supervised_latent_mim import SupervisedLatentMIM
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
 from helios.train.train_module.train_module import (
@@ -66,7 +66,7 @@ class SupervisedLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
 
     def build(
         self,
-        model: LatentMIM,
+        model: SupervisedLatentMIM,
         device: torch.device | None = None,
     ) -> "SupervisedLatentMIMTrainModuleConfig":
         """Build the corresponding :class:`LatentMIMTrainModule`.
@@ -121,7 +121,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
 
     def __init__(
         self,
-        model: LatentMIM,
+        model: SupervisedLatentMIM,
         optim_config: OptimConfig,
         transform_config: TransformConfig,
         masking_config: MaskingConfig,

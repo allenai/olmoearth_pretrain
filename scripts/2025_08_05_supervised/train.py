@@ -38,12 +38,8 @@ from helios.internal.experiment import (
     main,
 )
 from helios.internal.utils import MODEL_SIZE_ARGS
-from helios.nn.flexihelios import (
-    EncoderConfig,
-    PoolingType,
-    PredictorConfig,
-)
-from helios.nn.latent_mim import LatentMIMConfig
+from helios.nn.flexihelios import EncoderConfig, PoolingType, SupervisedPredictorConfig
+from helios.nn.supervised_latent_mim import SupervisedLatentMIMConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -90,7 +86,7 @@ def my_build_common_components(
     return config
 
 
-def build_model_config(common: CommonComponents) -> LatentMIMConfig:
+def build_model_config(common: CommonComponents) -> SupervisedLatentMIMConfig:
     """Build the model config for an experiment."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
@@ -106,7 +102,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_sequence_length=12,
         probe_modalities=list(SUPERVISORY_MODALITIES.keys()),
     )
-    decoder_config = PredictorConfig(
+    decoder_config = SupervisedPredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
         decoder_embedding_size=model_size["decoder_embedding_size"],
         depth=model_size["decoder_depth"],
@@ -115,7 +111,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
     )
-    model_config = LatentMIMConfig(
+    model_config = SupervisedLatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
     )
