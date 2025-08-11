@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
+import torch.nn.functional as F
 from olmo_core.distributed.parallel import DataParallelConfig
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
@@ -15,7 +16,7 @@ from olmo_core.train.common import ReduceType
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
-from helios.nn.flexihelios import TokensAndMasks
+from helios.nn.flexihelios import PoolingType, TokensAndMasks
 from helios.nn.latent_mim import LatentMIM
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
@@ -266,7 +267,21 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
+                simsiam_output, _ = self.model.encoder.forward(
+                    batch.unmask(),
+                    patch_size=patch_size,
+                    token_exit_cfg=token_exit_cfg,
+                )
+                simsiam_pooled = simsiam_output.pool_unmasked_tokens(PoolingType.MEAN)
+            tokens_pooled = latent.pool_unmasked_tokens(PoolingType.MEAN)
+            tokens_pooled = self.model.token_autoencoder(tokens_pooled)
             loss = self.loss_fn(decoded, target_output)
+            loss += F.cosine_embedding_loss(
+                tokens_pooled,
+                simsiam_pooled,
+                torch.ones(tokens_pooled.shape[0], device=tokens_pooled.device),
+            )
+
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output

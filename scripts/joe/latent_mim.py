@@ -58,11 +58,11 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
+model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-
     model_config = LatentMIMConfig(
         encoder_config=EncoderConfig(
             embedding_size=model_size["encoder_embedding_size"],
@@ -109,9 +109,19 @@ def build_train_module_config(
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        # token_exit_cfg={
+        #     Modality.SENTINEL2_L2A.name: model_size["encoder_depth"],
+        #     Modality.LATLON.name: model_size["encoder_depth"],
+        #     Modality.SENTINEL1.name: model_size["encoder_depth"],
+        #     Modality.WORLDCOVER.name: 0,
+        #     Modality.SRTM.name: model_size["encoder_depth"] // 2,
+        #     Modality.OPENSTREETMAP_RASTER.name: 0,
+        #     Modality.LANDSAT.name: model_size["encoder_depth"],
+        # },
         max_grad_norm=1.0,
-        scheduler=ConstantWithWarmup(warmup=2000),
+        scheduler=ConstantWithWarmup(warmup=8000),
         ema_decay=(1.0, 1.0),
+        # initial_weights="/weka/dfive-default/helios/checkpoints/joer/lmim_repro/step200000/",
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
             param_dtype=DType.bfloat16,
@@ -143,12 +153,12 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         dataset_configs=[
             # presto
             HeliosDatasetConfig(
-                h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892",
+                h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469728",
                 training_modalities=common.training_modalities,
             ),
             # osm_sampling
             HeliosDatasetConfig(
-                h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
+                h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
                 training_modalities=common.training_modalities,
             ),
         ]

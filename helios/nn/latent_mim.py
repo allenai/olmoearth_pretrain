@@ -42,6 +42,13 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.decoder = decoder
         self.reconstructor = reconstructor
         self.target_encoder = deepcopy(self.encoder)
+
+        embd = self.encoder.embedding_size
+        self.token_autoencoder = nn.Sequential(
+            nn.Linear(embd, embd // 4),
+            nn.ReLU(),
+            nn.Linear(embd // 4, embd),
+        )
         for p in self.target_encoder.parameters():
             p.requires_grad = False
 
