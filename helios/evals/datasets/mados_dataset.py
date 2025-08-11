@@ -268,6 +268,21 @@ class MADOSDataset(Dataset):
         """Return a single MADOS data instance."""
         image = self.images[idx]  # (80, 80, 13)
         label = self.labels[idx]  # (80, 80)
+
+        # OK, start visualizing here
+        fig_dir = "/weka/dfive-default/yawenz/figures/latent_mim_cross_random_per_modality_patchdisc_loss_cutmix"
+        task_fig_dir = f"{fig_dir}/mados"
+        import os
+
+        os.makedirs(task_fig_dir, exist_ok=True)
+        import matplotlib.pyplot as plt
+
+        # the RBG bands are 3, 2, 1
+        plt.imshow(image[:, :, [3, 2, 1]])
+        plt.axis("off")
+        plt.savefig(f"{task_fig_dir}/{idx}_sentinel2.png", bbox_inches="tight", dpi=150)
+        plt.close()
+
         if not self.norm_stats_from_pretrained:
             image = normalize_bands(
                 image.numpy(), self.means, self.stds, self.norm_method
@@ -278,6 +293,7 @@ class MADOSDataset(Dataset):
             :,
             EVAL_TO_HELIOS_S2_BANDS,
         ]
+
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)

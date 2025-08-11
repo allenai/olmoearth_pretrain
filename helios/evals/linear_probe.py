@@ -128,11 +128,11 @@ def train_and_eval_probe(
         raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
 
-    fig_dir = "/weka/dfive-default/yawenz/figures/latent_mim_cross_random_per_modality_patchdisc_loss"
+    fig_dir = "/weka/dfive-default/yawenz/figures/latent_mim_cross_random_per_modality_patchdisc_loss_cutmix"
     num_samples_task_name = {
-        5820: "PASTIS_S2",
-        2651: "MADOS",
-        6790: "Sen1floods11",
+        5820: "pastis_sentinel2",
+        2651: "mados",
+        6790: "sen1floods11",
     }
     if config.task_type == TaskType.SEGMENTATION:
         # mainly use train_embeddings and train_labels
@@ -144,7 +144,7 @@ def train_and_eval_probe(
         os.makedirs(task_fig_dir, exist_ok=True)
         logger.info(f"Task name: {task_name}, Task fig dir: {task_fig_dir}")
 
-        train_embeddings_sel = train_embeddings[:100]
+        train_embeddings_sel = train_embeddings
         emb_np = train_embeddings_sel.cpu().numpy()
         B, H, W, D = emb_np.shape
         emb_flat = emb_np.reshape(-1, D)  # shape: (B*H*W, D)
@@ -154,23 +154,27 @@ def train_and_eval_probe(
         pca = PCA(n_components=3)
         emb_pca = pca.fit_transform(emb_flat)  # shape: (B*H*W, 3)
         emb_pca = emb_pca.reshape(B, H, W, 3)
+        vmin = emb_pca.min(axis=(0, 1, 2))
+        vmax = emb_pca.max(axis=(0, 1, 2))
 
         for idx, item in enumerate(emb_pca):
             import matplotlib.pyplot as plt
 
             plt.figure(figsize=(10, 10))
-            item_normalized = (item - item.min()) / (item.max() - item.min())
-            plt.imshow(item_normalized)  # No cmap needed for RGB
-            plt.axis("off")  # Remove axes for cleaner look
+            item_normalized = (item - vmin) / (vmax - vmin)
+            plt.imshow(item_normalized)
+            plt.axis("off")
             plt.savefig(f"{task_fig_dir}/{idx}.png", bbox_inches="tight", dpi=150)
-            plt.close()  # Free memory
+            plt.close()
 
-        train_labels_sel = train_labels[:100]
+        train_labels_sel = train_labels
         labels_np = train_labels_sel.cpu().numpy()
+        vmin = labels_np.min()
+        vmax = labels_np.max()
         for idx, item in enumerate(labels_np):
             plt.figure(figsize=(10, 10))
-            plt.imshow(item, cmap="viridis")
-            plt.axis("off")  # Remove axes for cleaner look
+            plt.imshow(item, cmap="viridis", vmin=vmin, vmax=vmax)
+            plt.axis("off")
             plt.savefig(f"{task_fig_dir}/{idx}_label.png")
             plt.close()
 

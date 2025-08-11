@@ -26,7 +26,7 @@ checkpoints = [
     # "/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_random_encode_era5_decode_maps_dataset_osm/step165000",
     # Add checkpoints here
     # "/weka/dfive-default/helios/checkpoints/henryh/cross_random_regional_sampling_france__1000km8gpu/step340000",
-    "/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_cross_random_per_modality_patchdisc_loss/step180000",
+    "/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_cross_random_per_modality_patchdisc_loss_cutmix/step285000",
 ]
 
 parser = argparse.ArgumentParser()
