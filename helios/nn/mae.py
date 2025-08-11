@@ -2,8 +2,14 @@
 
 from dataclasses import dataclass
 
+import torch
 import torch.nn as nn
 from olmo_core.config import Config
+from torch.distributed import DeviceMesh
+from torch.distributed.fsdp import (
+    MixedPrecisionPolicy,
+    fully_shard,
+)
 
 from helios.nn.flexihelios import (
     EncoderConfig,
@@ -58,6 +64,27 @@ class MAE(nn.Module, DistributedMixins):
         if self.reconstructor is not None:
             self.reconstructor.apply_compile()
         # TODO: add aaply for constructor
+
+    def apply_fsdp(
+        self,
+        dp_mesh: DeviceMesh | None = None,
+        param_dtype: torch.dtype | None = None,
+        reduce_dtype: torch.dtype = torch.float32,
+        prefetch_factor: int = 0,
+    ) -> None:
+        """Apply FSDP to the model."""
+        mp_policy = MixedPrecisionPolicy(
+            param_dtype=param_dtype, reduce_dtype=reduce_dtype
+        )
+        fsdp_config = dict(mesh=dp_mesh, mp_policy=mp_policy)
+
+        self.encoder.apply_fsdp(**fsdp_config)
+        if self.decoder is not None:
+            self.decoder.apply_fsdp(**fsdp_config)
+        if self.reconstructor is not None:
+            self.reconstructor.apply_fsdp(**fsdp_config)
+        # TODO: More finegrained wrapping of the encoder transformer layers next time
+        fully_shard(self, **fsdp_config)
 
 
 @dataclass

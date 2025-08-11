@@ -76,15 +76,6 @@ def build_model_config(common: CommonComponents) -> MAEConfig:
             drop_path=0.1,
             max_sequence_length=12,
         ),
-        decoder_config=PredictorConfig(
-            encoder_embedding_size=model_size["encoder_embedding_size"],
-            decoder_embedding_size=model_size["decoder_embedding_size"],
-            depth=model_size["decoder_depth"],
-            mlp_ratio=model_size["mlp_ratio"],
-            num_heads=model_size["decoder_num_heads"],
-            supported_modality_names=common.training_modalities,
-            max_sequence_length=12,
-        ),
         reconstructor_config=ReconstructorConfig(
             supported_modality_names=common.training_modalities,
             max_patch_size=MAX_PATCH_SIZE,

@@ -19,7 +19,7 @@ from helios.data.constants import ModalitySpec
 logger = logging.getLogger(__name__)
 
 
-def gram_schmidt_preserve_norm(x):
+def gram_schmidt_preserve_norm(x: torch.Tensor) -> torch.Tensor:
     """Gram–Schmidt orthogonalization while preserving original norms."""
     out = torch.zeros_like(x)
     orig_norms = torch.norm(x, dim=1, keepdim=True)  # store original filter norms
@@ -36,7 +36,7 @@ def gram_schmidt_preserve_norm(x):
     return out
 
 
-def orthogonalize_conv_filters(conv_layer):
+def orthogonalize_conv_filters(conv_layer: nn.Conv2d) -> None:
     """Orthogonalize the filters of a Conv2d layer using Gram–Schmidt."""
     with torch.no_grad():
         w = conv_layer.weight.data  # shape: (out_channels, in_channels, kH, kW)
