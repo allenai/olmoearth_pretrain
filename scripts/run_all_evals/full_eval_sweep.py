@@ -10,24 +10,34 @@ import subprocess  # nosec
 from all_evals import EVAL_TASKS
 
 from helios.evals.datasets.configs import dataset_to_config, get_eval_mode
+from helios.nn.flexihelios import PoolingType
 
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 Normalization_MODES = ["dataset", "helios"]
+pooling_types = [PoolingType.MAX, PoolingType.MEAN]
 
 
-def create_linear_probe_arg(task_name: str) -> str:
+def create_linear_probe_arg(task_name: str, field_name: str) -> str:
     """Create a linear probe argument for a given task name."""
     initial_str = (
-        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.probe_lr="
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.{field_name}="
     )
-    return initial_str + "{lr}"
+    return initial_str + "{arg}"
 
 
 lr_args = " ".join(
     [
-        create_linear_probe_arg(task_name)
+        create_linear_probe_arg(task_name, "probe_lr")
         for task_name, task in EVAL_TASKS.items()
         if get_eval_mode(dataset_to_config(task.dataset).task_type) == "linear_probe"
+    ]
+)
+
+pooling_args = " ".join(
+    [" "]
+    + [
+        create_linear_probe_arg(task_name, "pooling_type")
+        for task_name, task in EVAL_TASKS.items()
     ]
 )
 
@@ -72,26 +82,28 @@ def main():
     )
     for lr in LP_LRs:
         for norm_mode in Normalization_MODES:
-            print(f"Running with {norm_mode} normalization and {lr} learning rate")
-            # crop the parent dirname if needed
-            parent_dir = os.path.basename(os.path.dirname(checkpoint_path))[:100]
-            base_run_name = f"{parent_dir}_{norm_mode}_lr{lr}"
-            run_name = base_run_name
-            cmd_args = lr_args.format(lr=lr)
-            if norm_mode == "dataset":
-                cmd_args += dataset_args
-            elif norm_mode == "helios":
-                cmd_args += helios_args
+            for pooling_type in pooling_types:
+                print(f"Running with {norm_mode} normalization and {lr} learning rate")
+                # crop the parent dirname if needed
+                parent_dir = os.path.basename(os.path.dirname(checkpoint_path))[:100]
+                base_run_name = f"{parent_dir}_{norm_mode}_lr{lr}"
+                run_name = base_run_name
+                cmd_args = lr_args.format(arg=lr)
+                cmd_args += pooling_args.format(arg=pooling_type)
+                if norm_mode == "dataset":
+                    cmd_args += dataset_args
+                elif norm_mode == "helios":
+                    cmd_args += helios_args
 
-            if project_name is None:
-                project_name = "helios_in_loop_evals"
-            cmd = (
-                f"TRAIN_SCRIPT_PATH={module_path} python3 scripts/run_all_evals/all_evals.py "
-                f"launch {run_name} {cluster} --launch.priority=high {cmd_args} "
-                f"--launch.task_name=eval --trainer.load_path={checkpoint_path} --trainer.callbacks.wandb.project={project_name}"
-            )
-            print(cmd)
-            subprocess.run(cmd, shell=True)  # nosec
+                if project_name is None:
+                    project_name = "helios_in_loop_evals"
+                cmd = (
+                    f"TRAIN_SCRIPT_PATH={module_path} python3 scripts/run_all_evals/all_evals.py "
+                    f"launch {run_name} {cluster} --launch.priority=high {cmd_args} "
+                    f"--launch.task_name=eval --trainer.load_path={checkpoint_path} --trainer.callbacks.wandb.project={project_name}"
+                )
+                print(cmd)
+                subprocess.run(cmd, shell=True)  # nosec
 
 
 if __name__ == "__main__":
