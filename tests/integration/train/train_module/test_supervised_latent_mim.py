@@ -12,8 +12,11 @@ from olmo_core.train.config import TrainerConfig
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample, collate_helios
 from helios.data.transform import TransformConfig
-from helios.nn.flexihelios import EncoderConfig, PredictorConfig
-from helios.nn.latent_mim import LatentMIM, LatentMIMConfig
+from helios.nn.flexihelios import EncoderConfig, SupervisedPredictorConfig
+from helios.nn.supervised_latent_mim import (
+    SupervisedLatentMIM,
+    SupervisedLatentMIMConfig,
+)
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.supervised_latent_mim import (
@@ -45,8 +48,8 @@ def supported_modality_names() -> list[str]:
 @pytest.fixture
 def latent_mim_model(
     supported_modality_names: list[str], set_random_seeds: None
-) -> LatentMIM:
-    """Create a real LatentMIM model for testing."""
+) -> SupervisedLatentMIM:
+    """Create a real SupervisedLatentMIM model for testing."""
     # Create encoder config
     encoder_config = EncoderConfig(
         supported_modality_names=supported_modality_names,
@@ -61,7 +64,7 @@ def latent_mim_model(
     )
 
     # Create predictor config
-    predictor_config = PredictorConfig(
+    predictor_config = SupervisedPredictorConfig(
         supported_modality_names=supported_modality_names,
         encoder_embedding_size=16,
         decoder_embedding_size=16,
@@ -74,7 +77,7 @@ def latent_mim_model(
     )
 
     # Create LatentMIM config
-    latent_mim_config = LatentMIMConfig(
+    latent_mim_config = SupervisedLatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=predictor_config,
     )
@@ -164,7 +167,7 @@ class MockTrainer:
 
 def test_train_batch_without_missing_modalities(
     samples_without_missing_modalities: list[tuple[int, HeliosSample]],
-    latent_mim_model: LatentMIM,
+    latent_mim_model: SupervisedLatentMIM,
     train_module_config: SupervisedLatentMIMTrainModuleConfig,
     set_random_seeds: None,
 ) -> None:
@@ -183,14 +186,14 @@ def test_train_batch_without_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(5.6),
+            torch.tensor(3.3),
             atol=1e-1,
         )
 
 
 def test_train_batch_with_missing_modalities(
     samples_with_missing_modalities: list[tuple[int, HeliosSample]],
-    latent_mim_model: LatentMIM,
+    latent_mim_model: SupervisedLatentMIM,
     train_module_config: SupervisedLatentMIMTrainModuleConfig,
     set_random_seeds: None,
 ) -> None:
@@ -210,6 +213,6 @@ def test_train_batch_with_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(5.5),
+            torch.tensor(3.3),
             atol=1e-1,
         )

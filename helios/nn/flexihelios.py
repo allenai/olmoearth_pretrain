@@ -1911,14 +1911,21 @@ class SupervisedPredictor(FlexiHeliosBase):
             cu_seqlens_tokens_to_decode = None
             cu_seqlens_unmasked_tokens = None
 
+        flat_spatial_tokens = rearrange(spatial_tokens, "b h w d -> b (h w) d")
+        attn_mask = repeat(
+            unmasked_tokens_mask.bool(),
+            "b n_x -> b n_x n_y",
+            n_y=flat_spatial_tokens.shape[1],
+        )
+
         for blk in self.blocks:
             # note that we are not taking the inverse of the mask, since split_x_y gives us
             # true values for values we want to take part in attention
             tokens_to_decode = blk(
                 x=tokens_to_decode,
-                y=spatial_tokens,
+                y=flat_spatial_tokens,
                 attn_mask=(
-                    unmasked_tokens_mask.bool() if not self.use_flash_attn else None
+                    attn_mask if not self.use_flash_attn else None
                 ),  # only for flash attn though this should not be left in
                 cu_seqlens_q=cu_seqlens_tokens_to_decode,
                 cu_seqlens_k=cu_seqlens_unmasked_tokens,
