@@ -1643,6 +1643,386 @@ class Encoder(FlexiHeliosBase):
         fully_shard(self, **fsdp_kwargs)
 
 
+class SupervisedPredictor(FlexiHeliosBase):
+    """Predictor module that generates predictions from encoded tokens."""
+
+    cross_attn = True
+
+    def __init__(
+        self,
+        supported_modalities: list[ModalitySpec],
+        encoder_embedding_size: int = 128,
+        decoder_embedding_size: int = 128,
+        depth: int = 2,
+        mlp_ratio: float = 2.0,
+        num_heads: int = 8,
+        max_sequence_length: int = 24,
+        drop_path: float = 0.0,
+        learnable_channel_embeddings: bool = True,
+        random_channel_embeddings: bool = False,
+        output_embedding_size: int | None = None,
+        use_flash_attn: bool = False,
+        qk_norm: bool = False,
+    ):
+        """Initialize the predictor.
+
+        Args:
+            supported_modalities: modalities this model instantiation supports
+            encoder_embedding_size: Size of encoder embeddings
+            decoder_embedding_size: Size of decoder embeddings
+            depth: Number of transformer layers
+            mlp_ratio: Ratio for MLP hidden dimension
+            num_heads: Number of attention heads
+            max_sequence_length: Maximum sequence length
+            drop_path: Drop path rate
+            learnable_channel_embeddings: Whether to use learnable channel embeddings
+            random_channel_embeddings: Whether to randomly initialize channel embeddings
+            output_embedding_size: Size of output embeddings
+            use_flash_attn: Whether to use flash attention
+            qk_norm: Whether to apply normalization to Q and K in attention
+        """
+        super().__init__(
+            embedding_size=decoder_embedding_size,
+            depth=depth,
+            mlp_ratio=mlp_ratio,
+            num_heads=num_heads,
+            max_sequence_length=max_sequence_length,
+            drop_path=drop_path,
+            learnable_channel_embeddings=learnable_channel_embeddings,
+            random_channel_embeddings=random_channel_embeddings,
+            supported_modalities=supported_modalities,
+            use_flash_attn=use_flash_attn,
+            qk_norm=qk_norm,
+        )
+        self.learnable_channel_embeddings = learnable_channel_embeddings
+        self.random_channel_embeddings = random_channel_embeddings
+        self.encoder_embedding_size = encoder_embedding_size
+        self.encoder_to_decoder_embed = nn.Linear(
+            encoder_embedding_size, decoder_embedding_size, bias=True
+        )
+        if output_embedding_size is None:
+            output_embedding_size = encoder_embedding_size
+        self.output_embedding_size = output_embedding_size
+        self.to_output_embed = nn.Linear(
+            decoder_embedding_size, output_embedding_size, bias=True
+        )
+        # THIS is the learnable mask token
+        self.mask_token = nn.Parameter(torch.zeros(decoder_embedding_size))
+
+        self.input_norm = nn.LayerNorm(encoder_embedding_size)
+        self.norm = nn.LayerNorm(decoder_embedding_size)
+        self.apply(self._init_weights)
+
+    def add_masks(self, x: dict[str, Tensor]) -> dict[str, Tensor]:
+        """Replace tokens that should be decoded (MaskValue.DECODER_ONLY) with the learnable mask token.
+
+        in a dimension-agnostic way using einops. We assume the final dimension of each token tensor
+        is the embedding dimension matching self.mask_token's size.
+        """
+        output_dict = {}
+        available_modalities = return_modalities_from_dict(x)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            x_modality = x[modality]
+            mask_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            mask_modality = x[mask_name]
+            # A boolean mask: True where tokens must be replaced by the mask token
+            kept_mask = mask_modality == MaskValue.DECODER.value
+
+            # Build the einops pattern and dimension dict
+            spatial_dims = x_modality.shape[
+                :-1
+            ]  # all dimensions except the last (embedding)
+            pattern_input, dim_dict = self._construct_einops_pattern(spatial_dims)
+
+            mask_token_broadcasted = repeat(self.mask_token, pattern_input, **dim_dict)
+
+            # Where kept_mask is True, use the broadcasted mask token
+            x_modality = torch.where(
+                kept_mask.unsqueeze(-1).bool(), mask_token_broadcasted, x_modality
+            )
+
+            output_dict[modality] = x_modality
+
+        return output_dict
+
+    # TODO: GIVE more explicit function names
+    @staticmethod
+    def split_x_y(tokens: Tensor, mask: Tensor) -> tuple[Tensor, ...]:
+        """Splits tokens into three groups based on mask values.
+
+        This function:
+        1. Sorts tokens according to the mask and gathers them in order.
+        2. Chooses tokens to be decoded (x) based on the mask value DECODER.
+        3. Chooses tokens to be used as context (y) based on the mask value ONLINE_ENCODER.
+        4. Identifies missing tokens (z) based on the mask value MISSING.
+        5. Returns boolean masks for x, y, and z along with indices to revert to the original ordering.
+
+        Args:
+            tokens: Tokens to split of shape [B, T, D].
+            mask: Mask of shape [B, T].
+
+        Returns:
+            tokens_to_decode: Tokens to be decoded of shape [B, X_len, D].
+            unmasked_tokens: Tokens to be used as context of shape [B, Y_len, D].
+            tokens_to_decode_mask: Binary mask for x tokens of shape [B, X_len].
+            unmasked_tokens_mask: Binary mask for y tokens of shape [B, Y_len].
+            indices: Indices for restoring the original token ordering of shape [B, T].
+            seqlens_tokens_to_decode: Sequence lengths of tokens to decode of shape [B].
+            seqlens_unmasked_tokens: Sequence lengths of unmasked tokens of shape [B].
+            max_length_of_decoded_tokens: Maximum length of decoded tokens of shape [1].
+            max_length_of_unmasked_tokens: Maximum length of unmasked tokens of shape [1].
+        """
+        # Set Missing Masks to Target Encoder ONLY so that we can have all unused tokens in the middle
+        org_mask_dtype = mask.dtype
+        missing_mask = mask == MaskValue.MISSING.value
+        mask[missing_mask] = MaskValue.TARGET_ENCODER_ONLY.value
+
+        # Sort tokens by mask value (descending order)
+        sorted_mask, indices = torch.sort(
+            mask.int(), dim=1, descending=True, stable=True
+        )
+        tokens = tokens.gather(1, indices[:, :, None].expand_as(tokens))
+
+        # Create binary masks for Encoder and Decoder
+        binarized_decoder_mask = sorted_mask == MaskValue.DECODER.value
+        binarized_online_encoder_mask = sorted_mask == MaskValue.ONLINE_ENCODER.value
+
+        seqlens_unmasked_tokens = binarized_online_encoder_mask.sum(dim=-1)
+        max_length_of_unmasked_tokens = seqlens_unmasked_tokens.max()
+        seqlens_tokens_to_decode = binarized_decoder_mask.sum(dim=-1)
+        max_length_of_decoded_tokens = seqlens_tokens_to_decode.max()
+
+        # the y mask is going to be used to determine which of the y values take. True values
+        # take part in the attention (we don't take the inverse here, unlike in the decoder)
+        tokens_to_decode = tokens[:, :max_length_of_decoded_tokens]
+        tokens_to_decode_mask = binarized_decoder_mask[
+            :, :max_length_of_decoded_tokens
+        ].to(org_mask_dtype)
+
+        unmasked_tokens = tokens[:, -max_length_of_unmasked_tokens:]
+        # the x_mask is just going to be used in the reconstruction, to know which
+        # x tokens to add back into the token list. TODO is this even necessary? it could
+        # get padded with noise tokens since we don't care about reconstruction at all
+        # for a whole bunch of tokens
+        unmasked_tokens_mask = binarized_online_encoder_mask[
+            :, -max_length_of_unmasked_tokens:
+        ].to(org_mask_dtype)
+
+        return (
+            tokens_to_decode,
+            unmasked_tokens,
+            tokens_to_decode_mask,
+            unmasked_tokens_mask,
+            indices,
+            seqlens_tokens_to_decode,
+            seqlens_unmasked_tokens,
+            max_length_of_decoded_tokens,
+            max_length_of_unmasked_tokens,
+        )
+
+    @staticmethod
+    def combine_x_y(
+        tokens_to_decode: Tensor,
+        unmasked_tokens: Tensor,
+        tokens_to_decode_mask: Tensor,
+        unmasked_tokens_mask: Tensor,
+        indices: Tensor,
+    ) -> Tensor:
+        """Reintegrate the separated token sequences into their original order.
+
+        The token masks zero out positions which are not used/needed,
+        and the final scatter step re-applies the original ordering tracked in 'indices'.
+
+        Args:
+            tokens_to_decode: Key/value tokens of shape [B, X_len, D].
+            unmasked_tokens: Query tokens of shape [B, Y_len, D].
+            tokens_to_decode_mask: Binary mask for tokens to decode of shape [B, X_len].
+            unmasked_tokens_mask: Binary mask for unmasked tokens of shape [B, Y_len].
+            indices: Indices for restoring the original token ordering of shape [B, T].
+
+        Returns:
+            A merged tokens tensor of shape [B, T, D] with all tokens in their
+            original positions.
+        """
+        # Get dimensions
+        B, T = indices.shape[0], indices.shape[1]
+        D = tokens_to_decode.shape[-1]
+        tokens = torch.zeros(
+            (B, T, D), dtype=tokens_to_decode.dtype, device=tokens_to_decode.device
+        )
+        tokens[:, -unmasked_tokens.shape[1] :] = (
+            unmasked_tokens * unmasked_tokens_mask.unsqueeze(-1)
+        )
+        tokens[:, : tokens_to_decode.shape[1]] += (
+            tokens_to_decode * tokens_to_decode_mask.unsqueeze(-1)
+        )
+        tokens = tokens.scatter(1, indices[:, :, None].expand_as(tokens), tokens)
+        return tokens
+
+    def apply_attn(
+        self,
+        x: dict[str, Tensor],
+        spatial_tokens: torch.Tensor,
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int,
+    ) -> dict[str, Tensor]:
+        """Apply attention to the tokens."""
+        tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
+            self.split_tokens_masks_and_dims(x)
+        )
+        tokens_dict = self.composite_encodings(
+            tokens_only_dict, timestamps, patch_size, input_res
+        )
+        tokens_dict.update(original_masks_dict)
+        all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        # X contains the tokens to decode, Y contains the tokens to attend to for context
+        (
+            tokens_to_decode,
+            unmasked_tokens,
+            tokens_to_decode_mask,
+            unmasked_tokens_mask,
+            indices,
+            seqlens_tokens_to_decode,
+            seqlens_unmasked_tokens,
+            max_length_of_tokens_to_decode,
+            max_length_of_unmasked_tokens,
+        ) = self.split_x_y(all_tokens, mask)
+        # Pack x tokens
+        if self.use_flash_attn:
+            og_shape_tokens_to_decode = tokens_to_decode.shape
+            tokens_to_decode = self.pack_tokens(
+                tokens_to_decode, tokens_to_decode_mask.bool()
+            )
+            og_shape_unmasked_tokens = unmasked_tokens.shape
+            unmasked_tokens = self.pack_tokens(
+                unmasked_tokens, unmasked_tokens_mask.bool()
+            )
+            cu_seqlens_tokens_to_decode = get_cumulative_sequence_lengths(
+                seqlens_tokens_to_decode
+            )
+            cu_seqlens_unmasked_tokens = get_cumulative_sequence_lengths(
+                seqlens_unmasked_tokens
+            )
+        else:
+            cu_seqlens_tokens_to_decode = None
+            cu_seqlens_unmasked_tokens = None
+
+        for blk in self.blocks:
+            # note that we are not taking the inverse of the mask, since split_x_y gives us
+            # true values for values we want to take part in attention
+            tokens_to_decode = blk(
+                x=tokens_to_decode,
+                y=spatial_tokens,
+                attn_mask=(
+                    unmasked_tokens_mask.bool() if not self.use_flash_attn else None
+                ),  # only for flash attn though this should not be left in
+                cu_seqlens_q=cu_seqlens_tokens_to_decode,
+                cu_seqlens_k=cu_seqlens_unmasked_tokens,
+                max_seqlen_q=max_length_of_tokens_to_decode,
+                max_seqlen_k=max_length_of_unmasked_tokens,
+            )
+
+        if self.use_flash_attn:
+            tokens_to_decode = self.unpack_tokens(
+                tokens_to_decode,
+                tokens_to_decode_mask.bool(),
+                og_shape_tokens_to_decode,
+            )
+            unmasked_tokens = self.unpack_tokens(
+                unmasked_tokens, unmasked_tokens_mask.bool(), og_shape_unmasked_tokens
+            )
+
+        x = self.combine_x_y(
+            tokens_to_decode=tokens_to_decode,
+            unmasked_tokens=unmasked_tokens,
+            tokens_to_decode_mask=tokens_to_decode_mask,
+            unmasked_tokens_mask=unmasked_tokens_mask,
+            indices=indices,
+        )
+        tokens_per_modality_dict = self.split_and_expand_per_modality(
+            x, modalities_to_dims_dict
+        )
+        tokens_per_modality_dict.update(original_masks_dict)
+        return tokens_per_modality_dict
+
+    def is_any_data_to_be_decoded(self, modality_mask: Tensor) -> bool:
+        """Check if any data is to be decoded for a given modality."""
+        return (MaskValue.DECODER.value == modality_mask).any()
+
+    def forward(
+        self,
+        x: TokensAndMasks,
+        spatial_tokens: torch.Tensor,
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+    ) -> TokensAndMasks:
+        """Generate predictions from encoded token representations.
+
+        Args:
+            x: TokensAndMasks containing the encoded tokens to make predictions from
+            spatial_tokens: The output tokens from the spatial attention layer
+            timestamps: Timestamps of the tokens
+            patch_size: Patch size of the tokens
+            input_res: Input resolution of the tokens
+
+        Returns:
+            TokensAndMasks containing the predicted tokens and their masks
+        """
+        decoder_emedded_dict = x.as_dict(return_none=False)
+        # Apply Input Norms and encoder to decoder embeds to each modality
+        available_modalities = x.modalities
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            x_modality = getattr(x, modality)
+            # Are these normalizations masked correctly?
+            x_modality = self.input_norm(x_modality)
+            x_modality = self.encoder_to_decoder_embed(x_modality)
+            masked_modality_name = x.get_masked_modality_name(modality)
+            decoder_emedded_dict[modality] = x_modality
+            decoder_emedded_dict[masked_modality_name] = getattr(
+                x, masked_modality_name
+            )
+
+        tokens_only_dict = self.add_masks(decoder_emedded_dict)
+        decoder_emedded_dict.update(tokens_only_dict)
+        tokens_and_masks = self.apply_attn(
+            decoder_emedded_dict, spatial_tokens, timestamps, patch_size, input_res
+        )
+        # TODO: Factor this out into a more readable function
+        output_dict = {}
+        available_modalities = return_modalities_from_dict(tokens_and_masks)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            modality_mask = tokens_and_masks[masked_modality_name]
+            # patchify masked data
+            per_modality_output_tokens = []
+            modality_data = tokens_and_masks[modality]
+
+            band_sets = Modality.get(modality).band_sets
+            for idx in range(len(band_sets)):
+                per_channel_modality_data = modality_data[..., idx, :]
+                output_data = self.to_output_embed(self.norm(per_channel_modality_data))
+                per_modality_output_tokens.append(output_data)
+            output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
+            output_dict[masked_modality_name] = modality_mask
+        return TokensAndMasks(**output_dict)
+
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        super().apply_fsdp(**fsdp_kwargs)
+        fully_shard(self, **fsdp_kwargs)
+
+
 class Predictor(FlexiHeliosBase):
     """Predictor module that generates predictions from encoded tokens."""
 
