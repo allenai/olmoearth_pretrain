@@ -75,6 +75,8 @@ class MaskedHeliosSample(NamedTuple):
     gse_mask: ArrayTensor | None = None
     cdl: ArrayTensor | None = None
     cdl_mask: ArrayTensor | None = None
+    worldpop: ArrayTensor | None = None
+    worldpop_mask: ArrayTensor | None = None
 
     def as_dict(self, return_none: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
@@ -1613,6 +1615,7 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
         self,
         strategy: MaskingStrategy,
         decoded_modalities: list[str],
+        randomize_missing_modalities: list[str] = [],
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
     ) -> None:
@@ -1621,6 +1624,8 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
         self._decode_ratio = decode_ratio
         self.strategy = strategy
         self.decoded_modalities = decoded_modalities
+        self.randomize_missing_modalities = randomize_missing_modalities
+        self.generator = np.random.default_rng(0)
 
     def apply_mask(
         self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
@@ -1638,6 +1643,17 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
                 continue
             mask[:] = MaskValue.DECODER.value
 
+        # Randomly decide whether to mark the randomize_missing_modalities as missing.
+        for modality in self.randomize_missing_modalities:
+            if self.generator.random() < 0.5:
+                continue
+            mask = getattr(
+                masked_sample, MaskedHeliosSample.get_masked_modality_name(modality)
+            )
+            if mask is None:
+                continue
+            mask[:] = MaskValue.MISSING.value
+
         return masked_sample
 
 
@@ -1648,6 +1664,7 @@ class RandomFixedModalityMaskingStrategy(FixedModalityMaskingStrategy):
     def __init__(
         self,
         decoded_modalities: list[str],
+        randomize_missing_modalities: list[str] = [],
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
     ) -> None:
@@ -1655,6 +1672,7 @@ class RandomFixedModalityMaskingStrategy(FixedModalityMaskingStrategy):
         super().__init__(
             strategy=RandomMaskingStrategy(encode_ratio, decode_ratio),
             decoded_modalities=decoded_modalities,
+            randomize_missing_modalities=randomize_missing_modalities,
             encode_ratio=encode_ratio,
             decode_ratio=decode_ratio,
         )

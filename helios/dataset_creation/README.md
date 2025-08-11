@@ -73,9 +73,9 @@ ingesting since processing the PBF can use a lot of memory:
     rslearn dataset ingest --root $DATASET_PATH --group res_10 --workers 16 --no-use-initial-job
     rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
 
-WorldCover, SRTM, and CDL can also be processed on one machine:
+WorldCover, SRTM, CDL, and WorldPop can also be processed on one machine:
 
-    cp data/rslearn_dataset_configs/config_{worldcover,srtm,cdl}.json $DATASET_PATH/config.json
+    cp data/rslearn_dataset_configs/config_{worldcover,srtm,cdl,worldpop}.json $DATASET_PATH/config.json
     rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64
     rslearn dataset ingest --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
     rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
@@ -120,6 +120,7 @@ Now we convert the data to Helios format.
     python -m helios.dataset_creation.rslearn_to_helios.worldcover --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.gse --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.cdl --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
+    python -m helios.dataset_creation.rslearn_to_helios.worldpop --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
 
 
 Landsat
@@ -202,3 +203,12 @@ into the per-modality CSVs:
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality worldcover
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality gse
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality cdl
+    python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality worldpop
+
+
+Create H5s
+----------
+
+```
+python -m helios.internal.run_h5_conversion --tile_path=$HELIOS_PATH --supported_modality_names='[sentinel2_l2a,sentinel1,worldcover,srtm,landsat,openstreetmap_raster,gse,cdl,worldpop]' --compression=zstd --compression_opts=3 --tile_size=128
+```
