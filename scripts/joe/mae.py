@@ -41,8 +41,9 @@ from helios.nn.flexihelios import (
     EncoderConfig,
     PoolingType,
     PredictorConfig,
+    ReconstructorConfig,
 )
-from helios.nn.latent_mim import LatentMIMConfig
+from helios.nn.latent_mim import MAEConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -51,7 +52,7 @@ from helios.train.callbacks import (
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from helios.train.train_module.latent_mim import MAETrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +62,9 @@ MIN_PATCH_SIZE = 1
 model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
 
-def build_model_config(common: CommonComponents) -> LatentMIMConfig:
+def build_model_config(common: CommonComponents) -> MAEConfig:
     """Build the model config for an experiment."""
-    model_config = LatentMIMConfig(
+    model_config = MAEConfig(
         encoder_config=EncoderConfig(
             embedding_size=model_size["encoder_embedding_size"],
             num_heads=model_size["encoder_num_heads"],
@@ -84,15 +85,28 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
             supported_modality_names=common.training_modalities,
             max_sequence_length=12,
         ),
+        reconstructor_config=ReconstructorConfig(
+            supported_modality_names=common.training_modalities,
+            max_patch_size=MAX_PATCH_SIZE,
+            decoder_config=PredictorConfig(
+                encoder_embedding_size=model_size["encoder_embedding_size"],
+                decoder_embedding_size=model_size["decoder_embedding_size"],
+                depth=model_size["decoder_depth"],
+                mlp_ratio=model_size["mlp_ratio"],
+                num_heads=model_size["decoder_num_heads"],
+                supported_modality_names=common.training_modalities,
+                max_sequence_length=12,
+            ),
+        ),
     )
     return model_config
 
 
 def build_train_module_config(
     common: CommonComponents,
-) -> LatentMIMTrainModuleConfig:
+) -> MAETrainModuleConfig:
     """Build the train module config for an experiment."""
-    return LatentMIMTrainModuleConfig(
+    return MAETrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
@@ -103,9 +117,11 @@ def build_train_module_config(
                 "allow_encoding_decoding_same_bandset": True,
             }
         ),
-        loss_config=LossConfig(
+        mae_loss_config=LossConfig(
             loss_config={
-                "type": "patch_discrimination_new",
+                "type": "mae",
+                "loss_function": "SmoothL1Loss",
+                "beta": 0.1,
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
@@ -121,7 +137,6 @@ def build_train_module_config(
         max_grad_norm=1.0,
         scheduler=ConstantWithWarmup(warmup=8000),
         ema_decay=(1.0, 1.0),
-        # initial_weights="/weka/dfive-default/helios/checkpoints/joer/lmim_repro/step200000/",
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
             param_dtype=DType.bfloat16,

@@ -93,7 +93,7 @@ def build_train_module_config(
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     return LatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
+        optim_config=AdamWConfig(lr=0.0002, weight_decay=0.02),
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
@@ -105,7 +105,7 @@ def build_train_module_config(
         ),
         loss_config=LossConfig(
             loss_config={
-                "type": "patch_discrimination_new",
+                "type": "cossim",
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
