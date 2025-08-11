@@ -43,7 +43,7 @@ from helios.nn.flexihelios import (
     PredictorConfig,
     ReconstructorConfig,
 )
-from helios.nn.latent_mim import MAEConfig
+from helios.nn.mae import MAEConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -52,7 +52,7 @@ from helios.train.callbacks import (
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import MAETrainModuleConfig
+from helios.train.train_module.mae import MAETrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
