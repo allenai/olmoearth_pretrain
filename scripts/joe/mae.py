@@ -77,7 +77,9 @@ def build_model_config(common: CommonComponents) -> MAEConfig:
             max_sequence_length=12,
         ),
         reconstructor_config=ReconstructorConfig(
-            supported_modality_names=common.training_modalities,
+            supported_modality_names=[
+                m for m in common.training_modalities if m != Modality.LATLON.name
+            ],
             max_patch_size=MAX_PATCH_SIZE,
             decoder_config=PredictorConfig(
                 encoder_embedding_size=model_size["encoder_embedding_size"],
