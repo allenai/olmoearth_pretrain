@@ -1,1 +1,1 @@
-beaker-py>=2.0
+beaker-py==1.34.1
