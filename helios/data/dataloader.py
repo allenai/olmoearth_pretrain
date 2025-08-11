@@ -344,6 +344,12 @@ class HeliosDataLoader(DataLoaderBase):
                 (standard_hw, standard_hw, 1, Modality.CDL.num_bands), dtype=np.float32
             )
             output_dict["cdl"] = mock_cdl
+        if Modality.WORLDPOP.name in self.dataset.training_modalities:
+            mock_worldpop = rng.random(
+                (standard_hw, standard_hw, 1, Modality.WORLDPOP.num_bands),
+                dtype=np.float32,
+            )
+            output_dict["worldpop"] = mock_worldpop
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))

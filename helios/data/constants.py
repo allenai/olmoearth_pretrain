@@ -410,6 +410,14 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    WORLDPOP = ModalitySpec(
+        name="worldpop",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["B1"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     @classmethod
     def get(self, name: str) -> ModalitySpec:
         """Get the ModalitySpec with the specified name."""

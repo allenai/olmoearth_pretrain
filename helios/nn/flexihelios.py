@@ -95,6 +95,8 @@ class TokensAndMasks(NamedTuple):
     gse_mask: Tensor | None = None
     cdl: Tensor | None = None
     cdl_mask: Tensor | None = None
+    worldpop: Tensor | None = None
+    worldpop_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
