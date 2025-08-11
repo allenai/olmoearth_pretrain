@@ -49,10 +49,6 @@ from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
-# from helios.train.train_module.contrastive_latentmim import (
-#     ContrastiveLatentMIMTrainModuleConfig,
-# )
-
 logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
@@ -115,27 +111,9 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    # scheduler = WSD(
-    #     decay_steps=0,
-    #     decay_fraction=None,
-    # )
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        # warmup_duration=Duration.steps(8000),
         rank_microbatch_size=64,
-        # masking_config=MaskingConfig(
-        #     strategy_config={
-        #         "type": "random_fixed_modality",
-        #         "encode_ratio": 0.5,
-        #         "decode_ratio": 0.5,
-        #         "decoded_modalities": [
-        #             Modality.WORLDCOVER.name,
-        #             Modality.SRTM.name,
-        #             Modality.OPENSTREETMAP_RASTER.name,
-        #             Modality.ERA5_10.name,
-        #         ],
-        #     }
-        # ),
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "modality_cross_random",
@@ -144,25 +122,6 @@ def build_train_module_config(
                 "allow_encoding_decoding_same_bandset": True,
             }
         ),
-        # loss_config=LossConfig(
-        #     loss_config={"type": "adjusted_patch_discrimination", "mu": 0.7}
-        # ),
-        # loss_config=LossConfig(
-        #     loss_config={
-        #         "type": "patch_discrimination_new",
-        #     }
-        # ),
-        # loss_config=LossConfig(
-        #     loss_config={
-        #         "type": "modality_patch_discrimination_new",
-        #     },
-        # ),
-        # contrastive_config=LossConfig(
-        #     loss_config={
-        #         "type": "InfoNCE",
-        #         "weight": 0.5,
-        #     }
-        # ),
         loss_config=LossConfig(
             loss_config={
                 "type": "modality_patch_discrimination_new",

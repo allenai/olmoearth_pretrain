@@ -18,7 +18,7 @@ from helios.evals.utils import adjust_learning_rate
 logger = getLogger(__name__)
 
 
-class ProbeType(str, Enum):
+class ProbeType(Enum):
     """Enumeration of probe types for linear probing."""
 
     ATTNPOOL = "attnpool"

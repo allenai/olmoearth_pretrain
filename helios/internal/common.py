@@ -176,10 +176,10 @@ def build_common_components(
     TRAINING_MODALITIES = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
+        Modality.LANDSAT.name,
         # Modality.WORLDCOVER.name,
         # Modality.LATLON.name,
         # Modality.SRTM.name,
-        Modality.LANDSAT.name,
         # Modality.OPENSTREETMAP_RASTER.name,
         # Modality.NAIP_10.name,
         # Modality.ERA5_10.name,
