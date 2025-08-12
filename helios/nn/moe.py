@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-from einops import rearrange
+from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor
 
@@ -67,11 +67,9 @@ class SwitchFeedForward(nn.Module):
         # make copies of the FFNs
         self.experts = clone_module_list(expert, n_experts)
         # Routing layer and softmax
-        self.route_with_latlons = route_with_latlons
-        self.switch = nn.Linear(
-            d_model if not route_with_latlons else d_model * 2, n_experts
-        )
+        self.switch = nn.Linear(d_model, n_experts)
         self.softmax = nn.Softmax(dim=-1)
+        self.route_with_latlons = route_with_latlons
 
     def forward(  # type: ignore
         self, x: torch.Tensor, routing_tokens: Tensor
@@ -90,11 +88,11 @@ class SwitchFeedForward(nn.Module):
         # $h(\cdot)$ is the linear transformation of token embeddings.
         if self.route_with_latlons:
             # assuming only a single routing token
-            routing_tokens = routing_tokens[:, 0].repeat(n, 1)
-            x_for_router = torch.cat([x, routing_tokens], dim=-1)
+            routing_tokens = routing_tokens[:, 0]  # B, D
+            route_prob = self.softmax(self.switch(routing_tokens))
+            route_prob = repeat(route_prob, "b d -> (repeat b) d", repeat=n)
         else:
-            x_for_router = x
-        route_prob = self.softmax(self.switch(x_for_router))
+            route_prob = self.softmax(self.switch(x))
 
         # Get the maximum routing probabilities and the routes.
         # We route to the expert with highest probability
