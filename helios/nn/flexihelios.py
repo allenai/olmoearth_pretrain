@@ -1913,7 +1913,7 @@ class SupervisedPredictor(FlexiHeliosBase):
 
         flat_spatial_tokens = rearrange(spatial_tokens, "b h w d -> b (h w) d")
         attn_mask = repeat(
-            unmasked_tokens_mask.bool(),
+            tokens_to_decode_mask.bool(),
             "b n_x -> b n_x n_y",
             n_y=flat_spatial_tokens.shape[1],
         )
