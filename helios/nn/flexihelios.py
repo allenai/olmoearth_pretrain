@@ -1917,7 +1917,12 @@ class SupervisedPredictor(FlexiHeliosBase):
             "b n_x -> b n_x n_y",
             n_y=flat_spatial_tokens.shape[1],
         )
-
+        print(
+            "in predictor, ",
+            attn_mask.shape,
+            tokens_to_decode.shape,
+            flat_spatial_tokens.shape,
+        )
         for blk in self.blocks:
             # note that we are not taking the inverse of the mask, since split_x_y gives us
             # true values for values we want to take part in attention
