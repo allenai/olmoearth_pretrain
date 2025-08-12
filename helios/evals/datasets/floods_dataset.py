@@ -266,20 +266,6 @@ class Sen1Floods11Dataset(Dataset):
         image = self.s1[idx]  # (64, 64, 2)
         label = self.labels[idx][0]  # (64, 64)
 
-        # OK, start visualizing here
-        fig_dir = "/weka/dfive-default/yawenz/figures/latent_mim_cross_random_per_modality_patchdisc_loss_cutmix"
-        task_fig_dir = f"{fig_dir}/sen1floods11"
-        import os
-
-        os.makedirs(task_fig_dir, exist_ok=True)
-        import matplotlib.pyplot as plt
-
-        # the RBG bands are 3, 2, 1
-        plt.imshow(image[:, :, [1, 0, 0]])
-        plt.axis("off")
-        plt.savefig(f"{task_fig_dir}/{idx}_sentinel1.png", bbox_inches="tight", dpi=150)
-        plt.close()
-
         if not self.norm_stats_from_pretrained:
             image = normalize_bands(
                 image.numpy(), self.means, self.stds, self.norm_method
@@ -292,6 +278,19 @@ class Sen1Floods11Dataset(Dataset):
         ]
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL1, image)
+
+        # OK, start visualizing here
+        fig_dir = "/weka/dfive-default/yawenz/figures/latent_mim_cross_random_per_modality_patchdisc_loss_cutmix"
+        task_fig_dir = f"{fig_dir}/sen1floods11"
+        import os
+
+        os.makedirs(task_fig_dir, exist_ok=True)
+        import matplotlib.pyplot as plt
+
+        plt.imshow(image[:, :, [1, 0, 0]])
+        plt.axis("off")
+        plt.savefig(f"{task_fig_dir}/{idx}_sentinel1.png", bbox_inches="tight", dpi=150)
+        plt.close()
 
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
         masked_sample = MaskedHeliosSample.from_heliossample(
