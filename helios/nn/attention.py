@@ -203,6 +203,7 @@ class Attention(nn.Module):
                 elif len(attn_mask.shape) == 3:
                     # attn_mask has shape [B, N, N] and we want to expand it to [B, num_heads, N, N]
                     attn_mask = attn_mask[:, None].repeat(1, self.num_heads, 1, 1)
+            print(q.shape, k.shape, v.shape, attn_mask.shape)
             x = F.scaled_dot_product_attention(
                 q,
                 k,
