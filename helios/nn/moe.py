@@ -1,13 +1,17 @@
 """MoE for Helios."""
 
 import copy
+import logging
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from einops import rearrange
+from olmo_core.config import Config
 from torch import Tensor
 
-from helios.data.constants import ModalitySpec
+from helios.data.constants import Modality, ModalitySpec
+from helios.dataset.utils import get_modality_specs_from_names
 from helios.nn.attention import Block, Mlp
 from helios.nn.flexihelios import (
     BASE_GSD,
@@ -16,6 +20,8 @@ from helios.nn.flexihelios import (
     get_cumulative_sequence_lengths,
 )
 from helios.train.masking import MaskedHeliosSample, MaskValue
+
+logger = logging.getLogger(__name__)
 
 
 def clone_module_list(module: nn.Module, n: int) -> nn.ModuleList:
@@ -535,3 +541,50 @@ class SwitchEncoder(Encoder):
             n_dropped,
             route_prob_max,
         )
+
+
+@dataclass
+class SwitchEncoderConfig(Config):
+    """Configuration for the Encoder."""
+
+    supported_modality_names: list[str]
+    embedding_size: int = 16
+    # This is the base patch size for the patch embedder
+    max_patch_size: int = 8
+    min_patch_size: int = 1
+    num_heads: int = 2
+    mlp_ratio: float = 1.0
+    depth: int = 2
+    drop_path: float = 0.1
+    max_sequence_length: int = 12
+    learnable_channel_embeddings: bool = True
+    random_channel_embeddings: bool = False
+    num_projection_layers: int = 1
+    aggregate_then_project: bool = True
+    use_flash_attn: bool = False
+    frozen_patch_embeddings: bool = False
+    qk_norm: bool = False
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        if len(self.supported_modalities) == 0:
+            raise ValueError("At least one modality must be added!")
+        else:
+            for modality in self.supported_modalities:
+                if modality not in Modality.values():
+                    raise ValueError(f"Modality {modality} is not supported")
+
+    @property
+    def supported_modalities(self) -> list[ModalitySpec]:
+        """Get the supported modalities."""
+        return get_modality_specs_from_names(self.supported_modality_names)
+
+    def build(self) -> "Encoder":
+        """Build the encoder."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        # supported_modality_names is replaced by supported_modalities
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"Encoder kwargs: {kwargs}")
+        return SwitchEncoder(**kwargs)
