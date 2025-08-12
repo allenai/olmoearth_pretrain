@@ -1,9 +1,9 @@
 """Unit tests for TaskLoRALinear."""
 
+import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pytest
 
 from helios.nn.lora import TaskLoRALinear
 
@@ -28,7 +28,9 @@ def test_matches_linear_when_no_task() -> None:
     x = torch.randn(3, 7, in_f)
 
     base = nn.Linear(in_f, out_f)
-    tl = TaskLoRALinear(in_f, out_f, task_dim=8, lora_rank=4, lora_alpha=8.0, lora_dropout=0.0)
+    tl = TaskLoRALinear(
+        in_f, out_f, task_dim=8, lora_rank=4, lora_alpha=8.0, lora_dropout=0.0
+    )
 
     _copy_linear_params(tl, base)
 
@@ -46,7 +48,9 @@ def test_zero_init_delta() -> None:
     task = torch.randn(B, task_d)  # (batch, task_dim)
 
     base = nn.Linear(in_f, out_f)
-    tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0)
+    tl = TaskLoRALinear(
+        in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0
+    )
 
     _copy_linear_params(tl, base)
 
@@ -64,7 +68,9 @@ def test_learns_nonzero_delta_after_optimization() -> None:
     task = torch.randn(B, task_d)  # (batch, task_dim)
     target = torch.randn(B, 3, out_f)
 
-    tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=3, lora_alpha=6.0, lora_dropout=0.0)
+    tl = TaskLoRALinear(
+        in_f, out_f, task_dim=task_d, lora_rank=3, lora_alpha=6.0, lora_dropout=0.0
+    )
 
     y0 = tl(x, task_emb=task).detach()
     opt = torch.optim.Adam(tl.parameters(), lr=1e-2)
@@ -84,7 +90,9 @@ def test_high_rank_input_5d() -> None:
     x = torch.randn(B, T, H, W, in_f)
     task = torch.randn(B, task_d)  # (batch, task_dim) with batch=B
 
-    tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0)
+    tl = TaskLoRALinear(
+        in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0
+    )
     y = tl(x, task_emb=task)
     assert y.shape == (B, T, H, W, out_f)
 
@@ -111,7 +119,14 @@ def test_alpha_scaling_effect() -> None:
     task = torch.randn(B, task_d)  # (batch, task_dim)
 
     def make(alpha: float) -> TaskLoRALinear:
-        tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=r, lora_alpha=alpha, lora_dropout=0.0)
+        tl = TaskLoRALinear(
+            in_f,
+            out_f,
+            task_dim=task_d,
+            lora_rank=r,
+            lora_alpha=alpha,
+            lora_dropout=0.0,
+        )
         # Force nonzero generators for test (override zero-init)
         with torch.no_grad():
             la = tl.lora_gen_a[-1]
@@ -126,8 +141,10 @@ def test_alpha_scaling_effect() -> None:
     base = nn.Linear(in_f, out_f)
     tl1, tl2 = make(2.0), make(6.0)
     with torch.no_grad():
-        tl1.weight.copy_(base.weight); tl1.bias.copy_(base.bias)
-        tl2.weight.copy_(base.weight); tl2.bias.copy_(base.bias)
+        tl1.weight.copy_(base.weight)
+        tl1.bias.copy_(base.bias)
+        tl2.weight.copy_(base.weight)
+        tl2.bias.copy_(base.bias)
 
     yb = base(x)
     d1 = (tl1(x, task_emb=task) - yb).norm()
@@ -145,7 +162,9 @@ def test_gradients_flow() -> None:
     task = torch.randn(B, task_d)  # (batch, task_dim)
     target = torch.randn(B, 5, out_f)
 
-    tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0)
+    tl = TaskLoRALinear(
+        in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0
+    )
     loss = F.mse_loss(tl(x, task_emb=task), target)
     loss.backward()
 

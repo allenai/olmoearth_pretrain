@@ -1,7 +1,5 @@
 """Task-conditioned LoRA layer."""
 
-from typing import Optional
-
 import math
 
 import torch
@@ -10,7 +8,7 @@ import torch.nn.functional as F
 
 
 class TaskLoRALinear(nn.Module):
-    """Drop-in Linear with **task-conditioned LoRA**.
+    r"""Drop-in Linear with task-conditioned LoRA.
 
     This layer augments a standard linear projection with a per-task, low-rank
     weight update :math:`\\Delta W` that is **generated** from a task embedding.
@@ -77,13 +75,9 @@ class TaskLoRALinear(nn.Module):
         self.lora_gen_activation = lora_gen_activation
 
         self.lora_in_dropout = (
-            nn.Dropout(lora_dropout)
-            if lora_dropout > 0 else nn.Identity()
+            nn.Dropout(lora_dropout) if lora_dropout > 0 else nn.Identity()
         )
-        self.gen_hidden = (
-            int(lora_gen_hidden)
-            if lora_gen_hidden is not None else 128
-        )
+        self.gen_hidden = int(lora_gen_hidden) if lora_gen_hidden is not None else 128
 
         # Resolve activation class (fallback to Identity if None or unrecognized)
         if lora_gen_activation is None:
@@ -111,7 +105,7 @@ class TaskLoRALinear(nn.Module):
             nn.init.uniform_(self.bias, -bound, bound)
 
     def make_mlp(self, out_size: int) -> nn.Sequential:
-        """Construct a small MLP that outputs a flattened matrix.
+        r"""Construct a small MLP that outputs a flattened matrix.
 
         The final linear layer is zero-initialized so that at initialization
         the generated LoRA factors produce :math:`\\Delta W = 0`.
@@ -126,10 +120,9 @@ class TaskLoRALinear(nn.Module):
         layers: list[nn.Module] = []
         in_size = self.task_dim
         for _ in range(max(0, self.lora_gen_layers - 1)):
-            layers.extend([
-                nn.Linear(in_size, self.gen_hidden, bias=True),
-                self.activation_cls()
-            ])
+            layers.extend(
+                [nn.Linear(in_size, self.gen_hidden, bias=True), self.activation_cls()]
+            )
             in_size = self.gen_hidden
         layers.append(nn.Linear(in_size, out_size, bias=True))
         mlp = nn.Sequential(*layers)
@@ -143,7 +136,9 @@ class TaskLoRALinear(nn.Module):
         last._skip_reinit = True
         return mlp
 
-    def forward(self, x: torch.Tensor, task_emb: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, task_emb: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """Apply the linear projection with optional task-conditioned LoRA.
 
         If ``task_emb`` is ``None``, this is equivalent to
@@ -173,15 +168,15 @@ class TaskLoRALinear(nn.Module):
 
         # Generate LoRA factors per sample
         r = self.lora_rank
-        vec_a = self.lora_gen_a(task_emb)                 # (B_eff, out*r)
-        vec_b = self.lora_gen_b(task_emb)                 # (B_eff, r*in)
-        a = vec_a.view(b_eff, self.out_features, r)       # (B_eff, out, r)
-        b = vec_b.view(b_eff, r, self.in_features)        # (B_eff, r, in)
-        delta = torch.bmm(a, b)                           # (B_eff, out, in)
+        vec_a = self.lora_gen_a(task_emb)  # (B_eff, out*r)
+        vec_b = self.lora_gen_b(task_emb)  # (B_eff, r*in)
+        a = vec_a.view(b_eff, self.out_features, r)  # (B_eff, out, r)
+        b = vec_b.view(b_eff, r, self.in_features)  # (B_eff, r, in)
+        delta = torch.bmm(a, b)  # (B_eff, out, in)
 
         # Base + LoRA paths
-        x2d_drop = self.lora_in_dropout(x2d)              # (B_eff, in)
-        y_base = F.linear(x2d, self.weight, self.bias)    # (B_eff, out)
+        x2d_drop = self.lora_in_dropout(x2d)  # (B_eff, in)
+        y_base = F.linear(x2d, self.weight, self.bias)  # (B_eff, out)
 
         # Compute y_delta = x2d_drop @ delta^T per sample
         y_delta = torch.einsum("bi,boi->bo", x2d_drop, delta)  # (B_eff, out)
