@@ -78,17 +78,19 @@ class SwitchFeedForward(nn.Module):
     ) -> tuple[Tensor, Tensor, Tensor, int, Tensor]:
         """X is the input to the switching module with shape `[batch_size, seq_len, d_model]`."""
         x = rearrange(x, "b n d -> n b d")
+        n = x.shape[0]
         # Capture the shape to change shapes later
         seq_len, batch_size, d_model = x.shape
         # Flatten the sequence and batch dimensions
-        x = x.view(-1, d_model)
-
+        # this flattening happens as [B1, B1, B1, ... B_N, B_N, B_N]
+        x = x.reshape(-1, d_model)
         # Get routing probabilities for each of the tokens.
         # $$p_i(x) = \frac{e^{h(x)_i}}{\sum^N_j e^{h(x)_j}}$$
         # where $N$ is the number of experts `n_experts` and
         # $h(\cdot)$ is the linear transformation of token embeddings.
         if self.route_with_latlons:
-            routing_tokens = routing_tokens.repeat(1, x.shape[1], 1)
+            # assuming only a single routing token
+            routing_tokens = routing_tokens[:, 0].repeat(n, 1)
             x_for_router = torch.cat([x, routing_tokens], dim=-1)
         else:
             x_for_router = x
@@ -386,9 +388,10 @@ class SwitchEncoder(Encoder):
             self.split_tokens_masks_and_dims(x)
         )
         # remove the latlons from the attention sequence
-        latlons = tokens_only_dict["latlons"]
-        original_masks_dict["latlons_mask"] = (
-            torch.ones_like(original_masks_dict["latlons_mask"]) * MaskValue.DECODER
+        latlons = tokens_only_dict["latlon"]
+        original_masks_dict["latlon_mask"] = (
+            torch.ones_like(original_masks_dict["latlon_mask"])
+            * MaskValue.DECODER.value
         )
         exit_ids_seq = self.create_exit_seqs(
             tokens_only_dict, original_masks_dict, token_exit_cfg
@@ -532,6 +535,12 @@ class SwitchEncoder(Encoder):
                 token_exit_cfg=token_exit_cfg,
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
+        else:
+            counts = torch.empty(1)
+            route_prob = torch.empty(1)
+            n_dropped = 0
+            route_prob_max = torch.empty(1)
+
         output = TokensAndMasks(**patchified_tokens_and_masks)
         return (  # type: ignore
             output,

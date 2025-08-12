@@ -29,7 +29,7 @@ logger = getLogger(__name__)
 
 
 @dataclass
-class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
+class LatentMIMMoETrainModuleConfig(HeliosTrainModuleConfig):
     """A configuration class for building :class:`LatentMIMTrainModule` instances.
 
     Args:
@@ -55,7 +55,7 @@ class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
         self,
         model: LatentMIM,
         device: torch.device | None = None,
-    ) -> "LatentMIMTrainModule":
+    ) -> "LatentMIMMoETrainModule":
         """Build the corresponding :class:`LatentMIMTrainModule`.
 
         Args:
@@ -63,14 +63,14 @@ class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
             device: The device to train on.
         """
         kwargs = self.prepare_kwargs()
-        return LatentMIMTrainModule(
+        return LatentMIMMoETrainModule(
             model=model,
             device=device,
             **kwargs,
         )
 
 
-class LatentMIMTrainModule(HeliosTrainModule):
+class LatentMIMMoETrainModule(HeliosTrainModule):
     """A :class:`TrainModule`.
 
     Initialize the training module.
@@ -221,9 +221,28 @@ class LatentMIMTrainModule(HeliosTrainModule):
                 )
                 masked_batch = MaskedHeliosSample(**masked_batch_d)
                 # Run Encoder and decoder on the augmented input
-                loss, latent, decoded, target_output = self.model_forward(
-                    masked_batch, patch_size, self.token_exit_cfg
+                loss, latent, decoded, target_output, counts, route_prob = (
+                    self.model_forward(masked_batch, patch_size, self.token_exit_cfg)
                 )
+                # compute the load balancing loss
+                # Total number of tokens processed, $T$, in the current batch $\mathscr{B}$
+                total = counts.sum(dim=-1, keepdims=True)
+                # Fraction of tokens routed to each expert
+                # $$f_i = \frac{1}{T} \sum_{x \in \mathscr{B}} \mathbf{1} \{ \mathop{argmax} p(x), i \}$$
+                # $f_i$ is the count of tokens where the argmax of $p(x)$ is equal to $i$.
+                route_frac = counts / total
+                # Mean routing probability
+                # $$P_i = \frac{1}{T} \sum_{x \in \mathscr{B}} p_i (x)$$
+                route_prob = route_prob / total
+                # Load balancing loss
+                # $$\mathscr{L} = N \sum_{i=1}^N f_i \cdot P_i$$
+                # $\mathscr{L}$ is the loss for a single layer and here we are
+                # taking the sum of losses across all layers.
+                load_balancing_loss = (
+                    4 * (route_frac * route_prob).sum()
+                )  # TODO: 4 = num_experts
+                loss += load_balancing_loss
+
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
                     loss = loss + reg_term
@@ -260,15 +279,24 @@ class LatentMIMTrainModule(HeliosTrainModule):
         del batch, batch_data  # In case this helps with memory utilization.
         del masked_batch
 
-    def model_forward(
+    def model_forward(  # type: ignore
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
-    ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
+    ) -> tuple[
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, _, reconstructed = self.model(batch, patch_size)
+            latent, decoded, _, reconstructed, counts, route_prob = self.model(
+                batch, patch_size
+            )
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
-                target_output, _ = self.model.target_encoder.forward(
+                target_output, _, _, _, _, _ = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
@@ -276,4 +304,4 @@ class LatentMIMTrainModule(HeliosTrainModule):
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output
+            return loss, latent, decoded, target_output, counts, route_prob
