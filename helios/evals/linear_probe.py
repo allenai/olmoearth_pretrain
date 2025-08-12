@@ -1,7 +1,7 @@
 """Train and evaluate a linear probe."""
 
 import math
-from enum import StrEnum
+from enum import Enum
 from logging import getLogger
 
 import torch
@@ -18,7 +18,7 @@ from helios.evals.utils import adjust_learning_rate
 logger = getLogger(__name__)
 
 
-class ProbeType(StrEnum):
+class ProbeType(Enum):
     """Enumeration of probe types for linear probing."""
 
     ATTNPOOL = "attnpool"
@@ -127,6 +127,7 @@ def train_and_eval_probe(
     if train_embeddings.shape[-1] != test_embeddings.shape[-1]:
         raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
+
     if config.task_type == TaskType.SEGMENTATION:
         logits_per_patch = int(config.num_classes * patch_size * patch_size)
         if probe_type == ProbeType.ATTNPOOL:

@@ -56,6 +56,8 @@ class HeliosSample(NamedTuple):
     # naip_10 is currently 4x the height/width of sentinel2_l2a.
     naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
     gse: ArrayTensor | None = None  # [B, H, W, 1, len(GSE_bands)]
+    # era5_10 is not spatially varying, so it has no height/width dimensions.
+    era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
@@ -257,9 +259,9 @@ class HeliosSample(NamedTuple):
                 num_bands,
             )
         elif modality_spec.is_time_only_varying:
-            return (1, 1, self.time, num_bands)
+            return (self.time, num_bands)
         else:
-            return (1, 1, 1, num_bands)
+            return (num_bands,)
 
     def _get_max_t_within_token_budget(
         self, h_w_p: int, max_tokens_per_instance: int
@@ -341,6 +343,7 @@ class HeliosSample(NamedTuple):
         sampled_hw_p: int,
         current_length: int,
         missing_timesteps_masks: dict[str, Any] = {},
+        apply_cutmix: bool = False,
     ) -> "HeliosSample":
         """Subset a HelioSample that is unbatched ie no batch dimension.
 
@@ -352,6 +355,7 @@ class HeliosSample(NamedTuple):
             sampled_hw_p: The number of tokens in the height and width dimensions.
             current_length: The current maximum sequence length of the sample.
             missing_timesteps_masks: A dictionary of missing timesteps masks.
+            apply_cutmix: Whether or not to apply CutMix to the subsetted sample.
 
         We apply current_length here to ensure that the subset focuses on the valid timesteps
         instead of the padded timesteps.
@@ -363,55 +367,98 @@ class HeliosSample(NamedTuple):
         where hw_t is sampled from hw_to_sample and max_t is the maximum number
         of timesteps allowable so that the total tokens (per instance) is >=
         max_tokens_per_instance
+
+        When applying CutMix, we sample patches from the height and width dimensions,
+        and assemble them into a new sample.
         """
         if max_tokens_per_instance is None:
             return self
         max_t = self._get_max_t_within_token_budget(
             sampled_hw_p, max_tokens_per_instance
         )
-        sampled_hw = sampled_hw_p * patch_size
-        start_h = np.random.choice(self.height - sampled_hw + 1)
-        start_w = np.random.choice(self.width - sampled_hw + 1)
-
         valid_start_ts = self._get_valid_start_ts(
             missing_timesteps_masks, max_t, current_length
         )
         start_t = np.random.choice(valid_start_ts)
-
         new_data_dict: dict[str, ArrayTensor] = {}
-        for attribute, modality in self.as_dict(ignore_nones=True).items():
-            assert modality is not None
-            if attribute == "timestamps":
-                new_data_dict[attribute] = modality[start_t : start_t + max_t]
-                continue
-            modality_spec = Modality.get(attribute)
-            if modality_spec.is_spacetime_varying:
-                new_data_dict[attribute] = modality[
-                    start_h * modality_spec.image_tile_size_factor : (
-                        start_h + sampled_hw
-                    )
-                    * modality_spec.image_tile_size_factor,
-                    start_w * modality_spec.image_tile_size_factor : (
-                        start_w + sampled_hw
-                    )
-                    * modality_spec.image_tile_size_factor,
-                    start_t : start_t + max_t,
-                ]
-            elif modality_spec.is_space_only_varying:
-                new_data_dict[attribute] = modality[
-                    start_h * modality_spec.image_tile_size_factor : (
-                        start_h + sampled_hw
-                    )
-                    * modality_spec.image_tile_size_factor,
-                    start_w * modality_spec.image_tile_size_factor : (
-                        start_w + sampled_hw
-                    )
-                    * modality_spec.image_tile_size_factor,
-                ]
-            elif modality_spec.is_time_only_varying:
-                new_data_dict[attribute] = modality[start_t : start_t + max_t]
-            elif modality_spec.is_static_in_space_and_time:
-                new_data_dict[attribute] = modality
+
+        if not apply_cutmix:
+            sampled_hw = sampled_hw_p * patch_size
+            start_h = np.random.choice(self.height - sampled_hw + 1)
+            start_w = np.random.choice(self.width - sampled_hw + 1)
+
+            for attribute, modality in self.as_dict(ignore_nones=True).items():
+                assert modality is not None
+                if attribute == "timestamps":
+                    new_data_dict[attribute] = modality[start_t : start_t + max_t]
+                    continue
+                modality_spec = Modality.get(attribute)
+                if modality_spec.is_spacetime_varying:
+                    new_data_dict[attribute] = modality[
+                        start_h * modality_spec.image_tile_size_factor : (
+                            start_h + sampled_hw
+                        )
+                        * modality_spec.image_tile_size_factor,
+                        start_w * modality_spec.image_tile_size_factor : (
+                            start_w + sampled_hw
+                        )
+                        * modality_spec.image_tile_size_factor,
+                        start_t : start_t + max_t,
+                    ]
+                elif modality_spec.is_space_only_varying:
+                    new_data_dict[attribute] = modality[
+                        start_h * modality_spec.image_tile_size_factor : (
+                            start_h + sampled_hw
+                        )
+                        * modality_spec.image_tile_size_factor,
+                        start_w * modality_spec.image_tile_size_factor : (
+                            start_w + sampled_hw
+                        )
+                        * modality_spec.image_tile_size_factor,
+                    ]
+                elif modality_spec.is_time_only_varying:
+                    new_data_dict[attribute] = modality[start_t : start_t + max_t]
+                elif modality_spec.is_static_in_space_and_time:
+                    new_data_dict[attribute] = modality
+
+        else:
+            height_p, width_p = self.height // patch_size, self.width // patch_size
+            h_p_indices = np.random.choice(height_p, size=sampled_hw_p, replace=False)
+            w_p_indices = np.random.choice(width_p, size=sampled_hw_p, replace=False)
+            h_indices = [
+                i
+                for h_p in h_p_indices
+                for i in range(h_p * patch_size, (h_p + 1) * patch_size)
+            ]
+            w_indices = [
+                i
+                for w_p in w_p_indices
+                for i in range(w_p * patch_size, (w_p + 1) * patch_size)
+            ]
+            hh, ww = np.meshgrid(h_indices, w_indices, indexing="ij")
+
+            for attribute, modality in self.as_dict(ignore_nones=True).items():
+                assert modality is not None
+                if attribute == "timestamps":
+                    new_data_dict[attribute] = modality[start_t : start_t + max_t]
+                    continue
+                modality_spec = Modality.get(attribute)
+                if modality_spec.is_spacetime_varying:
+                    new_data_dict[attribute] = modality[
+                        hh * modality_spec.image_tile_size_factor,
+                        ww * modality_spec.image_tile_size_factor,
+                        start_t : start_t + max_t,
+                    ]
+                elif modality_spec.is_space_only_varying:
+                    new_data_dict[attribute] = modality[
+                        hh * modality_spec.image_tile_size_factor,
+                        ww * modality_spec.image_tile_size_factor,
+                    ]
+                elif modality_spec.is_time_only_varying:
+                    new_data_dict[attribute] = modality[start_t : start_t + max_t]
+                elif modality_spec.is_static_in_space_and_time:
+                    new_data_dict[attribute] = modality
+
         return HeliosSample(**new_data_dict)
 
     def scale(self, s: float) -> "HeliosSample":
@@ -482,6 +529,7 @@ class GetItemArgs(NamedTuple):
     patch_size: int
     sampled_hw_p: int
     token_budget: int | None = None
+    apply_cutmix: bool = False
 
 
 # TODO should training modalities be str or modality_spec
@@ -619,27 +667,29 @@ class HeliosDataset(Dataset):
         logger.info(f"columns: {metadata_df.columns}")
 
         # Get the indices of samples that don't have any training modalities that are
-        # multi-temporal. We want to remove these samples.
-        multitemporal_training_modalities = [
+        # spacetime varying. We want to remove these samples.
+        spacetime_varying_training_modalities = [
             modality
             for modality in self.training_modalities
-            if Modality.get(modality).is_multitemporal
+            if Modality.get(modality).is_spacetime_varying
         ]
-        if len(multitemporal_training_modalities) == 0:
-            raise ValueError("no multi-temporal modalities are specified for training")
-        no_multitemporal_indices = metadata_df[
-            metadata_df[multitemporal_training_modalities].sum(axis=1) == 0
+        if len(spacetime_varying_training_modalities) == 0:
+            raise ValueError(
+                "no spacetime varying modalities are specified for training"
+            )
+        no_spacetime_varying_indices = metadata_df[
+            metadata_df[spacetime_varying_training_modalities].sum(axis=1) == 0
         ].index
 
         # Filter these indices out
         logger.info(
-            f"Filtering out {len(no_multitemporal_indices)} samples without any training modalities"
+            f"Filtering out {len(no_spacetime_varying_indices)} samples without any training modalities"
         )
         self.sample_indices = np.setdiff1d(
-            self.sample_indices, no_multitemporal_indices
+            self.sample_indices, no_spacetime_varying_indices
         )
         logger.info(
-            f"Filtered {len(no_multitemporal_indices)} samples to {self.sample_indices.shape} samples"
+            f"Filtered {len(no_spacetime_varying_indices)} samples to {self.sample_indices.shape} samples"
         )
 
     def prepare(self) -> None:
@@ -904,6 +954,7 @@ class HeliosDataset(Dataset):
             sampled_hw_p=args.sampled_hw_p,
             current_length=current_length,
             missing_timesteps_masks=missing_timesteps_masks,
+            apply_cutmix=args.apply_cutmix,
         )
 
         sample_dict = subset_sample.as_dict(ignore_nones=True)
