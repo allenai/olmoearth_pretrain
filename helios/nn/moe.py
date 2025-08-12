@@ -38,6 +38,7 @@ class SwitchFeedForward(nn.Module):
         n_experts: int = 4,
         expert: Mlp,
         d_model: int,
+        route_with_latlons: bool = True,
     ) -> None:
         """Routing among multiple FFNs.
 
@@ -60,10 +61,15 @@ class SwitchFeedForward(nn.Module):
         # make copies of the FFNs
         self.experts = clone_module_list(expert, n_experts)
         # Routing layer and softmax
-        self.switch = nn.Linear(d_model, n_experts)
+        self.route_with_latlons = route_with_latlons
+        self.switch = nn.Linear(
+            d_model if not route_with_latlons else d_model * 2, n_experts
+        )
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x: torch.Tensor) -> tuple[Tensor, Tensor, Tensor, int, Tensor]:
+    def forward(  # type: ignore
+        self, x: torch.Tensor, routing_tokens: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor, int, Tensor]:
         """X is the input to the switching module with shape `[batch_size, seq_len, d_model]`."""
         x = rearrange(x, "b n d -> n b d")
         # Capture the shape to change shapes later
@@ -75,7 +81,12 @@ class SwitchFeedForward(nn.Module):
         # $$p_i(x) = \frac{e^{h(x)_i}}{\sum^N_j e^{h(x)_j}}$$
         # where $N$ is the number of experts `n_experts` and
         # $h(\cdot)$ is the linear transformation of token embeddings.
-        route_prob = self.softmax(self.switch(x))
+        if self.route_with_latlons:
+            routing_tokens = routing_tokens.repeat(1, x.shape[1], 1)
+            x_for_router = torch.cat([x, routing_tokens], dim=-1)
+        else:
+            x_for_router = x
+        route_prob = self.softmax(self.switch(x_for_router))
 
         # Get the maximum routing probabilities and the routes.
         # We route to the expert with highest probability
@@ -223,9 +234,10 @@ class SwitchBlock(Block):
 
         self.mlp = SwitchFeedForward(d_model=dim, expert=self.mlp)
 
-    def forward(
+    def forward(  # type: ignore
         self,
         x: torch.Tensor,
+        routing_tokens: torch.Tensor,
         y: torch.Tensor | None = None,
         cu_seqlens: torch.Tensor | None = None,
         cu_seqlens_q: torch.Tensor | None = None,
@@ -239,6 +251,7 @@ class SwitchBlock(Block):
 
         Args:
             x: Input tensor of shape (B, N, C)
+            routing_tokens: routing tokens, shape (b, 1, C)
             y: Optional context tensor for cross attention of shape (B, M, C)
             attn_mask: Optional attention mask tensor
             cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
@@ -266,7 +279,9 @@ class SwitchBlock(Block):
                 )
             )
         )
-        x, counts, route_prob, n_dropped, route_prob_max = self.mlp(self.norm2(x))
+        x, counts, route_prob, n_dropped, route_prob_max = self.mlp(
+            self.norm2(x), routing_tokens
+        )
         x = x + self.drop_path(self.ls2(x))
         return x, counts, route_prob, n_dropped, route_prob_max
 
@@ -364,6 +379,11 @@ class SwitchEncoder(Encoder):
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
+        # remove the latlons from the attention sequence
+        latlons = tokens_only_dict["latlons"]
+        original_masks_dict["latlons_mask"] = (
+            torch.ones_like(original_masks_dict["latlons_mask"]) * MaskValue.DECODER
+        )
         exit_ids_seq = self.create_exit_seqs(
             tokens_only_dict, original_masks_dict, token_exit_cfg
         )
@@ -377,6 +397,7 @@ class SwitchEncoder(Encoder):
             input_res,
         )
         tokens_dict.update(original_masks_dict)
+
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
@@ -421,6 +442,7 @@ class SwitchEncoder(Encoder):
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
             tokens, f, p, n_d, p_max = blk(
                 x=tokens,
+                routing_tokens=latlons,
                 cu_seqlens=cu_seqlens,
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
