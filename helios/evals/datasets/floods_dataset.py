@@ -287,7 +287,7 @@ class Sen1Floods11Dataset(Dataset):
         os.makedirs(task_fig_dir, exist_ok=True)
         import matplotlib.pyplot as plt
 
-        plt.imshow(image[:, :, [1, 0, 0]])
+        plt.imshow(image[:, :, 0, [1, 0, 0]])
         plt.axis("off")
         plt.savefig(f"{task_fig_dir}/{idx}_sentinel1.png", bbox_inches="tight", dpi=150)
         plt.close()
