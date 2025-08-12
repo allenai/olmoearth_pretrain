@@ -41,8 +41,9 @@ def test_zero_init_delta() -> None:
     """Zero-init generators => ΔW=0 so outputs match base at start."""
     torch.manual_seed(1)
     in_f, out_f, task_d = 8, 8, 6
-    x = torch.randn(2, 5, in_f)
-    task = torch.randn(task_d)
+    B = 2
+    x = torch.randn(B, 5, in_f)
+    task = torch.randn(B, task_d)  # (batch, task_dim)
 
     base = nn.Linear(in_f, out_f)
     tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0)
@@ -58,9 +59,10 @@ def test_learns_nonzero_delta_after_optimization() -> None:
     """Training changes outputs (ΔW learns)."""
     torch.manual_seed(2)
     in_f, out_f, task_d = 10, 7, 5
-    x = torch.randn(4, 3, in_f)
-    task = torch.randn(task_d)
-    target = torch.randn(4, 3, out_f)
+    B = 4
+    x = torch.randn(B, 3, in_f)
+    task = torch.randn(B, task_d)  # (batch, task_dim)
+    target = torch.randn(B, 3, out_f)
 
     tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=3, lora_alpha=6.0, lora_dropout=0.0)
 
@@ -80,7 +82,7 @@ def test_high_rank_input_5d() -> None:
     torch.manual_seed(4)
     B, T, H, W, in_f, out_f, task_d = 1, 2, 3, 4, 6, 9, 5
     x = torch.randn(B, T, H, W, in_f)
-    task = torch.randn(task_d)
+    task = torch.randn(B, task_d)  # (batch, task_dim) with batch=B
 
     tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0)
     y = tl(x, task_emb=task)
@@ -92,7 +94,7 @@ def test_invalid_last_dim_raises() -> None:
     torch.manual_seed(5)
     B, H, N, in_f, out_f, task_d = 2, 2, 4, 8, 8, 4
     x = torch.randn(B, H, N, in_f + 1)  # wrong last dim
-    task = torch.randn(task_d)
+    task = torch.randn(B, task_d)  # (batch, task_dim)
 
     tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=2)
     with pytest.raises(ValueError):
@@ -104,8 +106,9 @@ def test_alpha_scaling_effect() -> None:
     # From the lora paper, delta should somewhat scale the learning rate
     torch.manual_seed(6)
     in_f, out_f, task_d, r = 8, 8, 4, 2
-    x = torch.randn(3, 7, in_f)
-    task = torch.randn(task_d)
+    B = 3
+    x = torch.randn(B, 7, in_f)
+    task = torch.randn(B, task_d)  # (batch, task_dim)
 
     def make(alpha: float) -> TaskLoRALinear:
         tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=r, lora_alpha=alpha, lora_dropout=0.0)
@@ -137,9 +140,10 @@ def test_gradients_flow() -> None:
     """Sanity check that gradients reach base and generator params."""
     torch.manual_seed(7)
     in_f, out_f, task_d = 8, 8, 3
-    x = torch.randn(2, 5, in_f)
-    task = torch.randn(task_d)
-    target = torch.randn(2, 5, out_f)
+    B = 2
+    x = torch.randn(B, 5, in_f)
+    task = torch.randn(B, task_d)  # (batch, task_dim)
+    target = torch.randn(B, 5, out_f)
 
     tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0)
     loss = F.mse_loss(tl(x, task_emb=task), target)

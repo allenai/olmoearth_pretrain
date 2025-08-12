@@ -151,8 +151,8 @@ class TaskLoRALinear(nn.Module):
 
         Args:
             x: Input tensor of shape ``(..., in_features)`` (e.g., ``(B, N, C_in)``).
-            task_emb: Task embedding of shape ``(task_dim,)``. All tokens in the
-                batch are assumed to share the same task embedding.
+            task_emb: Task embedding of shape ``(B, task_dim)``. These embeddings are broadcasted
+                across all patches (tokens) in the batch.
 
         Returns:
             Output tensor with shape ``(..., out_features)``.
@@ -169,7 +169,7 @@ class TaskLoRALinear(nn.Module):
         b_eff = x2d.shape[0]
 
         # Broadcast task embedding across the effective batch
-        task_emb = task_emb.unsqueeze(0).expand(b_eff, -1)  # (B_eff, task_dim)
+        task_emb = task_emb.repeat(b_eff // task_emb.shape[0], 1)  # (B_eff, task_dim)
 
         # Generate LoRA factors per sample
         r = self.lora_rank

@@ -253,7 +253,7 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
-            task_emb: Optional task embedding tensor of shape (B, task_dim) or (task_dim,)
+            task_emb: Optional task embedding tensor of shape (B, task_dim)
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
@@ -551,7 +551,7 @@ class Block(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
-            task_emb: Optional task embedding tensor of shape (B, task_dim) or (task_dim,)
+            task_emb: Optional task embedding tensor of shape (B, task_dim)
 
         Returns:
             Output tensor of shape (B, N, C)

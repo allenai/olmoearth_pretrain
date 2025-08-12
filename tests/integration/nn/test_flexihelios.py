@@ -633,7 +633,7 @@ class TestEncoder:
 
         patch_size = 2
         input_res = 1
-        task_emb = torch.randn(task_d)
+        task_emb = torch.randn(B, task_d)  # (batch, task_dim)
 
         # 1) With zero-init generators, task_emb should have no effect initially
         out_none, _ = encoder.forward(
