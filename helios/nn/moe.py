@@ -90,21 +90,16 @@ class SwitchFeedForward(nn.Module):
             # Get the maximum routing probabilities and the routes.
             # We route to the expert with highest probability
             route_prob_max, routes = torch.max(route_prob, dim=-1)
-            print("route_prob_max, ", route_prob_max)
-            print("routes, ", routes)
             indexes_list = [
                 torch.eq(routes, i).nonzero(as_tuple=True)[0]
                 for i in range(self.n_experts)
             ]  # B, num_experts
-            print("indexes_list, ", indexes_list)
             # Initialize an empty tensor to store outputs
-            print("x.shape, ", x.shape)
             final_output = x.new_zeros(x.shape)
             if self.drop_tokens:
                 raise ValueError("drop_tokens unsupported for route_with_latlons")
             # Number of *instances* routed to each expert.
             counts = x.new_tensor([len(indexes_list[i]) for i in range(self.n_experts)])
-            print("counts, ", counts)
             # Get outputs of the expert FFNs
             expert_output = [
                 self.experts[i](x[indexes_list[i], :, :]) for i in range(self.n_experts)
@@ -377,6 +372,9 @@ class SwitchEncoder(Encoder):
             use_flash_attn=use_flash_attn,
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
+            num_projection_layers=num_projection_layers,
+            aggregate_then_project=aggregate_then_project,
+            frozen_patch_embeddings=frozen_patch_embeddings,
         )
 
         self.blocks = nn.ModuleList(
