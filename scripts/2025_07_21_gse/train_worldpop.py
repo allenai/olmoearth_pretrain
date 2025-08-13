@@ -116,7 +116,7 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
-        rank_microbatch_size=32,
+        rank_microbatch_size=16,
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "random_fixed_modality",

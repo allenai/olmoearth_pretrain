@@ -1644,15 +1644,41 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
             mask[:] = MaskValue.DECODER.value
 
         # Randomly decide whether to mark the randomize_missing_modalities as missing.
-        for modality in self.randomize_missing_modalities:
-            if self.generator.random() < 0.5:
-                continue
-            mask = getattr(
-                masked_sample, MaskedHeliosSample.get_masked_modality_name(modality)
-            )
-            if mask is None:
-                continue
-            mask[:] = MaskValue.MISSING.value
+        # We do this on a per-instance basis since we want to make sure we don't mark
+        # all the modalities for that instance missing.
+        if len(self.randomize_missing_modalities) > 0:
+            batch_size = getattr(batch, self.randomize_missing_modalities[0]).shape[0]
+            for batch_idx in range(batch_size):
+                cur_available_modalities = []
+                for modality in self.randomize_missing_modalities:
+                    mask = getattr(
+                        masked_sample,
+                        MaskedHeliosSample.get_masked_modality_name(modality),
+                    )
+                    # We check it is available everywhere since if it is missing in
+                    # some patches and we mask a different modality then we might end
+                    # up with no data for that spatial patch.
+                    is_available = torch.all(mask != MaskValue.MISSING.value)
+                    if is_available:
+                        cur_available_modalities.append(modality)
+
+                if len(cur_available_modalities) <= 1:
+                    continue
+
+                # Pick a subset to actually mask. We leave at least one unmasked.
+                modality_indices = np.arange(len(cur_available_modalities))
+                self.generator.shuffle(modality_indices)
+                num_to_mask = self.generator.integers(len(cur_available_modalities))
+                cur_mask_modalities = [
+                    cur_available_modalities[idx]
+                    for idx in modality_indices[0:num_to_mask]
+                ]
+
+                for modality in cur_mask_modalities:
+                    getattr(
+                        masked_sample,
+                        MaskedHeliosSample.get_masked_modality_name(modality),
+                    )[batch_idx] = MaskValue.MISSING.value
 
         return masked_sample
 
