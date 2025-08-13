@@ -50,6 +50,7 @@ class LatentMIMMoETrainModuleConfig(HeliosTrainModuleConfig):
     )
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
+    balancing_loss_weight: float = 0.1
 
     def build(
         self,
@@ -94,6 +95,7 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
         token_exit_cfg: The token exit configuration for the model.
+        balancing_loss_weight: balancing_loss_weight
     """
 
     def __init__(
@@ -118,6 +120,7 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
+        balancing_loss_weight: float = 0.1,
     ):
         """Initialize the training module.
 
@@ -143,6 +146,7 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
             mae_loss_config: Optional loss config for masked auto-encoding.
             regularizer_config: An optional regularizer configuration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
+            balancing_loss_weight: balancing_loss_weight
         """
         super().__init__(
             model=model,
@@ -175,6 +179,7 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
+        self.balancing_loss_weight = balancing_loss_weight
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -200,6 +205,7 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
+        total_batch_load = torch.zeros([], device=self.device)
         patch_size, batch_data = batch
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
@@ -241,7 +247,8 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
                 load_balancing_loss = (
                     4 * (route_frac * route_prob).sum()
                 )  # TODO: 4 = num_experts
-                loss += load_balancing_loss
+                loss += self.balancing_loss_weight * load_balancing_loss
+                total_batch_load += get_local_tensor(load_balancing_loss.detach())
 
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
@@ -269,6 +276,11 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
             total_batch_loss,
+            ReduceType.mean,
+        )
+        self.trainer.record_metric(
+            "train/balancing_loss",
+            total_batch_load,
             ReduceType.mean,
         )
         self.log_regularization(total_batch_reg)
