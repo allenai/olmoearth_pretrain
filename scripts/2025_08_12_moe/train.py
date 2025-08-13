@@ -52,7 +52,7 @@ from helios.train.callbacks import (
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from helios.train.train_module.latent_mim_moe import LatentMIMMoETrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
@@ -115,9 +115,9 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 
 def build_train_module_config(
     common: CommonComponents,
-) -> LatentMIMTrainModuleConfig:
+) -> LatentMIMMoETrainModuleConfig:
     """Build the train module config for an experiment."""
-    return LatentMIMTrainModuleConfig(
+    return LatentMIMMoETrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
         rank_microbatch_size=64,
         masking_config=MaskingConfig(
