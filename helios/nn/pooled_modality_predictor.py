@@ -912,6 +912,7 @@ class EncodeEarlyAttnPool(Encoder):
         for i_blk, blk in enumerate(self.blocks):
             if i_blk == self.num_pre_modality_pooling_layers:
                 break
+            logger.debug(f"i_blk pre-modality pooling: {i_blk}")
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
             if (exit_ids_seq is not None) and (i_blk > 0):
                 # this should only ever be called by the target encoder,
@@ -1024,6 +1025,7 @@ class EncodeEarlyAttnPool(Encoder):
             if i_blk < self.num_pre_modality_pooling_layers:
                 # skip the pre-modality pooling layer attention blocks
                 continue
+            logger.debug(f"i_blk post-modality pooling: {i_blk}")
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
             if (exit_ids_seq is not None) and (i_blk > 0):
                 # this should only ever be called by the target encoder,
