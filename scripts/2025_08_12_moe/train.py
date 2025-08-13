@@ -42,7 +42,7 @@ from helios.nn.flexihelios import (
     PoolingType,
     PredictorConfig,
 )
-from helios.nn.latent_mim import LatentMIMConfig
+from helios.nn.latent_mim_moe import LatentMIMMoEConfig
 from helios.nn.moe import SwitchEncoderConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -82,7 +82,7 @@ def my_build_common_components(
     return config
 
 
-def build_model_config(common: CommonComponents) -> LatentMIMConfig:
+def build_model_config(common: CommonComponents) -> LatentMIMMoEConfig:
     """Build the model config for an experiment."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
@@ -106,7 +106,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
     )
-    model_config = LatentMIMConfig(
+    model_config = LatentMIMMoEConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
     )
