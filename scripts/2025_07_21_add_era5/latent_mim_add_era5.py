@@ -169,7 +169,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1138828",
             training_modalities=common.training_modalities,
-            dataset_percentage=0.008,
+            dataset_percentage=0.005,
         ),
         # # osmbig
         # HeliosDatasetConfig(
@@ -182,7 +182,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(300)
+    MAX_DURATION = Duration.epochs(300 * 200)
     METRICS_COLLECT_INTERVAL = 10
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
