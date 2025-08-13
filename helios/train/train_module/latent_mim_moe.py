@@ -243,10 +243,10 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
                 # Load balancing loss
                 # $$\mathscr{L} = N \sum_{i=1}^N f_i \cdot P_i$$
                 # $\mathscr{L}$ is the loss for a single layer and here we are
-                # taking the sum of losses across all layers.
+                # taking the sum of losses across all layers. counts.shape[-1] == num experts
                 load_balancing_loss = (
-                    4 * (route_frac * route_prob).sum()
-                )  # TODO: 4 = num_experts
+                    counts.shape[-1] * (route_frac * route_prob).sum()
+                ) / len(self.model.encoder.blocks)
                 loss += self.balancing_loss_weight * load_balancing_loss
                 total_batch_load += get_local_tensor(load_balancing_loss.detach())
 
