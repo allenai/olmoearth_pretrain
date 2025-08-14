@@ -635,7 +635,9 @@ class TopNGating(Module):
             safe_one_hot(positions.long(), expert_capacity),
         )
 
-        combine_tensor = reduce(combine_tensor, "k b n e c -> b n e c", "sum").type(dtype)
+        combine_tensor = reduce(combine_tensor, "k b n e c -> b n e c", "sum").type(
+            dtype
+        )
 
         # dispatch tensor
 
