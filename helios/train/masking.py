@@ -73,6 +73,10 @@ class MaskedHeliosSample(NamedTuple):
     naip_10_mask: ArrayTensor | None = None
     gse: ArrayTensor | None = None
     gse_mask: ArrayTensor | None = None
+    cdl: ArrayTensor | None = None
+    cdl_mask: ArrayTensor | None = None
+    worldcereal: ArrayTensor | None = None
+    worldcereal_mask: ArrayTensor | None = None
 
     def as_dict(self, return_none: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
@@ -815,14 +819,14 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self.strategy = strategy
         self.allow_encoding_decoding_same_bandset = allow_encoding_decoding_same_bandset
         if min_encoded_bandsets is None:
-            assert (
-                max_encoded_bandsets is None
-            ), "max_encoded_bandsets must be set if min_encoded_bandsets is set"
+            assert max_encoded_bandsets is None, (
+                "max_encoded_bandsets must be set if min_encoded_bandsets is set"
+            )
         else:
-            assert (
-                min_encoded_bandsets > 1
-            ), "min_encoded_bandsets must be greater than 1 so that we don't only  \
+            assert min_encoded_bandsets > 1, (
+                "min_encoded_bandsets must be greater than 1 so that we don't only  \
                 encode a modality that is randomly masked on batch dimension ie latlon"
+            )
         self.min_encoded_bandsets = min_encoded_bandsets
         self.max_encoded_bandsets = max_encoded_bandsets
         self.min_decoded_bandsets = min_decoded_bandsets

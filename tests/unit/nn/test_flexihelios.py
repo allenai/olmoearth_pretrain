@@ -236,13 +236,13 @@ class TestEncoder:
 
         token_exit_cfg = {"sentinel2_l2a": 1, "latlon": 2}
         exit_ids_dict = encoder.create_token_exit_ids(x, token_exit_cfg)
-        assert (
-            "sentinel2_l2a" in exit_ids_dict
-        ), "Expected 'sentinel2_l2a' key in the result dict"
+        assert "sentinel2_l2a" in exit_ids_dict, (
+            "Expected 'sentinel2_l2a' key in the result dict"
+        )
         sentinel2_l2a_exit_ids = exit_ids_dict["sentinel2_l2a"]
-        assert (
-            sentinel2_l2a_exit_ids.shape == sentinel2_l2a_tokens.shape
-        ), "Shape of exit IDs should match the shape of the modality tokens."
+        assert sentinel2_l2a_exit_ids.shape == sentinel2_l2a_tokens.shape, (
+            "Shape of exit IDs should match the shape of the modality tokens."
+        )
 
         assert (exit_ids_dict["sentinel2_l2a"] == 1).all()
         assert (exit_ids_dict["latlon"] == 2).all()
@@ -383,9 +383,9 @@ class TestPredictor:
         replaced_dict = predictor.add_masks(tokens_and_masks)
 
         # We expect replaced_dict to have the key "sentinel2_l2a"
-        assert (
-            "sentinel2_l2a" in replaced_dict
-        ), "Expected replaced_dict to have key 'sentinel2_l2a'"
+        assert "sentinel2_l2a" in replaced_dict, (
+            "Expected replaced_dict to have key 'sentinel2_l2a'"
+        )
 
         replaced_sentinel2_l2a = replaced_dict["sentinel2_l2a"]
         assert replaced_sentinel2_l2a.shape == sentinel2_l2a_tokens.shape, (
@@ -399,9 +399,9 @@ class TestPredictor:
         # Check an unchanged location
         unchanged_location = replaced_sentinel2_l2a[0, 0, 0, 0, 1, :]
 
-        assert torch.allclose(
-            replaced_location, predictor.mask_token, atol=1e-6
-        ), "Tokens at masked location should be replaced with mask token."
+        assert torch.allclose(replaced_location, predictor.mask_token, atol=1e-6), (
+            "Tokens at masked location should be replaced with mask token."
+        )
         assert torch.allclose(
             unchanged_location, sentinel2_l2a_tokens[0, 0, 0, 0, 1, :], atol=1e-6
         ), "Tokens at non-masked location should remain the same."

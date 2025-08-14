@@ -78,14 +78,13 @@ class Sen1Floods11Processor:
             f"s1 tensor must be of shape ({len(cls.s1_bands)}, {cls.input_hw}, {cls.input_hw}), "
             f"got {s1.shape}"
         )
-        assert (
-            s2.shape
-            == (
-                len(cls.s2_bands),
-                cls.input_hw,
-                cls.input_hw,
-            )
-        ), f"s2 tensor must be of shape ({len(cls.s2_bands)}, {cls.input_hw}, {cls.input_hw})"
+        assert s2.shape == (
+            len(cls.s2_bands),
+            cls.input_hw,
+            cls.input_hw,
+        ), (
+            f"s2 tensor must be of shape ({len(cls.s2_bands)}, {cls.input_hw}, {cls.input_hw})"
+        )
         assert labels.shape == (
             1,
             cls.input_hw,

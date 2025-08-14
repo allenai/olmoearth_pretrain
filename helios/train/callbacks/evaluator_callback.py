@@ -13,7 +13,7 @@ from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader
 
 from helios.evals.datasets import EvalDatasetPartition, get_eval_dataset
-from helios.evals.datasets.configs import TaskType, dataset_to_config
+from helios.evals.datasets.configs import TaskType, dataset_to_config, get_eval_mode
 from helios.evals.datasets.normalize import NormMethod
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
@@ -87,11 +87,7 @@ class DownstreamEvaluator:
         self.partition = task.partition
         self.norm_method = task.norm_method
         if self.eval_mode is None:
-            self.eval_mode = (
-                "knn"
-                if self.config.task_type == TaskType.CLASSIFICATION
-                else "linear_probe"
-            )
+            self.eval_mode = get_eval_mode(self.config.task_type)
 
         assert self.eval_mode in [
             "knn",

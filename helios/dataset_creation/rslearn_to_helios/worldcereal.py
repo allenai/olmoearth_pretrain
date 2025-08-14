@@ -1,88 +1,101 @@
-"""Post-process ingested OpenStreetMap data into the Helios dataset.
-
-OpenStreetMap is vector data, so we want to keep the precision of the data as high as
-possible, but the data size (i.e. bytes) is also small enough that we can store it
-under the 10 m/pixel tiles without needing too much storage space.
-
-So, we use the 10 m/pixel grid, but store it with 16x zoomed in coordinates (meaning
-the coordinates actually match those of the 0.625 m/pixel tiles). This way we can use
-the data for training even at coarser resolution.
-"""
+"""Post-process ingested WorldCereal data into the Helios dataset."""
 
 import argparse
 import csv
 import multiprocessing
 from datetime import UTC, datetime
 
+import numpy as np
 import tqdm
 from rslearn.dataset import Window
 from rslearn.utils.mp import star_imap_unordered
-from rslearn.utils.vector_format import GeojsonCoordinateMode, GeojsonVectorFormat
 from upath import UPath
 
 from helios.data.constants import Modality, TimeSpan
 from helios.dataset.utils import get_modality_fname
 
-from ..constants import METADATA_COLUMNS
+from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
 
-# Placeholder time range for OpenStreetMap.
-START_TIME = datetime(2020, 1, 1, tzinfo=UTC)
-END_TIME = datetime(2025, 1, 1, tzinfo=UTC)
-
-# Layer name in the input rslearn dataset.
-LAYER_NAME = "openstreetmap"
-
-RESOLUTION = 10
+START_TIME = datetime(2021, 1, 1, tzinfo=UTC)
+END_TIME = datetime(2022, 1, 1, tzinfo=UTC)
 
 
-def convert_openstreetmap(window_path: UPath, helios_path: UPath) -> None:
-    """Add OpenStreetMap data for this window to the Helios dataset.
+def _fill_nones_with_zeros(ndarrays: list[np.ndarray | None]) -> np.ndarray | None:
+    filler = None
+    for x in ndarrays:
+        if x is not None:
+            filler = np.zeros_like(x)
+            break
+    if filler is None:
+        return None
+
+    return_list = []
+    for x in ndarrays:
+        if x is not None:
+            return_list.append(x)
+        else:
+            return_list.append(filler.copy())
+    return np.concatenate(return_list, axis=0)
+
+
+def convert_worldcereal(window_path: UPath, helios_path: UPath) -> None:
+    """Add WorldCereal data for this window to the Helios dataset.
 
     Args:
         window_path: the rslearn window directory to read data from.
         helios_path: Helios dataset path to write to.
     """
+    ndarrays: list[np.ndarray | None] = []
+    assert len(Modality.WORLDCEREAL.band_sets) == 1
+    band_set = Modality.WORLDCEREAL.band_sets[0]
     window = Window.load(window_path)
-    layer_datas = window.load_layer_datas()
-
-    if LAYER_NAME not in layer_datas:
-        return
-
-    layer_data = layer_datas[LAYER_NAME]
     window_metadata = get_window_metadata(window)
-    vector_format = GeojsonVectorFormat(coordinate_mode=GeojsonCoordinateMode.CRS)
+    for band in band_set.bands:
+        if not window.is_layer_completed(band):
+            ndarrays.append(None)
+            continue
+        window_dir = window.get_raster_dir(band, [band])
 
-    # Load the vector data.
-    # It may end up in multiple layers if there are different OpenStreetMap GeoJSONs
-    # that match to the window due to just using their bounding box instead of actual
-    # extent. So we need to concatenate the features across all of the layers.
-    features = []
-    for group_idx in range(len(layer_data.serialized_item_groups)):
-        layer_dir = window.get_layer_dir(LAYER_NAME, group_idx=group_idx)
-        cur_features = vector_format.decode_vector(
-            layer_dir, window.projection, window.bounds
+        ndarrays.append(
+            GEOTIFF_RASTER_FORMAT.decode_raster(
+                path=window_dir, projection=window.projection, bounds=window.bounds
+            )
         )
-        features.extend(cur_features)
 
-    # Upload the data.
+    assert len(ndarrays) == len(band_set.bands), (
+        f"Expected {len(band_set.bands)} arrays, got {len(ndarrays)}"
+    )
+    concatenated_arrays = _fill_nones_with_zeros(ndarrays)
+
+    if concatenated_arrays is None:
+        return None
+
+    # 255 = missing data, which we will treat as 0s
+    # 254 = not cropland. This only occurs in crop type products
+    # in addition, because of our resampling we rarely get
+    # other values (e.g. 252). Lets set them all to 0
+    concatenated_arrays[concatenated_arrays > 100] = 0
+    assert concatenated_arrays.min() >= 0
+    assert concatenated_arrays.max() <= 100
+
     dst_fname = get_modality_fname(
         helios_path,
-        Modality.OPENSTREETMAP,
+        Modality.WORLDCEREAL,
         TimeSpan.STATIC,
         window_metadata,
-        RESOLUTION,
-        "geojson",
+        band_set.get_resolution(),
+        "tif",
     )
-    dst_fname.parent.mkdir(parents=True, exist_ok=True)
-    vector_format.encode_to_file(
-        fname=dst_fname,
-        features=features,
+    GEOTIFF_RASTER_FORMAT.encode_raster(
+        path=dst_fname.parent,
+        projection=window.projection,
+        bounds=window.bounds,
+        array=concatenated_arrays,
+        fname=dst_fname.name,
     )
-
-    # Create the metadata file for this data.
     metadata_fname = get_modality_temp_meta_fname(
-        helios_path, Modality.OPENSTREETMAP, TimeSpan.STATIC, window.name
+        helios_path, Modality.WORLDCEREAL, TimeSpan.STATIC, window.name
     )
     metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with metadata_fname.open("w") as f:
@@ -94,7 +107,7 @@ def convert_openstreetmap(window_path: UPath, helios_path: UPath) -> None:
                 col=window_metadata.col,
                 row=window_metadata.row,
                 tile_time=window_metadata.time.isoformat(),
-                image_idx="N/A",
+                image_idx="0",
                 start_time=START_TIME.isoformat(),
                 end_time=END_TIME.isoformat(),
             )
@@ -141,7 +154,7 @@ if __name__ == "__main__":
         )
 
     p = multiprocessing.Pool(args.workers)
-    outputs = star_imap_unordered(p, convert_openstreetmap, jobs)
+    outputs = star_imap_unordered(p, convert_worldcereal, jobs)
     for _ in tqdm.tqdm(outputs, total=len(jobs)):
         pass
     p.close()

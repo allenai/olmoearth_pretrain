@@ -11,6 +11,14 @@ class TaskType(Enum):
     SEGMENTATION = "segmentation"
 
 
+def get_eval_mode(task_type: TaskType) -> str:
+    """Get the eval mode for a given task type."""
+    if task_type == TaskType.CLASSIFICATION:
+        return "knn"
+    else:
+        return "linear_probe"
+
+
 class EvalDatasetConfig(NamedTuple):
     """EvalDatasetConfig configs."""
 
