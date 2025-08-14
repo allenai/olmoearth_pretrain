@@ -279,7 +279,7 @@ class Experts(Module):
         self,
         experts,
         is_distributed=None,
-        allow_var_seq_len=False,  # whether to handle variable sequence length
+        allow_var_seq_len=True,  # whether to handle variable sequence length
     ):
         super().__init__()
         self.num_experts = len(experts)
