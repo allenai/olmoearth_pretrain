@@ -75,9 +75,9 @@ def create_geotiff(
 
 
 @pytest.fixture
-def prepare_samples_and_supported_modalities() -> (
-    tuple[Callable[[Path], list[SampleInformation]], list[ModalitySpec]]
-):
+def prepare_samples_and_supported_modalities() -> tuple[
+    Callable[[Path], list[SampleInformation]], list[ModalitySpec]
+]:
     """Function to create samples in a directory.
 
     and also returns what modalities are supported in these samples

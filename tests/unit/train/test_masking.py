@@ -73,18 +73,18 @@ def test_random_masking_and_unmask() -> None:
             total_elements = mask.numel()
             num_encoder = len(mask[mask == MaskValue.ONLINE_ENCODER.value])
             num_decoder = len(mask[mask == MaskValue.DECODER.value])
-            assert (
-                num_encoder / total_elements
-            ) == encode_ratio, f"{modality_name} has incorrect encode mask ratio"
-            assert (
-                num_decoder / total_elements
-            ) == decode_ratio, f"{modality_name} has incorrect decode mask ratio"
-            assert (
-                mask.shape[:-1] == data.shape[:-1]
-            ), f"{modality_name} has incorrect shape"
-            assert (
-                mask.shape[-1] == modality.num_band_sets
-            ), f"{modality_name} has incorrect num band sets"
+            assert (num_encoder / total_elements) == encode_ratio, (
+                f"{modality_name} has incorrect encode mask ratio"
+            )
+            assert (num_decoder / total_elements) == decode_ratio, (
+                f"{modality_name} has incorrect decode mask ratio"
+            )
+            assert mask.shape[:-1] == data.shape[:-1], (
+                f"{modality_name} has incorrect shape"
+            )
+            assert mask.shape[-1] == modality.num_band_sets, (
+                f"{modality_name} has incorrect num band sets"
+            )
 
     unmasked_sample = masked_sample.unmask()
     for modality_name in unmasked_sample._fields:
@@ -134,18 +134,18 @@ def test_space_structure_masking_and_unmask() -> None:
             total_elements = mask.numel()
             num_encoder = len(mask[mask == MaskValue.ONLINE_ENCODER.value])
             num_decoder = len(mask[mask == MaskValue.DECODER.value])
-            assert (
-                num_encoder / total_elements
-            ) == encode_ratio, f"{modality_name} has incorrect encode mask ratio"
-            assert (
-                num_decoder / total_elements
-            ) == decode_ratio, f"{modality_name} has incorrect decode mask ratio"
-            assert (
-                mask.shape[:-1] == data.shape[:-1]
-            ), f"{modality_name} has incorrect shape"
-            assert (
-                mask.shape[-1] == modality.num_band_sets
-            ), f"{modality_name} has incorrect num band sets"
+            assert (num_encoder / total_elements) == encode_ratio, (
+                f"{modality_name} has incorrect encode mask ratio"
+            )
+            assert (num_decoder / total_elements) == decode_ratio, (
+                f"{modality_name} has incorrect decode mask ratio"
+            )
+            assert mask.shape[:-1] == data.shape[:-1], (
+                f"{modality_name} has incorrect shape"
+            )
+            assert mask.shape[-1] == modality.num_band_sets, (
+                f"{modality_name} has incorrect num band sets"
+            )
 
     unmasked_sample = masked_sample.unmask()
     for modality_name in unmasked_sample._fields:
@@ -197,18 +197,18 @@ def test_time_structure_masking_and_unmask() -> None:
             total_elements = mask.numel()
             num_encoder = len(mask[mask == MaskValue.ONLINE_ENCODER.value])
             num_decoder = len(mask[mask == MaskValue.DECODER.value])
-            assert (
-                num_encoder / total_elements
-            ) == encode_ratio, f"{modality_name} has incorrect encode mask ratio"
-            assert (
-                num_decoder / total_elements
-            ) == decode_ratio, f"{modality_name} has incorrect decode mask ratio"
-            assert (
-                mask.shape[:-1] == data.shape[:-1]
-            ), f"{modality_name} has incorrect shape"
-            assert (
-                mask.shape[-1] == modality.num_band_sets
-            ), f"{modality_name} has incorrect num band sets"
+            assert (num_encoder / total_elements) == encode_ratio, (
+                f"{modality_name} has incorrect encode mask ratio"
+            )
+            assert (num_decoder / total_elements) == decode_ratio, (
+                f"{modality_name} has incorrect decode mask ratio"
+            )
+            assert mask.shape[:-1] == data.shape[:-1], (
+                f"{modality_name} has incorrect shape"
+            )
+            assert mask.shape[-1] == modality.num_band_sets, (
+                f"{modality_name} has incorrect num band sets"
+            )
 
     unmasked_sample = masked_sample.unmask()
     for modality_name in unmasked_sample._fields:
@@ -337,12 +337,12 @@ def test_modality_space_time_masking_and_unmask() -> None:
                 if mask is None:
                     continue
                 # TODO check ratios depending on masking strategy?
-                assert (
-                    mask.shape[:-1] == data.shape[:-1]
-                ), f"{modality_name} has incorrect shape"
-                assert (
-                    mask.shape[-1] == modality.num_band_sets
-                ), f"{modality_name} has incorrect num band sets {mask.shape} {modality.num_band_sets}"
+                assert mask.shape[:-1] == data.shape[:-1], (
+                    f"{modality_name} has incorrect shape"
+                )
+                assert mask.shape[-1] == modality.num_band_sets, (
+                    f"{modality_name} has incorrect num band sets {mask.shape} {modality.num_band_sets}"
+                )
 
         unmasked_sample = masked_sample.unmask()
         for modality_name in unmasked_sample._fields:
@@ -395,12 +395,12 @@ def test_create_random_mask_with_missing_mask() -> None:
         num_target = (mask_slice == MaskValue.TARGET_ENCODER_ONLY.value).sum().item()
 
         # Check with tolerance for rounding
-        assert (
-            abs(num_encoder / total_elements - encode_ratio) < 0.05
-        ), "Encoder ratio incorrect for non-missing samples"
-        assert (
-            abs(num_decoder / total_elements - decode_ratio) < 0.05
-        ), "Decoder ratio incorrect for non-missing samples"
+        assert abs(num_encoder / total_elements - encode_ratio) < 0.05, (
+            "Encoder ratio incorrect for non-missing samples"
+        )
+        assert abs(num_decoder / total_elements - decode_ratio) < 0.05, (
+            "Decoder ratio incorrect for non-missing samples"
+        )
         assert (
             abs(num_target / total_elements - (1 - encode_ratio - decode_ratio)) < 0.05
         ), "Target ratio incorrect for non-missing samples"
@@ -410,9 +410,9 @@ def test_create_random_mask_with_missing_mask() -> None:
     for idx in missing_indices:
         mask_slice = sentinel1_mask[idx]
         # All values for missing samples should be set to MaskValue.MISSING.value
-        assert (
-            mask_slice == MaskValue.MISSING.value
-        ).all(), f"Missing sample {idx} should have all mask values set to MISSING"
+        assert (mask_slice == MaskValue.MISSING.value).all(), (
+            f"Missing sample {idx} should have all mask values set to MISSING"
+        )
 
 
 def test_create_spatial_mask_with_patch_size() -> None:
@@ -446,9 +446,9 @@ def test_create_spatial_mask_with_patch_size() -> None:
             for b_idx in range(b):
                 patch = mask[b_idx, i : i + patch_size, j : j + patch_size]
                 # All values within a patch should be the same
-                assert (
-                    patch == patch[0, 0]
-                ).all(), f"Patch at ({b_idx},{i},{j}) has inconsistent values"
+                assert (patch == patch[0, 0]).all(), (
+                    f"Patch at ({b_idx},{i},{j}) has inconsistent values"
+                )
 
     # Check the ratios across all values
     total_elements = mask.numel()
@@ -458,9 +458,9 @@ def test_create_spatial_mask_with_patch_size() -> None:
 
     assert num_encoder / total_elements == encode_ratio, "Incorrect encode mask ratio"
     assert num_decoder / total_elements == decode_ratio, "Incorrect decode mask ratio"
-    assert (
-        num_target / total_elements == 1 - encode_ratio - decode_ratio
-    ), "Incorrect target mask ratio"
+    assert num_target / total_elements == 1 - encode_ratio - decode_ratio, (
+        "Incorrect target mask ratio"
+    )
 
 
 def test_create_temporal_mask() -> None:
@@ -488,12 +488,12 @@ def test_create_temporal_mask() -> None:
 
     # Check that the ratios are close to expected for non-missing values
     # Note: With small values of t, the ratios might not be exactly as expected
-    assert (
-        abs(num_encoder / total_non_missing - encode_ratio) < 0.2
-    ), "Encode mask ratio too far from expected"
-    assert (
-        abs(num_decoder / total_non_missing - decode_ratio) < 0.2
-    ), "Decode mask ratio too far from expected"
+    assert abs(num_encoder / total_non_missing - encode_ratio) < 0.2, (
+        "Encode mask ratio too far from expected"
+    )
+    assert abs(num_decoder / total_non_missing - decode_ratio) < 0.2, (
+        "Decode mask ratio too far from expected"
+    )
     assert (
         abs(num_target / total_non_missing - (1 - encode_ratio - decode_ratio)) < 0.2
     ), "Target mask ratio too far from expected"
@@ -553,12 +553,12 @@ def test_space_masking_with_missing_modality_mask() -> None:
 
         # Check that the mask values are distributed according to the ratios
         # with some tolerance for rounding
-        assert (
-            abs(num_encoder / total_elements - encode_ratio) < 0.05
-        ), "Incorrect encode mask ratio for present samples"
-        assert (
-            abs(num_decoder / total_elements - decode_ratio) < 0.05
-        ), "Incorrect decode mask ratio for present samples"
+        assert abs(num_encoder / total_elements - encode_ratio) < 0.05, (
+            "Incorrect encode mask ratio for present samples"
+        )
+        assert abs(num_decoder / total_elements - decode_ratio) < 0.05, (
+            "Incorrect decode mask ratio for present samples"
+        )
         assert (
             abs(num_target / total_elements - (1 - encode_ratio - decode_ratio)) < 0.05
         ), "Incorrect target mask ratio for present samples"
@@ -570,9 +570,9 @@ def test_space_masking_with_missing_modality_mask() -> None:
                 for t_idx in range(t):
                     patch = sentinel1_mask[idx, i : i + 4, j : j + 4, t_idx]
                     # All values within a patch should be the same
-                    assert (
-                        patch == patch[0, 0]
-                    ).all(), f"Patch at ({idx},{i},{j},{t_idx}) has inconsistent values"
+                    assert (patch == patch[0, 0]).all(), (
+                        f"Patch at ({idx},{i},{j},{t_idx}) has inconsistent values"
+                    )
 
     # Test unmasking
     unmasked_sample = masked_sample.unmask()
@@ -584,9 +584,9 @@ def test_space_masking_with_missing_modality_mask() -> None:
     # Check that non-missing samples have been set to ONLINE_ENCODER
     for idx in present_indices:
         # All non-missing values should be set to ONLINE_ENCODER (0)
-        assert (
-            unmasked_sentinel1_mask[idx] == MaskValue.ONLINE_ENCODER.value
-        ).all(), "Unmasked should be ONLINE_ENCODER for present samples"
+        assert (unmasked_sentinel1_mask[idx] == MaskValue.ONLINE_ENCODER.value).all(), (
+            "Unmasked should be ONLINE_ENCODER for present samples"
+        )
 
 
 def test_time_masking_with_missing_modality_mask() -> None:
@@ -641,12 +641,12 @@ def test_time_masking_with_missing_modality_mask() -> None:
 
         # Check that the mask values are distributed according to the ratios
         # with some tolerance for rounding
-        assert (
-            abs(num_encoder / total_elements - encode_ratio) < 0.05
-        ), "Incorrect encode mask ratio for present samples"
-        assert (
-            abs(num_decoder / total_elements - decode_ratio) < 0.05
-        ), "Incorrect decode mask ratio for present samples"
+        assert abs(num_encoder / total_elements - encode_ratio) < 0.05, (
+            "Incorrect encode mask ratio for present samples"
+        )
+        assert abs(num_decoder / total_elements - decode_ratio) < 0.05, (
+            "Incorrect decode mask ratio for present samples"
+        )
         assert (
             abs(num_target / total_elements - (1 - encode_ratio - decode_ratio)) < 0.05
         ), "Incorrect target mask ratio for present samples"
@@ -654,9 +654,9 @@ def test_time_masking_with_missing_modality_mask() -> None:
     # Check that missing samples are set to MISSING
     missing_indices = torch.where(sentinel1 == MISSING_VALUE)[0]
     for idx in missing_indices:
-        assert (
-            sentinel1_mask[idx] == MaskValue.MISSING.value
-        ).all(), f"Sample {idx} should be set to MISSING"
+        assert (sentinel1_mask[idx] == MaskValue.MISSING.value).all(), (
+            f"Sample {idx} should be set to MISSING"
+        )
 
     # Test unmasking
     unmasked_sample = masked_sample.unmask()
@@ -668,9 +668,9 @@ def test_time_masking_with_missing_modality_mask() -> None:
     # Check that non-missing samples have been set to ONLINE_ENCODER
     for idx in present_indices:
         # All non-missing values should be set to ONLINE_ENCODER (0)
-        assert (
-            unmasked_sentinel1_mask[idx] == MaskValue.ONLINE_ENCODER.value
-        ).all(), "Unmasked should be ONLINE_ENCODER for present samples"
+        assert (unmasked_sentinel1_mask[idx] == MaskValue.ONLINE_ENCODER.value).all(), (
+            "Unmasked should be ONLINE_ENCODER for present samples"
+        )
 
 
 def test_random_masking_with_missing_modality_mask() -> None:
@@ -731,12 +731,12 @@ def test_random_masking_with_missing_modality_mask() -> None:
 
         # Check that the mask values are distributed according to the ratios
         # with some tolerance for rounding
-        assert (
-            abs(num_encoder / total_elements - encode_ratio) < 0.05
-        ), "Incorrect encode mask ratio for present samples"
-        assert (
-            abs(num_decoder / total_elements - decode_ratio) < 0.05
-        ), "Incorrect decode mask ratio for present samples"
+        assert abs(num_encoder / total_elements - encode_ratio) < 0.05, (
+            "Incorrect encode mask ratio for present samples"
+        )
+        assert abs(num_decoder / total_elements - decode_ratio) < 0.05, (
+            "Incorrect decode mask ratio for present samples"
+        )
         assert (
             abs(num_target / total_elements - (1 - encode_ratio - decode_ratio)) < 0.05
         ), "Incorrect target mask ratio for present samples"
@@ -751,9 +751,9 @@ def test_random_masking_with_missing_modality_mask() -> None:
     # Check that non-missing samples have been set to ONLINE_ENCODER
     for idx in present_indices:
         # All non-missing values should be set to ONLINE_ENCODER (0)
-        assert (
-            unmasked_sentinel1_mask[idx] == MaskValue.ONLINE_ENCODER.value
-        ).all(), "Unmasked should be ONLINE_ENCODER for present samples"
+        assert (unmasked_sentinel1_mask[idx] == MaskValue.ONLINE_ENCODER.value).all(), (
+            "Unmasked should be ONLINE_ENCODER for present samples"
+        )
 
 
 def test_modality_mask_and_unmask() -> None:
@@ -805,12 +805,12 @@ def test_modality_mask_and_unmask() -> None:
             assert unique_per_instance.size(1) == 1
             mask_per_modality.append(unique_per_instance)
 
-            assert (
-                mask.shape[:-1] == data.shape[:-1]
-            ), f"{modality_name} has incorrect shape"
-            assert (
-                mask.shape[-1] == modality.num_band_sets
-            ), f"{modality_name} has incorrect num band sets"
+            assert mask.shape[:-1] == data.shape[:-1], (
+                f"{modality_name} has incorrect shape"
+            )
+            assert mask.shape[-1] == modality.num_band_sets, (
+                f"{modality_name} has incorrect num band sets"
+            )
 
     # shape [b, num_modalities]
     total_mask = torch.concat(mask_per_modality, dim=-1)
@@ -823,12 +823,12 @@ def test_modality_mask_and_unmask() -> None:
 
     expected_encode_ratio = expected_encoded_modalities / total_modalities
     expected_decode_ratio = expected_decoded_modalities / total_modalities
-    assert (
-        num_encoder / total_elements
-    ) == expected_encode_ratio, "Incorrect encode mask ratio"
-    assert (
-        num_decoder / total_elements
-    ) == expected_decode_ratio, "Incorrect decode mask ratio"
+    assert (num_encoder / total_elements) == expected_encode_ratio, (
+        "Incorrect encode mask ratio"
+    )
+    assert (num_decoder / total_elements) == expected_decode_ratio, (
+        "Incorrect decode mask ratio"
+    )
 
 
 def test_random_range_masking() -> None:

@@ -56,6 +56,7 @@ class HeliosSample(NamedTuple):
     # naip_10 is currently 4x the height/width of sentinel2_l2a.
     naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
     gse: ArrayTensor | None = None  # [B, H, W, 1, len(GSE_bands)]
+    cdl: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
@@ -736,9 +737,9 @@ class HeliosDataset(Dataset):
         self, sample_dict: dict[str, Any], missing_timesteps_masks: dict[str, Any]
     ) -> tuple[HeliosSample, list[str]]:
         """Fill the sample with missing values."""
-        assert (
-            sample_dict["timestamps"].shape[0] == self.max_sequence_length
-        ), f"Timestamps shape {sample_dict['timestamps'].shape[0]} does not match max_sequence_length {self.max_sequence_length}"
+        assert sample_dict["timestamps"].shape[0] == self.max_sequence_length, (
+            f"Timestamps shape {sample_dict['timestamps'].shape[0]} does not match max_sequence_length {self.max_sequence_length}"
+        )
         missing_modalities = []
         sample = HeliosSample(**sample_dict)
         for modality in self.training_modalities:
