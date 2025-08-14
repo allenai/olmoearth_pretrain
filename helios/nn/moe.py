@@ -80,38 +80,33 @@ def has_only_one_value(t: Tensor) -> bool:
     return (t == t[0]).all()
 
 
-def all_gather_variable_dim(
-    t: Tensor, dim: int = 0, sizes: Tensor | None = None
-) -> tuple[Tensor, Tensor]:
-    """all_gather_variable_dim."""
+def all_gather_variable_dim(t, dim = 0, sizes = None):
     device, rank, world_size = t.device, dist.get_rank(), dist.get_world_size()
 
     if not exists(sizes):
-        sizes_t = gather_sizes(t, dim=dim)
-    else:
-        sizes_t = sizes
+        sizes = gather_sizes(t, dim = dim)
 
-    if has_only_one_value(sizes_t):
+    if has_only_one_value(sizes):
         gathered_tensors = all_gather_same_dim(t)
-        gathered_tensors = torch.cat(gathered_tensors, dim=dim)
+        gathered_tensors = torch.cat(gathered_tensors, dim = dim)
         return gathered_tensors, sizes
 
-    max_size = sizes_t.amax().item()
+    max_size = sizes.amax().item()
 
-    padded_t = pad_dim_to(t, max_size, dim=dim)
+    padded_t = pad_dim_to(t, max_size, dim = dim)
     gathered_tensors = all_gather_same_dim(padded_t)
 
-    gathered_tensors = torch.cat(gathered_tensors, dim=dim)
-    seq = torch.arange(max_size, device=device)
+    gathered_tensors = torch.cat(gathered_tensors, dim = dim)
+    seq = torch.arange(max_size, device = device)
 
-    mask = rearrange(seq, "j -> 1 j") < rearrange(sizes_t, "i -> i 1")
-    mask = rearrange(mask, "i j -> (i j)")
-    seq = torch.arange(mask.shape[-1], device=device)
+    mask = rearrange(seq, 'j -> 1 j') < rearrange(sizes, 'i -> i 1')
+    mask = rearrange(mask, 'i j -> (i j)')
+    seq = torch.arange(mask.shape[-1], device = device)
     indices = seq[mask]
 
     gathered_tensors = gathered_tensors.index_select(dim, indices)
 
-    return gathered_tensors, sizes_t
+    return gathered_tensors, sizes
 
 
 class AllGatherFunction(Function):
