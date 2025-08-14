@@ -523,7 +523,7 @@ class TopNGating(Module):
             self.num_gates,
             self.eps,
         )
-
+        print("in top n gating, x.dtype, ", dtype, x.dtype)
         # threshold, capacity depending on training or eval
 
         suffix = "train" if self.training else "eval"
@@ -640,7 +640,7 @@ class TopNGating(Module):
         # dispatch tensor
 
         dispatch_tensor = combine_tensor.bool().type(dtype)
-
+        print("in top n gating, dispatch_tensor.dtype, ", dispatch_tensor.dtype, dtype)
         if self.straight_through_dispatch_tensor:
             dispatch_tensor = dispatch_tensor + combine_tensor - combine_tensor.detach()
 
@@ -728,7 +728,7 @@ class MoE(Module):
         )
 
         # dispatch
-
+        print("in MoE, dispatch_tensor.dtype, x.dtype, ", x.dtype, dispatch_tensor.dtype)
         expert_inputs = einsum("b n d, b n e c -> b e c d", x, dispatch_tensor)
 
         # feed the expert inputs through the experts.
