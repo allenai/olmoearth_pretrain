@@ -384,7 +384,7 @@ class HeliosTrainModule(TrainModule):
 
     def zero_grads(self) -> None:
         """Zero the gradients."""
-        self.optimizer.zero_grad(set_to_none=False)
+        self.optimizer.zero_grad(set_to_none=True)
 
     def optim_step(self) -> None:
         """Optimize the model."""
