@@ -298,7 +298,9 @@ class HeliosSample(NamedTuple):
         remaining_tokens = max_tokens_per_instance - used_tokens
         max_t_within_budget = remaining_tokens / time_multiply_tokens
         if max_t_within_budget < 1:
-            raise ValueError("patch_size too small for this sample and budget")
+            raise ValueError(
+                f"patch_size too small for this sample and budget, h_w_p: {h_w_p}, max_tokens: {max_tokens_per_instance}"
+            )
 
         return min(floor(max_t_within_budget), self.time)
 
