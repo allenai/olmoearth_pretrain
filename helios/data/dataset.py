@@ -57,6 +57,7 @@ class HeliosSample(NamedTuple):
     naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
     gse: ArrayTensor | None = None  # [B, H, W, 1, len(GSE_bands)]
     cdl: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
+    worldcereal: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
