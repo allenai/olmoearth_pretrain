@@ -91,7 +91,7 @@ def all_gather_variable_dim(
     else:
         sizes_t = sizes
 
-    if has_only_one_value(sizes):
+    if has_only_one_value(sizes_t):
         gathered_tensors = all_gather_same_dim(t)
         gathered_tensors = torch.cat(gathered_tensors, dim=dim)
         return gathered_tensors, sizes
