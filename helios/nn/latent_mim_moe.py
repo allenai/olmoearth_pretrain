@@ -53,7 +53,6 @@ class LatentMIMMoE(nn.Module, DistributedMixins):
         torch.Tensor,
         TokensAndMasks | None,
         torch.Tensor,
-        torch.Tensor,
     ]:
         """Forward pass for the Latent MIM Style.
 
@@ -64,7 +63,7 @@ class LatentMIMMoE(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent, latent_projected_and_pooled, counts, route_prob, _, _ = self.encoder(
+        latent, latent_projected_and_pooled, total_aux_loss = self.encoder(
             x, patch_size=patch_size
         )
         reconstructed = None
@@ -76,8 +75,7 @@ class LatentMIMMoE(nn.Module, DistributedMixins):
             decoded,
             latent_projected_and_pooled,
             reconstructed,
-            counts,
-            route_prob,
+            total_aux_loss
         )
 
     def apply_fsdp(

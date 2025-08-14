@@ -1,22 +1,47 @@
-import torch
-from torch.nn import Module
-import torch.nn.functional as F
-import torch.distributed as dist
-from torch import nn, einsum, Tensor
+from __future__ import annotations
+from olmo_core.config import Config
+from collections import namedtuple
+from typing import Tuple
 from torch.autograd import Function
-from einops import rearrange, pack, unpack
+from dataclasses import dataclass
+import torch
+from torch import autocast
+from torch import Tensor
+from torch.nn import Module, ModuleList
+from torch import nn, einsum
+import torch.nn.functional as F
 
-from helios.nn.flexihelios import Encoder, Block
+import einx
+from typing import Any, NamedTuple
+from einops import rearrange, repeat, reduce, pack, unpack
+import logging
+from helios.nn.attention import Attention, LayerScale, DropPath, fully_shard
+from helios.dataset.utils import get_modality_specs_from_names
+from helios.nn.flexihelios import BASE_GSD, Encoder, TokensAndMasks, get_cumulative_sequence_lengths
 from helios.train.masking import MaskedHeliosSample, MaskValue
+from helios.data.constants import ModalitySpec, Modality
+import torch.distributed as dist
+logger = logging.getLogger(__name__)
 
-def exists(val):
-    return val is not None
+# constants
 
-def default(val, d):
-    return val if exists(val) else d
+MIN_EXPERT_CAPACITY = 4
 
-def divisible_by(num, den):
-    return (num % den) == 0
+class MixtureOfExpertsReturn(NamedTuple):
+    outputs: Tensor
+    total_aux_loss: Tensor
+    balance_loss: Tensor
+    router_z_loss: Tensor
+
+    def update_outputs(self, x: Tensor) -> "MixtureOfExpertsReturn":
+        return MixtureOfExpertsReturn(
+            outputs=x,
+            total_aux_loss=self.total_aux_loss,
+            balance_loss=self.balance_loss,
+            router_z_loss=self.router_z_loss
+        )
+
+# helper functions
 
 def pad_dim_to(t, length, dim = 0):
     pad_length = length - t.shape[dim]
@@ -24,8 +49,8 @@ def pad_dim_to(t, length, dim = 0):
     return F.pad(t, (*((0, 0) * zero_pairs), 0, pad_length))
 
 def all_gather_same_dim(t):
-    world_size = dist.get_world_size()
     t = t.contiguous()
+    world_size = dist.get_world_size()
     gathered_tensors = [torch.empty_like(t, device = t.device, dtype = t.dtype) for i in range(world_size)]
     dist.all_gather(gathered_tensors, t)
     return gathered_tensors
@@ -91,13 +116,23 @@ class AllGather(nn.Module):
 def split_by_rank(x):
     rank = dist.get_rank()
     out = x[rank]
-    return out
+
+    if isinstance(x, tuple):
+        sizes = tuple(map(lambda t: t.shape[0], x))
+    else:
+        sizes = (x.shape[1],) * x.shape[0]
+
+    sizes = torch.tensor(sizes, device = out.device, dtype = torch.long)
+    return out, sizes
 
 def exists(val):
     return val is not None
 
-def default(val, d):
-    return val if exists(val) else d
+def default(val, default):
+    if exists(val):
+        return val
+
+    return default() if callable(default) else default
 
 def divisible_by(num, den):
     return (num % den) == 0
@@ -118,8 +153,13 @@ def pack_one(t, pattern):
 def unpack_one(t, ps, pattern):
     return unpack(t, ps, pattern)[0]
 
-def l2norm(t):
-    return F.normalize(t, dim = - 1)
+def cast_tuple(el, len = 1):
+    return el if isinstance(el, tuple) else ((el,) * len)
+
+def Sequential(*modules):
+    return nn.Sequential(*filter(exists, modules))
+
+# tensor related helper functions
 
 def cumsum_exclusive(t, dim = -3):
     assert dim < 0
@@ -134,16 +174,15 @@ def gumbel_noise(t):
     noise = torch.zeros_like(t).uniform_(0, 1)
     return -log(-log(noise))
 
-# norm
+# pytorch one hot throws an error if there are out of bound indices.
+# tensorflow, in contrast, does not throw an error
 
-class LayerNorm(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.gamma = nn.Parameter(torch.ones(dim))
-        self.register_buffer("beta", torch.zeros(dim))
+def safe_one_hot(indexes, max_length):
+    max_index = indexes.max() + 1
+    one_hot_classes = max(max_index + 1, max_length)
+    return F.one_hot(indexes, one_hot_classes)[..., :max_length]
 
-    def forward(self, x):
-        return F.layer_norm(x, x.shape[-1:], self.gamma, self.beta)
+# rms normalization
 
 class RMSNorm(Module):
     def __init__(self, dim):
@@ -152,63 +191,78 @@ class RMSNorm(Module):
         self.gamma = nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
-        return l2norm(x) * self.scale * self.gamma
+        return F.normalize(x, dim = -1) * self.gamma * self.scale
 
-# expert
-
-def FeedForward(
-    dim,
-    mult = 4,
-    dropout = 0.
-):
-    dim_hidden = int(dim * mult)
-    return nn.Sequential(
-        nn.Linear(dim, dim_hidden),
-        nn.GELU(),
-        nn.Dropout(dropout),
-        nn.Linear(dim_hidden, dim)
-    )
+# expert class
+# best performing was ff geglu with multiplicative bias (just after gating)
 
 class GEGLU(Module):
+    def __init__(
+        self,
+        dim,
+        mult_bias = True
+    ):
+        super().__init__()
+        self.mult_bias = nn.Parameter(torch.ones(dim)) if mult_bias else 1.
+
     def forward(self, x):
         x, gate = x.chunk(2, dim = -1)
-        return x * F.gelu(gate)
+        return F.gelu(gate) * x * self.mult_bias
 
-def GLUFeedForward(
-    dim,
-    mult = 4,
-    dropout = 0.
-):
-    dim_hidden = int(dim * mult * 2 / 3)
+class Expert(Module):
+    def __init__(
+        self,
+        dim,
+        hidden_mult = 4,
+        mult_bias = True,
+        prenorm = False
+    ):
+        super().__init__()
+        dim_hidden = int(dim * hidden_mult * 2 / 3)
 
-    return nn.Sequential(
-        nn.Linear(dim, dim_hidden * 2),
-        GEGLU(),
-        nn.Dropout(dropout),
-        nn.Linear(dim_hidden, dim)
-    )
+        self.net = Sequential(
+            RMSNorm(dim) if prenorm else None,
+            nn.Linear(dim, dim_hidden * 2),
+            GEGLU(dim_hidden, mult_bias = mult_bias),
+            nn.Linear(dim_hidden, dim)
+        )
 
-# experts
+        self.apply(self.init_)
 
-class Experts(nn.Module):
+    def init_(self, module):
+        if isinstance(module, nn.Linear):
+            dim = module.weight.shape[0]
+            std = dim ** -0.5
+
+            module.weight.data.uniform_(-std, std)
+            module.bias.data.uniform_(-std, std)
+
+    def forward(self, x):
+        return self.net(x)
+
+class Experts(Module):
     def __init__(
         self,
         experts,
         is_distributed = None,
-        offload_unused_experts_to_cpu = True
+        allow_var_seq_len = False # whether to handle variable sequence length
     ):
         super().__init__()
         self.num_experts = len(experts)
-        self.experts = nn.ModuleList(experts)
+        self.experts = ModuleList(experts)
+
+        # distributed related settings
 
         self.is_distributed = is_distributed
         if not exists(self.is_distributed):
             self.is_distributed = dist.is_initialized() and dist.get_world_size() > 1
 
-        # whether to offload unused experts to cpu, will require optimizer handles conversion of gradients to right device when accumulating
-        self.offload_unused_experts_to_cpu = offload_unused_experts_to_cpu
-
         self.all_gather = AllGather()
+
+        self.allow_var_seq_len = allow_var_seq_len
+
+        # device tracker, since need to manually move experts not in use to CPU in distributed
+
         self.register_buffer('dummy', torch.ones(1), persistent = False)
 
     @property
@@ -216,9 +270,6 @@ class Experts(nn.Module):
         return self.dummy.device
 
     def all_experts_to_cpu_besides(self, selection):
-        if not self.offload_unused_experts_to_cpu:
-            return
-
         if isinstance(selection, int):
             experts = [self.experts[selection]]
         if isinstance(selection, slice):
@@ -246,25 +297,41 @@ class Experts(nn.Module):
         d - feature dimension
         """
 
+        # declare some variables
+
         is_distributed = default(is_distributed, self.is_distributed)
         shape, num_experts = x.shape, self.num_experts
+        seq_len = shape[-2]
 
         # for now naively all gather across batch dimension if distributed, optimize later
 
+        world_size = 1
+        rank = 0
+
         if is_distributed:
             seq_sizes = gather_sizes(x, dim = -2)
-            assert has_only_one_value(seq_sizes), 'number of tokens per expert must be the same'
+            var_seq_len = not has_only_one_value(seq_sizes)
+
+            assert self.allow_var_seq_len or not var_seq_len, 'number of tokens per expert must be the same - if you want the framework to handle it, set `allow_var_seq_len = True` on `Experts`'
+
+            # if variable sequence length, pad
+
+            if var_seq_len:
+                max_seq_size = seq_sizes.amax().item()
+                x = pad_dim_to(x, max_seq_size, dim = -2)
+
+            # gather and concat across batches, accounting for variable batch sizes
 
             x, batch_sizes = self.all_gather(x)
-            total_batch_size = x.shape[0]
+            total_batch_size = batch_sizes.sum().item()
 
             world_size = dist.get_world_size()
             rank = dist.get_rank()
-        else:
-            world_size = 1
-            rank = 0
 
         # the experts in use on the rank
+
+        num_experts_per_rank = num_experts
+        expert_slice = slice(0, num_experts)
 
         if is_distributed:
             if world_size <= num_experts:
@@ -294,9 +361,6 @@ class Experts(nn.Module):
             assert len(num_experts_batches_across_ranks) == world_size
 
             expert_slice = slice(expert_start_index, expert_start_index + num_experts_per_rank)
-        else:
-            num_experts_per_rank = num_experts
-            expert_slice = slice(0, num_experts)
 
         # if distributed, each machine only handles subset of experts and batch
 
@@ -304,8 +368,9 @@ class Experts(nn.Module):
 
         if is_distributed:
             x, expert_batch_packed_shape = pack_one(x, '* n d')
+
             x = x.split(num_experts_batches_across_ranks, dim = 0)
-            x = split_by_rank(x)
+            x, experts_per_rank_sizes = split_by_rank(x)
 
             if num_experts_per_rank > 0:
                 x = rearrange(x, '(e b) n d -> e b n d', e = num_experts_per_rank)
@@ -321,6 +386,7 @@ class Experts(nn.Module):
         # route tokens to appropriate experts
 
         outs = []
+
         for expert, expert_input in zip(experts, x):
             out = expert(expert_input)
             outs.append(out)
@@ -328,131 +394,366 @@ class Experts(nn.Module):
         if len(outs) > 0:
             outs = torch.stack(outs)
         else:
-            outs = torch.empty_like(x).requires_grad_()
+            outs = torch.empty_like(x, requires_grad = self.training)
 
         # all gather across merged expert batches dimensions
         # then split the batch dimension back
 
         if is_distributed:
             outs = rearrange(outs, 'e b n d -> (e b) n d')
-            outs, _ = self.all_gather(outs)
+            outs, _ = self.all_gather(outs, sizes = experts_per_rank_sizes)
             outs = unpack_one(outs, expert_batch_packed_shape, '* n d')
 
         outs = rearrange(outs, 'e b n d -> b e n d')
 
         if is_distributed:
             outs = outs.split(batch_sizes.tolist())
-            outs = split_by_rank(outs)
+            outs, _ = split_by_rank(outs)
+
+            # account for padded sequence length
+            outs = outs[..., :seq_len, :]
 
         assert outs.shape == shape
         return outs
 
+@autocast('cuda', enabled = False)
+def topk(x, k):
+    """
+    differentiable top-k on last dimension
+    """
 
-class SoftMoE(Module):
+    values, indices = torch.topk(x, k = k, dim = -1)
+    return values, indices
+
+# the below code is almost all transcribed from the official tensorflow version, from which the papers are written
+# https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/models/research/moe.py
+
+# gating network
+
+class TopNGating(Module):
+
     def __init__(
         self,
         dim,
-        *,
-        seq_len = None,
-        num_experts = 4,
-        num_slots = None,
-        expert_mult = 4,
-        dropout = 0.,
-        geglu = False,
-        is_distributed = None,
-        offload_unused_experts_to_cpu = True,
-        use_layernorm = False
+        num_gates,
+        eps = 1e-9,
+        top_n = 2,
+        threshold_train: float | Tuple[float, ...] = 0.2,
+        threshold_eval: float | Tuple[float, ...] = 0.2,
+        capacity_factor_train = 1.25,
+        capacity_factor_eval = 2.,
+        straight_through_dispatch_tensor = True
     ):
         super().__init__()
-        assert exists(seq_len) ^ exists(num_slots), 'either seq_len, or num_slots must be passed into SoftMoE'
+        self.eps = eps
+        self.num_gates = num_gates
+        self.to_gates = nn.Linear(dim, num_gates, bias = False)
 
-        if exists(seq_len):
-            num_slots = default(num_slots, seq_len // num_experts)
-        elif exists(num_slots):
-            seq_len = num_slots * num_experts
+        assert top_n >= 2, 'must be 2 or more experts'
+        self.top_n = top_n
+        top_n_minus_1 = top_n - 1
 
-        norm_klass = LayerNorm if use_layernorm else RMSNorm
-        self.norm = norm_klass(dim)
+        threshold_train = cast_tuple(threshold_train, top_n_minus_1)
+        threshold_eval = cast_tuple(threshold_eval, top_n_minus_1)
 
-        self.slot_norm = norm_klass(dim)
-        self.slot_embeds = nn.Parameter(torch.randn(num_experts, num_slots, dim))
+        assert len(threshold_train) == len(threshold_eval) == top_n_minus_1
 
-        expert_klass = GLUFeedForward if geglu else FeedForward
+        self.register_buffer('threshold_train', torch.tensor([eps, *threshold_train]))
+        self.register_buffer('threshold_eval', torch.tensor([eps, *threshold_eval]))
 
-        self.experts = Experts(
-            experts = [expert_klass(dim = dim, mult = expert_mult, dropout = dropout) for _ in range(num_experts)],
-            is_distributed = is_distributed,
-            offload_unused_experts_to_cpu = offload_unused_experts_to_cpu
+        self.capacity_factor_train = capacity_factor_train
+        self.capacity_factor_eval = capacity_factor_eval
+
+        self.straight_through_dispatch_tensor = straight_through_dispatch_tensor
+        self.register_buffer('zero', torch.zeros((1,)), persistent = False)
+
+    def forward(
+        self,
+        x,
+        routing_tokens,
+        noise_gates = False,
+        noise_mult = 1.
+    ):
+        """
+        einstein notation:
+
+        b - batch
+        n - sequence
+        e - experts
+        k - top-n experts
+        c - capacity
+        """
+
+        *_, b, group_size, dim, dtype, top_n, num_gates, eps = *x.shape, x.dtype, self.top_n, self.num_gates, self.eps
+
+        # threshold, capacity depending on training or eval
+
+        suffix = 'train' if self.training else 'eval'
+
+        threshold = getattr(self, f'threshold_{suffix}')
+        capacity_factor = getattr(self, f'capacity_factor_{suffix}')
+
+        # Each sequence sends (at most?) expert_capacity positions to each expert.
+        # Static expert_capacity dimension is needed for expert batch sizes
+
+        expert_capacity = min(group_size, int((group_size * capacity_factor) / num_gates))
+        expert_capacity = max(expert_capacity, MIN_EXPERT_CAPACITY)
+        expert_capacity_f = float(expert_capacity)
+
+        # gate logits and gates
+        if routing_tokens is not None:
+            gate_logits = self.to_gates(routing_tokens)  # B, 1, num_experts
+            gate_logits = gate_logits.repeat(1, x.shape[1], 1)
+        else:
+            gate_logits = self.to_gates(x)
+        maybe_noised_gate_logits = gate_logits
+
+        if noise_gates:
+            noise = gumbel_noise(maybe_noised_gate_logits)
+            maybe_noised_gate_logits = maybe_noised_gate_logits + noise * noise_mult
+
+        raw_gates = maybe_noised_gate_logits.softmax(dim = -1)
+
+        # find top N experts per position
+
+        gates, gate_indices = torch.topk(raw_gates, k = top_n, dim = -1)
+
+        # move the top-n dimension to be first
+
+        gates = rearrange(gates, '... k -> k ...')
+        gate_indices = rearrange(gate_indices, '... k -> k ...')
+
+        # masks
+
+        one_hot_gate_indices = F.one_hot(gate_indices, num_gates)
+        mask = one_hot_gate_indices.float()
+
+        mask_1 = mask[0] # needed for balancing loss
+
+        # normalize top-n gate scores
+
+        denom = reduce(gates, 'k ... -> 1 ...', 'sum').clamp(min = eps)
+        gates = gates / denom
+
+        # best performing policy was to route to the second expert, with probability of min(1., score / threshold), where score = gate2 / (gate1 + gate2)
+        # optimal threshold was ~ 0.2
+        # generalized to more than 2 experts
+
+        probs = torch.zeros_like(gates).uniform_(0., 1.)
+
+        should_route = probs < einx.divide('k b n, k -> k b n', gates, threshold.clamp(min = eps))
+
+        # tokens should always be routed to first expert
+        # threshold for first expert already set to very small number, but just in case
+
+        should_route[0, ...] = True
+
+        mask *= rearrange(should_route.float(), '... -> ... 1')
+
+        mask_cumsum = cumsum_exclusive(mask, dim = -2) # along sequence dimension
+
+        # compute assignment to experts - (batch, seq, experts)
+
+        # This is the position within the expert's mini-batch for this sequence
+
+        positions = []
+        prev_expert_count = 0.
+
+        for n in range(self.top_n):
+            position_in_expert = (mask_cumsum[n] + prev_expert_count) * mask[n]
+
+            # Remove the elements that don't fit. (batch, sequence, experts)
+            mask[n] *= (position_in_expert < expert_capacity_f).float()
+
+            # How many examples in this sequence go to this expert - needed for the next iteration as offset
+            prev_expert_count = reduce(mask[n], '... n e -> ... 1 e', 'sum') + prev_expert_count
+
+            # (batch, sequence)
+            position_in_expert = reduce(position_in_expert, '... n e -> ... n', 'sum')
+            positions.append(position_in_expert)
+
+        positions = torch.stack(positions)
+
+        # (k, batch, sequence) - mostly ones, but zeros where something didn't fit
+        mask_flat = reduce(mask, '... n e -> ... n', 'sum')
+
+        # (k, batch, sequence) - weighted assignment
+        # following https://github.com/tensorflow/mesh/blob/master/mesh_tensorflow/transformer/moe.py#L1903
+        gates = gates * mask_flat
+
+        # (batch, sequence, experts, expert_capacity)
+
+        combine_tensor = einx.multiply(
+            'k b n, k b n, k b n e, k b n c -> k b n e c',
+            gates,
+            mask_flat,
+            one_hot_gate_indices,
+            safe_one_hot(positions.long(), expert_capacity)
         )
 
-    def forward(self, x, mask = None, add_noise = False, noise_mult = 1.):
-        """
-        einstein notation
-        b - batch
-        n - sequence length
-        e - number of experts
-        s - number of slots per expert
-        d - feature dimension
-        """
+        combine_tensor = reduce(combine_tensor, 'k b n e c -> b n e c', 'sum')
 
-        is_single_token = x.ndim == 2
-        is_image = x.ndim == 4
+        # dispatch tensor
 
-        if is_image:
-            x = rearrange(x, 'b d h w -> b h w d')
-            x, ps = pack([x], 'b * d')
-        elif is_single_token:
-            x = rearrange(x, 'b d -> b 1 d')
+        dispatch_tensor = combine_tensor.bool().type(dtype)
 
-        # following Algorithm 1, with the normalization they proposed, but with scaling of both (the now popular rmsnorm + gamma)
+        if self.straight_through_dispatch_tensor:
+            dispatch_tensor = dispatch_tensor + combine_tensor - combine_tensor.detach()
 
-        x = self.norm(x)
-        slot_embeds = self.slot_norm(self.slot_embeds)
+        # balance losses - (batch, experts)
+        # We want to equalize the fraction of the batch assigned to each expert
 
-        logits = einsum('b n d, e s d -> b n e s', x, slot_embeds)
+        if self.training:
+            density_1 = reduce(mask_1, '... n e -> ... e', 'mean')
+            density_1_proxy = reduce(raw_gates, '... n e -> ... e', 'mean') # Something continuous that is correlated with what we want to equalize.
 
-        # noised dispatch and combine gate logits, with annealing if needed
+            balance_loss = (density_1_proxy * density_1).mean() * float(num_gates ** 2)
+        else:
+            balance_loss = self.zero
 
-        if add_noise:
-            noise = gumbel_noise(logits) * noise_mult
-            logits = logits + noise
+        # calculate the router z-loss proposed in paper
 
-        # account for key padding mask
+        if self.training:
+            router_z_loss = torch.logsumexp(gate_logits, dim = -1)
+            router_z_loss = torch.square(router_z_loss)
+            router_z_loss = router_z_loss.mean()
+        else:
+            router_z_loss = self.zero
 
-        if exists(mask):
-            mask = rearrange(mask, 'b n -> b n 1 1')
-            logits = logits.masked_fill(~mask, -torch.finfo(logits.dtype).max)
+        return dispatch_tensor, combine_tensor, balance_loss, router_z_loss
 
-        # get dispatch and combine weights (softmax across right dimensions)
+# plain mixture of experts
 
-        dispatch_weights = logits.softmax(dim = 1)
+class MoE(Module):
 
-        combine_weights = rearrange(logits, 'b n e s -> b n (e s)')
-        combine_weights = combine_weights.softmax(dim = -1)
+    def __init__(self,
+        dim,
+        num_experts = 16,
+        expert_hidden_mult = 4,
+        threshold_train = 0.2,
+        threshold_eval = 0.2,
+        capacity_factor_train = 1.25,
+        capacity_factor_eval = 2.,
+        gating_top_n = 2,
+        balance_loss_coef = 1e-2,
+        router_z_loss_coef = 1e-3,
+        experts: Module | None = None,
+        straight_through_dispatch_tensor = True,
+        differentiable_topk = False,
+        differentiable_topk_fused = True,
+        is_distributed = None,
+        allow_var_seq_len = False
+    ):
+        super().__init__()
+        self.dim = dim
+        self.num_experts = num_experts
 
-        # derive slots by weighted average of input tokens using the dispatch weights from above
+        self.gate = TopNGating(
+            dim,
+            top_n = gating_top_n,
+            num_gates = num_experts,
+            straight_through_dispatch_tensor = straight_through_dispatch_tensor,
+            threshold_train = threshold_train,
+            threshold_eval = threshold_eval,
+            capacity_factor_train = capacity_factor_train,
+            capacity_factor_eval = capacity_factor_eval
+        )
 
-        slots = einsum('b n d, b n e s -> b e s d', x, dispatch_weights)
+        experts = default(experts, lambda: [Expert(dim = dim, hidden_mult = expert_hidden_mult) for _ in range(num_experts)])
 
-        # route the slots per expert to each expert
+        self.experts = Experts(
+            experts,
+            is_distributed = is_distributed,
+            allow_var_seq_len = allow_var_seq_len
+        )
 
-        out = self.experts(slots)
+        self.balance_loss_coef = balance_loss_coef
+        self.router_z_loss_coef = router_z_loss_coef
 
-        # combine back out
+    def forward(
+        self,
+        x,
+        routing_tokens,
+        noise_gates = False,
+        noise_mult = 1.
+    ):
+        dispatch_tensor, combine_tensor, balance_loss, router_z_loss = self.gate(x, routing_tokens, noise_gates = noise_gates, noise_mult = noise_mult)
 
-        out = rearrange(out, ' b e s d -> b (e s) d')
-        out = einsum('b s d, b n s -> b n d', out, combine_weights)
+        # dispatch
 
-        if is_image:
-            out, = unpack(out, ps, 'b * d')
-            out = rearrange(out, 'b h w d -> b d h w')
-        elif is_single_token:
-            out = rearrange(out, 'b 1 d -> b d')
+        expert_inputs = einsum('b n d, b n e c -> b e c d', x, dispatch_tensor)
 
-        return out
+        # feed the expert inputs through the experts.
 
-class MoEBlock(Block):
-    """Transformer block with self/cross attention and an MoE MLP.
+        expert_outputs = self.experts(expert_inputs)
+
+        # combine
+
+        output = einsum('b e c d, b n e c -> b n d', expert_outputs, combine_tensor)
+
+        # losses
+
+        weighted_balance_loss = balance_loss * self.balance_loss_coef
+        weighted_router_z_loss = router_z_loss * self.router_z_loss_coef
+
+        # combine the losses
+
+        total_aux_loss = weighted_balance_loss + weighted_router_z_loss
+
+        return MixtureOfExpertsReturn(output, total_aux_loss, balance_loss, router_z_loss)
+
+# sparse moe block
+# in particular, they found that adding a feedforward before or after greatly stabilized the training and improved results
+
+class SparseMoEBlock(Module):
+
+    def __init__(
+        self,
+        moe: MoE,
+        *,
+        add_ff_before = False,
+        add_ff_after = True
+    ):
+        super().__init__()
+        dim = moe.dim
+
+        self.moe = moe
+        self.moe_prenorm = RMSNorm(dim)
+
+        self.ff_before = Expert(dim, prenorm = True) if add_ff_before else None
+        self.ff_after = Expert(dim, prenorm = True) if add_ff_after else None
+
+    def forward(
+        self,
+        x,
+        routing_tokens,
+        noise_gates = False,
+        noise_mult = 1.
+    ):
+
+        # feedforward before
+
+        if exists(self.ff_before):
+            x = self.ff_before(x) + x
+
+        # mixture of experts layer
+
+        residual = x
+
+        moe_out, total_aux_loss, balance_loss, router_z_loss = self.moe(self.moe_prenorm(x), routing_tokens=routing_tokens, noise_gates = noise_gates, noise_mult = noise_mult)
+
+        x = moe_out + residual
+
+        # feedforward after
+
+        if exists(self.ff_after):
+            x = self.ff_after(x) + x
+
+        return MixtureOfExpertsReturn(x, total_aux_loss, balance_loss, router_z_loss)
+
+
+class SparseMoEBlockWithAttn(Module):
+    """Transformer block with self/cross attention and MLP.
 
     Args:
         dim: Input dimension
@@ -502,28 +803,34 @@ class MoEBlock(Block):
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
         """
-        super().__init__(
-            dim=dim,
+        super().__init__()
+        self.norm1 = norm_layer(dim)
+        self.attn = Attention(
+            dim,
             num_heads=num_heads,
-            mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias,
             qk_norm=qk_norm,
-            drop=drop,
             attn_drop=attn_drop,
-            drop_path=drop_path,
-            init_values=init_values,
-            act_layer=act_layer,
+            proj_drop=drop,
             norm_layer=norm_layer,
             cross_attn=cross_attn,
             use_flash_attn=use_flash_attn,
         )
+        self.ls1 = (
+            LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
+        )
+        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
-        self.mlp = SoftMoE(d_model=dim, expert=self.mlp)
+        self.norm2 = norm_layer(dim)
+        self.mlp = SparseMoEBlock(moe=MoE(dim=dim, num_experts=8, expert_hidden_mult=mlp_ratio))
+        self.ls2 = (
+            LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
+        )
 
-    def forward(  # type: ignore
+    def forward(
         self,
         x: torch.Tensor,
-        routing_tokens: torch.Tensor,
+        routing_tokens: Tensor,
         y: torch.Tensor | None = None,
         cu_seqlens: torch.Tensor | None = None,
         cu_seqlens_q: torch.Tensor | None = None,
@@ -532,12 +839,11 @@ class MoEBlock(Block):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> MixtureOfExpertsReturn:
         """Forward pass.
 
         Args:
             x: Input tensor of shape (B, N, C)
-            routing_tokens: routing tokens, shape (b, 1, C)
             y: Optional context tensor for cross attention of shape (B, M, C)
             attn_mask: Optional attention mask tensor
             cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
@@ -565,11 +871,18 @@ class MoEBlock(Block):
                 )
             )
         )
-        x, counts, route_prob, n_dropped, route_prob_max = self.mlp(
-            self.norm2(x), routing_tokens
-        )
-        x = x + self.drop_path(self.ls2(x))
-        return x, counts, route_prob, n_dropped, route_prob_max
+        moe_return: MixtureOfExpertsReturn = self.mlp(self.norm2(x), routing_tokens)
+        x = x + self.drop_path(self.ls2(moe_return.outputs))
+        return moe_return.update_outputs(x)
+
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        fully_shard(self, **fsdp_kwargs)
+
+    def apply_compile(self) -> None:
+        """Apply torch.compile to the model."""
+        self.compile()
+
 
 class MoEEncoder(Encoder):
     """Encoder module that processes masked input samples into token representations."""
@@ -634,9 +947,10 @@ class MoEEncoder(Encoder):
             qk_norm=qk_norm,
         )
 
+        # todo - make this only the later blocks
         self.blocks = nn.ModuleList(
             [
-                SwitchBlock(
+                SparseMoEBlockWithAttn(
                     embedding_size,
                     num_heads,
                     mlp_ratio,
@@ -708,7 +1022,7 @@ class MoEEncoder(Encoder):
         attn_mask = self.get_attn_or_none_mask(
             new_mask, always_pass_none_mask_to_transformer
         )
-        counts, route_prob, n_dropped, route_prob_max = [], [], [], []
+        total_aux_losses = []
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -726,7 +1040,7 @@ class MoEEncoder(Encoder):
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
-            tokens, f, p, n_d, p_max = blk(
+            tokens, total_aux_loss, _, _ = blk(
                 x=tokens,
                 routing_tokens=latlons,
                 cu_seqlens=cu_seqlens,
@@ -734,10 +1048,7 @@ class MoEEncoder(Encoder):
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
             )
-            counts.append(f)
-            route_prob.append(p)
-            n_dropped.append(n_d)
-            route_prob_max.append(p_max)
+            total_aux_losses.append(total_aux_loss)
 
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
@@ -766,10 +1077,7 @@ class MoEEncoder(Encoder):
         tokens_per_modality_dict.update(original_masks_dict)
         return (  # type: ignore
             tokens_per_modality_dict,
-            torch.stack(counts),
-            torch.stack(route_prob),
-            n_dropped,
-            torch.stack(route_prob_max),
+            torch.stack(total_aux_losses),
         )
 
     # TODO: we want to have a single API for the encoder and decoder
@@ -800,10 +1108,7 @@ class MoEEncoder(Encoder):
         ):
             (
                 patchified_tokens_and_masks,
-                counts,
-                route_prob,
-                n_dropped,
-                route_prob_max,
+                total_aux_losses
             ) = self.apply_attn(
                 x=patchified_tokens_and_masks,
                 timestamps=x.timestamps,
@@ -813,24 +1118,18 @@ class MoEEncoder(Encoder):
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         else:
-            counts = torch.empty(1)
-            route_prob = torch.empty(1)
-            n_dropped = 0
-            route_prob_max = torch.empty(1)
+            total_aux_losses = torch.empty(1)
 
         output = TokensAndMasks(**patchified_tokens_and_masks)
         return (  # type: ignore
             output,
             self.project_and_aggregate(output),
-            counts,
-            route_prob,
-            n_dropped,
-            route_prob_max,
+            total_aux_losses,
         )
 
 
 @dataclass
-class SwitchEncoderConfig(Config):
+class MoEEncoderConfig(Config):
     """Configuration for the Encoder."""
 
     supported_modality_names: list[str]
@@ -873,4 +1172,4 @@ class SwitchEncoderConfig(Config):
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Encoder kwargs: {kwargs}")
-        return SwitchEncoder(**kwargs)
+        return MoEEncoder(**kwargs)

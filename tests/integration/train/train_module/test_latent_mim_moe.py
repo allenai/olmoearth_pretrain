@@ -14,7 +14,7 @@ from helios.data.dataset import HeliosSample, collate_helios
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import PredictorConfig
 from helios.nn.latent_mim_moe import LatentMIMMoE, LatentMIMMoEConfig
-from helios.nn.moe import SwitchEncoderConfig
+from helios.nn.moe import MoEEncoderConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim_moe import LatentMIMMoETrainModuleConfig
@@ -47,7 +47,7 @@ def latent_mim_model(
 ) -> LatentMIMMoE:
     """Create a real LatentMIM model for testing."""
     # Create encoder config
-    encoder_config = SwitchEncoderConfig(
+    encoder_config = MoEEncoderConfig(
         supported_modality_names=supported_modality_names,
         embedding_size=16,
         max_patch_size=8,

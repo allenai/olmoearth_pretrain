@@ -205,7 +205,7 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
-        total_batch_load = torch.zeros([], device=self.device)
+        total_batch_aux_loss = torch.zeros([], device=self.device)
         patch_size, batch_data = batch
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
@@ -227,28 +227,11 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
                 )
                 masked_batch = MaskedHeliosSample(**masked_batch_d)
                 # Run Encoder and decoder on the augmented input
-                loss, latent, decoded, target_output, counts, route_prob = (
+                loss, latent, decoded, target_output, total_aux_loss = (
                     self.model_forward(masked_batch, patch_size, self.token_exit_cfg)
                 )
-                # compute the load balancing loss
-                # Total number of tokens processed, $T$, in the current batch $\mathscr{B}$
-                total = counts.sum(dim=-1, keepdims=True)
-                # Fraction of tokens routed to each expert
-                # $$f_i = \frac{1}{T} \sum_{x \in \mathscr{B}} \mathbf{1} \{ \mathop{argmax} p(x), i \}$$
-                # $f_i$ is the count of tokens where the argmax of $p(x)$ is equal to $i$.
-                route_frac = counts / total
-                # Mean routing probability
-                # $$P_i = \frac{1}{T} \sum_{x \in \mathscr{B}} p_i (x)$$
-                route_prob = route_prob / total
-                # Load balancing loss
-                # $$\mathscr{L} = N \sum_{i=1}^N f_i \cdot P_i$$
-                # $\mathscr{L}$ is the loss for a single layer and here we are
-                # taking the sum of losses across all layers. counts.shape[-1] == num experts
-                load_balancing_loss = (
-                    counts.shape[-1] * (route_frac * route_prob).sum()
-                ) / len(self.model.encoder.blocks)
-                loss += self.balancing_loss_weight * load_balancing_loss
-                total_batch_load += get_local_tensor(load_balancing_loss.detach())
+                loss += self.balancing_loss_weight * total_aux_loss.mean()
+                total_batch_aux_loss += get_local_tensor(total_aux_loss.detach().mean())
 
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
@@ -280,7 +263,7 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
         )
         self.trainer.record_metric(
             "train/balancing_loss",
-            total_batch_load,
+            total_batch_aux_loss,
             ReduceType.mean,
         )
         self.log_regularization(total_batch_reg)
@@ -299,16 +282,15 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
         TokensAndMasks,
         TokensAndMasks,
         torch.Tensor,
-        torch.Tensor,
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, _, reconstructed, counts, route_prob = self.model(
+            latent, decoded, _, reconstructed, total_aux_loss = self.model(
                 batch, patch_size
             )
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
-                target_output, _, _, _, _, _ = self.model.target_encoder.forward(
+                target_output, _, _ = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
@@ -316,4 +298,4 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output, counts, route_prob
+            return loss, latent, decoded, target_output, total_aux_loss

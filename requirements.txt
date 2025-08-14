@@ -5,6 +5,7 @@ breizhcrops==0.0.4.1 # Force the latest available
 cartopy
 class-registry
 einops>=0.7.0
+einx
 gcsfs
 hdf5plugin
 matplotlib
