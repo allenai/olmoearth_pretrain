@@ -84,7 +84,7 @@ def my_build_common_components(
 
 def build_model_config(common: CommonComponents) -> LatentMIMMoEConfig:
     """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    model_size = MODEL_SIZE_ARGS["tiny_shallow_decoder"]
 
     encoder_config = MoEEncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
