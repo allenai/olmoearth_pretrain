@@ -852,6 +852,7 @@ class FlexiHeliosBase(nn.Module):
         qk_norm: bool = False,
         use_task_lora: bool = False,
         task_dim: int = 768,
+        task_lora_indices: list[int] | None = None,
     ) -> None:
         """Initialize the FlexiHeliosBase class."""
         super().__init__()
@@ -866,8 +867,10 @@ class FlexiHeliosBase(nn.Module):
         self.use_flash_attn = use_flash_attn
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
-        self.blocks = nn.ModuleList(
-            [
+
+        blocks = []
+        for i in range(depth):
+            blocks.append(
                 Block(
                     embedding_size,
                     num_heads,
@@ -878,13 +881,15 @@ class FlexiHeliosBase(nn.Module):
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
-                    use_task_lora=use_task_lora,
+                    use_task_lora=(
+                        use_task_lora
+                        and (task_lora_indices is None or i in task_lora_indices)
+                    ),
                     task_dim=task_dim,
                 )
-                for _ in range(depth)
-            ]
-        )
+            )
 
+        self.blocks = nn.ModuleList(blocks)
         self.composite_encodings = FlexiHeliosCompositeEncodings(
             embedding_size,
             self.supported_modalities,
@@ -1078,6 +1083,7 @@ class Encoder(FlexiHeliosBase):
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
         use_task_lora: bool = False,
+        task_lora_indices: list[int] | None = None,
         task_dim: int = 768,
     ):
         """Initialize the encoder.
@@ -1103,6 +1109,7 @@ class Encoder(FlexiHeliosBase):
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
             use_task_lora: Whether to apply low-rank updates to attention projection heads
+            task_lora_indices: Indices of layers to apply task-conditioned LoRA
             task_dim: Dimension of task embeds used to condition LoRA updates
         """
         super().__init__(
@@ -1118,6 +1125,7 @@ class Encoder(FlexiHeliosBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
             use_task_lora=use_task_lora,
+            task_lora_indices=task_lora_indices,
             task_dim=task_dim,
         )
         self.min_patch_size = min_patch_size
@@ -1830,6 +1838,7 @@ class EncoderConfig(Config):
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
     use_task_lora: bool = False
+    task_lora_indices: list[int] | None = None
     task_dim: int = 768
 
     def validate(self) -> None:

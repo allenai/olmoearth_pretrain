@@ -11,7 +11,7 @@ class TaskLoRALinear(nn.Module):
     r"""Drop-in Linear with task-conditioned LoRA.
 
     This layer augments a standard linear projection with a per-task, low-rank
-    weight update :math:`\\Delta W` that is **generated** from a task embedding.
+    weight update :math:`\\Delta W` that is generated from a task embedding.
 
     At initialization the LoRA generators' final layers are zero-initialized,
     ensuring :math:`\\Delta W = 0` and preserving the behavior of a plain
@@ -37,7 +37,7 @@ class TaskLoRALinear(nn.Module):
         lora_rank: int = 8,
         lora_alpha: float = 8.0,
         lora_dropout: float = 0.1,
-        lora_gen_hidden: int = 128,
+        lora_gen_hidden: int = 64,
         lora_gen_layers: int = 2,
         lora_gen_activation: str | None = "gelu",
     ) -> None:
@@ -60,24 +60,21 @@ class TaskLoRALinear(nn.Module):
         super().__init__()
 
         # Base linear
-        self.in_features = int(in_features)
-        self.out_features = int(out_features)
+        self.in_features = in_features
+        self.out_features = out_features
         self.weight = nn.Parameter(torch.empty(self.out_features, self.in_features))
         self.bias = nn.Parameter(torch.empty(self.out_features)) if bias else None
         self.reset_parameters()
 
         # LoRA config
-        self.lora_rank = int(lora_rank)
+        self.lora_rank = lora_rank
+        self.gen_hidden = lora_gen_hidden
         self.task_dim = task_dim
-        self.lora_alpha = float(lora_alpha)
-        self.lora_scaling = self.lora_alpha / self.lora_rank
-        self.lora_gen_layers = int(lora_gen_layers)
+        self.lora_alpha = lora_alpha
+        self.lora_gen_layers = lora_gen_layers
         self.lora_gen_activation = lora_gen_activation
-
-        self.lora_in_dropout = (
-            nn.Dropout(lora_dropout) if lora_dropout > 0 else nn.Identity()
-        )
-        self.gen_hidden = int(lora_gen_hidden) if lora_gen_hidden is not None else 128
+        self.lora_dropout = lora_dropout
+        self.lora_scaling = self.lora_alpha / self.lora_rank
 
         # Resolve activation class (fallback to Identity if None or unrecognized)
         if lora_gen_activation is None:
@@ -121,7 +118,12 @@ class TaskLoRALinear(nn.Module):
         in_size = self.task_dim
         for _ in range(max(0, self.lora_gen_layers - 1)):
             layers.extend(
-                [nn.Linear(in_size, self.gen_hidden, bias=True), self.activation_cls()]
+                [
+                    nn.Linear(in_size, self.gen_hidden, bias=True),
+                    nn.Dropout(self.lora_dropout),
+                    self.activation_cls(),
+                    nn.Dropout(self.lora_dropout),
+                ]
             )
             in_size = self.gen_hidden
         layers.append(nn.Linear(in_size, out_size, bias=True))
@@ -175,7 +177,7 @@ class TaskLoRALinear(nn.Module):
         delta = torch.bmm(a, b)  # (B_eff, out, in)
 
         # Base + LoRA paths
-        x2d_drop = self.lora_in_dropout(x2d)  # (B_eff, in)
+        x2d_drop = F.dropout(x2d, p=self.lora_dropout)  # (B_eff, in)
         y_base = F.linear(x2d, self.weight, self.bias)  # (B_eff, out)
 
         # Compute y_delta = x2d_drop @ delta^T per sample

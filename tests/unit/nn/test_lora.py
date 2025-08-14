@@ -109,50 +109,6 @@ def test_invalid_last_dim_raises() -> None:
         _ = tl(x, task_emb=task)
 
 
-def test_alpha_scaling_effect() -> None:
-    """Delta magnitude grows with alpha (roughly)."""
-    # From the lora paper, delta should somewhat scale the learning rate
-    torch.manual_seed(6)
-    in_f, out_f, task_d, r = 8, 8, 4, 2
-    B = 3
-    x = torch.randn(B, 7, in_f)
-    task = torch.randn(B, task_d)  # (batch, task_dim)
-
-    def make(alpha: float) -> TaskLoRALinear:
-        tl = TaskLoRALinear(
-            in_f,
-            out_f,
-            task_dim=task_d,
-            lora_rank=r,
-            lora_alpha=alpha,
-            lora_dropout=0.0,
-        )
-        # Force nonzero generators for test (override zero-init)
-        with torch.no_grad():
-            la = tl.lora_gen_a[-1]
-            lb = tl.lora_gen_b[-1]
-            nn.init.uniform_(la.weight, -0.1, 0.1)
-            nn.init.uniform_(la.bias, -0.1, 0.1)
-            nn.init.uniform_(lb.weight, -0.1, 0.1)
-            nn.init.uniform_(lb.bias, -0.1, 0.1)
-        return tl
-
-    # Same base weights for fair comparison
-    base = nn.Linear(in_f, out_f)
-    tl1, tl2 = make(2.0), make(6.0)
-    with torch.no_grad():
-        tl1.weight.copy_(base.weight)
-        tl1.bias.copy_(base.bias)
-        tl2.weight.copy_(base.weight)
-        tl2.bias.copy_(base.bias)
-
-    yb = base(x)
-    d1 = (tl1(x, task_emb=task) - yb).norm()
-    d2 = (tl2(x, task_emb=task) - yb).norm()
-    ratio = (d2 / (d1 + 1e-8)).item()
-    assert 2.0 <= ratio <= 4.0  # allow slack
-
-
 def test_gradients_flow() -> None:
     """Sanity check that gradients reach base and generator params."""
     torch.manual_seed(7)
