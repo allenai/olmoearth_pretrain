@@ -672,7 +672,7 @@ class MoE(Module):
     def __init__(
         self,
         dim,
-        num_experts=16,
+        num_experts=4,
         expert_hidden_mult=4,
         threshold_train=0.2,
         threshold_eval=0.2,
