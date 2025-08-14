@@ -230,8 +230,8 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
                 loss, latent, decoded, target_output, total_aux_loss = (
                     self.model_forward(masked_batch, patch_size, self.token_exit_cfg)
                 )
-                loss += self.balancing_loss_weight * total_aux_loss.mean()
-                total_batch_aux_loss += get_local_tensor(total_aux_loss.detach().mean())
+                loss += self.balancing_loss_weight * total_aux_loss.sum()
+                total_batch_aux_loss += get_local_tensor(total_aux_loss.detach().sum())
 
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
