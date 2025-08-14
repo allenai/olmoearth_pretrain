@@ -805,7 +805,8 @@ class MultiBlockMaskingStrategy(MaskingStrategy):
         if not modality.is_spatial:
             raise ValueError("Multi-Block Masking is only supported for spatial modalities")
 
-        B, H, W, T, B_S = shape
+        B, H, W, T, _ = shape
+        B_S = modality.num_band_sets
         num_h_token = (H // patch_size)
         num_w_token = (W // patch_size)
         mask = torch.full((B, H, W, T, B_S), MaskValue.ONLINE_ENCODER.value, device=device)
@@ -1205,6 +1206,42 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         )
         return masked_sample
 
+
+@MASKING_STRATEGY_REGISTRY.register("modality_cross_multi_block")
+class ModalityCrossMultiBlockMaskingStrategy(ModalityCrossMaskingStrategy):
+    """Randomly select a modality and apply space masking to it."""
+
+    def __init__(
+        self,
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+        allow_encoding_decoding_same_bandset: bool = False,
+        min_encoded_bandsets: int = 2,
+        max_encoded_bandsets: int | None = None,
+        min_decoded_bandsets: int | None = None,
+        max_decoded_bandsets: int | None = None,
+        only_decode_modalities: list[str] = [],
+        **multi_block_kwargs: Any,
+    ) -> None:
+        """Initialize the masking strategy."""
+        multi_block_strategy = MultiBlockMaskingStrategy(encode_ratio, decode_ratio, **multi_block_kwargs)
+        super().__init__(
+            strategy=multi_block_strategy,
+            encode_ratio=encode_ratio,
+            decode_ratio=decode_ratio,
+            allow_encoding_decoding_same_bandset=allow_encoding_decoding_same_bandset,
+            min_encoded_bandsets=min_encoded_bandsets,
+            max_encoded_bandsets=max_encoded_bandsets,
+            min_decoded_bandsets=min_decoded_bandsets,
+            max_decoded_bandsets=max_decoded_bandsets,
+            only_decode_modalities=only_decode_modalities,
+        )
+
+    def overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
+        """Overide the random mask  for the given modality by the encoding and decoding bandsets."""
+        # For space masking non spatial data is randomly masked but we want to use the encoding and decoding bandsets
+        # to determine the mask for the non spatial data
+        return not modality_spec.is_spatial
 
 @MASKING_STRATEGY_REGISTRY.register("modality_cross_space")
 class ModalityCrossSpaceMaskingStrategy(ModalityCrossMaskingStrategy):
