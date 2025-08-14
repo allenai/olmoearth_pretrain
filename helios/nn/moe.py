@@ -16,7 +16,7 @@ from torch.nn import Module, ModuleList
 
 from helios.data.constants import Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
-from helios.nn.attention import Attention, DropPath, LayerScale, fully_shard
+from helios.nn.attention import Attention, Block, DropPath, LayerScale, fully_shard
 from helios.nn.flexihelios import (
     BASE_GSD,
     Encoder,
@@ -50,13 +50,15 @@ class MixtureOfExpertsReturn(NamedTuple):
 # helper functions
 
 
-def pad_dim_to(t, length, dim=0):
+def pad_dim_to(t: Tensor, length: int, dim: int = 0) -> Tensor:
+    """pad_dim_to."""
     pad_length = length - t.shape[dim]
     zero_pairs = (-dim - 1) if dim < 0 else (t.ndim - dim - 1)
     return F.pad(t, (*((0, 0) * zero_pairs), 0, pad_length))
 
 
-def all_gather_same_dim(t):
+def all_gather_same_dim(t: Tensor) -> Tensor:
+    """all_gather_same_dim."""
     t = t.contiguous()
     world_size = dist.get_world_size()
     gathered_tensors = [
@@ -66,28 +68,35 @@ def all_gather_same_dim(t):
     return gathered_tensors
 
 
-def gather_sizes(t, *, dim):
+def gather_sizes(t: Tensor, *, dim: int) -> Tensor:
+    """gather_sizes."""
     size = torch.tensor(t.shape[dim], device=t.device, dtype=torch.long)
     sizes = all_gather_same_dim(size)
     return torch.stack(sizes)
 
 
-def has_only_one_value(t):
+def has_only_one_value(t: Tensor) -> bool:
+    """has_only_one_value."""
     return (t == t[0]).all()
 
 
-def all_gather_variable_dim(t, dim=0, sizes=None):
+def all_gather_variable_dim(
+    t: Tensor, dim: int = 0, sizes: Tensor | None = None
+) -> tuple[Tensor, Tensor]:
+    """all_gather_variable_dim."""
     device, rank, world_size = t.device, dist.get_rank(), dist.get_world_size()
 
     if not exists(sizes):
-        sizes = gather_sizes(t, dim=dim)
+        sizes_t = gather_sizes(t, dim=dim)
+    else:
+        sizes_t = sizes
 
     if has_only_one_value(sizes):
         gathered_tensors = all_gather_same_dim(t)
         gathered_tensors = torch.cat(gathered_tensors, dim=dim)
         return gathered_tensors, sizes
 
-    max_size = sizes.amax().item()
+    max_size = sizes_t.amax().item()
 
     padded_t = pad_dim_to(t, max_size, dim=dim)
     gathered_tensors = all_gather_same_dim(padded_t)
@@ -95,41 +104,45 @@ def all_gather_variable_dim(t, dim=0, sizes=None):
     gathered_tensors = torch.cat(gathered_tensors, dim=dim)
     seq = torch.arange(max_size, device=device)
 
-    mask = rearrange(seq, "j -> 1 j") < rearrange(sizes, "i -> i 1")
+    mask = rearrange(seq, "j -> 1 j") < rearrange(sizes_t, "i -> i 1")
     mask = rearrange(mask, "i j -> (i j)")
     seq = torch.arange(mask.shape[-1], device=device)
     indices = seq[mask]
 
     gathered_tensors = gathered_tensors.index_select(dim, indices)
 
-    return gathered_tensors, sizes
+    return gathered_tensors, sizes_t
 
 
 class AllGatherFunction(Function):
+    """AllGatherFunction."""
+
     @staticmethod
-    def forward(ctx, x, dim, sizes):
+    def forward(
+        ctx: Any, x: Tensor, dim: int, sizes: Tensor | None
+    ) -> tuple[Tensor, list]:
         x, batch_sizes = all_gather_variable_dim(x, dim=dim, sizes=sizes)
         ctx.batch_sizes = batch_sizes.tolist()
         ctx.dim = dim
         return x, batch_sizes
 
     @staticmethod
-    def backward(ctx, grads, _):
+    def backward(ctx: Any, grads: Any, _: Any) -> Any:
         batch_sizes, rank = ctx.batch_sizes, dist.get_rank()
         grads_by_rank = grads.split(batch_sizes, dim=ctx.dim)
         return grads_by_rank[rank], None, None
 
 
 class AllGather(nn.Module):
-    def __init__(self, *, dim=0):
+    def __init__(self, *, dim: int = 0):
         super().__init__()
         self.dim = dim
 
-    def forward(self, x, sizes=None):
+    def forward(self, x: Tensor, sizes: Tensor | None = None) -> Tensor:
         return AllGatherFunction.apply(x, self.dim, sizes)
 
 
-def split_by_rank(x):
+def split_by_rank(x: Tensor) -> tuple[Tensor, Tensor]:
     rank = dist.get_rank()
     out = x[rank]
 
@@ -142,22 +155,22 @@ def split_by_rank(x):
     return out, sizes
 
 
-def exists(val):
+def exists(val: Any) -> bool:
     return val is not None
 
 
-def default(val, default):
+def default(val: Any, default: Any) -> Any:
     if exists(val):
         return val
 
     return default() if callable(default) else default
 
 
-def divisible_by(num, den):
+def divisible_by(num: Any, den: Any) -> bool:
     return (num % den) == 0
 
 
-def chunk_num(num, chunks):
+def chunk_num(num: Any, chunks: Any) -> list:
     num_per_chunk, remainder = divmod(num, chunks)
 
     out = []
@@ -168,15 +181,15 @@ def chunk_num(num, chunks):
     return out
 
 
-def pack_one(t, pattern):
+def pack_one(t: Any, pattern: Any) -> Any:
     return pack([t], pattern)
 
 
-def unpack_one(t, ps, pattern):
+def unpack_one(t: Any, ps: Any, pattern: Any) -> Any:
     return unpack(t, ps, pattern)[0]
 
 
-def cast_tuple(el, len=1):
+def cast_tuple(el: Any, len: int = 1) -> tuple:
     return el if isinstance(el, tuple) else ((el,) * len)
 
 
@@ -939,6 +952,7 @@ class MoEEncoder(Encoder):
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
+        moe_every: int = 2,
     ):
         """Initialize the encoder.
 
@@ -962,6 +976,7 @@ class MoEEncoder(Encoder):
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
+            moe_every: which layers should be an MoE?
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -977,25 +992,30 @@ class MoEEncoder(Encoder):
             use_flash_attn=use_flash_attn,
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
+            aggregate_then_project=aggregate_then_project,
+            frozen_patch_embeddings=frozen_patch_embeddings,
+            num_projection_layers=num_projection_layers,
         )
 
-        # todo - make this only the later blocks
-        self.blocks = nn.ModuleList(
-            [
-                SparseMoEBlockWithAttn(
-                    embedding_size,
-                    num_heads,
-                    mlp_ratio,
-                    qkv_bias=True,
-                    qk_norm=qk_norm,
-                    norm_layer=nn.LayerNorm,  # TODO: This should be configurable
-                    cross_attn=self.cross_attn,
-                    drop_path=drop_path,
-                    use_flash_attn=self.use_flash_attn,
-                )
-                for _ in range(depth)
-            ]
-        )
+        args = {
+            "dim": embedding_size,
+            "num_heads": num_heads,
+            "mlp_ratio": mlp_ratio,
+            "qkv_bias": True,
+            "qk_norm": qk_norm,
+            "norm_layer": nn.LayerNorm,
+            "cross_attn": self.cross_attn,
+            "drop_path": drop_path,
+            "use_flash_attn": self.use_flash_attn,
+        }
+        blocks = []
+        for i in range(depth):
+            if (i + 1) % moe_every == 0:
+                blocks.append(SparseMoEBlockWithAttn(**args))
+            else:
+                blocks.append(Block(**args))
+
+        self.blocks = nn.ModuleList(blocks)
 
     def apply_attn(  # type: ignore
         self,
@@ -1072,15 +1092,18 @@ class MoEEncoder(Encoder):
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
-            tokens, total_aux_loss, _, _ = blk(
-                x=tokens,
-                routing_tokens=latlons,
-                cu_seqlens=cu_seqlens,
-                max_seqlen=max_seqlen,
-                # we will have to specify k and q lens for cross attention
-                attn_mask=attn_mask,
-            )
-            total_aux_losses.append(total_aux_loss)
+            block_args = {
+                "x": tokens,
+                "cu_seqlens": cu_seqlens,
+                "max_seqlen": max_seqlen,
+                "attn_mask": attn_mask,
+            }
+            if isinstance(blk, Block):
+                tokens = blk(**block_args)
+            else:
+                block_args["routing_tokens"] = latlons
+                tokens, total_aux_loss, _, _ = blk(**block_args)
+                total_aux_losses.append(total_aux_loss)
 
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
@@ -1178,6 +1201,7 @@ class MoEEncoderConfig(Config):
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
+    moe_every: int = 2
 
     def validate(self) -> None:
         """Validate the configuration."""

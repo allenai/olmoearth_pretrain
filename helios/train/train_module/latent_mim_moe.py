@@ -255,7 +255,6 @@ class LatentMIMMoETrainModule(HeliosTrainModule):
 
                 del latent, decoded, target_output
                 loss.backward()
-
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
             total_batch_loss,
