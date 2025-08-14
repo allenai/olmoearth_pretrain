@@ -19,6 +19,20 @@ from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
+def get_spatial_grid(H, W, device="cpu"):
+    rows = torch.arange(H, device=device).repeat_interleave(W)   # [0,0,...,1,1,...]
+    cols = torch.arange(W, device=device).repeat(H)              # [0,1,2,...,0,1,2,...]
+    return torch.stack([rows, cols], dim=-1)
+
+def chebyshev_within_mask(H, W, n, device="cpu"):
+    N = H * W
+    rows = torch.arange(H, device=device).repeat_interleave(W)   # [0,0,...,1,1,...]
+    cols = torch.arange(W, device=device).repeat(H)              # [0,1,2,...,0,1,2,...]
+
+    dr = (rows[:, None] - rows[None, :]).abs()  # (N, N)
+    dc = (cols[:, None] - cols[None, :]).abs()  # (N, N)
+    return ((dr <= n) & (dc <= n)).bool()
+
 
 class Loss(ABC):
     """Abstract base class for loss functions."""
@@ -189,6 +203,284 @@ class PatchDiscriminationLossNew(Loss):
         return self.weight * loss
 
 
+
+
+# WIP Stuck on how to make sure the right par mask is passed and aligned to each sample
+@LOSS_REGISTRY.register("patch_discrimination_no_neighbors")
+class PatchDiscriminationLossNoNeighbors(Loss):
+    """Loss function for patch discrimination task.
+
+    This has lower memory consumption than the old patch discrimination loss.
+    It does not support all discrimination loss.
+    """
+
+    name = "PatchDiscNoNeighbors"
+
+    def __init__(self, tau: float = 0.1, pred2unit: bool = False, weight: float = 1.0, neighbor_radius: int = 1):
+        """Initialize patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            mask_other_samples: whether to apply the contrastive loss drawing samples
+                from within a sample (True) or using all other instances in a batch (False).
+                If this is False, then this is the AllDisc loss from the Galileo paper
+            weight: the weight to apply to this loss
+            neighbor_radius: the radius of the neighborhood to not consider  as negatives for the loss
+        """
+        self.tau = tau
+        self.pred2unit = pred2unit
+        self.weight = weight
+        self.neighbor_radius = neighbor_radius
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute patch discrimination loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        # before we flatten this we need to figure out what the nearby tokens are in a way that we can use it to mask out the nearby negatives
+        # for each modality  do we want a different mask?
+        # What if we just create a spatial grid for each modality and then creat pariswise distance matrix for all the decoder tokens
+        # Then we can  threshold that mask so that we filter out any negatives that are within the neighbor_radius
+
+        # I need a mask for each modality
+        neighbors_masks_dict = {}
+        decoder_pair_masks = {}
+        for modality in predictions.modalities:
+            modality_spec = Modality.get(modality)
+            if not modality_spec.is_spatial:
+                continue
+            logger.info(f"modality: {modality}")
+            data = getattr(predictions, modality)
+            logger.info(f"data.shape: {data.shape}")
+            B, H, W, T, B_S, _ = data.shape
+
+            masked_name  = TokensAndMasks.get_masked_modality_name(modality)
+            mask_data = getattr(predictions, masked_name)
+            neighbors_decoder_mask = mask_data == MaskValue.DECODER.value
+            # num decoded tokens before collapse
+            num_decoded_tokens = (neighbors_decoder_mask == MaskValue.DECODER.value).sum()
+            logger.info(f"num_decoded_tokens.shape: {num_decoded_tokens.shape} {num_decoded_tokens}")
+            collapsed_hw = rearrange(neighbors_decoder_mask, "b h w ... -> b (...) (h w) ").long()
+            # num decoded tokens after collapse
+            num_decoded_tokens_collapsed = (collapsed_hw == MaskValue.DECODER.value).sum()
+            logger.info(f"num_decoded_tokens_collapsed.shape: {num_decoded_tokens_collapsed.shape} {num_decoded_tokens_collapsed}")
+            logger.info(f"collapsed_hw.shape: {collapsed_hw.shape}")
+            pair_mask = collapsed_hw.unsqueeze(-1) & collapsed_hw.unsqueeze(-2)
+
+            # Rearrange the pair mask
+            pair_mask = rearrange(pair_mask, "b (b_s t) n1 n2 -> b n1 n2 b_s t", b_s=B_S, t=T)
+
+            # Hacky redundancy for now
+            decoder_pair_masks[masked_name] = pair_mask.bool()
+            decoder_pair_masks[modality] = data
+
+            spatial_grid = get_spatial_grid(H, W, device=predictions.device)
+            logger.info(f"spatial_grid.shape: {spatial_grid.shape}")
+            # IF both of the positions for which we have a pairwise distance are decoder only then we say it is decoder only
+            # make this a long tensor
+            neighbors_masks = chebyshev_within_mask(H, W, self.neighbor_radius, device=predictions.device)
+
+            logger.info(f"neighbors_masks.shape: {neighbors_masks.shape}")
+            # Repeat in T and B_S dimensions so we have the mask for each timestep and modalit
+            # the issue here is we need to calculate a new decoder mask for the neighborhood masks
+
+            neighbors_masks = repeat(neighbors_masks, "h w -> b h w t b_s", t=T, b_s=B_S, b=B)
+            logger.info(f"neighbors_masks.shape: {neighbors_masks.shape}")
+            # for each neighborhood masks we
+            neighbors_masks_dict[masked_name] = neighbors_masks
+            neighbors_masks_dict[modality] = data
+
+        all_neighbors_masks = TokensAndMasks(**neighbors_masks_dict).flatten_tokens_and_masks()[1]
+        logger.info(f"all_neighbors_masks.shape: {all_neighbors_masks.shape}")
+        decoder_pair_masks = TokensAndMasks(**decoder_pair_masks).flatten_tokens_and_masks()[1]
+        logger.info(f"decoder_pair_masks.shape: {decoder_pair_masks.shape}")
+
+
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+        logger.info(f"all_preds.shape: {all_preds.shape}")
+        logger.info(f"all_masks.shape: {all_masks.shape}")
+        logger.info(f"all_targets.shape: {all_targets.shape}")
+        # create a grid of spatial locations for each modality
+
+        # Samples may have different number of tokens
+        # TODO: Skip unqueeze and the for loop when mask_other_samples is True
+
+        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+
+        # get the shape of all
+        neighbors_masks = all_neighbors_masks[decoder_pair_masks].unsqueeze(dim=0)
+        # get how many of these belong to each sample
+        # I would need the decoder sampling
+        pair_count = (decoder_pair_masks).sum(dim=-1)
+        logger.info(f"pair_count.shape: {pair_count.shape} {pair_count}")
+        logger.info(f"neighbors_masks.shape: {neighbors_masks.shape}")
+        bs, nt, _ = pred.shape
+
+
+        # for each token we need a decode don't decode boolean mask so we can use it to mask out the nearby negatives
+
+        if self.pred2unit:
+            pred_mu = pred.mean(1, keepdims=True)
+            pred_std = pred.std(1, keepdims=True)
+            pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+        pred = F.normalize(pred, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+
+        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+        losses = []
+        start = 0
+        start_pair = 0
+        for c, pair_count in zip(count, pair_count):
+            end = start + c
+            end_pair = start_pair + pair_count
+            if c == 0:
+                # we will occasionally get a sample with no decoded values due to missing data this will let us skip it
+                logger.warning("No decoded values for this sample")
+                continue
+            pred_sample   = pred[:, start:end, :]          # [N, c, D]
+            target_sample = target[:, start:end, :]        # [N, c, D]
+            mask_sample   = neighbors_masks[:, start_pair:end_pair]  # [N, c, C]
+            N, c, D = pred_sample.shape
+            logger.info(f"mask_sample.shape: {mask_sample.shape} c {c} pair_count {pair_count}")
+            _, _, C = mask_sample.shape  # typically C == original sequence length; here we want c classes
+
+            # similarity logits: [N, c, c]
+            score_sample = torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
+
+            # restrict to the same c columns (q in start:end) so scores and masks match
+            score_sample = score_sample[:, :, :c]          # [N, c, c]
+            mask_sample  = mask_sample[:, :, start:end]    # [N, c, c]
+
+            # ensure the positive (diagonal) is always included
+            eye = torch.eye(c, dtype=torch.bool, device=pred.device)  # [c, c]
+            mask = mask_sample | eye.unsqueeze(0)                      # [N, c, c]
+
+            # remove neighbor logits from the softmax support
+            masked_scores = score_sample.masked_fill(mask, float("-inf"))  # no grad flows through invalid entries
+
+            # labels: for each (n, p) the correct class is q == p
+            labels = torch.arange(c, device=pred.device).expand(N, -1).reshape(-1)  # [N*c]
+
+            # standard CE over the masked logits (only neighbors contribute)
+            loss = F.cross_entropy(masked_scores.reshape(-1, c), labels)
+            losses.append(loss)
+            start = end
+        loss = torch.stack(losses).mean()
+        return self.weight * loss
+
+# Top N patch discrimination loss
+
+@LOSS_REGISTRY.register("patch_discrimination_top_n")
+class PatchDiscriminationLossTopN(Loss):
+    """Loss function for patch discrimination task.
+
+    This has lower memory consumption than the old patch discrimination loss.
+    It does not support all discrimination loss.
+    """
+
+    name = "PatchDiscTopN"
+
+    def __init__(self, tau: float = 0.1, pred2unit: bool = False, weight: float = 1.0, top_n: int  | None = 2000):
+        """Initialize patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            mask_other_samples: whether to apply the contrastive loss drawing samples
+                from within a sample (True) or using all other instances in a batch (False).
+                If this is False, then this is the AllDisc loss from the Galileo paper
+            weight: the weight to apply to this loss
+            top_n: the number of negatives to use for the loss
+        """
+        self.tau = tau
+        self.pred2unit = pred2unit
+        self.weight = weight
+        self.top_n = top_n
+
+    def compute(self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any) -> Tensor:
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+
+        # keep only decoder tokens; no dummy batch dim
+        keep = (all_masks == MaskValue.DECODER.value)
+        pred = all_preds[keep]      # (N_tokens, D)
+        target = all_targets[keep]  # (N_tokens, D)
+
+        # optional standardization across tokens in this batch
+        if self.pred2unit:
+            mu = pred.mean(dim=0, keepdim=True)
+            std = pred.std(dim=0, keepdim=True)
+            pred = (pred - mu) / (std + 1e-4)
+
+        pred = F.normalize(pred, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+
+        counts = (all_masks == MaskValue.DECODER.value).sum(dim=-1).tolist()
+
+        device = pred.device
+        losses = []
+        start = 0
+        for c in counts:
+            end = start + c
+            if c == 0:
+                logger.warning("No decoded values for this sample")
+                start = end
+                continue
+
+            pred_sample = pred[start:end]      # (c, D)
+            target_sample = target[start:end]  # (c, D)
+
+            # logits (c, c); positive is the diagonal
+            score_sample = (pred_sample @ target_sample.T) / self.tau
+
+            if self.top_n is None:
+                labels = torch.arange(c, dtype=torch.long, device=device)
+                loss = F.cross_entropy(score_sample, labels, reduction="mean") * (self.tau * 2)
+                losses.append(loss)
+            else:
+                if c == 1:
+                    losses.append(score_sample.new_zeros(()))
+                    start = end
+                    continue
+
+                k = min(self.top_n, c - 1)
+                logger.info(f"k: {k}")
+                # log c as well
+                logger.info(f"c: {c}")
+                neg_only = score_sample.masked_fill(
+                    torch.eye(c, dtype=torch.bool, device=device), -torch.inf
+                )
+                topk_vals, _ = torch.topk(neg_only, k=k, dim=1)  # (c, k)
+
+
+                pos_vals = score_sample.diag().unsqueeze(1)      # (c, 1)
+                subset_scores = torch.cat([pos_vals, topk_vals], dim=1)  # (c, 1+k)
+
+                labels = torch.zeros(c, dtype=torch.long, device=device)  # positive at col 0
+                loss = F.cross_entropy(subset_scores, labels, reduction="mean") * (self.tau * 2)
+                losses.append(loss)
+
+            start = end
+
+        if not losses:
+            return pred.new_zeros(())
+
+        return self.weight * torch.stack(losses).mean()
+
+
+
 @LOSS_REGISTRY.register("patch_discrimination")
 class PatchDiscriminationLoss(Loss):
     """Loss function for patch discrimination task."""
@@ -214,8 +506,7 @@ class PatchDiscriminationLoss(Loss):
         self.pred2unit = pred2unit
         self.mask_other_samples = mask_other_samples
 
-    def compute(
-        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    def compute(self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
     ) -> Tensor:
         """Compute patch discrimination loss between predictions and targets.
 

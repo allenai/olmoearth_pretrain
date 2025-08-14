@@ -109,8 +109,8 @@ class TokensAndMasks(NamedTuple):
             raise ValueError("No data to get device from")
 
     # TODO: It seems like we want a lot of our named tuples to have this functionality so we should probably create a utility base class for the named tuples and double subclass
-    @classmethod
-    def get_masked_modality_name(cls, modality: str) -> str:
+    @staticmethod
+    def get_masked_modality_name(modality: str) -> str:
         """Get the masked modality name."""
         return f"{modality}_mask"
 
