@@ -15,6 +15,7 @@ from olmo_core.config import Config
 from helios.data.constants import MISSING_VALUE, Modality, ModalitySpec
 from helios.data.dataset import HeliosSample
 from helios.types import ArrayTensor
+from olmo_core.data.utils import get_rng
 
 logger = logging.getLogger(__name__)
 
@@ -777,6 +778,130 @@ class ModalitySpaceTimeMaskingStrategy(MaskingStrategy):
 
         return selected_strategy.apply_mask(batch, **kwargs)
 
+@MASKING_STRATEGY_REGISTRY.register("multi_block")
+class MultiBlockMaskingStrategy(MaskingStrategy):
+    """Apply Multi-Block Masking strategy"""
+
+    def __init__(
+        self,
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+        aspect_ratio_range: tuple[float, float] = (0.75, 1.5),
+        area_ratio_range: tuple[float, float] = (0.4, 0.5),
+    ) -> None:
+        """Initialize the masking strategy."""
+        self._encode_ratio = encode_ratio
+        self._decode_ratio = decode_ratio
+        self.aspect_ratio_range = aspect_ratio_range
+        self.area_ratio_range = area_ratio_range
+        # This should either be deteministic or use the torch random state
+        self.generator = get_rng(0)
+
+    def _create_multi_block_mask(self,  modality: ModalitySpec, shape: torch.Size, patch_size: int, device: torch.device | None = None) -> torch.Tensor:
+        """Create a multi-block mask for the input data."""
+
+        # Initially we will just assume that the block in the timestep dimension is dim 1
+        if not modality.is_spatial:
+            raise ValueError("Multi-Block Masking is only supported for spatial modalities")
+
+        # I potentially also want to loop in the batch dimension
+        # Get the spatial dimensions of the modality
+        B, H, W, T, B_S = shape
+        num_h_token = (H // patch_size)
+        num_w_token = (W // patch_size)
+        mask = torch.full((B, H, W, T, B_S), MaskValue.ONLINE_ENCODER.value, device=device)
+        for t in range(T):
+            logger.info(f"Creating multi-block mask for timestep {t}")
+            available_tokens = num_h_token * num_w_token
+            block_count = 0
+            num_decoded_tokens = 0
+            while available_tokens - num_decoded_tokens >= self._decode_ratio * available_tokens:
+                    # pick an area ratio
+                    area_ratio = self.generator.uniform(*self.area_ratio_range)
+                    aspect_ratio = self.generator.uniform(*self.aspect_ratio_range)
+                    logger.info(f"Making block {block_count} Area ratio: {area_ratio}, Aspect ratio: {aspect_ratio}")
+                    logger.info(f"Available tokens: {available_tokens}, Num decoded tokens: {num_decoded_tokens}")
+                    tokens_to_use = int(available_tokens * area_ratio)
+                    logger.info(f"Tokens to use: {tokens_to_use}")
+                    height_num_tokens = int(math.sqrt(tokens_to_use * aspect_ratio))
+                    width_num_tokens = int(tokens_to_use / height_num_tokens)
+                    height_to_use = height_num_tokens * patch_size
+                    width_to_use = width_num_tokens * patch_size
+                    logger.info(f"Height to use: {height_to_use}, Width to use: {width_to_use}")
+                    # Randomly pick the starting corner of the block
+                    start_h = self.generator.integers(0, num_h_token * patch_size - height_to_use + 1)
+                    start_w = self.generator.integers(0, num_w_token * patch_size - width_to_use + 1)
+                    logger.info(f"Start height: {start_h}, Start width: {start_w}")
+                    # Set the mask to decode for that block
+                    mask[:, start_h:start_h + height_to_use, start_w:start_w + width_to_use, t, :] = MaskValue.DECODER.value
+                    num_decoded_tokens = (mask[..., t, 0] == MaskValue.DECODER.value).sum()
+                    block_count += 1
+
+        # log total number of encoder and decoder tokens
+        num_encoder_tokens = (mask == MaskValue.ONLINE_ENCODER.value).sum()
+        num_decoder_tokens = (mask == MaskValue.DECODER.value).sum()
+        # log the percent encoding and percent decoding
+        logger.info(f"Total number of encoder tokens: {num_encoder_tokens}, Total number of decoder tokens: {num_decoder_tokens}")
+        logger.info(f"Percent encoding: {num_encoder_tokens / (num_encoder_tokens + num_decoder_tokens)}, Percent decoding: {num_decoder_tokens / (num_encoder_tokens + num_decoder_tokens)}")
+        # log the mask for a single timestep
+        for t in range(T):
+            logger.info(f"Mask for timestep {t}: {mask[0, :, :, t, 0]}")
+        import time
+        time.sleep(5)
+        # should this mask be shared across modalities?
+        # No more randomness and cross modality prediction opportunities
+        # Yes we cannot cheat across modalities at all
+        return mask
+        # Given an decode ratio, some ratio to pick a block size within the image for each dimension
+        # We figure out the number of blocks we need to mask and randomly mask those blocks which can be overlapping
+        # This can reduce to basically random masking
+        # then the rest of the tokens are decoded
+
+        # Or we can do it vice versa and select a couple of decoding blocks and then just use the rest of the tokens for encoding context
+
+
+
+    def apply_mask(
+        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedHeliosSample:
+        """Apply Multi-Block Masking strategy"""
+
+
+        if patch_size is None:
+            raise ValueError("patch_size must be provided for random masking")
+        output_dict: dict[str, ArrayTensor | None] = {}
+        for modality_name in batch.modalities:
+            instance = getattr(batch, modality_name)
+            if instance is None:
+                # set instance and mask to None
+                output_dict[modality_name] = None
+                output_dict[
+                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                ] = None
+            else:
+                if modality_name == "timestamps":
+                    output_dict[modality_name] = instance
+                    continue
+
+                if isinstance(instance, torch.Tensor):
+                    device: torch.device | None = instance.device
+                else:
+                    device = None
+                modality = Modality.get(modality_name)
+                if modality.is_spatial:
+                    mask = self._create_multi_block_mask(
+                        modality, instance.shape, patch_size, device
+                    )
+                else:
+                    mask = self._create_random_mask(
+                        modality, instance.shape, patch_size, device
+                    )
+                mask = self.fill_mask_with_missing_values(instance, mask, modality)
+                output_dict[modality_name] = instance
+                output_dict[
+                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                ] = mask
+        return MaskedHeliosSample(**output_dict)
 
 class ModalityCrossMaskingStrategy(MaskingStrategy):
     """Abstract class for masking strategies that select a seperate set of bandsets to encode and decode on top of another masking strategy."""
