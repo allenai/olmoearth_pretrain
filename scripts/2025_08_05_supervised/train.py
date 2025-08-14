@@ -86,6 +86,7 @@ def my_build_common_components(
         Modality.LANDSAT.name,
         Modality.OPENSTREETMAP_RASTER.name,
         Modality.GSE.name,
+        Modality.WORLDCEREAL.name,
     ]
     return config
 
@@ -177,6 +178,11 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         # osm_sampling
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
+            training_modalities=common.training_modalities,
+        ),
+        # presto sampling
+        HeliosDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_era5_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover/469728",
             training_modalities=common.training_modalities,
         ),
     ]
