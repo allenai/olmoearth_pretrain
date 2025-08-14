@@ -1,196 +1,457 @@
-"""MoE for Helios."""
-
-import copy
-import logging
-from dataclasses import dataclass
-
 import torch
-import torch.nn as nn
-from einops import rearrange
-from olmo_core.config import Config
-from torch import Tensor
+from torch.nn import Module
+import torch.nn.functional as F
+import torch.distributed as dist
+from torch import nn, einsum, Tensor
+from torch.autograd import Function
+from einops import rearrange, pack, unpack
 
-from helios.data.constants import Modality, ModalitySpec
-from helios.dataset.utils import get_modality_specs_from_names
-from helios.nn.attention import Block, Mlp
-from helios.nn.flexihelios import (
-    BASE_GSD,
-    Encoder,
-    TokensAndMasks,
-    get_cumulative_sequence_lengths,
-)
+from helios.nn.flexihelios import Encoder, Block
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
-logger = logging.getLogger(__name__)
+def exists(val):
+    return val is not None
 
+def default(val, d):
+    return val if exists(val) else d
 
-def clone_module_list(module: nn.Module, n: int) -> nn.ModuleList:
-    """Clone Module.
+def divisible_by(num, den):
+    return (num % den) == 0
 
-    Make a `nn.ModuleList` with clones of a given module
-    """
-    return nn.ModuleList([copy.deepcopy(module) for _ in range(n)])
+def pad_dim_to(t, length, dim = 0):
+    pad_length = length - t.shape[dim]
+    zero_pairs = (-dim - 1) if dim < 0 else (t.ndim - dim - 1)
+    return F.pad(t, (*((0, 0) * zero_pairs), 0, pad_length))
 
+def all_gather_same_dim(t):
+    world_size = dist.get_world_size()
+    t = t.contiguous()
+    gathered_tensors = [torch.empty_like(t, device = t.device, dtype = t.dtype) for i in range(world_size)]
+    dist.all_gather(gathered_tensors, t)
+    return gathered_tensors
 
-class SwitchFeedForward(nn.Module):
-    """Routing among multiple FFNs."""
+def gather_sizes(t, *, dim):
+    size = torch.tensor(t.shape[dim], device = t.device, dtype = torch.long)
+    sizes = all_gather_same_dim(size)
+    return torch.stack(sizes)
 
+def has_only_one_value(t):
+    return (t == t[0]).all()
+
+def all_gather_variable_dim(t, dim = 0, sizes = None):
+    device, rank, world_size = t.device, dist.get_rank(), dist.get_world_size()
+
+    if not exists(sizes):
+        sizes = gather_sizes(t, dim = dim)
+
+    if has_only_one_value(sizes):
+        gathered_tensors = all_gather_same_dim(t)
+        gathered_tensors = torch.cat(gathered_tensors, dim = dim)
+        return gathered_tensors, sizes
+
+    max_size = sizes.amax().item()
+
+    padded_t = pad_dim_to(t, max_size, dim = dim)
+    gathered_tensors = all_gather_same_dim(padded_t)
+
+    gathered_tensors = torch.cat(gathered_tensors, dim = dim)
+    seq = torch.arange(max_size, device = device)
+
+    mask = rearrange(seq, 'j -> 1 j') < rearrange(sizes, 'i -> i 1')
+    mask = rearrange(mask, 'i j -> (i j)')
+    seq = torch.arange(mask.shape[-1], device = device)
+    indices = seq[mask]
+
+    gathered_tensors = gathered_tensors.index_select(dim, indices)
+
+    return gathered_tensors, sizes
+
+class AllGatherFunction(Function):
+    @staticmethod
+    def forward(ctx, x, dim, sizes):
+        x, batch_sizes = all_gather_variable_dim(x, dim = dim, sizes = sizes)
+        ctx.batch_sizes = batch_sizes.tolist()
+        ctx.dim = dim
+        return x, batch_sizes
+
+    @staticmethod
+    def backward(ctx, grads, _):
+        batch_sizes, rank = ctx.batch_sizes, dist.get_rank()
+        grads_by_rank = grads.split(batch_sizes, dim = ctx.dim)
+        return grads_by_rank[rank], None, None
+
+class AllGather(nn.Module):
+    def __init__(self, *, dim = 0):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x, sizes = None):
+        return AllGatherFunction.apply(x, self.dim, sizes)
+
+def split_by_rank(x):
+    rank = dist.get_rank()
+    out = x[rank]
+    return out
+
+def exists(val):
+    return val is not None
+
+def default(val, d):
+    return val if exists(val) else d
+
+def divisible_by(num, den):
+    return (num % den) == 0
+
+def chunk_num(num, chunks):
+    num_per_chunk, remainder = divmod(num, chunks)
+
+    out = []
+    for i in range(chunks):
+        n = num_per_chunk
+        out.append(n + int(i < remainder))
+
+    return out
+
+def pack_one(t, pattern):
+    return pack([t], pattern)
+
+def unpack_one(t, ps, pattern):
+    return unpack(t, ps, pattern)[0]
+
+def l2norm(t):
+    return F.normalize(t, dim = - 1)
+
+def cumsum_exclusive(t, dim = -3):
+    assert dim < 0
+    num_pad_dims = -dim - 1
+    pre_padding = (0, 0) * num_pad_dims
+    return F.pad(t, (*pre_padding, 1, -1)).cumsum(dim = dim)
+
+def log(t, eps = 1e-20):
+    return torch.log(t.clamp(min = eps))
+
+def gumbel_noise(t):
+    noise = torch.zeros_like(t).uniform_(0, 1)
+    return -log(-log(noise))
+
+# norm
+
+class LayerNorm(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.gamma = nn.Parameter(torch.ones(dim))
+        self.register_buffer("beta", torch.zeros(dim))
+
+    def forward(self, x):
+        return F.layer_norm(x, x.shape[-1:], self.gamma, self.beta)
+
+class RMSNorm(Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.scale = dim ** 0.5
+        self.gamma = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        return l2norm(x) * self.scale * self.gamma
+
+# expert
+
+def FeedForward(
+    dim,
+    mult = 4,
+    dropout = 0.
+):
+    dim_hidden = int(dim * mult)
+    return nn.Sequential(
+        nn.Linear(dim, dim_hidden),
+        nn.GELU(),
+        nn.Dropout(dropout),
+        nn.Linear(dim_hidden, dim)
+    )
+
+class GEGLU(Module):
+    def forward(self, x):
+        x, gate = x.chunk(2, dim = -1)
+        return x * F.gelu(gate)
+
+def GLUFeedForward(
+    dim,
+    mult = 4,
+    dropout = 0.
+):
+    dim_hidden = int(dim * mult * 2 / 3)
+
+    return nn.Sequential(
+        nn.Linear(dim, dim_hidden * 2),
+        GEGLU(),
+        nn.Dropout(dropout),
+        nn.Linear(dim_hidden, dim)
+    )
+
+# experts
+
+class Experts(nn.Module):
     def __init__(
         self,
-        *,
-        capacity_factor: float = 1.0,
-        drop_tokens: bool = False,
-        n_experts: int = 4,
-        expert: Mlp,
-        d_model: int,
-        route_with_latlons: bool = True,
-    ) -> None:
-        """Routing among multiple FFNs.
-
-        * `capacity_factor` is the capacity of each expert as a factor relative to ideally balanced load
-        * `drop_tokens` specifies whether to drop tokens if more tokens are routed to an expert than the capacity
-        * `n_experts` is the number of experts
-        * `expert` is the expert layer, a [FFN module](../feed_forward.html)
-        * `d_model` is the number of features in a token embedding
-        * `d_ff` is the number of features in the hidden layer of the FFN
-        * `dropout` is dropout probability in the FFN
-        """
+        experts,
+        is_distributed = None,
+        offload_unused_experts_to_cpu = True
+    ):
         super().__init__()
+        self.num_experts = len(experts)
+        self.experts = nn.ModuleList(experts)
 
-        self.capacity_factor = capacity_factor
-        self.n_experts = n_experts
-        self.drop_tokens = drop_tokens
+        self.is_distributed = is_distributed
+        if not exists(self.is_distributed):
+            self.is_distributed = dist.is_initialized() and dist.get_world_size() > 1
 
-        # make copies of the FFNs
-        self.experts = clone_module_list(expert, n_experts)
-        # Routing layer and softmax
-        self.switch = nn.Linear(d_model, n_experts)
-        self.softmax = nn.Softmax(dim=-1)
-        self.route_with_latlons = route_with_latlons
+        # whether to offload unused experts to cpu, will require optimizer handles conversion of gradients to right device when accumulating
+        self.offload_unused_experts_to_cpu = offload_unused_experts_to_cpu
 
-    def forward(  # type: ignore
-        self, x: torch.Tensor, routing_tokens: Tensor
-    ) -> tuple[Tensor, Tensor, Tensor, int, Tensor]:
-        """X is the input to the switching module with shape `[batch_size, seq_len, d_model]`."""
-        # Get routing probabilities for each of the tokens.
-        # $$p_i(x) = \frac{e^{h(x)_i}}{\sum^N_j e^{h(x)_j}}$$
-        # where $N$ is the number of experts `n_experts` and
-        # $h(\cdot)$ is the linear transformation of token embeddings.
+        self.all_gather = AllGather()
+        self.register_buffer('dummy', torch.ones(1), persistent = False)
 
-        # Initialize an empty list of dropped tokens
-        dropped: list[Tensor] = []
+    @property
+    def device(self):
+        return self.dummy.device
 
-        if self.route_with_latlons:
-            # assuming only a single routing token
-            routing_tokens = routing_tokens[:, 0]  # B, D
-            route_prob = self.softmax(self.switch(routing_tokens))  # B, D
-            # we will index according to batches, so no need to flatten
-            # Get indexes of tokens going to each expert
+    def all_experts_to_cpu_besides(self, selection):
+        if not self.offload_unused_experts_to_cpu:
+            return
 
-            # Get the maximum routing probabilities and the routes.
-            # We route to the expert with highest probability
-            route_prob_max, routes = torch.max(route_prob, dim=-1)
-            indexes_list = [
-                torch.eq(routes, i).nonzero(as_tuple=True)[0]
-                for i in range(self.n_experts)
-            ]  # B, num_experts
-            # Initialize an empty tensor to store outputs
-            final_output = x.new_zeros(x.shape)
-            if self.drop_tokens:
-                raise ValueError("drop_tokens unsupported for route_with_latlons")
-            # Number of *instances* routed to each expert.
-            counts = x.new_tensor([len(indexes_list[i]) for i in range(self.n_experts)])
-            # Get outputs of the expert FFNs
-            expert_output = [
-                self.experts[i](x[indexes_list[i], :, :]) for i in range(self.n_experts)
-            ]
-            # Assign to final output
-            for i in range(self.n_experts):
-                final_output[indexes_list[i], :] = expert_output[i]
-            # Multiply by the expert outputs by the probabilities $y = p_i(x) E_i(x)$
-            final_output = final_output * route_prob_max.view(-1, 1, 1)
-
+        if isinstance(selection, int):
+            experts = [self.experts[selection]]
+        if isinstance(selection, slice):
+            experts = self.experts[selection]
         else:
-            x = rearrange(x, "b n d -> n b d")
-            # Capture the shape to change shapes later
-            seq_len, batch_size, d_model = x.shape
-            # Flatten the sequence and batch dimensions
-            # this flattening happens as [B1, B1, B1, ... B_N, B_N, B_N]
-            x = x.reshape(-1, d_model)
-            route_prob = self.softmax(self.switch(x))
+            experts = selection
 
-            # Get the maximum routing probabilities and the routes.
-            # We route to the expert with highest probability
-            route_prob_max, routes = torch.max(route_prob, dim=-1)
+        experts_set = set(experts)
 
-            # Get indexes of tokens going to each expert
-            indexes_list = [
-                torch.eq(routes, i).nonzero(as_tuple=True)[0]
-                for i in range(self.n_experts)
-            ]
+        for expert in self.experts:
+            device = self.device if expert in experts_set else 'cpu'
+            expert.to(device)
 
-            # Initialize an empty tensor to store outputs
-            final_output = x.new_zeros(x.shape)
+    def forward(
+        self,
+        x,
+        is_distributed = None
+    ):
+        """
+        einops notation:
+        b - batch
+        r - rank (device / machines)
+        e - experts
+        n - sequence (number of tokens per expert)
+        d - feature dimension
+        """
 
-            # Capacity of each expert.
-            # $$\mathrm{expert\;capacity} =
-            # \frac{\mathrm{tokens\;per\;batch}}{\mathrm{number\;of\;experts}}
-            # \times \mathrm{capacity\;factor}$$
-            capacity = int(self.capacity_factor * len(x) / self.n_experts)
-            # Number of tokens routed to each expert.
-            counts = x.new_tensor([len(indexes_list[i]) for i in range(self.n_experts)])
+        is_distributed = default(is_distributed, self.is_distributed)
+        shape, num_experts = x.shape, self.num_experts
 
-            # Only drop tokens if `drop_tokens` is `True`.
-            if self.drop_tokens:
-                # Drop tokens in each of the experts
-                for i in range(self.n_experts):
-                    # Ignore if the expert is not over capacity
-                    if len(indexes_list[i]) <= capacity:
-                        continue
-                    # Shuffle indexes before dropping
-                    indexes_list[i] = indexes_list[i][
-                        torch.randperm(len(indexes_list[i]))
-                    ]
-                    # Collect the tokens over capacity as dropped tokens
-                    dropped.append(indexes_list[i][capacity:])
-                    # Keep only the tokens upto the capacity of the expert
-                    indexes_list[i] = indexes_list[i][:capacity]
+        # for now naively all gather across batch dimension if distributed, optimize later
 
-            # Get outputs of the expert FFNs
-            expert_output = [
-                self.experts[i](x[indexes_list[i], :]) for i in range(self.n_experts)
-            ]
+        if is_distributed:
+            seq_sizes = gather_sizes(x, dim = -2)
+            assert has_only_one_value(seq_sizes), 'number of tokens per expert must be the same'
 
-            # Assign to final output
-            for i in range(self.n_experts):
-                final_output[indexes_list[i], :] = expert_output[i]
+            x, batch_sizes = self.all_gather(x)
+            total_batch_size = x.shape[0]
 
-            # Pass through the dropped tokens
-            if dropped:
-                dropped = torch.cat(dropped)
-                final_output[dropped, :] = x[dropped, :]
+            world_size = dist.get_world_size()
+            rank = dist.get_rank()
+        else:
+            world_size = 1
+            rank = 0
 
-            # Multiply by the expert outputs by the probabilities $y = p_i(x) E_i(x)$
-            final_output = final_output * route_prob_max.view(-1, 1)
+        # the experts in use on the rank
 
-            # Change the shape of the final output back to `[batch_size, seq_len, d_model]`
-            final_output = rearrange(
-                final_output.view(seq_len, batch_size, d_model), "n b d -> b n d"
-            )
+        if is_distributed:
+            if world_size <= num_experts:
+                num_experts_across_ranks = chunk_num(num_experts, world_size)
+                start_indices = cumsum_exclusive(torch.tensor(num_experts_across_ranks), dim = -1)
 
-        # Return
-        #
-        # * the final output
-        # * number of tokens routed to each expert
-        # * sum of probabilities for each expert
-        # * number of tokens dropped.
-        # * routing probabilities of the selected experts
-        #
-        # These are used for the load balancing loss and logging
-        return final_output, counts, route_prob.sum(0), len(dropped), route_prob_max
+                num_experts_per_rank = num_experts_across_ranks[rank]
+                num_experts_batches_across_ranks = tuple(i * total_batch_size for i in num_experts_across_ranks)
+
+                expert_start_index = start_indices[rank].item()
+            else:
+                num_batch_chunks = world_size // num_experts
+                total_ranks_in_use = num_batch_chunks * num_experts
+
+                expert_start_index = rank // num_batch_chunks
+
+                batch_splits = chunk_num(total_batch_size, num_batch_chunks)
+                num_experts_batches_across_ranks = batch_splits * num_experts
+
+                # for now, remaining machines just process nothing
+
+                remain_ranks = world_size % num_experts
+                num_experts_batches_across_ranks += (0,) * remain_ranks
+
+                num_experts_per_rank = int(rank < total_ranks_in_use)
+
+            assert len(num_experts_batches_across_ranks) == world_size
+
+            expert_slice = slice(expert_start_index, expert_start_index + num_experts_per_rank)
+        else:
+            num_experts_per_rank = num_experts
+            expert_slice = slice(0, num_experts)
+
+        # if distributed, each machine only handles subset of experts and batch
+
+        x = rearrange(x, 'b e n d -> e b n d')
+
+        if is_distributed:
+            x, expert_batch_packed_shape = pack_one(x, '* n d')
+            x = x.split(num_experts_batches_across_ranks, dim = 0)
+            x = split_by_rank(x)
+
+            if num_experts_per_rank > 0:
+                x = rearrange(x, '(e b) n d -> e b n d', e = num_experts_per_rank)
+            else:
+                x = x.reshape(num_experts, *x.shape)
+
+        # get the experts in use
+
+        self.all_experts_to_cpu_besides(expert_slice)
+
+        experts = self.experts[expert_slice]
+
+        # route tokens to appropriate experts
+
+        outs = []
+        for expert, expert_input in zip(experts, x):
+            out = expert(expert_input)
+            outs.append(out)
+
+        if len(outs) > 0:
+            outs = torch.stack(outs)
+        else:
+            outs = torch.empty_like(x).requires_grad_()
+
+        # all gather across merged expert batches dimensions
+        # then split the batch dimension back
+
+        if is_distributed:
+            outs = rearrange(outs, 'e b n d -> (e b) n d')
+            outs, _ = self.all_gather(outs)
+            outs = unpack_one(outs, expert_batch_packed_shape, '* n d')
+
+        outs = rearrange(outs, 'e b n d -> b e n d')
+
+        if is_distributed:
+            outs = outs.split(batch_sizes.tolist())
+            outs = split_by_rank(outs)
+
+        assert outs.shape == shape
+        return outs
 
 
-class SwitchBlock(Block):
+class SoftMoE(Module):
+    def __init__(
+        self,
+        dim,
+        *,
+        seq_len = None,
+        num_experts = 4,
+        num_slots = None,
+        expert_mult = 4,
+        dropout = 0.,
+        geglu = False,
+        is_distributed = None,
+        offload_unused_experts_to_cpu = True,
+        use_layernorm = False
+    ):
+        super().__init__()
+        assert exists(seq_len) ^ exists(num_slots), 'either seq_len, or num_slots must be passed into SoftMoE'
+
+        if exists(seq_len):
+            num_slots = default(num_slots, seq_len // num_experts)
+        elif exists(num_slots):
+            seq_len = num_slots * num_experts
+
+        norm_klass = LayerNorm if use_layernorm else RMSNorm
+        self.norm = norm_klass(dim)
+
+        self.slot_norm = norm_klass(dim)
+        self.slot_embeds = nn.Parameter(torch.randn(num_experts, num_slots, dim))
+
+        expert_klass = GLUFeedForward if geglu else FeedForward
+
+        self.experts = Experts(
+            experts = [expert_klass(dim = dim, mult = expert_mult, dropout = dropout) for _ in range(num_experts)],
+            is_distributed = is_distributed,
+            offload_unused_experts_to_cpu = offload_unused_experts_to_cpu
+        )
+
+    def forward(self, x, mask = None, add_noise = False, noise_mult = 1.):
+        """
+        einstein notation
+        b - batch
+        n - sequence length
+        e - number of experts
+        s - number of slots per expert
+        d - feature dimension
+        """
+
+        is_single_token = x.ndim == 2
+        is_image = x.ndim == 4
+
+        if is_image:
+            x = rearrange(x, 'b d h w -> b h w d')
+            x, ps = pack([x], 'b * d')
+        elif is_single_token:
+            x = rearrange(x, 'b d -> b 1 d')
+
+        # following Algorithm 1, with the normalization they proposed, but with scaling of both (the now popular rmsnorm + gamma)
+
+        x = self.norm(x)
+        slot_embeds = self.slot_norm(self.slot_embeds)
+
+        logits = einsum('b n d, e s d -> b n e s', x, slot_embeds)
+
+        # noised dispatch and combine gate logits, with annealing if needed
+
+        if add_noise:
+            noise = gumbel_noise(logits) * noise_mult
+            logits = logits + noise
+
+        # account for key padding mask
+
+        if exists(mask):
+            mask = rearrange(mask, 'b n -> b n 1 1')
+            logits = logits.masked_fill(~mask, -torch.finfo(logits.dtype).max)
+
+        # get dispatch and combine weights (softmax across right dimensions)
+
+        dispatch_weights = logits.softmax(dim = 1)
+
+        combine_weights = rearrange(logits, 'b n e s -> b n (e s)')
+        combine_weights = combine_weights.softmax(dim = -1)
+
+        # derive slots by weighted average of input tokens using the dispatch weights from above
+
+        slots = einsum('b n d, b n e s -> b e s d', x, dispatch_weights)
+
+        # route the slots per expert to each expert
+
+        out = self.experts(slots)
+
+        # combine back out
+
+        out = rearrange(out, ' b e s d -> b (e s) d')
+        out = einsum('b s d, b n s -> b n d', out, combine_weights)
+
+        if is_image:
+            out, = unpack(out, ps, 'b * d')
+            out = rearrange(out, 'b h w d -> b d h w')
+        elif is_single_token:
+            out = rearrange(out, 'b 1 d -> b d')
+
+        return out
+
+class MoEBlock(Block):
     """Transformer block with self/cross attention and an MoE MLP.
 
     Args:
@@ -257,7 +518,7 @@ class SwitchBlock(Block):
             use_flash_attn=use_flash_attn,
         )
 
-        self.mlp = SwitchFeedForward(d_model=dim, expert=self.mlp)
+        self.mlp = SoftMoE(d_model=dim, expert=self.mlp)
 
     def forward(  # type: ignore
         self,
@@ -310,8 +571,7 @@ class SwitchBlock(Block):
         x = x + self.drop_path(self.ls2(x))
         return x, counts, route_prob, n_dropped, route_prob_max
 
-
-class SwitchEncoder(Encoder):
+class MoEEncoder(Encoder):
     """Encoder module that processes masked input samples into token representations."""
 
     cross_attn: bool = False
@@ -372,9 +632,6 @@ class SwitchEncoder(Encoder):
             use_flash_attn=use_flash_attn,
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
-            num_projection_layers=num_projection_layers,
-            aggregate_then_project=aggregate_then_project,
-            frozen_patch_embeddings=frozen_patch_embeddings,
         )
 
         self.blocks = nn.ModuleList(
