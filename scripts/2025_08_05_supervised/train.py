@@ -58,9 +58,9 @@ MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
 SUPERVISORY_MODALITIES = {
-    Modality.WORLDCOVER.name: 0.1,
-    Modality.GSE.name: 1.0,
-    Modality.OPENSTREETMAP_RASTER.name: 0.1,
+    Modality.WORLDCOVER.name: 1,
+    Modality.GSE.name: 10,
+    Modality.OPENSTREETMAP_RASTER.name: 1,
 }
 
 
