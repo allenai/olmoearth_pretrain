@@ -649,9 +649,9 @@ class TestEncoder:
         out_task2, _ = encoder.forward(
             x, patch_size, input_res, token_exit_cfg=None, task_emb=task_emb
         )
-        assert not torch.allclose(
-            out_none.sentinel2_l2a, out_task2.sentinel2_l2a
-        ), "Non-zero generators should make output depend on task_emb."
+        assert not torch.allclose(out_none.sentinel2_l2a, out_task2.sentinel2_l2a), (
+            "Non-zero generators should make output depend on task_emb."
+        )
 
         # 3) Backprop hits both base and generator params
         loss = out_task2.sentinel2_l2a.sum()  # type: ignore
