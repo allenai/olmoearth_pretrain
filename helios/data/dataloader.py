@@ -436,8 +436,16 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
     def __init__(self, data_loader: HeliosDataLoader):
         """Initialize the IterableDatasetWrapper."""
         self.data_loader = data_loader
-        offset = data_loader.dp_rank * data_loader.num_workers + self.worker_info.id
-        self.rng = get_rng(data_loader.seed + data_loader.epoch + offset)  # type: ignore
+        self.rng = get_rng(data_loader.seed + data_loader.epoch + data_loader.dp_rank)
+        self.rngs = [
+            get_rng(
+                data_loader.seed
+                + data_loader.epoch
+                + data_loader.dp_rank * data_loader.num_workers
+                + i
+            )
+            for i in range(data_loader.num_workers)
+        ]
 
     def _get_batch_item_params_iterator(
         self,
@@ -454,10 +462,13 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
         hw_p_to_sample_array = np.array(hw_p_to_sample)
         instances_processed = 0
         # TODO: We need to maintain state and reproducibility here
-        # DO we want this to differ by rank?
+        if self.worker_info is not None:
+            rng = self.rngs[self.worker_info.id]
+        else:
+            rng = self.rng
         for idx in indices:
             if instances_processed % rank_batch_size == 0:
-                patch_size = self.rng.choice(patch_size_array)
+                patch_size = rng.choice(patch_size_array)
                 max_height_width_tokens = int(IMAGE_TILE_SIZE / patch_size)
                 filtered_hw_p_to_sample_array = hw_p_to_sample_array[
                     hw_p_to_sample_array <= max_height_width_tokens
@@ -465,7 +476,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
                 filtered_hw_p_to_sample_array = filtered_hw_p_to_sample_array[
                     filtered_hw_p_to_sample_array > 0
                 ]
-                sampled_hw_p = self.rng.choice(filtered_hw_p_to_sample_array)
+                sampled_hw_p = rng.choice(filtered_hw_p_to_sample_array)
             yield idx, int(patch_size), int(sampled_hw_p)
             instances_processed += 1
 
