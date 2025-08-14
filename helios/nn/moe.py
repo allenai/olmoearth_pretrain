@@ -518,7 +518,6 @@ class TopNGating(Module):
             self.num_gates,
             self.eps,
         )
-        print("in top n gating, x.dtype, ", dtype, x.dtype)
         # threshold, capacity depending on training or eval
 
         suffix = "train" if self.training else "eval"
@@ -683,10 +682,8 @@ class MoE(Module):
         router_z_loss_coef=1e-3,
         experts: Module | None = None,
         straight_through_dispatch_tensor=True,
-        differentiable_topk=False,
-        differentiable_topk_fused=True,
         is_distributed=None,
-        allow_var_seq_len=False,
+        allow_var_seq_len=True,
     ):
         super().__init__()
         self.dim = dim
