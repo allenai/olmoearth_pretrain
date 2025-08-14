@@ -786,8 +786,8 @@ class MultiBlockMaskingStrategy(MaskingStrategy):
         self,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
-        aspect_ratio_range: tuple[float, float] = (0.75, 1.5),
-        area_ratio_range: tuple[float, float] = (0.4, 0.5),
+        aspect_ratio_range: list[float, float] = [0.75, 1.5],
+        area_ratio_range: list[float, float] = [0.25, 0.5],
     ) -> None:
         """Initialize the masking strategy."""
         self._encode_ratio = encode_ratio
@@ -797,6 +797,7 @@ class MultiBlockMaskingStrategy(MaskingStrategy):
         # This should either be deteministic or use the torch random state
         self.generator = get_rng(0)
 
+    # TODO: Maybe this block masking should be shared across modalities? maybe not
     def _create_multi_block_mask(self,  modality: ModalitySpec, shape: torch.Size, patch_size: int, device: torch.device | None = None) -> torch.Tensor:
         """Create a multi-block mask for the input data."""
 
@@ -804,38 +805,37 @@ class MultiBlockMaskingStrategy(MaskingStrategy):
         if not modality.is_spatial:
             raise ValueError("Multi-Block Masking is only supported for spatial modalities")
 
-        # I potentially also want to loop in the batch dimension
-        # Get the spatial dimensions of the modality
         B, H, W, T, B_S = shape
         num_h_token = (H // patch_size)
         num_w_token = (W // patch_size)
         mask = torch.full((B, H, W, T, B_S), MaskValue.ONLINE_ENCODER.value, device=device)
-        for t in range(T):
-            logger.info(f"Creating multi-block mask for timestep {t}")
-            available_tokens = num_h_token * num_w_token
-            block_count = 0
-            num_decoded_tokens = 0
-            while available_tokens - num_decoded_tokens >= self._decode_ratio * available_tokens:
-                    # pick an area ratio
-                    area_ratio = self.generator.uniform(*self.area_ratio_range)
-                    aspect_ratio = self.generator.uniform(*self.aspect_ratio_range)
-                    logger.info(f"Making block {block_count} Area ratio: {area_ratio}, Aspect ratio: {aspect_ratio}")
-                    logger.info(f"Available tokens: {available_tokens}, Num decoded tokens: {num_decoded_tokens}")
-                    tokens_to_use = int(available_tokens * area_ratio)
-                    logger.info(f"Tokens to use: {tokens_to_use}")
-                    height_num_tokens = int(math.sqrt(tokens_to_use * aspect_ratio))
-                    width_num_tokens = int(tokens_to_use / height_num_tokens)
-                    height_to_use = height_num_tokens * patch_size
-                    width_to_use = width_num_tokens * patch_size
-                    logger.info(f"Height to use: {height_to_use}, Width to use: {width_to_use}")
-                    # Randomly pick the starting corner of the block
-                    start_h = self.generator.integers(0, num_h_token * patch_size - height_to_use + 1)
-                    start_w = self.generator.integers(0, num_w_token * patch_size - width_to_use + 1)
-                    logger.info(f"Start height: {start_h}, Start width: {start_w}")
-                    # Set the mask to decode for that block
-                    mask[:, start_h:start_h + height_to_use, start_w:start_w + width_to_use, t, :] = MaskValue.DECODER.value
-                    num_decoded_tokens = (mask[..., t, 0] == MaskValue.DECODER.value).sum()
-                    block_count += 1
+        for b in range(B):
+            for t in range(T):
+                logger.debug(f"Creating multi-block mask for timestep {t}")
+                available_tokens = num_h_token * num_w_token
+                block_count = 0
+                num_decoded_tokens = 0
+                while available_tokens - num_decoded_tokens >= self._decode_ratio * available_tokens:
+                        # pick an area ratio
+                        area_ratio = self.generator.uniform(*self.area_ratio_range)
+                        aspect_ratio = self.generator.uniform(*self.aspect_ratio_range)
+                        logger.debug(f"Making block {block_count} Area ratio: {area_ratio}, Aspect ratio: {aspect_ratio}")
+                        logger.debug(f"Available tokens: {available_tokens}, Num decoded tokens: {num_decoded_tokens}")
+                        tokens_to_use = int(available_tokens * area_ratio)
+                        logger.debug(f"Tokens to use: {tokens_to_use}")
+                        height_num_tokens = int(math.sqrt(tokens_to_use * aspect_ratio))
+                        width_num_tokens = int(tokens_to_use / height_num_tokens)
+                        height_to_use = height_num_tokens * patch_size
+                        width_to_use = width_num_tokens * patch_size
+                        logger.debug(f"Height to use: {height_to_use}, Width to use: {width_to_use}")
+                        # Randomly pick the starting corner of the block
+                        start_h = self.generator.integers(0, num_h_token * patch_size - height_to_use + 1)
+                        start_w = self.generator.integers(0, num_w_token * patch_size - width_to_use + 1)
+                        logger.debug(f"Start height: {start_h}, Start width: {start_w}")
+                        # Set the mask to decode for that block
+                        mask[b, start_h:start_h + height_to_use, start_w:start_w + width_to_use, t, :] = MaskValue.DECODER.value
+                        num_decoded_tokens = (mask[b, ..., t, 0] == MaskValue.DECODER.value).sum()
+                        block_count += 1
 
         # log total number of encoder and decoder tokens
         num_encoder_tokens = (mask == MaskValue.ONLINE_ENCODER.value).sum()
@@ -843,23 +843,7 @@ class MultiBlockMaskingStrategy(MaskingStrategy):
         # log the percent encoding and percent decoding
         logger.info(f"Total number of encoder tokens: {num_encoder_tokens}, Total number of decoder tokens: {num_decoder_tokens}")
         logger.info(f"Percent encoding: {num_encoder_tokens / (num_encoder_tokens + num_decoder_tokens)}, Percent decoding: {num_decoder_tokens / (num_encoder_tokens + num_decoder_tokens)}")
-        # log the mask for a single timestep
-        for t in range(T):
-            logger.info(f"Mask for timestep {t}: {mask[0, :, :, t, 0]}")
-        import time
-        time.sleep(5)
-        # should this mask be shared across modalities?
-        # No more randomness and cross modality prediction opportunities
-        # Yes we cannot cheat across modalities at all
         return mask
-        # Given an decode ratio, some ratio to pick a block size within the image for each dimension
-        # We figure out the number of blocks we need to mask and randomly mask those blocks which can be overlapping
-        # This can reduce to basically random masking
-        # then the rest of the tokens are decoded
-
-        # Or we can do it vice versa and select a couple of decoding blocks and then just use the rest of the tokens for encoding context
-
-
 
     def apply_mask(
         self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
