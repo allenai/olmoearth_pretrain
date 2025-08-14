@@ -43,7 +43,7 @@ from helios.nn.flexihelios import (
     PredictorConfig,
 )
 from helios.nn.latent_mim_moe import LatentMIMMoEConfig
-from helios.nn.moe import SwitchEncoderConfig
+from helios.nn.moe import MoEEncoderConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -86,7 +86,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMMoEConfig:
     """Build the model config for an experiment."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
-    encoder_config = SwitchEncoderConfig(
+    encoder_config = MoEEncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
         num_heads=model_size["encoder_num_heads"],
         depth=model_size["encoder_depth"],

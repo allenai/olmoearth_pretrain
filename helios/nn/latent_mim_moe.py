@@ -75,7 +75,7 @@ class LatentMIMMoE(nn.Module, DistributedMixins):
             decoded,
             latent_projected_and_pooled,
             reconstructed,
-            total_aux_loss
+            total_aux_loss,
         )
 
     def apply_fsdp(
