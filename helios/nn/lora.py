@@ -34,12 +34,12 @@ class TaskLoRALinear(nn.Module):
         out_features: int,
         task_dim: int,
         bias: bool = True,
-        lora_rank: int = 8,
-        lora_alpha: float = 8.0,
-        lora_dropout: float = 0.1,
-        lora_gen_hidden: int = 64,
-        lora_gen_layers: int = 2,
-        lora_gen_activation: str | None = "gelu",
+        rank: int = 8,
+        alpha: float = 8.0,
+        dropout: float = 0.1,
+        gen_hidden: int = 64,
+        gen_layers: int = 2,
+        gen_activation: str | None = "gelu",
     ) -> None:
         """Initialize the TaskLoRALinear module.
 
@@ -48,13 +48,13 @@ class TaskLoRALinear(nn.Module):
             out_features: Size of each output sample.
             task_dim: Dimensionality of the task embedding vector.
             bias: If ``True``, adds a learnable bias to the output.
-            lora_rank: LoRA rank ``r``; must be > 0.
-            lora_alpha: Scaling factor; effective scale is ``alpha / r``.
-            lora_dropout: Dropout applied to input ``x`` before LoRA path.
-            lora_gen_hidden: Hidden width used in generator MLP(s).
-            lora_gen_layers: Number of hidden layers in generator MLP(s). ``0`` means
+            rank: LoRA rank ``r``; must be > 0.
+            alpha: Scaling factor; effective scale is ``alpha / r``.
+            dropout: Dropout applied to input ``x`` before LoRA path.
+            gen_hidden: Hidden width used in generator MLP(s).
+            gen_layers: Number of hidden layers in generator MLP(s). ``0`` means
                 a single linear layer (no hidden).
-            lora_gen_activation: Activation for generator hidden layers
+            gen_activation: Activation for generator hidden layers
                 (``"gelu"``, ``"relu"``, ``"silu"``) or ``None`` for identity.
         """
         super().__init__()
@@ -67,26 +67,26 @@ class TaskLoRALinear(nn.Module):
         self.reset_parameters()
 
         # LoRA config
-        self.lora_rank = lora_rank
-        self.gen_hidden = lora_gen_hidden
+        self.gen_hidden = gen_hidden
         self.task_dim = task_dim
-        self.lora_alpha = lora_alpha
-        self.lora_gen_layers = lora_gen_layers
-        self.lora_gen_activation = lora_gen_activation
-        self.lora_dropout = lora_dropout
-        self.lora_scaling = self.lora_alpha / self.lora_rank
+        self.rank = rank
+        self.alpha = alpha
+        self.gen_layers = gen_layers
+        self.gen_activation = gen_activation
+        self.dropout = dropout
+        self.scaling = self.alpha / self.rank
 
         # Resolve activation class (fallback to Identity if None or unrecognized)
-        if lora_gen_activation is None:
+        if gen_activation is None:
             self.activation_cls = nn.Identity
         else:
-            name = lora_gen_activation.lower()
+            name = gen_activation.lower()
             acts = {"gelu": nn.GELU, "relu": nn.ReLU, "silu": nn.SiLU}
             self.activation_cls = acts.get(name, nn.Identity)
 
         # Generators produce vec(A) and vec(B) per token
-        self.lora_gen_a = self.make_mlp(self.out_features * self.lora_rank)
-        self.lora_gen_b = self.make_mlp(self.lora_rank * self.in_features)
+        self.gen_a = self.make_mlp(self.out_features * self.rank)
+        self.gen_b = self.make_mlp(self.rank * self.in_features)
 
     def reset_parameters(self) -> None:
         """Initialize base linear parameters.
@@ -116,13 +116,13 @@ class TaskLoRALinear(nn.Module):
         """
         layers: list[nn.Module] = []
         in_size = self.task_dim
-        for _ in range(max(0, self.lora_gen_layers - 1)):
+        for _ in range(max(0, self.gen_layers - 1)):
             layers.extend(
                 [
                     nn.Linear(in_size, self.gen_hidden, bias=True),
-                    nn.Dropout(self.lora_dropout),
+                    nn.Dropout(self.dropout),
                     self.activation_cls(),
-                    nn.Dropout(self.lora_dropout),
+                    nn.Dropout(self.dropout),
                 ]
             )
             in_size = self.gen_hidden
@@ -169,19 +169,19 @@ class TaskLoRALinear(nn.Module):
         task_emb = task_emb.repeat(b_eff // task_emb.shape[0], 1)  # (B_eff, task_dim)
 
         # Generate LoRA factors per sample
-        r = self.lora_rank
-        vec_a = self.lora_gen_a(task_emb)  # (B_eff, out*r)
-        vec_b = self.lora_gen_b(task_emb)  # (B_eff, r*in)
+        r = self.rank
+        vec_a = self.gen_a(task_emb)  # (B_eff, out*r)
+        vec_b = self.gen_b(task_emb)  # (B_eff, r*in)
         a = vec_a.view(b_eff, self.out_features, r)  # (B_eff, out, r)
         b = vec_b.view(b_eff, r, self.in_features)  # (B_eff, r, in)
         delta = torch.bmm(a, b)  # (B_eff, out, in)
 
         # Base + LoRA paths
-        x2d_drop = F.dropout(x2d, p=self.lora_dropout)  # (B_eff, in)
+        x2d_drop = F.dropout(x2d, p=self.dropout)  # (B_eff, in)
         y_base = F.linear(x2d, self.weight, self.bias)  # (B_eff, out)
 
         # Compute y_delta = x2d_drop @ delta^T per sample
         y_delta = torch.einsum("bi,boi->bo", x2d_drop, delta)  # (B_eff, out)
-        y = y_base + self.lora_scaling * y_delta
+        y = y_base + self.scaling * y_delta
 
         return y.view(*x_shape[:-1], self.out_features)

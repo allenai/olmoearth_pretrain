@@ -852,9 +852,7 @@ class FlexiHeliosBase(nn.Module):
         random_channel_embeddings: bool = False,
         use_flash_attn: bool = False,
         qk_norm: bool = False,
-        use_task_lora: bool = False,
-        task_dim: int = 768,
-        task_lora_indices: list[int] | None = None,
+        task_lora_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the FlexiHeliosBase class."""
         super().__init__()
@@ -870,6 +868,9 @@ class FlexiHeliosBase(nn.Module):
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
 
+        if task_lora_kwargs is None:
+            task_lora_kwargs = {}
+
         blocks = []
         for i in range(depth):
             blocks.append(
@@ -883,11 +884,7 @@ class FlexiHeliosBase(nn.Module):
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
-                    use_task_lora=(
-                        use_task_lora
-                        and (task_lora_indices is None or i in task_lora_indices)
-                    ),
-                    task_dim=task_dim,
+                    task_lora_kwargs=task_lora_kwargs | {"index": i},
                 )
             )
 
@@ -1084,9 +1081,7 @@ class Encoder(FlexiHeliosBase):
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
-        use_task_lora: bool = False,
-        task_lora_indices: list[int] | None = None,
-        task_dim: int = 768,
+        task_lora_kwargs: dict[str, Any] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1110,9 +1105,7 @@ class Encoder(FlexiHeliosBase):
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
-            use_task_lora: Whether to apply low-rank updates to attention projection heads
-            task_lora_indices: Indices of layers to apply task-conditioned LoRA
-            task_dim: Dimension of task embeds used to condition LoRA updates
+            task_lora_kwargs: Keyword arguments for task-conditioned LoRA
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1126,9 +1119,7 @@ class Encoder(FlexiHeliosBase):
             use_flash_attn=use_flash_attn,
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
-            use_task_lora=use_task_lora,
-            task_lora_indices=task_lora_indices,
-            task_dim=task_dim,
+            task_lora_kwargs=task_lora_kwargs,
         )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
@@ -1839,9 +1830,7 @@ class EncoderConfig(Config):
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
-    use_task_lora: bool = False
-    task_lora_indices: list[int] | None = None
-    task_dim: int = 768
+    task_lora_kwargs: dict[str, Any] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""

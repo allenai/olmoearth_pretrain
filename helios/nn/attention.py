@@ -112,7 +112,6 @@ class Attention(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
-        use_task_lora: bool = False,
         task_lora_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the attention module.
@@ -127,7 +126,6 @@ class Attention(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
             use_flash_attn: Use flash attention
-            use_task_lora: Apply task-conditioned LoRA to attention output weights
             task_lora_kwargs: Keyword arguments for task-conditioned LoRA
         """
         super().__init__()
@@ -148,7 +146,14 @@ class Attention(nn.Module):
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj_drop = nn.Dropout(proj_drop)
 
-        self.use_task_lora = use_task_lora
+        # Disable task LoRA if index is not in task_lora_indices
+        task_lora_kwargs = task_lora_kwargs or {}
+        self.use_task_lora = task_lora_kwargs.pop("use_task_lora", False)
+        lora_indices = task_lora_kwargs.pop("task_lora_indices", [])
+        if task_lora_kwargs.pop("index", None) not in lora_indices:
+            self.use_task_lora = False
+
+        # Regular attention head projection or task-conditioned projection
         if self.use_task_lora:
             kwargs: dict[str, Any] = task_lora_kwargs or {}
             self.proj = TaskLoRALinear(dim, dim, **kwargs)
@@ -441,22 +446,7 @@ class DropPath(nn.Module):
 
 
 class Block(nn.Module):
-    """Transformer block with self/cross attention and MLP.
-
-    Args:
-        dim: Input dimension
-        num_heads: Number of attention heads
-        mlp_ratio: Ratio of mlp hidden dim to input dim. Default: 4.0
-        qkv_bias: Add bias to qkv projections. Default: False
-        qk_norm: Apply normalization to q,k. Default: False
-        drop: Dropout rate. Default: 0.0
-        attn_drop: Attention dropout rate. Default: 0.0
-        drop_path: Drop path rate. Default: 0.0
-        init_values: Layer scale initialization value. Default: None
-        act_layer: Activation layer. Default: nn.GELU
-        norm_layer: Normalization layer. Default: nn.LayerNorm
-        cross_attn: Whether to use cross attention. Default: False
-    """
+    """Transformer block with self/cross attention and MLP."""
 
     def __init__(
         self,
@@ -473,8 +463,7 @@ class Block(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
-        use_task_lora: bool = False,
-        task_dim: int = 768,
+        task_lora_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -492,8 +481,7 @@ class Block(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
-            use_task_lora: Whether to use task-conditioned LoRA
-            task_dim: Dimension of the task embedding
+            task_lora_kwargs: Keyword arguments for task-conditioned LoRA
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -507,8 +495,7 @@ class Block(nn.Module):
             norm_layer=norm_layer,
             cross_attn=cross_attn,
             use_flash_attn=use_flash_attn,
-            use_task_lora=use_task_lora,
-            task_lora_kwargs={"task_dim": task_dim},
+            task_lora_kwargs=task_lora_kwargs,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()

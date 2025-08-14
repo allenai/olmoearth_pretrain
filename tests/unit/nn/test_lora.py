@@ -28,9 +28,7 @@ def test_matches_linear_when_no_task() -> None:
     x = torch.randn(3, 7, in_f)
 
     base = nn.Linear(in_f, out_f)
-    tl = TaskLoRALinear(
-        in_f, out_f, task_dim=8, lora_rank=4, lora_alpha=8.0, lora_dropout=0.0
-    )
+    tl = TaskLoRALinear(in_f, out_f, task_dim=8, rank=4, alpha=8.0, dropout=0.0)
 
     _copy_linear_params(tl, base)
 
@@ -48,9 +46,7 @@ def test_zero_init_delta() -> None:
     task = torch.randn(B, task_d)  # (batch, task_dim)
 
     base = nn.Linear(in_f, out_f)
-    tl = TaskLoRALinear(
-        in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0
-    )
+    tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, rank=2, alpha=2.0, dropout=0.0)
 
     _copy_linear_params(tl, base)
 
@@ -68,9 +64,7 @@ def test_learns_nonzero_delta_after_optimization() -> None:
     task = torch.randn(B, task_d)  # (batch, task_dim)
     target = torch.randn(B, 3, out_f)
 
-    tl = TaskLoRALinear(
-        in_f, out_f, task_dim=task_d, lora_rank=3, lora_alpha=6.0, lora_dropout=0.0
-    )
+    tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, rank=3, alpha=6.0, dropout=0.0)
 
     y0 = tl(x, task_emb=task).detach()
     opt = torch.optim.Adam(tl.parameters(), lr=1e-2)
@@ -90,9 +84,7 @@ def test_high_rank_input_5d() -> None:
     x = torch.randn(B, T, H, W, in_f)
     task = torch.randn(B, task_d)  # (batch, task_dim) with batch=B
 
-    tl = TaskLoRALinear(
-        in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0
-    )
+    tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, rank=2, alpha=2.0, dropout=0.0)
     y = tl(x, task_emb=task)
     assert y.shape == (B, T, H, W, out_f)
 
@@ -104,7 +96,7 @@ def test_invalid_last_dim_raises() -> None:
     x = torch.randn(B, H, N, in_f + 1)  # wrong last dim
     task = torch.randn(B, task_d)  # (batch, task_dim)
 
-    tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, lora_rank=2)
+    tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, rank=2)
     with pytest.raises(ValueError):
         _ = tl(x, task_emb=task)
 
@@ -118,14 +110,12 @@ def test_gradients_flow() -> None:
     task = torch.randn(B, task_d)  # (batch, task_dim)
     target = torch.randn(B, 5, out_f)
 
-    tl = TaskLoRALinear(
-        in_f, out_f, task_dim=task_d, lora_rank=2, lora_alpha=2.0, lora_dropout=0.0
-    )
+    tl = TaskLoRALinear(in_f, out_f, task_dim=task_d, rank=2, alpha=2.0, dropout=0.0)
     loss = F.mse_loss(tl(x, task_emb=task), target)
     loss.backward()
 
     assert tl.weight.grad is not None
     if tl.bias is not None:
         assert tl.bias.grad is not None
-    assert all(p.grad is not None for p in tl.lora_gen_a.parameters())
-    assert all(p.grad is not None for p in tl.lora_gen_b.parameters())
+    assert all(p.grad is not None for p in tl.gen_a.parameters())
+    assert all(p.grad is not None for p in tl.gen_b.parameters())

@@ -574,8 +574,8 @@ class TestEncoder:
         with torch.no_grad():
             for m in module.modules():
                 if isinstance(m, TaskLoRALinear):
-                    la: torch.nn.Linear = m.lora_gen_a[-1]
-                    lb: torch.nn.Linear = m.lora_gen_b[-1]
+                    la: torch.nn.Linear = m.gen_a[-1]
+                    lb: torch.nn.Linear = m.gen_b[-1]
                     torch.nn.init.uniform_(la.weight, -0.1, 0.1)
                     torch.nn.init.uniform_(la.bias, -0.1, 0.1)
                     torch.nn.init.uniform_(lb.weight, -0.1, 0.1)
@@ -604,8 +604,11 @@ class TestEncoder:
             drop_path=0.0,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
-            use_task_lora=True,
-            task_dim=task_d,
+            task_lora_kwargs=dict(
+                use_task_lora=True,
+                task_lora_indices=[0, 1],
+                task_dim=task_d,
+            ),
         )
 
         # Build a small MaskedHeliosSample
@@ -664,8 +667,8 @@ class TestEncoder:
                     m.bias is not None and m.bias.grad is not None
                 ):
                     saw_base_grad = True
-                if any(p.grad is not None for p in m.lora_gen_a.parameters()) and any(
-                    p.grad is not None for p in m.lora_gen_b.parameters()
+                if any(p.grad is not None for p in m.gen_a.parameters()) and any(
+                    p.grad is not None for p in m.gen_b.parameters()
                 ):
                     saw_gen_grad = True
         assert saw_base_grad, "Expected gradients on base projection weights."
