@@ -168,7 +168,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         # we can have a much higher token budget because
         # all the supervisory modalities won't be passed through
         # the encoder.
-        token_budget=2000,
+        token_budget=1500,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(5, 13)),
         min_patch_size=MIN_PATCH_SIZE,
