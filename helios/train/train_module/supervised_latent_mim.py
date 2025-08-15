@@ -275,6 +275,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                             modality_bandset = torch.argmax(
                                 modality_bandset, dim=-1, keepdim=True
                             )
+                    else:
+                        print("wc unique values, ", modality_bandset.unique())
                     modality_bandset = modality_bandset.long()
                 else:
                     modality_bandset = modality_bandset.to(dtype=probe_output.dtype)
