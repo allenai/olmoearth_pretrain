@@ -28,7 +28,7 @@ for pct in "${PERCENTAGES[@]}"; do
     # Remove leading zero for name, keep full precision
     pct_str=$(printf "%.8f" "$pct" | sed 's/^0*//;s/\.$//;s/0*$//')
     name="latent_mim_cross_largeonly_dec_wc_osm_srtm_dataset_percentage_sweep_${pct_str}"
-    num_epochs=$((75 / $pct))
-    echo "Launching for percentage $pct as $name"
-    python3 scripts/2025_06_26_dataset_percentage_experiments/cross_large.py launch "$name" ai2/jupiter-cirrascale-2 --launch.priority=high --launch.num_gpus=8 --common.dataset_percentage="$pct"
+    num_epochs=$(printf "%.0f" "$(echo "scale=8; 75 / $pct" | bc)")
+    echo "Launching for percentage $pct as $name for $num_epochs epochs"
+    python3 scripts/2025_06_26_dataset_percentage_experiments/cross_large.py launch "$name" ai2/jupiter-cirrascale-2 --launch.priority=high --launch.num_gpus=8 --common.dataset_percentage="$pct" --trainer.max_duration.value="$num_epochs"
 done
