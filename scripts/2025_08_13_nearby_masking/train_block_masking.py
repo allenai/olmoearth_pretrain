@@ -93,12 +93,12 @@ def build_train_module_config(
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "modality_cross_multi_block",
+                "type": "multi_block",
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
-                "allow_encoding_decoding_same_bandset": True,
-                "min_decoded_bandsets": None,
-                "area_ratio_range": [0.25, 0.5],
+                # "allow_encoding_decoding_same_bandset": True,
+                # "min_decoded_bandsets": None,
+                # "area_ratio_range": [0.25, 0.5],
                 # # "only_decode_modalities": [
                 # #     Modality.OPENSTREETMAP_RASTER.name,
                 # #     Modality.WORLDCOVER.name,
