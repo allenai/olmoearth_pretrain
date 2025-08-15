@@ -343,11 +343,13 @@ class HeliosDataLoader(DataLoaderBase):
             )
             output_dict["cdl"] = mock_cdl
         if Modality.WORLDCEREAL.name in self.dataset.training_modalities:
-            mock_worldcereal = rng.integers(
-                low=0,
-                high=100,
-                size=(standard_hw, standard_hw, 1, Modality.WORLDCEREAL.num_bands),
-                dtype=np.float32,
+            mock_worldcereal = (
+                rng.integers(
+                    low=0,
+                    high=100,
+                    size=(standard_hw, standard_hw, 1, Modality.WORLDCEREAL.num_bands),
+                ).astype(np.float32)
+                * 100
             )
             output_dict["worldcereal"] = mock_worldcereal
 
