@@ -61,7 +61,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
         )
-
+        reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
         decoded = self.decoder(
