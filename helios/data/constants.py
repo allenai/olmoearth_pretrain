@@ -215,7 +215,7 @@ class Modality:
     SENTINEL1 = ModalitySpec(
         name="sentinel1",
         tile_resolution_factor=16,
-        band_sets=[BandSet(["vv", "vh"], 16)],
+        band_sets=[BandSet(["vv"], 16), BandSet(["vh"], 16)],
         is_multitemporal=True,
         ignore_when_parsing=False,
     )
@@ -240,11 +240,22 @@ class Modality:
         tile_resolution_factor=16,
         band_sets=[
             # 10 m/pixel bands.
-            BandSet(["B02", "B03", "B04", "B08"], 16),
-            # 20 m/pixel bands.
-            BandSet(["B05", "B06", "B07", "B8A", "B11", "B12"], 32),
-            # 60 m/pixel bands that we store at 40 m/pixel.
-            BandSet(["B01", "B09"], 64),
+            BandSet(["B02"], 16),
+            BandSet(["B03"], 16),
+            BandSet(["B04"], 16),
+            BandSet(["B08"], 16),
+            BandSet(["B05"], 32),
+            BandSet(["B06"], 32),
+            BandSet(["B07"], 32),
+            BandSet(["B8A"], 32),
+            BandSet(["B11"], 32),
+            BandSet(["B12"], 32),
+            BandSet(["B01"], 64),
+            BandSet(["B09"], 64),
+            # # 20 m/pixel bands.
+            # BandSet(["B05", "B06", "B07", "B8A", "B11", "B12"], 32),
+            # # 60 m/pixel bands that we store at 40 m/pixel.
+            # BandSet(["B01", "B09"], 64),
         ],
         is_multitemporal=True,
         ignore_when_parsing=False,
@@ -257,7 +268,16 @@ class Modality:
             # 15 m/pixel bands that we store at 10 m/pixel.
             BandSet(["B8"], 16),
             # 30 m/pixel bands that we store at 20 m/pixel.
-            BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 32),
+            BandSet(["B1"], 32),
+            BandSet(["B2"], 32),
+            BandSet(["B3"], 32),
+            BandSet(["B4"], 32),
+            BandSet(["B5"], 32),
+            BandSet(["B6"], 32),
+            BandSet(["B7"], 32),
+            BandSet(["B9"], 32),
+            BandSet(["B10"], 32),
+            BandSet(["B11"], 32),
         ],
         is_multitemporal=True,
         ignore_when_parsing=False,
