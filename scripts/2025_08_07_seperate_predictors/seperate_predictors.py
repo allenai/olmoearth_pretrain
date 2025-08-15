@@ -75,7 +75,7 @@ def build_model_config(common: CommonComponents) -> GalileoConfig:
     decoder_b_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
         decoder_embedding_size=model_size["decoder_embedding_size"],
-        depth=1,  # model_size["decoder_depth"],
+        depth=model_size["decoder_depth"],
         mlp_ratio=model_size["mlp_ratio"],
         num_heads=model_size["decoder_num_heads"],
         supported_modality_names=common.training_modalities,
