@@ -117,6 +117,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
     CLASSIFICATION_MODALITIES = [
         Modality.WORLDCOVER.name,
         Modality.OPENSTREETMAP_RASTER.name,
+        Modality.CDL.name,
+        Modality.WORLDCEREAL.name,
     ]
 
     def __init__(

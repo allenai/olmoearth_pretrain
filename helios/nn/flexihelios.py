@@ -12,7 +12,12 @@ from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
 
-from helios.data.constants import NUM_WORLDCOVER_CLASSES, Modality, ModalitySpec
+from helios.data.constants import (
+    NUM_CDL_CLASSES,
+    NUM_WORLDCOVER_CLASSES,
+    Modality,
+    ModalitySpec,
+)
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.nn.attention import Attention, Block
 from helios.nn.encodings import (
@@ -960,6 +965,8 @@ class SpatialAttnProbe(nn.Module):
                 modality = Modality.get(modality_name)
                 if modality_name == Modality.WORLDCOVER.name:
                     multiplier = NUM_WORLDCOVER_CLASSES
+                elif modality_name == Modality.CDL.name:
+                    multiplier = NUM_CDL_CLASSES
                 else:
                     multiplier = 1
                 for idx, band_set in enumerate(modality.band_sets):

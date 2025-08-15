@@ -954,6 +954,13 @@ class HeliosDataset(Dataset):
                     modality_data[modality_data == MISSING_VALUE / 10] = MISSING_VALUE
                     sample_dict[modality_name] = modality_data.astype(self.dtype)
                     continue
+                elif modality_name == Modality.CDL.name:
+                    # don't normalize CDL, since we will  one hot encode it
+                    logger.info(
+                        f"Skipping normalization for {modality_name} because it is CDL"
+                    )
+                    sample_dict[modality_name] = modality_data.astype(self.dtype)
+                    continue
                 logger.info(f"Normalizing {modality_name}")
                 missing_mask = modality_data == MISSING_VALUE
                 normalized_data = self.normalize_image(

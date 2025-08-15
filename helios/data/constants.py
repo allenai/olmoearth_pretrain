@@ -25,6 +25,8 @@ MAX_SEQUENCE_LENGTH = 12
 
 # 11 + 1, since we treat the missing class (0) as its own class
 NUM_WORLDCOVER_CLASSES = 12
+# there are less but this avoids us needing to remap
+NUM_CDL_CLASSES = 255
 
 
 def get_resolution(resolution_factor: int) -> float | int:
