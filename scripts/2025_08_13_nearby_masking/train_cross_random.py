@@ -108,8 +108,12 @@ def build_train_module_config(
         ),
         loss_config=LossConfig(
             loss_config={
-                "type": "patch_discrimination_top_n",
-                "top_n": 200,
+                "type": "patch_discrimination_new",
+            }
+        ),
+        regularizer_config=LossConfig(
+            loss_config={
+                "type": "negative_variance",
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},

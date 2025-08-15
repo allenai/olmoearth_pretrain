@@ -203,7 +203,169 @@ class PatchDiscriminationLossNew(Loss):
         return self.weight * loss
 
 
+#  The global embedding is two similar to individual embeddings
+# how can we add a regularizar
+# maybe just a single term that adds a penalty if the variance of the embeddings is too low
 
+        # Compute the squared norm of the difference between each encoding and the mean encoding
+
+@LOSS_REGISTRY.register("anti_anisotropy_top_pc")
+class AntiAnisotropyTopPC(Loss):
+    """
+    Penalizes variance concentrated along the top principal component.
+    Equivalent to penalizing the top eigenvalue of the centered covariance.
+
+    Loss = weight * ( lambda_max(C) / (trace(C) + eps_ref) )
+    where C = cov(centered, unit-norm features)
+
+    This discourages a single dominant direction without fully computing all eigenvalues.
+    """
+
+    name = "AntiAnisotropyTopPC"
+
+    def __init__(
+        self,
+        weight: float = 1e-3,
+        mode: str = "patch",       # "patch" or "instance", same semantics as KoLeo
+        eps: float = 1e-8,
+        power_iter: int = 10,      # iterations for power method (top eigen)
+        normalize_trace: bool = True,
+    ) -> None:
+        self.weight = weight
+        if mode not in ["instance", "patch"]:
+            raise ValueError(f"Unsupported mode {mode}")
+        self.mode = mode
+        self.eps = eps
+        self.power_iter = power_iter
+        self.normalize_trace = normalize_trace
+
+    def _extract_encodings(self, predictions):
+        if isinstance(predictions, TokensAndMasks):
+            if self.mode == "patch":
+                all_preds, all_masks = predictions.flatten_tokens_and_masks()
+                encoded_token_count = (all_masks == MaskValue.ONLINE_ENCODER.value).sum(dim=-1)
+                enc = all_preds[all_masks == MaskValue.ONLINE_ENCODER.value]
+            else:
+                enc = predictions.pool_unmasked_tokens(
+                    PoolingType.MEAN, spatial_pooling=False
+                )
+        else:
+            enc = predictions
+        return enc, encoded_token_count
+
+    @staticmethod
+    def _centered_cov(X: Tensor, eps: float) -> Tensor:
+        # X: (N, D), already unit-normalized
+        N = X.size(0)
+        if N <= 1:
+            # Degenerate batch; return tiny isotropic cov for stability
+            D = X.size(1)
+            return eps * torch.eye(D, device=X.device, dtype=X.dtype)
+        Xc = X - X.mean(dim=0, keepdim=True)
+        C = (Xc.T @ Xc) / (N - 1)
+        return C
+
+    def _top_eigenvalue_power(self, C: Tensor) -> Tensor:
+        # Power iteration for largest eigenvalue; differentiable through C
+        D = C.size(0)
+        v = torch.randn(D, device=C.device, dtype=C.dtype)
+        v = v / (v.norm() + self.eps)
+        for _ in range(self.power_iter):
+            v = C @ v
+            v = v / (v.norm() + self.eps)
+        # Rayleigh quotient
+        lam1 = (v @ (C @ v))
+        return lam1
+
+    def compute(self, predictions: TokensAndMasks, targets: None, **kwargs: Any) -> Tensor:
+        enc, encoded_token_count = self._extract_encodings(predictions)
+        # L2 normalize features to prevent scale cheating
+        Z = F.normalize(enc, p=2, dim=-1)
+        start = 0
+        losses = []
+        for c in encoded_token_count:
+            end = start + c
+            if c == 0:
+                continue
+            Z_sample = Z[start:end, :]
+            C = self._centered_cov(Z_sample, self.eps)
+            lam1 = self._top_eigenvalue_power(C)
+
+            if self.normalize_trace:
+                tr = torch.trace(C)
+                # Normalize by total variance to get a shape-free ratio
+                loss_val = lam1 / (tr + self.eps)
+            else:
+                loss_val = lam1
+            losses.append(loss_val)
+            start = end
+        loss = torch.stack(losses).mean()
+        return self.weight * loss
+
+@LOSS_REGISTRY.register("negative_variance")
+class NegativeVariance(Loss):
+    """
+    Subtracts (scaled) variance of embeddings from the loss:
+      Loss = - weight * mean_diag(C)
+    where C is centered covariance of unit-normalized features.
+
+    This encourages larger spread without managing anisotropy explicitly.
+    """
+
+    name = "NegativeVariance"
+
+    def __init__(
+        self,
+        weight: float = 1e-3,     # note the sign: this will be subtracted from total loss
+        mode: str = "patch",
+        eps: float = 1e-8,
+        use_mean_per_dim: bool = True,  # average variance per-dim for scale-invariance
+    ) -> None:
+        self.weight = weight
+        if mode not in ["instance", "patch"]:
+            raise ValueError(f"Unsupported mode {mode}")
+        self.mode = mode
+        self.eps = eps
+        self.use_mean_per_dim = use_mean_per_dim
+
+    def _extract_encodings(self, predictions):
+        if isinstance(predictions, TokensAndMasks):
+            if self.mode == "patch":
+                all_preds, all_masks = predictions.flatten_tokens_and_masks()
+                encoded_token_count = (all_masks == MaskValue.ONLINE_ENCODER.value).sum(dim=-1)
+                enc = all_preds[all_masks == MaskValue.ONLINE_ENCODER.value]
+            else:
+                enc = predictions.pool_unmasked_tokens(
+                    PoolingType.MEAN, spatial_pooling=False
+                )
+        else:
+            enc = predictions
+        return enc, encoded_token_count
+
+    def compute(self, predictions: TokensAndMasks, targets: None, **kwargs: Any) -> Tensor:
+        enc, encoded_token_count = self._extract_encodings(predictions)
+        Z = F.normalize(enc, p=2, dim=-1)
+        start = 0
+        losses = []
+        for c in encoded_token_count:
+            end = start + c
+            if c == 0:
+                continue
+            Z_sample = Z[start:end, :]
+            N, D = Z_sample.shape
+            if N <= 1:
+                return Z_sample.new_tensor(0.0)
+
+            Zc = Z_sample - Z_sample.mean(dim=0, keepdim=True)
+            C = (Zc.T @ Zc) / (N - 1)
+            # total variance = trace(C); mean per-dim variance = trace(C) / D
+            var_val = torch.trace(C)
+            if self.use_mean_per_dim:
+                var_val = var_val / (D + self.eps)
+            losses.append(var_val)
+            start = end
+        loss = torch.stack(losses).mean()
+        return -self.weight * loss
 
 # WIP Stuck on how to make sure the right par mask is passed and aligned to each sample
 @LOSS_REGISTRY.register("patch_discrimination_no_neighbors")
