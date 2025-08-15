@@ -12,7 +12,12 @@ from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
 
-from helios.data.constants import NUM_WORLDCOVER_CLASSES, Modality, ModalitySpec
+from helios.data.constants import (
+    NUM_CDL_CLASSES,
+    NUM_WORLDCOVER_CLASSES,
+    Modality,
+    ModalitySpec,
+)
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.nn.attention import Attention, Block
 from helios.nn.encodings import (
@@ -93,6 +98,10 @@ class TokensAndMasks(NamedTuple):
     naip_10_mask: Tensor | None = None
     gse: Tensor | None = None
     gse_mask: Tensor | None = None
+    cdl: Tensor | None = None
+    cdl_mask: Tensor | None = None
+    worldcereal: Tensor | None = None
+    worldcereal_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
@@ -956,6 +965,8 @@ class SpatialAttnProbe(nn.Module):
                 modality = Modality.get(modality_name)
                 if modality_name == Modality.WORLDCOVER.name:
                     multiplier = NUM_WORLDCOVER_CLASSES
+                elif modality_name == Modality.CDL.name:
+                    multiplier = NUM_CDL_CLASSES
                 else:
                     multiplier = 1
                 for idx, band_set in enumerate(modality.band_sets):
@@ -1423,9 +1434,9 @@ class Encoder(FlexiHeliosBase):
             tokens: Tokens with removed tokens added
             mask: Mask with removed tokens added
         """
-        assert (
-            x.shape[1] > 0
-        ), "x must have at least one token we should not mask all tokens"
+        assert x.shape[1] > 0, (
+            "x must have at least one token we should not mask all tokens"
+        )
         masked_tokens = repeat(
             torch.zeros_like(x[0, 0, :]), "d -> b t d", b=x.shape[0], t=indices.shape[1]
         )
@@ -1458,9 +1469,9 @@ class Encoder(FlexiHeliosBase):
     ) -> tuple[Tensor | None]:
         """Create the exit sequences and tokens."""
         # Check that tokens_only_dict doesn't contain any mask keys
-        assert all(
-            not key.endswith("_mask") for key in tokens_only_dict
-        ), "tokens_only_dict should not contain mask keys"
+        assert all(not key.endswith("_mask") for key in tokens_only_dict), (
+            "tokens_only_dict should not contain mask keys"
+        )
         if token_exit_cfg:
             exit_ids_per_modality = self.create_token_exit_ids(
                 tokens_only_dict, token_exit_cfg

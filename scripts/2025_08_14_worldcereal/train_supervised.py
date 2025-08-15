@@ -38,8 +38,12 @@ from helios.internal.experiment import (
     main,
 )
 from helios.internal.utils import MODEL_SIZE_ARGS
-from helios.nn.flexihelios import EncoderConfig, PoolingType, SupervisedPredictorConfig
-from helios.nn.supervised_latent_mim import SupervisedLatentMIMConfig
+from helios.nn.flexihelios import (
+    EncoderConfig,
+    PoolingType,
+    PredictorConfig,
+)
+from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -58,9 +62,11 @@ MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
 SUPERVISORY_MODALITIES = {
-    Modality.WORLDCOVER.name: 1,
-    Modality.GSE.name: 10,
-    Modality.OPENSTREETMAP_RASTER.name: 1,
+    Modality.WORLDCOVER.name: 0.1,
+    Modality.GSE.name: 1.0,
+    Modality.OPENSTREETMAP_RASTER.name: 0.1,
+    Modality.WORLDCEREAL.name: 0.1,
+    Modality.CDL.name: 0.1,
 }
 
 
@@ -83,11 +89,12 @@ def my_build_common_components(
         Modality.OPENSTREETMAP_RASTER.name,
         Modality.GSE.name,
         Modality.WORLDCEREAL.name,
+        Modality.CDL.name,
     ]
     return config
 
 
-def build_model_config(common: CommonComponents) -> SupervisedLatentMIMConfig:
+def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
@@ -103,7 +110,7 @@ def build_model_config(common: CommonComponents) -> SupervisedLatentMIMConfig:
         max_sequence_length=12,
         probe_modalities=list(SUPERVISORY_MODALITIES.keys()),
     )
-    decoder_config = SupervisedPredictorConfig(
+    decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
         decoder_embedding_size=model_size["decoder_embedding_size"],
         depth=model_size["decoder_depth"],
@@ -112,7 +119,7 @@ def build_model_config(common: CommonComponents) -> SupervisedLatentMIMConfig:
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
     )
-    model_config = SupervisedLatentMIMConfig(
+    model_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
     )
@@ -125,7 +132,7 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return SupervisedLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
-        rank_microbatch_size=64,
+        rank_microbatch_size=32,
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "random",
@@ -158,7 +165,10 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     return HeliosDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
-        token_budget=1500,
+        # we can have a much higher token budget because
+        # all the supervisory modalities won't be passed through
+        # the encoder.
+        token_budget=2500,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(5, 13)),
         min_patch_size=MIN_PATCH_SIZE,
@@ -221,7 +231,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.steps(10000),
+            eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
         ),
@@ -231,7 +241,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(4000),
+            eval_interval=Duration.epochs(20),
             input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
             patch_size=1,
             eval_mode="linear_probe",
@@ -246,33 +256,12 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(4000),
+            eval_interval=Duration.epochs(20),
             input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
             patch_size=1,
             eval_mode="linear_probe",
             probe_lr=0.1,
             epochs=50,
-        ),
-        "mados": DownstreamTaskConfig(
-            dataset="mados",
-            embedding_batch_size=128,
-            probe_batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            probe_lr=0.01,
-            epochs=50,
-            eval_interval=Duration.steps(10000),
-        ),
-        "m_cashew_plant": DownstreamTaskConfig(
-            dataset="m-cashew-plant",
-            embedding_batch_size=32,
-            probe_batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.steps(10000),
         ),
     }
     trainer_config = (

@@ -25,6 +25,8 @@ MAX_SEQUENCE_LENGTH = 12
 
 # 11 + 1, since we treat the missing class (0) as its own class
 NUM_WORLDCOVER_CLASSES = 12
+# there are less but this avoids us needing to remap
+NUM_CDL_CLASSES = 255
 
 
 def get_resolution(resolution_factor: int) -> float | int:
@@ -266,6 +268,28 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    WORLDCEREAL = ModalitySpec(
+        name="worldcereal",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [
+                    "tc-annual-temporarycrops-classification",
+                    "tc-maize-main-irrigation-classification",
+                    "tc-maize-main-maize-classification",
+                    "tc-maize-second-irrigation-classification",
+                    "tc-maize-second-maize-classification",
+                    "tc-springcereals-springcereals-classification",
+                    "tc-wintercereals-irrigation-classification",
+                    "tc-wintercereals-wintercereals-classification",
+                ],
+                16,
+            )
+        ],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     SRTM = ModalitySpec(
         name="srtm",
         tile_resolution_factor=16,
@@ -401,6 +425,14 @@ class Modality:
                 16,
             ),
         ],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    CDL = ModalitySpec(
+        name="cdl",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["cdl"], 16)],
         is_multitemporal=False,
         ignore_when_parsing=False,
     )

@@ -38,8 +38,12 @@ from helios.internal.experiment import (
     main,
 )
 from helios.internal.utils import MODEL_SIZE_ARGS
-from helios.nn.flexihelios import EncoderConfig, PoolingType, SupervisedPredictorConfig
-from helios.nn.supervised_latent_mim import SupervisedLatentMIMConfig
+from helios.nn.flexihelios import (
+    EncoderConfig,
+    PoolingType,
+    PredictorConfig,
+)
+from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -48,20 +52,12 @@ from helios.train.callbacks import (
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
-from helios.train.train_module.supervised_latent_mim import (
-    SupervisedLatentMIMTrainModuleConfig,
-)
+from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
-
-SUPERVISORY_MODALITIES = {
-    Modality.WORLDCOVER.name: 1,
-    Modality.GSE.name: 10,
-    Modality.OPENSTREETMAP_RASTER.name: 1,
-}
 
 
 def my_build_common_components(
@@ -81,13 +77,14 @@ def my_build_common_components(
         Modality.SRTM.name,
         Modality.LANDSAT.name,
         Modality.OPENSTREETMAP_RASTER.name,
-        Modality.GSE.name,
+        # Modality.GSE.name,
         Modality.WORLDCEREAL.name,
+        Modality.CDL.name,
     ]
     return config
 
 
-def build_model_config(common: CommonComponents) -> SupervisedLatentMIMConfig:
+def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
@@ -101,9 +98,8 @@ def build_model_config(common: CommonComponents) -> SupervisedLatentMIMConfig:
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,
-        probe_modalities=list(SUPERVISORY_MODALITIES.keys()),
     )
-    decoder_config = SupervisedPredictorConfig(
+    decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
         decoder_embedding_size=model_size["decoder_embedding_size"],
         depth=model_size["decoder_depth"],
@@ -112,7 +108,7 @@ def build_model_config(common: CommonComponents) -> SupervisedLatentMIMConfig:
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
     )
-    model_config = SupervisedLatentMIMConfig(
+    model_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
     )
@@ -121,19 +117,26 @@ def build_model_config(common: CommonComponents) -> SupervisedLatentMIMConfig:
 
 def build_train_module_config(
     common: CommonComponents,
-) -> SupervisedLatentMIMTrainModuleConfig:
+) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    return SupervisedLatentMIMTrainModuleConfig(
+    return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
         rank_microbatch_size=64,
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "random",
-                "encode_ratio": 0.9,
-                "decode_ratio": 0.1,
+                "type": "random_fixed_modality",
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
+                "decoded_modalities": [
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    # Modality.GSE.name,
+                    Modality.CDL.name,
+                    Modality.WORLDCEREAL.name,
+                ],
             }
         ),
-        supervisory_modalities_weights=SUPERVISORY_MODALITIES,
         loss_config=LossConfig(
             loss_config={
                 "type": "patch_discrimination_new",
@@ -141,7 +144,9 @@ def build_train_module_config(
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        scheduler=CosWithWarmup(warmup=3000),
+        scheduler=CosWithWarmup(
+            warmup_steps=8000,
+        ),
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
@@ -158,7 +163,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     return HeliosDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
-        token_budget=1500,
+        token_budget=2500,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(5, 13)),
         min_patch_size=MIN_PATCH_SIZE,
@@ -172,11 +177,6 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     dataset_configs = [
         # osm_sampling
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
-            training_modalities=common.training_modalities,
-        ),
-        # presto sampling
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_era5_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover/469728",
             training_modalities=common.training_modalities,
@@ -221,58 +221,9 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.steps(10000),
+            eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
-        ),
-        "cropharvest_Togo_12": DownstreamTaskConfig(
-            dataset="cropharvest_Togo_12",
-            embedding_batch_size=128,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(4000),
-            input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
-            patch_size=1,
-            eval_mode="linear_probe",
-            probe_lr=0.1,
-            epochs=50,
-        ),
-        # example of "in season" cropland mapping - 6 indicates only the
-        # first 6 timesteps are passed to the model
-        "cropharvest_People's Republic of China_6": DownstreamTaskConfig(
-            dataset="cropharvest_People's Republic of China_6",
-            embedding_batch_size=128,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(4000),
-            input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
-            patch_size=1,
-            eval_mode="linear_probe",
-            probe_lr=0.1,
-            epochs=50,
-        ),
-        "mados": DownstreamTaskConfig(
-            dataset="mados",
-            embedding_batch_size=128,
-            probe_batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            probe_lr=0.01,
-            epochs=50,
-            eval_interval=Duration.steps(10000),
-        ),
-        "m_cashew_plant": DownstreamTaskConfig(
-            dataset="m-cashew-plant",
-            embedding_batch_size=32,
-            probe_batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.steps(10000),
         ),
     }
     trainer_config = (

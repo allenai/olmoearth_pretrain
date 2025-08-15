@@ -1,11 +1,11 @@
-"""Post-process ingested SRTM elevation data into the Helios dataset."""
+"""Post-process ingested CDL crop type data into the Helios dataset."""
 
 import argparse
 import csv
 import multiprocessing
-from datetime import UTC, datetime
 
 import tqdm
+from rslearn.data_sources import Item
 from rslearn.dataset import Window
 from rslearn.utils.mp import star_imap_unordered
 from upath import UPath
@@ -16,15 +16,12 @@ from helios.dataset.utils import get_modality_fname
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
 
-START_TIME = datetime(2000, 1, 1, tzinfo=UTC)
-END_TIME = datetime(2001, 1, 1, tzinfo=UTC)
-
 # Layer name in the input rslearn dataset.
-LAYER_NAME = "srtm"
+LAYER_NAME = "cdl"
 
 
-def convert_srtm(window_path: UPath, helios_path: UPath) -> None:
-    """Add SRTM elevation data for this window to the Helios dataset.
+def convert_cdl(window_path: UPath, helios_path: UPath) -> None:
+    """Add CDL crop type data for this window to the Helios dataset.
 
     Args:
         window_path: the rslearn window directory to read data from.
@@ -32,19 +29,28 @@ def convert_srtm(window_path: UPath, helios_path: UPath) -> None:
     """
     window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
+    layer_datas = window.load_layer_datas()
 
     if not window.is_layer_completed(LAYER_NAME):
         return
 
-    assert len(Modality.SRTM.band_sets) == 1
-    band_set = Modality.SRTM.band_sets[0]
+    # Get start and end of the CDL item.
+    item_groups = layer_datas[LAYER_NAME].serialized_item_groups
+    if len(item_groups) == 0:
+        return
+    item = Item.deserialize(item_groups[0][0])
+    start_time = item.geometry.time_range[0]
+    end_time = item.geometry.time_range[1]
+
+    assert len(Modality.CDL.band_sets) == 1
+    band_set = Modality.CDL.band_sets[0]
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
     image = GEOTIFF_RASTER_FORMAT.decode_raster(
         raster_dir, window.projection, window.bounds
     )
     dst_fname = get_modality_fname(
         helios_path,
-        Modality.SRTM,
+        Modality.CDL,
         TimeSpan.STATIC,
         window_metadata,
         band_set.get_resolution(),
@@ -58,7 +64,7 @@ def convert_srtm(window_path: UPath, helios_path: UPath) -> None:
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(
-        helios_path, Modality.SRTM, TimeSpan.STATIC, window.name
+        helios_path, Modality.CDL, TimeSpan.STATIC, window.name
     )
     metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with metadata_fname.open("w") as f:
@@ -71,8 +77,8 @@ def convert_srtm(window_path: UPath, helios_path: UPath) -> None:
                 row=window_metadata.row,
                 tile_time=window_metadata.time.isoformat(),
                 image_idx="0",
-                start_time=START_TIME.isoformat(),
-                end_time=END_TIME.isoformat(),
+                start_time=start_time.isoformat(),
+                end_time=end_time.isoformat(),
             )
         )
 
@@ -116,7 +122,7 @@ if __name__ == "__main__":
         )
 
     p = multiprocessing.Pool(args.workers)
-    outputs = star_imap_unordered(p, convert_srtm, jobs)
+    outputs = star_imap_unordered(p, convert_cdl, jobs)
     for _ in tqdm.tqdm(outputs, total=len(jobs)):
         pass
     p.close()

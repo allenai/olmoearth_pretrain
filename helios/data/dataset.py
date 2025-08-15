@@ -56,6 +56,8 @@ class HeliosSample(NamedTuple):
     # naip_10 is currently 4x the height/width of sentinel2_l2a.
     naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
     gse: ArrayTensor | None = None  # [B, H, W, 1, len(GSE_bands)]
+    cdl: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
+    worldcereal: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
@@ -296,7 +298,9 @@ class HeliosSample(NamedTuple):
         remaining_tokens = max_tokens_per_instance - used_tokens
         max_t_within_budget = remaining_tokens / time_multiply_tokens
         if max_t_within_budget < 1:
-            raise ValueError("patch_size too small for this sample and budget")
+            raise ValueError(
+                f"patch_size too small for this sample and budget, h_w_p: {h_w_p}, max_tokens: {max_tokens_per_instance}"
+            )
 
         return min(floor(max_t_within_budget), self.time)
 
@@ -751,9 +755,9 @@ class HeliosDataset(Dataset):
         self, sample_dict: dict[str, Any], missing_timesteps_masks: dict[str, Any]
     ) -> tuple[HeliosSample, list[str]]:
         """Fill the sample with missing values."""
-        assert (
-            sample_dict["timestamps"].shape[0] == self.max_sequence_length
-        ), f"Timestamps shape {sample_dict['timestamps'].shape[0]} does not match max_sequence_length {self.max_sequence_length}"
+        assert sample_dict["timestamps"].shape[0] == self.max_sequence_length, (
+            f"Timestamps shape {sample_dict['timestamps'].shape[0]} does not match max_sequence_length {self.max_sequence_length}"
+        )
         missing_modalities = []
         sample = HeliosSample(**sample_dict)
         for modality in self.training_modalities:
@@ -948,6 +952,13 @@ class HeliosDataset(Dataset):
                     modality_data = modality_data / 10  # now we should be to classes
                     # keep missing values
                     modality_data[modality_data == MISSING_VALUE / 10] = MISSING_VALUE
+                    sample_dict[modality_name] = modality_data.astype(self.dtype)
+                    continue
+                elif modality_name == Modality.CDL.name:
+                    # don't normalize CDL, since we will  one hot encode it
+                    logger.info(
+                        f"Skipping normalization for {modality_name} because it is CDL"
+                    )
                     sample_dict[modality_name] = modality_data.astype(self.dtype)
                     continue
                 logger.info(f"Normalizing {modality_name}")
