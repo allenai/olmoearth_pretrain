@@ -211,6 +211,8 @@ class MAETrainModule(HeliosTrainModule):
 
         NOTE: For contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
+        if dry_run:
+            return
         # why is this a tuple?
         patch_size, batch = patch_batch
         self.model.train()
