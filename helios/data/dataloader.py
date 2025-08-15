@@ -342,6 +342,12 @@ class HeliosDataLoader(DataLoaderBase):
                 (standard_hw, standard_hw, 1, Modality.CDL.num_bands), dtype=np.float32
             )
             output_dict["cdl"] = mock_cdl
+        if Modality.WORLDCEREAL.name in self.dataset.training_modalities:
+            mock_worldcereal = rng.random(
+                (standard_hw, standard_hw, 1, Modality.WORLDCEREAL.num_bands),
+                dtype=np.float32,
+            )
+            output_dict["worldcereal"] = mock_worldcereal
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
