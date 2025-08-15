@@ -61,6 +61,8 @@ SUPERVISORY_MODALITIES = {
     Modality.WORLDCOVER.name: 1,
     Modality.GSE.name: 10,
     Modality.OPENSTREETMAP_RASTER.name: 1,
+    Modality.WORLDCEREAL.name: 1,
+    Modality.CDL.name: 1,
 }
 
 
@@ -125,7 +127,7 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return SupervisedLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
-        rank_microbatch_size=64,
+        rank_microbatch_size=32,
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "random",
@@ -158,7 +160,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     return HeliosDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
-        token_budget=1500,
+        token_budget=2500,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(5, 13)),
         min_patch_size=MIN_PATCH_SIZE,
