@@ -278,7 +278,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                         modality_bandset = modality_bandset.long()
                 else:
                     modality_bandset = modality_bandset.to(dtype=probe_output.dtype)
-
+                if modality == Modality.CDL.name:
+                    print(modality_bandset.unique())
                 # filter out missing values from the targets
                 # keep the final dimension, which will be 1 for categorical inputs
                 flat_modality_bandset = modality_bandset.flatten(end_dim=-2)
