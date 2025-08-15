@@ -218,7 +218,7 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
     @staticmethod
     def accuracy_score(pred: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """Compute accuracy score with missing values."""
-        if pred.dim[-1] > 1:
+        if pred.shape[-1] > 1:
             argmax_pred = pred.argmax(dim=-1)
         else:
             argmax_pred = F.sigmoid(pred) >= 0.5
