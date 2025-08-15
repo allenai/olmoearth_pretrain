@@ -218,7 +218,10 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
     @staticmethod
     def accuracy_score(pred: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """Compute accuracy score with missing values."""
-        argmax_pred = pred.argmax(dim=-1)
+        if pred.dim[-1] > 1:
+            argmax_pred = pred.argmax(dim=-1)
+        else:
+            argmax_pred = F.sigmoid(pred) >= 0.5
         matches = argmax_pred == targets
         return sum(matches.flatten()) / len(matches.flatten())
 
@@ -237,7 +240,10 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         for modality, modality_tensor in supervisory_modalities.items():
             modality_spec = Modality.get(modality)
             if modality in cls.CLASSIFICATION_MODALITIES:
-                loss_fn = torch.nn.CrossEntropyLoss()
+                if modality != Modality.WORLDCEREAL.name:
+                    loss_fn = torch.nn.CrossEntropyLoss()
+                else:
+                    loss_fn = torch.nn.BCEWithLogitsLoss()
             else:
                 loss_fn = torch.nn.MSELoss()
             for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
@@ -263,11 +269,12 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     )
 
                 if modality in cls.CLASSIFICATION_MODALITIES:
-                    if len(bands) > 1:
-                        # then we need to turn it into indices
-                        modality_bandset = torch.argmax(
-                            modality_bandset, dim=-1, keepdim=True
-                        )
+                    if modality != Modality.WORLDCEREAL.name:
+                        if len(bands) > 1:
+                            # then we need to turn it into indices
+                            modality_bandset = torch.argmax(
+                                modality_bandset, dim=-1, keepdim=True
+                            )
                     modality_bandset = modality_bandset.long()
                 else:
                     modality_bandset = modality_bandset.to(dtype=probe_output.dtype)
@@ -281,7 +288,8 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 filtered_preds = probe_output.flatten(end_dim=-2)[target_mask, :]
 
                 if modality in cls.CLASSIFICATION_MODALITIES:
-                    filtered_modality_bandset = filtered_modality_bandset[..., 0]
+                    if modality != Modality.WORLDCEREAL.name:
+                        filtered_modality_bandset = filtered_modality_bandset[..., 0]
                 modality_loss = loss_fn(
                     filtered_preds,
                     filtered_modality_bandset,
