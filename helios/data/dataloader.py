@@ -30,8 +30,6 @@ from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
 
 logger = logging.getLogger(__name__)
 
-BASE_TOKEN_BUDGET = 1500
-
 
 class HeliosDataLoader(DataLoaderBase):
     """Helios dataloader.

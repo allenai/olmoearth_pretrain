@@ -663,6 +663,40 @@
       "min": 0
     }
   },
+  "worldcereal": {
+    "tc-annual-temporarycrops-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-maize-main-irrigation-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-maize-main-maize-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-maize-second-irrigation-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-maize-second-maize-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-springcereals-springcereals-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-wintercereals-irrigation-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-wintercereals-wintercereals-classification": {
+      "max": 100,
+      "min": 0
+    }
+  },
   "worldcover": {
     "B1": {
       "max": 100,
