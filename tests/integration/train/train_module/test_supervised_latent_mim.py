@@ -47,9 +47,13 @@ def latent_mim_model(
     supported_modality_names: list[str], set_random_seeds: None
 ) -> LatentMIM:
     """Create a real LatentMIM model for testing."""
+    supervisory_modalities = [Modality.WORLDCOVER.name, Modality.GSE.name]
+    encoder_decoder_modalities = [
+        m for m in supported_modality_names if m not in supervisory_modalities
+    ]
     # Create encoder config
     encoder_config = EncoderConfig(
-        supported_modality_names=supported_modality_names,
+        supported_modality_names=encoder_decoder_modalities,
         embedding_size=16,
         max_patch_size=8,
         num_heads=2,
@@ -62,7 +66,7 @@ def latent_mim_model(
 
     # Create predictor config
     predictor_config = PredictorConfig(
-        supported_modality_names=supported_modality_names,
+        supported_modality_names=encoder_decoder_modalities,
         encoder_embedding_size=16,
         decoder_embedding_size=16,
         depth=2,
@@ -183,7 +187,7 @@ def test_train_batch_without_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(3.3),
+            torch.tensor(3.1),
             atol=1e-1,
         )
 
@@ -210,6 +214,6 @@ def test_train_batch_with_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(3.3),
+            torch.tensor(3.1),
             atol=1e-1,
         )
