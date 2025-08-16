@@ -249,9 +249,9 @@ class EncoderWithHead(nn.Module):
 
 def load_config(checkpoint_path: Path) -> Config:
     """Load the config file from the checkpoint input directory."""
-    assert (
-        checkpoint_path / "config.json"
-    ).exists(), f"Config file not found at {checkpoint_path}"
+    assert (checkpoint_path / "config.json").exists(), (
+        f"Config file not found at {checkpoint_path}"
+    )
 
     with open(checkpoint_path / "config.json") as f:
         config_dict = json.load(f)

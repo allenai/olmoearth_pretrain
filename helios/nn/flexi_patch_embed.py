@@ -125,9 +125,9 @@ class FlexiPatchEmbed(nn.Module):
             else:
                 patch_size = patch_size * self.modality_spec.image_tile_size_factor
         patch_size = self.to_2tuple(patch_size)
-        assert (
-            isinstance(patch_size, tuple) and len(patch_size) == 2
-        ), "patch_size must be a 2-tuple"
+        assert isinstance(patch_size, tuple) and len(patch_size) == 2, (
+            "patch_size must be a 2-tuple"
+        )
         # Resize input
         if patch_size != self.patch_size:
             shape = x.shape[-2:]

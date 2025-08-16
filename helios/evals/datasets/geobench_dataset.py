@@ -223,13 +223,13 @@ class GeobenchDataset(Dataset):
         if self.visualize_samples:
             self.visualize_sample_bands(x, f"./visualizations/sample_{idx}")
         if self.is_landsat:
-            assert (
-                x.shape[-1] == len(EVAL_L8_BAND_NAMES)
-            ), f"Instances must have {len(EVAL_L8_BAND_NAMES)} channels, not {x.shape[-1]}"
+            assert x.shape[-1] == len(EVAL_L8_BAND_NAMES), (
+                f"Instances must have {len(EVAL_L8_BAND_NAMES)} channels, not {x.shape[-1]}"
+            )
         else:
-            assert (
-                x.shape[-1] == len(EVAL_S2_BAND_NAMES)
-            ), f"Instances must have {len(EVAL_S2_BAND_NAMES)} channels, not {x.shape[-1]}"
+            assert x.shape[-1] == len(EVAL_S2_BAND_NAMES), (
+                f"Instances must have {len(EVAL_S2_BAND_NAMES)} channels, not {x.shape[-1]}"
+            )
         if self.multiply_by_10_000:
             x = x * 10_000
         # Normalize using the downstream task's normalization stats
