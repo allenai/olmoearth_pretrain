@@ -51,8 +51,8 @@ from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
-MAX_PATCH_SIZE = 4
-MIN_PATCH_SIZE = 4
+MAX_PATCH_SIZE = 8
+MIN_PATCH_SIZE = 1
 
 
 def my_build_common_components(
@@ -116,12 +116,12 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
-        rank_microbatch_size=16,
+        rank_microbatch_size=64,
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "random_fixed_modality",
-                "encode_ratio": 1.0,
-                "decode_ratio": 0.0,
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
                 "decoded_modalities": [
                     Modality.WORLDCOVER.name,
                     Modality.SRTM.name,
@@ -129,10 +129,6 @@ def build_train_module_config(
                     Modality.GSE.name,
                     Modality.CDL.name,
                     Modality.WORLDPOP.name,
-                ],
-                "randomize_missing_modalities": [
-                    Modality.SENTINEL1.name,
-                    Modality.LANDSAT.name,
                 ],
             }
         ),
@@ -162,7 +158,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     return HeliosDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
-        token_budget=3000,
+        token_budget=2000,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(5, 13)),
         min_patch_size=MIN_PATCH_SIZE,

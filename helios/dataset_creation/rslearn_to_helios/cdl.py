@@ -48,6 +48,11 @@ def convert_cdl(window_path: UPath, helios_path: UPath) -> None:
     image = GEOTIFF_RASTER_FORMAT.decode_raster(
         raster_dir, window.projection, window.bounds
     )
+
+    # Skip if there are any background/nodata.
+    if image.min() == 0:
+        return
+
     dst_fname = get_modality_fname(
         helios_path,
         Modality.CDL,
