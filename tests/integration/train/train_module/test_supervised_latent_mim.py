@@ -24,27 +24,11 @@ torch.set_default_device("cpu")
 logger = logging.getLogger(__name__)
 
 
-@pytest.fixture
-def supported_modalities() -> list:
-    """Return the supported modalities for the test."""
-    return [
-        Modality.get("sentinel2_l2a"),
-        Modality.get("sentinel1"),
-        Modality.get("worldcover"),
-        Modality.get("latlon"),
-        Modality.get("gse"),
-    ]
+SUPPORTED_MODALITY_NAMES = ["sentinel2_l2a", "sentinel1", "worldcover", "latlon", "gse"]
 
 
-@pytest.fixture
-def supported_modality_names() -> list[str]:
-    """Return the supported modality names for the test."""
-    return ["sentinel2_l2a", "sentinel1", "worldcover", "latlon", "gse"]
-
-
-@pytest.fixture
-def latent_mim_model(
-    supported_modality_names: list[str], set_random_seeds: None
+def create_latent_mim_model(
+    supported_modality_names: list[str], spatial_attn: bool
 ) -> LatentMIM:
     """Create a real LatentMIM model for testing."""
     supervisory_modalities = [Modality.WORLDCOVER.name, Modality.GSE.name]
@@ -62,6 +46,7 @@ def latent_mim_model(
         drop_path=0.1,
         max_sequence_length=12,
         probe_modalities=[Modality.WORLDCOVER.name, Modality.GSE.name],
+        use_spatial_attn=spatial_attn,
     )
 
     # Create predictor config
@@ -166,13 +151,15 @@ class MockTrainer:
         self._metrics[name] = value
 
 
+@pytest.mark.parametrize("spatial_attn,expected_output", [(True, 3.1), (False, 3.3)])
 def test_train_batch_without_missing_modalities(
+    spatial_attn: bool,
+    expected_output: float,
     samples_without_missing_modalities: list[tuple[int, HeliosSample]],
-    latent_mim_model: LatentMIM,
     train_module_config: SupervisedLatentMIMTrainModuleConfig,
-    set_random_seeds: None,
 ) -> None:
     """Test train batch without missing modalities."""
+    latent_mim_model = create_latent_mim_model(SUPPORTED_MODALITY_NAMES, spatial_attn)
     batch = collate_helios(samples_without_missing_modalities)
     train_module = train_module_config.build(latent_mim_model, device="cpu")
     with patch("helios.train.train_module.train_module.build_world_mesh"):
@@ -187,19 +174,21 @@ def test_train_batch_without_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(3.1),
+            torch.tensor(expected_output),
             atol=1e-1,
         )
 
 
+@pytest.mark.parametrize("spatial_attn,expected_output", [(True, 3.1), (False, 3.3)])
 def test_train_batch_with_missing_modalities(
+    spatial_attn: bool,
+    expected_output: float,
     samples_with_missing_modalities: list[tuple[int, HeliosSample]],
-    latent_mim_model: LatentMIM,
     train_module_config: SupervisedLatentMIMTrainModuleConfig,
-    set_random_seeds: None,
 ) -> None:
     """Test train batch with missing modalities."""
     # Create a collated batch
+    latent_mim_model = create_latent_mim_model(SUPPORTED_MODALITY_NAMES, spatial_attn)
     batch = collate_helios(samples_with_missing_modalities)
     train_module = train_module_config.build(latent_mim_model, device="cpu")
     with patch("helios.train.train_module.train_module.build_world_mesh"):
@@ -214,6 +203,6 @@ def test_train_batch_with_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(3.1),
+            torch.tensor(expected_output),
             atol=1e-1,
         )

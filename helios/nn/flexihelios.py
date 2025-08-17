@@ -938,7 +938,7 @@ class SpatialAttnProbe(nn.Module):
         embedding_size: int,
         max_patch_size: int,
         num_heads: int,
-        use_attn: bool = False,
+        use_spatial_attn: bool = False,
         probe_modalities: list[str] | None = None,
         probe_dims: list[int] = [],
         qk_norm: bool = False,
@@ -951,7 +951,7 @@ class SpatialAttnProbe(nn.Module):
         self.max_patch_size = max_patch_size
         self.mask_token = nn.Parameter(torch.zeros(embedding_size))
         self.attention = None
-        if use_attn:
+        if use_spatial_attn:
             self.attention = Attention(
                 dim=embedding_size,
                 cross_attn=True,
@@ -1047,14 +1047,16 @@ class SpatialAttnProbe(nn.Module):
                     q=q.shape[1],
                 ),
             )
-            spatial_tokens = rearrange(
-                spatial_tokens, "b (h w) d -> b h w d", h=x.h_at_10, w=x.h_at_10
-            )
             # everything is unmasked, so its ones
-            spatial_mask = torch.ones_like(spatial_tokens)[:, :, :, 0]
         else:
             spatial_tokens, spatial_mask = x.spatial_pool_with_mask()
+            spatial_tokens = rearrange(spatial_tokens, "b h w d -> b (h w) d")
         probe_outputs = self.apply_probes(spatial_tokens, h_w=x.h_at_10)
+        spatial_tokens = rearrange(
+            spatial_tokens, "b (h w) d -> b h w d", h=x.h_at_10, w=x.h_at_10
+        )
+        if self.attention is not None:
+            spatial_mask = torch.ones_like(spatial_tokens)[:, :, :, 0]
         probe_outputs["mask"] = spatial_mask
         return probe_outputs, spatial_tokens
 
@@ -1299,6 +1301,7 @@ class Encoder(FlexiHeliosBase):
         probe_modalities: list[str] | None = None,
         probe_dims: list[int] = [],
         qk_norm: bool = False,
+        use_spatial_attn: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1326,6 +1329,7 @@ class Encoder(FlexiHeliosBase):
             probe_dims: the hidden dimensions to use for the probe. If an empty list is passed,
                 only a linear layer is applied
             qk_norm: Whether to apply normalization to Q and K in attention
+            use_spatial_attn: whether to use spatial attn or just take spatial means
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1367,6 +1371,7 @@ class Encoder(FlexiHeliosBase):
             probe_dims=probe_dims,
             qk_norm=qk_norm,
             use_flash_attn=use_flash_attn,
+            use_spatial_attn=use_spatial_attn,
         )
 
     def create_token_exit_ids(
@@ -2063,6 +2068,7 @@ class EncoderConfig(Config):
     probe_modalities: list[str] | None = None
     probe_dims: list[int] = field(default_factory=lambda: [])
     qk_norm: bool = False
+    use_spatial_attn: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
