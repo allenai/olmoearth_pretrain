@@ -1,6 +1,6 @@
 """Launch script for evaluation."""
 
-from latent_mim_add_era5 import (
+from latent_mim_contrastive_add_era5 import (
     build_dataloader_config,
     build_dataset_config,
     build_model_config,
