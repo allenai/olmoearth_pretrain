@@ -32,6 +32,13 @@ class TestSupervisedLatentMIMUnit:
         }
         # 1s where the value is present
         probe_outputs = {
+            "mask": repeat(
+                torch.tensor([[0, 1], [1, 0]], dtype=torch.bool),
+                "h w -> b (h p1) (w p2)",
+                b=b,
+                p1=batch_patch_size,
+                p2=batch_patch_size,
+            ),
             "worldcover_0": repeat(
                 # times 100 since this is unnormalized from the perspective of the ce loss
                 one_hot(torch.tensor([[1, 2], [3, 4]]), num_classes=12).float() * 100,
