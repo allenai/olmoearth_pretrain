@@ -1057,7 +1057,9 @@ class SpatialAttnProbe(nn.Module):
         )
         if self.attention is not None:
             spatial_mask = torch.ones_like(spatial_tokens)[:, :, :, 0]
-        probe_outputs["mask"] = spatial_mask
+        probe_outputs["mask"] = repeat(
+            spatial_mask, "b h w -> b (h p1) (w p2)", p1=patch_size, p2=patch_size
+        )
         return probe_outputs, spatial_tokens
 
 
