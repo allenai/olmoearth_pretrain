@@ -20,7 +20,7 @@ lr_args = " ".join(
     ]
 )
 checkpoints = [
-    "/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_cross_random_per_modality_patchdisc_add_contrastive_0.1_all_datasets/step200000",
+    "/weka/dfive-default/helios/checkpoints/yawenzzzz/latent_mim_cross_random_per_modality_patchdisc_add_contrastive_0.1_1/step165000",
 ]
 
 parser = argparse.ArgumentParser()
