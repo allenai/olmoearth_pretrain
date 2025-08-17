@@ -938,6 +938,7 @@ class SpatialAttnProbe(nn.Module):
         embedding_size: int,
         max_patch_size: int,
         num_heads: int,
+        use_attn: bool = False,
         probe_modalities: list[str] | None = None,
         probe_dims: list[int] = [],
         qk_norm: bool = False,
@@ -949,13 +950,15 @@ class SpatialAttnProbe(nn.Module):
         self.embedding_size = embedding_size
         self.max_patch_size = max_patch_size
         self.mask_token = nn.Parameter(torch.zeros(embedding_size))
-        self.attention = Attention(
-            dim=embedding_size,
-            cross_attn=True,
-            num_heads=num_heads,
-            use_flash_attn=use_flash_attn,
-            qk_norm=qk_norm,
-        )
+        self.attention = None
+        if use_attn:
+            self.attention = Attention(
+                dim=embedding_size,
+                cross_attn=True,
+                num_heads=num_heads,
+                use_flash_attn=use_flash_attn,
+                qk_norm=qk_norm,
+            )
 
         if probe_modalities is not None:
             probes: dict[str, nn.Module] = {}
@@ -1020,33 +1023,39 @@ class SpatialAttnProbe(nn.Module):
         if len(self.probes) == 0:
             return {}, None
 
-        gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
-        spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
-            # we assume x is square, h == w
-            grid_size=x.h_at_10,
-            res=torch.ones(x.b, device=x.device) * gsd_ratio,
-            encoding_dim=self.embedding_size,
-            device=x.device,
-        )
-        mask_expanded = repeat(
-            self.mask_token, "d -> b (h w) d", b=x.b, h=x.h_at_10, w=x.h_at_10
-        )
-        q = mask_expanded + spatial_embed.to(dtype=mask_expanded.dtype)
-        feat_tokens, feat_masks = x.flatten_tokens_and_masks()
-        # feat_masks has shape[B, N_f], we want [B, N_q, N_f]
-        spatial_tokens = self.attention(
-            x=q,
-            y=feat_tokens,
-            attn_mask=repeat(
-                feat_masks == MaskValue.ONLINE_ENCODER.value,
-                "b f -> b q f",
-                q=q.shape[1],
-            ),
-        )
+        if self.attention is not None:
+            gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
+            spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
+                # we assume x is square, h == w
+                grid_size=x.h_at_10,
+                res=torch.ones(x.b, device=x.device) * gsd_ratio,
+                encoding_dim=self.embedding_size,
+                device=x.device,
+            )
+            mask_expanded = repeat(
+                self.mask_token, "d -> b (h w) d", b=x.b, h=x.h_at_10, w=x.h_at_10
+            )
+            q = mask_expanded + spatial_embed.to(dtype=mask_expanded.dtype)
+            feat_tokens, feat_masks = x.flatten_tokens_and_masks()
+            # feat_masks has shape[B, N_f], we want [B, N_q, N_f]
+            spatial_tokens = self.attention(
+                x=q,
+                y=feat_tokens,
+                attn_mask=repeat(
+                    feat_masks == MaskValue.ONLINE_ENCODER.value,
+                    "b f -> b q f",
+                    q=q.shape[1],
+                ),
+            )
+            spatial_tokens = rearrange(
+                spatial_tokens, "b (h w) d -> b h w d", h=x.h_at_10, w=x.h_at_10
+            )
+            # everything is unmasked, so its ones
+            spatial_mask = torch.ones_like(spatial_tokens)[:, :, :, 0]
+        else:
+            spatial_tokens, spatial_mask = x.spatial_pool_with_mask()
         probe_outputs = self.apply_probes(spatial_tokens, h_w=x.h_at_10)
-        spatial_tokens = rearrange(
-            spatial_tokens, "b (h w) d -> b h w d", h=x.h_at_10, w=x.h_at_10
-        )
+        probe_outputs["mask"] = spatial_mask
         return probe_outputs, spatial_tokens
 
 

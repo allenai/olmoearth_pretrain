@@ -237,6 +237,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
         loss_to_return: torch.Tensor | None = None
         accuracies_to_return: dict[str, torch.Tensor] = {}
         # TODO: this is required; is it okay to be a normal dict key?
+        if "mask" not in probe_outputs:
+            raise ValueError("mask not in probe_outputs")
+        spatial_mask = probe_outputs["mask"]
         for modality, modality_tensor in supervisory_modalities.items():
             modality_spec = Modality.get(modality)
             if modality in cls.CLASSIFICATION_MODALITIES:
@@ -281,7 +284,9 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 # filter out missing values from the targets
                 # keep the final dimension, which will be 1 for categorical inputs
                 flat_modality_bandset = modality_bandset.flatten(end_dim=-2)
-                target_mask = flat_modality_bandset[..., 0] != MISSING_VALUE
+                target_mask = torch.logical_and(
+                    spatial_mask.flatten(), (flat_modality_bandset != MISSING_VALUE)
+                )
 
                 filtered_modality_bandset = flat_modality_bandset[target_mask]
                 filtered_preds = probe_output.flatten(end_dim=-2)[target_mask, :]
