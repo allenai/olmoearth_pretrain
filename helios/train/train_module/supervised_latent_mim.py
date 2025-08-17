@@ -284,6 +284,12 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                 # filter out missing values from the targets
                 # keep the final dimension, which will be 1 for categorical inputs
                 flat_modality_bandset = modality_bandset.flatten(end_dim=-2)
+                print(
+                    modality,
+                    spatial_mask.shape,
+                    spatial_mask.flatten().shape,
+                    flat_modality_bandset.shape,
+                )
                 target_mask = torch.logical_and(
                     spatial_mask.flatten(),
                     (flat_modality_bandset[..., 0] != MISSING_VALUE),
