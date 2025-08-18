@@ -79,9 +79,11 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
         year_time_ranges.append(time_range)
 
         # Should we use this image for the frequent data for this window?
+        assert window.time_range is not None, "Window time range should not be None"
+        assert time_range is not None, "Item time range should not be None"
         if (
-            window.time_range[0] < time_range[1]  # type: ignore
-            and time_range[0] < window.time_range[1]  # type: ignore
+            window.time_range[0] < time_range[1]
+            and time_range[0] < window.time_range[1]
         ):
             two_week_image = image
             two_week_time_range = time_range
@@ -136,8 +138,8 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
                     row=window_metadata.row,
                     tile_time=window_metadata.time.isoformat(),
                     image_idx=group_idx,
-                    start_time=time_range[0].isoformat(),  # type: ignore
-                    end_time=time_range[1].isoformat(),  # type: ignore
+                    start_time=time_range[0].isoformat(),
+                    end_time=time_range[1].isoformat(),
                 )
             )
 
