@@ -124,7 +124,7 @@ def build_train_module_config(
         ),
         loss_config=LossConfig(
             loss_config={
-                "type": "modality_patch_discrimination_new_hard",
+                "type": "modality_all_discrimination_hard",
                 "tau": 0.1,
                 "margin": 0.1,
             }
