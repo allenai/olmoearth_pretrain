@@ -4,6 +4,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 
 import torch
 import torch.nn.functional as F
@@ -50,6 +51,9 @@ HELIOS_LANDSAT_RGB_BANDS = [
     Modality.LANDSAT.band_order.index(b) for b in ["B4", "B3", "B2"]
 ]
 
+REPO_DIR = "/weka/dfive-default/helios/models/dinov3/repo"
+CHECKPOINT_DIR = "/weka/dfive-default/helios/models/dinov3/checkpoints"
+
 
 class DinoV3Models(StrEnum):
     """Names for different DInoV3 images on torch hub"""
@@ -60,6 +64,7 @@ class DinoV3Models(StrEnum):
     LARGE_WEB = "dinov3_vitl16"
     HUGE_PLUS_WEB = "dinov3_vith16plus"
     FUll_7B_WEB = "dinov3_vit7b16"
+    LARGE_SATELLITE = "dinov3_vitl16_sat" # just the name I copied too
     # Not yet clear how to download the satelite models
 
 
@@ -102,8 +107,10 @@ class DINOv3(nn.Module):
         for attempt in range(2):
             try:
                 self.model = torch.hub.load(
-                    "facebookresearch/dinov3",
+                    REPO_DIR + "/dinov3",
                     torchhub_id,
+                    source="local",
+                    weights=f"{CHECKPOINT_DIR}/{torchhub_id}_pretrain.pth",
                 )
                 break
             except Exception as e:
