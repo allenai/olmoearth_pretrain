@@ -1,31 +1,43 @@
 """Task-conditioned LoRA layer."""
 
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
 class TaskLoRALinear(nn.Module):
-    r"""Drop-in Linear with task-conditioned LoRA.
+    r"""Task-conditioned LoRA that adds a per-task low-rank delta to a precomputed base output.
 
-    This layer augments a standard linear projection with a per-task, low-rank
-    weight update :math:`\\Delta W` that is generated from a task embedding.
-
-    At initialization the LoRA generators' final layers are zero-initialized,
-    ensuring :math:`\\Delta W = 0` and preserving the behavior of a plain
-    :class:`torch.nn.Linear`. During training, the generators learn to map
-    task embeddings to useful low-rank updates.
+    This layer generates a low-rank update :math:`\Delta W` from a task embedding
+    and adds the corresponding output delta to an already-computed base output.
 
     Behavior:
-        - If ``task_emb`` is ``None``, behaves exactly like :class:`torch.nn.Linear`.
-        - Else, computes ``ΔW = A(task_emb) @ B(task_emb)`` and returns
-          ``x @ W^T + (alpha/r) * x @ (ΔW)^T + b``.
+        - If ``task_emb`` is ``None``, returns ``base_out`` unchanged.
+        - Otherwise, computes ``\Delta W = A(task_emb) @ B(task_emb)`` and returns
+          ``base_out + (alpha / rank) * (x_drop @ (\Delta W)^T)``.
 
     Shapes:
-        - Input: ``x`` has shape ``(..., in_features)`` (e.g., ``(B, N, C_in)``).
-        - Output: same leading dims as input with last dim ``out_features``.
+        - ``x``: ``(..., in_features)``
+        - ``base_out``: ``(..., out_features)`` (same leading dims as ``x``)
+        - ``task_emb``: ``(B, task_dim)`` broadcast across tokens/samples
+        - return: ``(..., out_features)``
+
+    Notes:
+        The final layers of the generator MLPs are zero-initialized so that
+        :math:`\Delta W = 0` at initialization, preserving ``base_out`` exactly.
+
+    Args:
+        in_features: Size of the last dimension of ``x``.
+        out_features: Size of the last dimension of ``base_out`` and the output.
+        task_dim: Dimensionality of the task embedding vector.
+        rank: LoRA rank ``r``; must be > 0.
+        alpha: Scaling factor; effective scale is ``alpha / rank``.
+        dropout: Dropout probability applied to ``x`` along the LoRA path.
+        gen_hidden: Hidden width for the generator MLPs.
+        gen_layers: Number of layers in the generator MLPs. ``0`` means a single
+            linear layer (no hidden). ``1`` means one hidden -> output.
+        gen_activation: Name of activation for generator hidden layers
+            (``"gelu"``, ``"relu"``, ``"silu"``) or ``None`` for identity.
     """
 
     def __init__(
@@ -33,7 +45,7 @@ class TaskLoRALinear(nn.Module):
         in_features: int,
         out_features: int,
         task_dim: int,
-        bias: bool = True,
+        *,
         rank: int = 8,
         alpha: float = 8.0,
         dropout: float = 0.1,
@@ -44,144 +56,153 @@ class TaskLoRALinear(nn.Module):
         """Initialize the TaskLoRALinear module.
 
         Args:
-            in_features: Size of each input sample.
-            out_features: Size of each output sample.
-            task_dim: Dimensionality of the task embedding vector.
-            bias: If ``True``, adds a learnable bias to the output.
-            rank: LoRA rank ``r``; must be > 0.
-            alpha: Scaling factor; effective scale is ``alpha / r``.
-            dropout: Dropout applied to input ``x`` before LoRA path.
-            gen_hidden: Hidden width used in generator MLP(s).
-            gen_layers: Number of hidden layers in generator MLP(s). ``0`` means
-                a single linear layer (no hidden).
-            gen_activation: Activation for generator hidden layers
-                (``"gelu"``, ``"relu"``, ``"silu"``) or ``None`` for identity.
+            in_features: The dimension of the input features.
+            out_features: The dimension of the output features.
+            task_dim: The dimension of the task embedding.
+            rank: The rank of the LoRA matrix.
+            alpha: The scaling factor for the LoRA matrix.
+            dropout: The dropout probability for the LoRA matrix.
+            gen_hidden: The hidden width for the generator MLPs.
+            gen_layers: The number of layers in the generator MLPs.
+            gen_activation: The activation function for the generator MLPs.
         """
         super().__init__()
+        if rank <= 0:
+            raise ValueError("rank must be > 0")
 
-        # Base linear
         self.in_features = in_features
         self.out_features = out_features
-        self.weight = nn.Parameter(torch.empty(self.out_features, self.in_features))
-        self.bias = nn.Parameter(torch.empty(self.out_features)) if bias else None
-        self.reset_parameters()
-
-        # LoRA config
-        self.gen_hidden = gen_hidden
         self.task_dim = task_dim
         self.rank = rank
         self.alpha = alpha
-        self.gen_layers = gen_layers
-        self.gen_activation = gen_activation
         self.dropout = dropout
-        self.scaling = self.alpha / self.rank
+        self.scaling = alpha / rank
 
-        # Resolve activation class (fallback to Identity if None or unrecognized)
-        if gen_activation is None:
-            self.activation_cls = nn.Identity
-        else:
-            name = gen_activation.lower()
-            acts = {"gelu": nn.GELU, "relu": nn.ReLU, "silu": nn.SiLU}
-            self.activation_cls = acts.get(name, nn.Identity)
+        # Resolve activation (fallback to Identity)
+        acts = {"gelu": nn.GELU, "relu": nn.ReLU, "silu": nn.SiLU}
+        self.activation_cls = (
+            nn.Identity
+            if gen_activation is None
+            else acts.get(gen_activation.lower(), nn.Identity)
+        )
 
-        # Generators produce vec(A) and vec(B) per token
-        self.gen_a = self.make_mlp(self.out_features * self.rank)
-        self.gen_b = self.make_mlp(self.rank * self.in_features)
+        # Generators that output vec(A) and vec(B)
+        self.gen_a = self._make_mlp(out_features * rank, gen_hidden, gen_layers)
+        self.gen_b = self._make_mlp(rank * in_features, gen_hidden, gen_layers)
 
-    def reset_parameters(self) -> None:
-        """Initialize base linear parameters.
-
-        Uses the same initialization scheme as :class:`torch.nn.Linear`:
-        Kaiming-uniform for ``weight`` and a uniform bound for ``bias`` based on
-        fan-in.
-        """
-        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        if self.bias is not None:
-            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
-            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-            nn.init.uniform_(self.bias, -bound, bound)
-
-    def make_mlp(self, out_size: int) -> nn.Sequential:
-        r"""Construct a small MLP that outputs a flattened matrix.
-
-        The final linear layer is zero-initialized so that at initialization
-        the generated LoRA factors produce :math:`\\Delta W = 0`.
+    def _make_mlp(self, out_size: int, hidden: int, layers: int) -> nn.Sequential:
+        """Construct a small MLP to output a flattened matrix.
 
         Args:
-            out_size: Output dimensionality, typically ``out_features * r`` or
-                ``r * in_features`` to represent vectorized ``A`` or ``B``.
+            out_size: Output dimensionality (e.g., ``out_features * rank`` or
+                ``rank * in_features``).
+            hidden: Hidden width for the MLP (if any).
+            layers: Number of layers (>= 0). ``0`` means no hidden.
 
         Returns:
-            A :class:`torch.nn.Sequential` implementing the generator.
+            A :class:`torch.nn.Sequential` generator.
         """
-        layers: list[nn.Module] = []
+        modules: list[nn.Module] = []
         in_size = self.task_dim
-        for _ in range(max(0, self.gen_layers - 1)):
-            layers.extend(
-                [
-                    nn.Linear(in_size, self.gen_hidden, bias=True),
-                    nn.Dropout(self.dropout),
-                    self.activation_cls(),
-                    nn.Dropout(self.dropout),
-                ]
-            )
-            in_size = self.gen_hidden
-        layers.append(nn.Linear(in_size, out_size, bias=True))
-        mlp = nn.Sequential(*layers)
 
-        # Zero-init the last Linear so ΔW = 0 at init
-        last = mlp[-1]
-        nn.init.zeros_(last.weight)
-        nn.init.zeros_(last.bias)
+        # (layers - 1) hidden blocks, then the output layer
+        for _ in range(max(0, layers - 1)):
+            modules.append(nn.Linear(in_size, hidden, bias=True))
+            modules.append(self.activation_cls())
+            modules.append(nn.Dropout(self.dropout))
+            in_size = hidden
 
-        # Mark so global model init can skip re-initializing this layer.
-        last._skip_reinit = True
+        modules.append(nn.Linear(in_size, out_size, bias=True))
+        mlp = nn.Sequential(*modules)
         return mlp
 
-    def forward(
-        self, x: torch.Tensor, task_emb: torch.Tensor | None = None
+    @staticmethod
+    def _broadcast_task_emb(
+        task_emb: torch.Tensor, b_eff: int, task_dim: int
     ) -> torch.Tensor:
-        """Apply the linear projection with optional task-conditioned LoRA.
-
-        If ``task_emb`` is ``None``, this is equivalent to
-        ``torch.nn.functional.linear(x, weight, bias)``.
+        """Broadcast or trim ``task_emb`` to match the effective batch size.
 
         Args:
-            x: Input tensor of shape ``(..., in_features)`` (e.g., ``(B, N, C_in)``).
-            task_emb: Task embedding of shape ``(B, task_dim)``. These embeddings are broadcasted
-                across all patches (tokens) in the batch.
+            task_emb: Task embeddings of shape ``(B, task_dim)``.
+            b_eff: Effective batch size after flattening the leading dims of ``x``.
+            task_dim: Expected embedding dimension (for validation).
 
         Returns:
-            Output tensor with shape ``(..., out_features)``.
+            A tensor of shape ``(b_eff, task_dim)`` suitable for per-sample generation.
         """
-        # No task embedding -> plain linear
-        if task_emb is None:
-            return F.linear(x, self.weight, self.bias)
+        if task_emb.dim() != 2 or task_emb.size(-1) != task_dim:
+            raise ValueError(
+                f"task_emb must be (B, {task_dim}), got {tuple(task_emb.shape)}"
+            )
+        reps = (b_eff + task_emb.size(0) - 1) // task_emb.size(0)  # ceil division
+        return task_emb.repeat(reps, 1)[:b_eff]
 
-        # Flatten leading dims to an effective batch, keep last feature dim
+    def forward(
+        self,
+        x: torch.Tensor,
+        base_out: torch.Tensor,
+        task_emb: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Add a task-conditioned LoRA delta to a precomputed base output.
+
+        If ``task_emb`` is ``None``, this function returns ``base_out`` unchanged.
+
+        Args:
+            x: Input tensor of shape ``(..., in_features)`` used by the LoRA path.
+            base_out: Precomputed base output of shape ``(..., out_features)``.
+            task_emb: Task embeddings of shape ``(B, task_dim)`` or ``None``.
+                These embeddings are broadcast across tokens/samples in the batch.
+
+        Returns:
+            Tensor of shape ``(..., out_features)`` equal to:
+            ``base_out`` if ``task_emb is None``, else
+            ``base_out + scaling * (x_drop @ (Delta W)^T)``.
+        """
+        if task_emb is None:
+            return base_out
+
         if x.shape[-1] != self.in_features:
-            raise ValueError(f"Expected last dim {self.in_features}, got {x.shape[-1]}")
-        x_shape = x.shape  # effective batch = B * N
-        x2d = x.reshape(-1, self.in_features)  # (B_eff, C_in)
-        b_eff = x2d.shape[0]
+            raise ValueError(
+                f"Expected last dim of x to be {self.in_features}, got {x.shape[-1]}"
+            )
+        if (
+            base_out.shape[:-1] != x.shape[:-1]
+            or base_out.shape[-1] != self.out_features
+        ):
+            raise ValueError(
+                "base_out must match x's leading dimensions and have last dim "
+                f"{self.out_features}; got x {tuple(x.shape)}, base_out {tuple(base_out.shape)}"
+            )
+
+        # Flatten leading dims to an effective batch
+        x_shape = x.shape
+        x2d = x.reshape(-1, self.in_features)  # (B_eff, in)
+        b_eff = x2d.size(0)
 
         # Broadcast task embedding across the effective batch
-        task_emb = task_emb.repeat(b_eff // task_emb.shape[0], 1)  # (B_eff, task_dim)
+        task_eff = self._broadcast_task_emb(
+            task_emb, b_eff, self.task_dim
+        )  # (B_eff, task_dim)
 
         # Generate LoRA factors per sample
-        r = self.rank
-        vec_a = self.gen_a(task_emb)  # (B_eff, out*r)
-        vec_b = self.gen_b(task_emb)  # (B_eff, r*in)
-        a = vec_a.view(b_eff, self.out_features, r)  # (B_eff, out, r)
-        b = vec_b.view(b_eff, r, self.in_features)  # (B_eff, r, in)
+        rnk = self.rank
+        vec_a = self.gen_a(task_eff)  # (B_eff, out*rnk)
+        vec_b = self.gen_b(task_eff)  # (B_eff, rnk*in)
+        a = vec_a.view(b_eff, self.out_features, rnk)  # (B_eff, out, rnk)
+        b = vec_b.view(b_eff, rnk, self.in_features)  # (B_eff, rnk, in)
         delta = torch.bmm(a, b)  # (B_eff, out, in)
 
-        # Base + LoRA paths
-        x2d_drop = F.dropout(x2d, p=self.dropout)  # (B_eff, in)
-        y_base = F.linear(x2d, self.weight, self.bias)  # (B_eff, out)
-
-        # Compute y_delta = x2d_drop @ delta^T per sample
+        # LoRA delta path: y_delta = x_drop @ ΔW^T per sample
+        x2d_drop = F.dropout(x2d, p=self.dropout, training=self.training)
         y_delta = torch.einsum("bi,boi->bo", x2d_drop, delta)  # (B_eff, out)
-        y = y_base + self.scaling * y_delta
+        print(
+            "DELTA NORM",
+            y_delta.norm(),
+            "BASE NORM",
+            base_out.norm(),
+            "WEIGHT NORM",
+            delta.norm(),
+        )
 
+        y = base_out.reshape(-1, self.out_features) + self.scaling * y_delta
         return y.view(*x_shape[:-1], self.out_features)

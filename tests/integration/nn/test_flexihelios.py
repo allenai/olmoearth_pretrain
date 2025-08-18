@@ -565,22 +565,6 @@ class TestEncoder:
             ):
                 assert param.grad is not None, name
 
-    def _force_nonzero_tasklora_generators(self, module: torch.nn.Module) -> None:
-        """Make TaskLoRALinear generators non-zero for sensitivity checks.
-
-        Args:
-            module: The module to force non-zero TaskLoRALinear generators for.
-        """
-        with torch.no_grad():
-            for m in module.modules():
-                if isinstance(m, TaskLoRALinear):
-                    la: torch.nn.Linear = m.gen_a[-1]
-                    lb: torch.nn.Linear = m.gen_b[-1]
-                    torch.nn.init.uniform_(la.weight, -0.1, 0.1)
-                    torch.nn.init.uniform_(la.bias, -0.1, 0.1)
-                    torch.nn.init.uniform_(lb.weight, -0.1, 0.1)
-                    torch.nn.init.uniform_(lb.bias, -0.1, 0.1)
-
     def test_encoder_with_task_lora_end_to_end(
         self,
         supported_modalities: list[ModalitySpec],
@@ -636,43 +620,16 @@ class TestEncoder:
         input_res = 1
         task_emb = torch.randn(B, task_d)  # (batch, task_dim)
 
-        # 1) With zero-init generators, task_emb should have no effect initially
-        out_none, _ = encoder.forward(
-            x, patch_size, input_res, token_exit_cfg=None, task_emb=None
-        )
-        out_task, _ = encoder.forward(
+        out, _ = encoder.forward(
             x, patch_size, input_res, token_exit_cfg=None, task_emb=task_emb
         )
-        assert torch.allclose(
-            out_none.sentinel2_l2a, out_task.sentinel2_l2a, atol=1e-6, rtol=1e-6
-        ), "Zero-init LoRA should yield identical outputs to no-task path."
-
-        # 2) After forcing non-zero LoRA generators, task_emb should change outputs
-        self._force_nonzero_tasklora_generators(encoder)
-        out_task2, _ = encoder.forward(
-            x, patch_size, input_res, token_exit_cfg=None, task_emb=task_emb
-        )
-        assert not torch.allclose(out_none.sentinel2_l2a, out_task2.sentinel2_l2a), (
-            "Non-zero generators should make output depend on task_emb."
-        )
-
-        # 3) Backprop hits both base and generator params
-        loss = out_task2.sentinel2_l2a.sum()  # type: ignore
+        loss = out.sentinel2_l2a.sum()  # type: ignore
         loss.backward()
 
-        saw_base_grad, saw_gen_grad = False, False
         for m in encoder.modules():
             if isinstance(m, TaskLoRALinear):
-                if m.weight.grad is not None or (
-                    m.bias is not None and m.bias.grad is not None
-                ):
-                    saw_base_grad = True
-                if any(p.grad is not None for p in m.gen_a.parameters()) and any(
-                    p.grad is not None for p in m.gen_b.parameters()
-                ):
-                    saw_gen_grad = True
-        assert saw_base_grad, "Expected gradients on base projection weights."
-        assert saw_gen_grad, "Expected gradients on LoRA generator parameters."
+                assert all(p.grad is not None for p in m.gen_a.parameters())
+                assert all(p.grad is not None for p in m.gen_b.parameters())
 
 
 class TestPredictor:

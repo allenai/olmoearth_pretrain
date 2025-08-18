@@ -853,6 +853,7 @@ class FlexiHeliosBase(nn.Module):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         task_lora_kwargs: dict[str, Any] | None = None,
+        task_moe_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the FlexiHeliosBase class."""
         super().__init__()
@@ -870,6 +871,8 @@ class FlexiHeliosBase(nn.Module):
 
         if task_lora_kwargs is None:
             task_lora_kwargs = {}
+        if task_moe_kwargs is None:
+            task_moe_kwargs = {}
 
         blocks = []
         for i in range(depth):
@@ -885,6 +888,7 @@ class FlexiHeliosBase(nn.Module):
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
                     task_lora_kwargs=task_lora_kwargs | {"index": i},
+                    task_moe_kwargs=task_moe_kwargs | {"index": i},
                 )
             )
 
@@ -1082,6 +1086,7 @@ class Encoder(FlexiHeliosBase):
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
         task_lora_kwargs: dict[str, Any] | None = None,
+        task_moe_kwargs: dict[str, Any] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1106,6 +1111,7 @@ class Encoder(FlexiHeliosBase):
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
             task_lora_kwargs: Keyword arguments for task-conditioned LoRA
+            task_moe_kwargs: Keyword arguments for task-conditioned MoE
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1120,6 +1126,7 @@ class Encoder(FlexiHeliosBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
             task_lora_kwargs=task_lora_kwargs,
+            task_moe_kwargs=task_moe_kwargs,
         )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
@@ -1343,16 +1350,14 @@ class Encoder(FlexiHeliosBase):
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
-            kwargs = dict(
+            tokens = blk(
                 x=tokens,
                 cu_seqlens=cu_seqlens,
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
+                task_emb=task_emb,
             )
-            if blk.attn.use_task_lora:
-                kwargs["task_emb"] = task_emb
-            tokens = blk(**kwargs)
 
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
@@ -1831,6 +1836,7 @@ class EncoderConfig(Config):
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
     task_lora_kwargs: dict[str, Any] | None = None
+    task_moe_kwargs: dict[str, Any] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""

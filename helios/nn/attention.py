@@ -11,6 +11,7 @@ from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
 from helios.nn.lora import TaskLoRALinear
+from helios.nn.moe.soft import SoftMoE
 
 try:
     import flash_attn
@@ -153,12 +154,10 @@ class Attention(nn.Module):
         if task_lora_kwargs.pop("index", None) not in lora_indices:
             self.use_task_lora = False
 
-        # Regular attention head projection or task-conditioned projection
+        self.proj = nn.Linear(dim, dim)
         if self.use_task_lora:
             kwargs: dict[str, Any] = task_lora_kwargs or {}
-            self.proj = TaskLoRALinear(dim, dim, **kwargs)
-        else:
-            self.proj = nn.Linear(dim, dim)
+            self.lora = TaskLoRALinear(dim, dim, **kwargs)
 
     def sdpa(
         self,
@@ -303,11 +302,11 @@ class Attention(nn.Module):
             attn_mask=attn_mask,
         )
         x = x.transpose(1, 2).reshape(original_shape)
+        x_proj = self.proj_drop(self.proj(x))
         if self.use_task_lora:
-            x = self.proj(x, task_emb=task_emb)
+            x = self.lora(x, x_proj, task_emb=task_emb)
         else:
-            x = self.proj(x)
-        x = self.proj_drop(x)
+            x = x_proj
         return x
 
 
@@ -464,6 +463,7 @@ class Block(nn.Module):
         cross_attn: bool = False,
         use_flash_attn: bool = False,
         task_lora_kwargs: dict[str, Any] | None = None,
+        task_moe_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -482,6 +482,7 @@ class Block(nn.Module):
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
             task_lora_kwargs: Keyword arguments for task-conditioned LoRA
+            task_moe_kwargs: Keyword arguments for task-conditioned MoE
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -503,6 +504,18 @@ class Block(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
         self.norm2 = norm_layer(dim)
+
+        # Disable task MoE if index is not in task_moe_indices
+        task_moe_kwargs = task_moe_kwargs or {}
+        self.use_task_moe = task_moe_kwargs.pop("use_task_moe", False)
+        moe_indices = task_moe_kwargs.pop("task_moe_indices", [])
+        if task_moe_kwargs.pop("index", None) not in moe_indices:
+            self.use_task_moe = False
+        if self.use_task_moe:
+            # Project [MoE, MLP] to dim to control increased activation norm
+            self.moe = SoftMoE(dim, **task_moe_kwargs)
+            self.moe_proj = nn.Linear(dim * 2, dim, bias=False)
+
         self.mlp = Mlp(
             in_features=dim,
             hidden_features=int(dim * mlp_ratio),
@@ -560,7 +573,13 @@ class Block(nn.Module):
             )
         )
 
-        x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
+        mlp_out = self.mlp(self.norm2(x))
+        if self.use_task_moe:
+            moe_out = self.moe(mlp_out, task_emb=task_emb)["outputs"]
+            print(f"MoE out norm: {moe_out.norm()}, mlp out norm: {mlp_out.norm()}")
+            mlp_out = self.moe_proj(torch.concat([moe_out, mlp_out], dim=-1))
+            print(f"Post-proj norm: {mlp_out.norm()}")
+        x = x + self.drop_path(self.ls2(mlp_out))
         return x
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
