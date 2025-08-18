@@ -65,8 +65,8 @@ SUPERVISORY_MODALITIES = {
     Modality.WORLDCOVER.name: 1.0,
     Modality.GSE.name: 1.0,
     Modality.OPENSTREETMAP_RASTER.name: 1.0,
-    # Modality.WORLDCEREAL.name: 1.0,
-    # Modality.CDL.name: 1.0,
+    Modality.WORLDCEREAL.name: 1.0,
+    Modality.CDL.name: 1.0,
 }
 
 
@@ -88,8 +88,8 @@ def my_build_common_components(
         Modality.LANDSAT.name,
         Modality.OPENSTREETMAP_RASTER.name,
         Modality.GSE.name,
-        # Modality.WORLDCEREAL.name,
-        # Modality.CDL.name,
+        Modality.WORLDCEREAL.name,
+        Modality.CDL.name,
     ]
     return config
 
