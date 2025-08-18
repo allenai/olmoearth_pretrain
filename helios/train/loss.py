@@ -182,6 +182,92 @@ class ModalityAllDiscriminationLoss(Loss):
         return total_loss
 
 
+@LOSS_REGISTRY.register("modality_all_discrimination_hard")
+class ModalityAllDiscriminationHardLoss(Loss):
+    """Loss function for all discrimination task.
+
+    Discriminates across patches using all samples in a batch.
+    """
+
+    name = "ModalityAllDiscHard"
+
+    def __init__(self, tau: float = 0.1, pred2unit: bool = False, margin: float = 0.1):
+        """Initialize all patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            margin: the margin for hard negative mining
+        """
+        self.tau = tau
+        self.pred2unit = pred2unit
+        self.margin = margin
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute all patch discrimination loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        modality_preds, modality_masks = predictions.flatten_tokens_and_masks(
+            return_lists=True
+        )
+        modality_targets = targets.flatten_tokens_and_masks(return_lists=True)[0]
+
+        # Accumulate to the total loss
+        total_loss = 0
+        for all_preds, all_masks, all_targets in zip(
+            modality_preds, modality_masks, modality_targets
+        ):
+            pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            bs, nt, _ = pred.shape
+            if nt == 0:
+                # If no decoded values, skip this modality
+                logger.warning("No decoded values for this modality")
+                continue
+            if self.pred2unit:
+                pred_mu = pred.mean(1, keepdims=True)
+                pred_std = pred.std(1, keepdims=True)
+                pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+            pred = F.normalize(pred, p=2, dim=-1)
+            target = F.normalize(target, p=2, dim=-1)
+
+            # TODO: fix the bug here, margin should be applied to sim not sim/self.tau
+            scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
+            count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+
+            labels = torch.arange(nt, dtype=torch.long, device=pred.device)[
+                None
+            ].repeat(bs, 1)
+
+            pos = scores[:, torch.arange(nt), torch.arange(nt)]  # [bs, nt]
+            keep_mask = scores >= (pos[:, :, None] - self.margin)
+            diag = torch.eye(nt, device=scores.device, dtype=torch.bool)[None]
+            keep_mask = keep_mask | diag
+            scores = scores.masked_fill(~keep_mask, float("-inf"))
+
+            loss = F.cross_entropy(
+                scores.flatten(0, 1), labels.flatten(0, 1), reduction="none"
+            ) * (self.tau * 2)
+
+            # emulate averaging across the batch dimension
+            loss_multiplier = self._expand_and_reciprocate(count)
+            # can't use bs here since this is after the unsqueezing, so bs == 1
+            loss = (loss * loss_multiplier).sum() / all_preds.shape[0]
+            total_loss += loss
+
+        return total_loss
+
+
 @LOSS_REGISTRY.register("patch_discrimination_new")
 class PatchDiscriminationLossNew(Loss):
     """Loss function for patch discrimination task.
@@ -357,6 +443,106 @@ class ModalityPatchDiscriminationLossNew(Loss):
             total_loss += loss
 
         return self.weight * total_loss
+
+
+@LOSS_REGISTRY.register("patch_discrimination_new_hard")
+class PatchDiscriminationLossNewHard(Loss):
+    """Loss function for patch discrimination task.
+
+    This has lower memory consumption than the old patch discrimination loss.
+    It does not support all discrimination loss.
+    """
+
+    name = "PatchDiscHard"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        pred2unit: bool = False,
+        weight: float = 1.0,
+        margin: float = 0.1,
+    ):
+        """Initialize patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            mask_other_samples: whether to apply the contrastive loss drawing samples
+                from within a sample (True) or using all other instances in a batch (False).
+                If this is False, then this is the AllDisc loss from the Galileo paper
+            weight: the weight to apply to this loss
+            margin: the margin for hard negative mining
+        """
+        self.tau = tau
+        self.pred2unit = pred2unit
+        self.weight = weight
+        self.margin = margin
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute patch discrimination loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+
+        # Samples may have different number of tokens
+        # TODO: Skip unqueeze and the for loop when mask_other_samples is True
+        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        bs, nt, _ = pred.shape
+
+        if self.pred2unit:
+            pred_mu = pred.mean(1, keepdims=True)
+            pred_std = pred.std(1, keepdims=True)
+            pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+        pred = F.normalize(pred, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+
+        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+        losses = []
+        start = 0
+        for c in count:
+            end = start + c
+            if c == 0:
+                # we will occasionally get a sample with no decoded values due to missing data this will let us skip it
+                logger.warning("No decoded values for this sample")
+                continue
+            pred_sample = pred[:, start:end, :]
+            target_sample = target[:, start:end, :]
+            score_sample = (
+                torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
+            )
+            c = score_sample.shape[1]
+            labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
+            pos = score_sample[:, torch.arange(c), torch.arange(c)]  # [1, c]
+
+            # Only keep hard negatives
+            keep_mask = score_sample >= (pos[:, :, None] - self.margin)
+
+            # always keep the positive (diagonal)
+            diag = torch.eye(c, device=score_sample.device, dtype=torch.bool)[None]
+            keep_mask = keep_mask | diag
+            score_sample = score_sample.masked_fill(~keep_mask, float("-inf"))
+            loss = F.cross_entropy(
+                score_sample.flatten(0, 1),
+                labels.flatten(0, 1),
+                reduction="none",
+            ) * (self.tau * 2)
+            loss = loss.mean()
+            losses.append(loss)
+            start = end
+        loss = torch.stack(losses).mean()
+        return self.weight * loss
 
 
 @LOSS_REGISTRY.register("patch_discrimination")
