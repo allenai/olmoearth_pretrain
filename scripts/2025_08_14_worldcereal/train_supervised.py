@@ -63,7 +63,7 @@ MIN_PATCH_SIZE = 1
 
 SUPERVISORY_MODALITIES = {
     Modality.WORLDCOVER.name: 0.1,
-    Modality.GSE.name: 1.0,
+    Modality.GSE.name: 0.1,
     Modality.OPENSTREETMAP_RASTER.name: 0.1,
     Modality.WORLDCEREAL.name: 0.1,
     Modality.CDL.name: 0.1,
