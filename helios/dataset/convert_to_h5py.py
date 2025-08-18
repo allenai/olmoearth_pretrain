@@ -56,6 +56,10 @@ class ConvertToH5pyConfig(Config):
         None  # Chunking configuration. None: disabled. True: auto (data_item.shape). tuple: specific shape.
     )
     tile_size: int = IMAGE_TILE_SIZE
+    # Processes may go to sleep state if we use too many processes
+    reserved_cores: int = (
+        10  # Number of cores to reserve and not used for multiprocessing
+    )
     required_modality_names: list[str] = field(
         default_factory=lambda: list()
     )  # Samples without all of these are skipped
@@ -73,6 +77,7 @@ class ConvertToH5pyConfig(Config):
             shuffle=self.shuffle,
             chunk_options=self.chunk_options,
             tile_size=self.tile_size,
+            reserved_cores=self.reserved_cores,
             required_modalities=get_modality_specs_from_names(
                 self.required_modality_names
             ),
@@ -100,6 +105,7 @@ class ConvertToH5py:
         shuffle: bool | None = None,
         chunk_options: tuple | bool | None = None,
         tile_size: int = IMAGE_TILE_SIZE,
+        reserved_cores: int = 10,
         required_modalities: list[ModalitySpec] = [],
     ) -> None:
         """Initialize the ConvertToH5py object.
@@ -119,6 +125,7 @@ class ConvertToH5py:
                                 it's adjusted (padded with full dimension sizes or truncated).
             tile_size: The size of the tile to split the image into. It is based on the IMAGE_TILE_SIZE, so
                 higher-resolution modalities like NAIP would be split up correspondingly.
+            reserved_cores: The number of cores to reserve and not use for multiprocessing.
             required_modalities: Samples without all of these modalities will be skipped.
         """
         self.tile_path = tile_path
@@ -140,6 +147,7 @@ class ConvertToH5py:
         # Tile_size_split_factor is the factor by which the tile size is split into subtiles
         self.num_subtiles_per_dim = IMAGE_TILE_SIZE // tile_size
         self.num_subtiles = self.num_subtiles_per_dim**2
+        self.reserved_cores = reserved_cores
 
     @property
     def compression_settings_suffix(self) -> str:
@@ -187,8 +195,7 @@ class ConvertToH5py:
         total_sample_indices = len(samples)
 
         if self.multiprocessed_h5_creation:
-            # Processes may go to sleep state if we use too many processes
-            num_processes = max(1, mp.cpu_count() - 10)
+            num_processes = max(1, mp.cpu_count() - self.reserved_cores)
             logger.info(f"Creating H5 dataset using {num_processes} processes")
             with mp.Pool(processes=num_processes) as pool:
                 # Process samples in parallel and track progress with tqdm
@@ -330,7 +337,7 @@ class ConvertToH5py:
         """Process samples before the filtering process."""
         total_sample_indices = len(samples)
         if self.multiprocessed_sample_processing:
-            num_processes = max(1, mp.cpu_count() - 10)
+            num_processes = max(1, mp.cpu_count() - self.reserved_cores)
             logger.info(f"Processing samples using {num_processes} processes")
             with mp.Pool(processes=num_processes) as pool:
                 # Process samples in parallel and track progress with tqdm

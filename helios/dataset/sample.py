@@ -233,62 +233,63 @@ def load_image_for_sample(
                     image: npt.NDArray = raster.read()
                     # Remove spatial dimension since they're not needed.
                     image = image.reshape(-1, len(band_set.bands))
-                else:
-                    # Assuming all tiles cover the same area as the resolution factor 16 tile
-                    subtile_size = raster.width // factor
-                    col_offset = subtile_size * (sample.grid_tile.col % factor)
-                    row_offset = subtile_size * (sample.grid_tile.row % factor)
+                    band_set_images.append(image)
+                    continue
 
-                    # Now we can perform a windowed read.
-                    rasterio_window = rasterio.windows.Window(
-                        col_off=col_offset,
-                        row_off=row_offset,
-                        width=subtile_size,
-                        height=subtile_size,
+                # Assuming all tiles cover the same area as the resolution factor 16 tile
+                subtile_size = raster.width // factor
+                col_offset = subtile_size * (sample.grid_tile.col % factor)
+                row_offset = subtile_size * (sample.grid_tile.row % factor)
+
+                # Now we can perform a windowed read.
+                rasterio_window = rasterio.windows.Window(
+                    col_off=col_offset,
+                    row_off=row_offset,
+                    width=subtile_size,
+                    height=subtile_size,
+                )
+                logger.debug(f"reading window={rasterio_window} from {fname}")
+                image: npt.NDArray = raster.read(window=rasterio_window)  # type: ignore
+                logger.debug(f"image.shape={image.shape}")
+
+                # And then for now resample it to the grid resolution.
+                # The difference in resolution should always be a power of 2.
+                # If the factor is less than 1 we want the desired size to be multiplied by the thing
+                # If the tile size is greater we want to keep that extent
+                desired_subtile_size = int(
+                    IMAGE_TILE_SIZE
+                    * image_tile.modality.image_tile_size_factor
+                    // factor
+                )
+                if desired_subtile_size < subtile_size:
+                    # In this case we need to downscale.
+                    # This should not be common, since usually bands would be stored at
+                    # the image tile resolution or lower. But it could happen for
+                    # OpenStreetMap. We just subsample the numpy array since averaging
+                    # the pixels would not be correct for OpenStreetMap.
+                    downscale_factor = subtile_size // desired_subtile_size
+                    image = image[:, ::downscale_factor, ::downscale_factor]
+                elif desired_subtile_size > subtile_size:
+                    logger.debug(
+                        f"desired_subtile_size={desired_subtile_size}, subtile_size={subtile_size}"
                     )
-                    logger.debug(f"reading window={rasterio_window} from {fname}")
-                    image: npt.NDArray = raster.read(window=rasterio_window)  # type: ignore
-                    logger.debug(f"image.shape={image.shape}")
-
-                    # And then for now resample it to the grid resolution.
-                    # The difference in resolution should always be a power of 2.
-                    # If the factor is less than 1 we want the desired size to be multiplied by the thing
-                    # If the tile size is greater we want to keep that extent
-                    desired_subtile_size = int(
-                        IMAGE_TILE_SIZE
-                        * image_tile.modality.image_tile_size_factor
-                        // factor
+                    # This is the more common case, where we need to upscale because we
+                    # stored some bands at a lower resolution, e.g. for Sentinel-2 or
+                    # Landsat.
+                    upscale_factor = desired_subtile_size // subtile_size
+                    image = image.repeat(repeats=upscale_factor, axis=1).repeat(
+                        repeats=upscale_factor, axis=2
                     )
-                    if desired_subtile_size < subtile_size:
-                        # In this case we need to downscale.
-                        # This should not be common, since usually bands would be stored at
-                        # the image tile resolution or lower. But it could happen for
-                        # OpenStreetMap. We just subsample the numpy array since averaging
-                        # the pixels would not be correct for OpenStreetMap.
-                        downscale_factor = subtile_size // desired_subtile_size
-                        image = image[:, ::downscale_factor, ::downscale_factor]
-                    elif desired_subtile_size > subtile_size:
-                        logger.debug(
-                            f"desired_subtile_size={desired_subtile_size}, subtile_size={subtile_size}"
-                        )
-                        # This is the more common case, where we need to upscale because we
-                        # stored some bands at a lower resolution, e.g. for Sentinel-2 or
-                        # Landsat.
-                        upscale_factor = desired_subtile_size // subtile_size
-                        image = image.repeat(repeats=upscale_factor, axis=1).repeat(
-                            repeats=upscale_factor, axis=2
-                        )
 
-                    # Uncouple time / channel dimensions.
-                    shape = (
-                        -1,
-                        len(band_set.bands),
-                        desired_subtile_size,
-                        desired_subtile_size,
-                    )
-                    image = image.reshape(shape)
-                    logger.debug(f"shape after scaling image.shape={image.shape}")
-
+                # Uncouple time / channel dimensions.
+                shape = (
+                    -1,
+                    len(band_set.bands),
+                    desired_subtile_size,
+                    desired_subtile_size,
+                )
+                image = image.reshape(shape)
+                logger.debug(f"shape after scaling image.shape={image.shape}")
                 band_set_images.append(image)
 
     return np.concatenate(band_set_images, axis=1)
