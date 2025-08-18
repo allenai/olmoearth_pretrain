@@ -101,9 +101,9 @@ class TestInstance:
         )
 
     def evaluate_predictions(self, preds: np.ndarray) -> dict[str, float]:
-        assert len(preds) == len(
-            self.y
-        ), f"Expected preds to have length {len(self.y)}, got {len(preds)}"
+        assert len(preds) == len(self.y), (
+            f"Expected preds to have length {len(self.y)}, got {len(preds)}"
+        )
         y_no_missing = self.y[self.y != MISSING_DATA]
         preds_no_missing = preds[self.y != MISSING_DATA]
 

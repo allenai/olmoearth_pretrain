@@ -11,7 +11,7 @@ authors = [
 ]
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.12"
 
 dynamic = ["dependencies", "optional-dependencies"]
 
@@ -24,7 +24,13 @@ include = ["helios*"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
-optional-dependencies = {extra = { file = ["extra_requirements.txt"] }}
+
+[tool.setuptools.dynamic.optional-dependencies]
+dataset_creation = { file = ["requirements_dataset_creation.txt"] }
+dev = { file = ["requirements-dev.txt"] }
+eval = { file = ["requirements-eval.txt"] }
+beaker = { file = ["requirements-beaker.txt"] }
+all = { file = ["requirements.txt", "requirements-dev.txt", "requirements-eval.txt"] }
 
 [tool.ruff]
 fix = true
