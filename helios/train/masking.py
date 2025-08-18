@@ -75,6 +75,8 @@ class MaskedHeliosSample(NamedTuple):
     gse_mask: ArrayTensor | None = None
     cdl: ArrayTensor | None = None
     cdl_mask: ArrayTensor | None = None
+    worldcereal: ArrayTensor | None = None
+    worldcereal_mask: ArrayTensor | None = None
 
     def as_dict(self, return_none: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.

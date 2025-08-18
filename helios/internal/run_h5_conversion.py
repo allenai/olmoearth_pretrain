@@ -33,6 +33,7 @@ def build_default_config() -> ConvertToH5pyConfig:
             Modality.SRTM.name,
             Modality.LANDSAT.name,
             Modality.OPENSTREETMAP_RASTER.name,
+            Modality.WORLDCEREAL.name,
         ],
         multiprocessed_h5_creation=True,
     )

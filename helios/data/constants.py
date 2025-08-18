@@ -23,6 +23,12 @@ MISSING_VALUE = -99999
 # Default maximum sequence length.
 MAX_SEQUENCE_LENGTH = 12
 
+# Default nodata value for Sentinel-1 data.
+SENTINEL1_NODATA = -32768
+
+# Number of timesteps for YEAR data.
+YEAR_NUM_TIMESTEPS = 12
+
 
 def get_resolution(resolution_factor: int) -> float | int:
     """Compute the resolution.
@@ -259,6 +265,28 @@ class Modality:
         name="worldcover",
         tile_resolution_factor=16,
         band_sets=[BandSet(["B1"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    WORLDCEREAL = ModalitySpec(
+        name="worldcereal",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [
+                    "tc-annual-temporarycrops-classification",
+                    "tc-maize-main-irrigation-classification",
+                    "tc-maize-main-maize-classification",
+                    "tc-maize-second-irrigation-classification",
+                    "tc-maize-second-maize-classification",
+                    "tc-springcereals-springcereals-classification",
+                    "tc-wintercereals-irrigation-classification",
+                    "tc-wintercereals-wintercereals-classification",
+                ],
+                16,
+            )
+        ],
         is_multitemporal=False,
         ignore_when_parsing=False,
     )
