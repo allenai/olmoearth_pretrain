@@ -5,7 +5,7 @@ This script is used to convert a dataset to h5py files.
 The modalities support can be changed in the script or by overriding the supported_modality_names argument with an escaped list
 
 Usage:
-    python run_h5_conversion.py --tile-path=TILE_PATH --supported-modality-names="\[sentinel2_l2a,sentinel1,worldcover\]"
+    python run_h5_conversion.py --tile-path=TILE_PATH --supported-modality-names="\[sentinel2_l2a,sentinel1,worldcover\]" --compression=zstd --compression_opts=3 --tile_size=128
 """
 
 import logging
