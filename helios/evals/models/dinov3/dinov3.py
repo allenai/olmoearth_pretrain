@@ -23,24 +23,25 @@ IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
 
 
-def make_transform_web(resize_size: int = 224):
-    to_tensor = transforms.ToTensor()
-    resize = transforms.Resize((resize_size, resize_size), antialias=True)
+def make_normalize_transform_web(resize_size: int = 224):
     normalize = transforms.Normalize(
         mean=(0.485, 0.456, 0.406),
         std=(0.229, 0.224, 0.225),
     )
-    return transforms.Compose([to_tensor, resize, normalize])
+    return normalize
 
 
-def make_transform_sat(resize_size: int = 224):
-    to_tensor = transforms.ToTensor()
+def make_resize_transform(resize_size: int = 224):
     resize = transforms.Resize((resize_size, resize_size), antialias=True)
+    return resize
+
+
+def make_normalize_transform_sat(resize_size: int = 224):
     normalize = transforms.Normalize(
         mean=(0.430, 0.411, 0.296),
         std=(0.213, 0.156, 0.143),
     )
-    return transforms.Compose([to_tensor, resize, normalize])
+    return normalize
 
 
 # DinoV2 Expects bands ordered as R, G, B
@@ -99,6 +100,10 @@ class DINOv3(nn.Module):
             )
         # Load the model
         self._load_model(torchhub_id)
+        if "sat" in torchhub_id:
+            self.normalize_transform = make_normalize_transform_sat()
+        else:
+            self.normalize_transform = make_normalize_transform_web()
 
     def _load_model(self, torchhub_id: str) -> None:
         """Load the dinov3 model from torch hub."""
@@ -142,17 +147,11 @@ class DINOv3(nn.Module):
                 data_i = data_i[:, HELIOS_LANDSAT_RGB_BANDS, :, :]
 
             new_height = self.patch_size if original_height == 1 else 224
-
-            data_i = F.interpolate(
-                data_i,
-                size=(new_height, new_height),
-                mode="bilinear",
-                align_corners=False,
-            )
+            resize_transform = make_resize_transform(new_height)
+            data_i = resize_transform(data_i)
             if self.apply_imagenet_normalization:
                 # normalize the data
-                normalize_transform = make_normalize_transform()
-                data_i = normalize_transform(data_i)
+                data_i = self.normalize_transform(data_i)
             data_list.append(data_i)
         return data_list
 
