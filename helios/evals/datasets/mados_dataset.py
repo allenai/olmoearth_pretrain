@@ -283,6 +283,23 @@ class MADOSDataset(Dataset):
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
 
+        # Very hacking right now to plot the original images
+        # After normalization, value range mostly within 0-1, outside will be cut off
+        if self.split == "train":
+            fig_dir = "/weka/dfive-default/yawenz/figures/embeddings"
+            task_fig_dir = f"{fig_dir}/mados"
+            import os
+
+            os.makedirs(task_fig_dir, exist_ok=True)
+            import matplotlib.pyplot as plt
+
+            plt.imshow(image[:, :, 0, [2, 1, 0]])
+            plt.axis("off")
+            plt.savefig(
+                f"{task_fig_dir}/{idx}_sentinel2.png", bbox_inches="tight", dpi=150
+            )
+            plt.close()
+
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
         masked_sample = MaskedHeliosSample.from_heliossample(
             HeliosSample(

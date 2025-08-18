@@ -128,6 +128,53 @@ def train_and_eval_probe(
         raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
 
+    # Very hacking way to plot embeddings
+    fig_dir = "/weka/dfive-default/yawenz/figures/embeddings"
+    num_samples_task_name = {
+        5820: "pastis_sentinel2",
+        2651: "mados",
+        6790: "sen1floods11",
+    }
+
+    if config.task_type == TaskType.SEGMENTATION:
+        # Only plot for the segmentation tasks, all training samples
+        num_samples = train_embeddings.shape[0]
+        task_name = num_samples_task_name.get(num_samples, "Unknown")
+        task_fig_dir = f"{fig_dir}/{task_name}"
+        logger.info(f"Task name: {task_name}, Task fig dir: {task_fig_dir}")
+
+        emb_np = train_embeddings.cpu().numpy()
+        B, H, W, D = emb_np.shape
+        emb_flat = emb_np.reshape(-1, D)  # shape: (B*H*W, D)
+        # Apply PCA on D dimension
+        from sklearn.decomposition import PCA
+
+        pca = PCA(n_components=3)
+        emb_pca = pca.fit_transform(emb_flat)  # shape: (B*H*W, 3)
+        emb_pca = emb_pca.reshape(B, H, W, 3)
+        vmin = emb_pca.min(axis=(0, 1, 2))
+        vmax = emb_pca.max(axis=(0, 1, 2))
+
+        for idx, item in enumerate(emb_pca):
+            import matplotlib.pyplot as plt
+
+            plt.figure(figsize=(10, 10))
+            item_normalized = (item - vmin) / (vmax - vmin)
+            plt.imshow(item_normalized)
+            plt.axis("off")
+            plt.savefig(f"{task_fig_dir}/{idx}.png", bbox_inches="tight", dpi=150)
+            plt.close()
+
+        labels_np = train_labels.cpu().numpy()
+        vmin = labels_np.min()
+        vmax = labels_np.max()
+        for idx, item in enumerate(labels_np):
+            plt.figure(figsize=(10, 10))
+            plt.imshow(item, cmap="viridis", vmin=vmin, vmax=vmax)
+            plt.axis("off")
+            plt.savefig(f"{task_fig_dir}/{idx}_label.png")
+            plt.close()
+
     if config.task_type == TaskType.SEGMENTATION:
         logits_per_patch = int(config.num_classes * patch_size * patch_size)
         if probe_type == ProbeType.ATTNPOOL:

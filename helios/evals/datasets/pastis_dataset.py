@@ -438,6 +438,24 @@ class PASTISRDataset(Dataset):
             )
             s1_image = self.normalizer_computed.normalize(Modality.SENTINEL1, s1_image)
 
+        # Very hacking right now to plot the original images
+        # After normalization, value range mostly within 0-1, outside will be cut off
+        if self.split == "train":
+            fig_dir = "/weka/dfive-default/yawenz/figures/embeddings"
+            task_fig_dir = f"{fig_dir}/pastis_sentinel2"
+            import os
+
+            os.makedirs(task_fig_dir, exist_ok=True)
+            import matplotlib.pyplot as plt
+
+            # the RBG bands are 2, 1, 0
+            plt.imshow(s2_image[:, :, 0, [2, 1, 0]])
+            plt.axis("off")
+            plt.savefig(
+                f"{task_fig_dir}/{idx}_sentinel2.png", bbox_inches="tight", dpi=150
+            )
+            plt.close()
+
         timestamps = []
         for month in months:
             item = int(month)
