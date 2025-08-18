@@ -342,6 +342,11 @@ class HeliosDataLoader(DataLoaderBase):
                 (standard_hw, standard_hw, 1, Modality.CDL.num_bands), dtype=np.float32
             )
             output_dict["cdl"] = mock_cdl
+        if Modality.ERA5_10.name in self.dataset.training_modalities:
+            mock_era5_10 = rng.random(
+                (12, Modality.ERA5_10.num_bands), dtype=np.float32
+            )
+            output_dict["era5_10"] = mock_era5_10
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
@@ -362,7 +367,7 @@ class HeliosDataLoader(DataLoaderBase):
             [
                 (
                     patch_size,
-                    self._get_mock_sample(rng).subset(
+                    self._get_mock_sample(rng).subset_default(
                         patch_size,
                         max_tokens_per_instance=1500,
                         sampled_hw_p=6,
