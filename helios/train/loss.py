@@ -144,9 +144,7 @@ class ModalityAllDiscriminationLoss(Loss):
         )
         modality_targets = targets.flatten_tokens_and_masks(return_lists=True)[0]
 
-        # Accumulate to the total loss
         total_loss = 0
-        total_decoded_modalities = 0
         for all_preds, all_masks, all_targets in zip(
             modality_preds, modality_masks, modality_targets
         ):
@@ -179,10 +177,9 @@ class ModalityAllDiscriminationLoss(Loss):
             loss_multiplier = self._expand_and_reciprocate(count)
             # can't use bs here since this is after the unsqueezing, so bs == 1
             loss = (loss * loss_multiplier).sum() / all_preds.shape[0]
-            total_decoded_modalities += 1
             total_loss += loss
 
-        return total_loss  # / total_decoded_modalities
+        return total_loss
 
 
 @LOSS_REGISTRY.register("patch_discrimination_new")
@@ -312,7 +309,6 @@ class ModalityPatchDiscriminationLossNew(Loss):
 
         # Accumulate to the total loss
         total_loss = 0
-        total_decoded_modalities = 0
         for all_preds, all_masks, all_targets in zip(
             modality_preds, modality_masks, modality_targets
         ):
@@ -359,9 +355,8 @@ class ModalityPatchDiscriminationLossNew(Loss):
                 continue
             loss = torch.stack(losses).mean()
             total_loss += loss
-            total_decoded_modalities += 1
 
-        return self.weight * total_loss  # / total_decoded_modalities
+        return self.weight * total_loss
 
 
 @LOSS_REGISTRY.register("patch_discrimination")
