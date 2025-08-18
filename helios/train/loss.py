@@ -445,15 +445,15 @@ class ModalityPatchDiscriminationLossNew(Loss):
         return self.weight * total_loss
 
 
-@LOSS_REGISTRY.register("patch_discrimination_new_hard")
-class PatchDiscriminationLossNewHard(Loss):
-    """Loss function for patch discrimination task.
+@LOSS_REGISTRY.register("modality_patch_discrimination_new_hard")
+class ModalityPatchDiscriminationLossNewHard(Loss):
+    """Loss function for per-modality patch discrimination task.
 
     This has lower memory consumption than the old patch discrimination loss.
     It does not support all discrimination loss.
     """
 
-    name = "PatchDiscHard"
+    name = "ModalityPatchDiscHard"
 
     def __init__(
         self,
@@ -491,58 +491,72 @@ class PatchDiscriminationLossNewHard(Loss):
         Returns:
             The computed loss value.
         """
-        all_preds, all_masks = predictions.flatten_tokens_and_masks()
-        all_targets = targets.flatten_tokens_and_masks()[0]
+        modality_preds, modality_masks = predictions.flatten_tokens_and_masks(
+            return_lists=True
+        )
+        modality_targets = targets.flatten_tokens_and_masks(return_lists=True)[0]
 
-        # Samples may have different number of tokens
-        # TODO: Skip unqueeze and the for loop when mask_other_samples is True
-        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-        bs, nt, _ = pred.shape
+        # Accumulate to the total loss
+        total_loss = 0
+        for all_preds, all_masks, all_targets in zip(
+            modality_preds, modality_masks, modality_targets
+        ):
+            # Samples may have different number of tokens
+            # TODO: Skip unqueeze and the for loop when mask_other_samples is True
+            pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            bs, nt, _ = pred.shape
 
-        if self.pred2unit:
-            pred_mu = pred.mean(1, keepdims=True)
-            pred_std = pred.std(1, keepdims=True)
-            pred = (pred - pred_mu) / (pred_std + 1e-4)
+            if self.pred2unit:
+                pred_mu = pred.mean(1, keepdims=True)
+                pred_std = pred.std(1, keepdims=True)
+                pred = (pred - pred_mu) / (pred_std + 1e-4)
 
-        pred = F.normalize(pred, p=2, dim=-1)
-        target = F.normalize(target, p=2, dim=-1)
+            pred = F.normalize(pred, p=2, dim=-1)
+            target = F.normalize(target, p=2, dim=-1)
 
-        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
-        losses = []
-        start = 0
-        for c in count:
-            end = start + c
-            if c == 0:
-                # we will occasionally get a sample with no decoded values due to missing data this will let us skip it
-                logger.warning("No decoded values for this sample")
+            count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+            losses = []
+            start = 0
+            for c in count:
+                end = start + c
+                if c == 0:
+                    # we will occasionally get a sample with no decoded values due to missing data this will let us skip it
+                    # logger.warning("No decoded values for this sample")
+                    continue
+                pred_sample = pred[:, start:end, :]
+                target_sample = target[:, start:end, :]
+                score_sample = (
+                    torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
+                )
+                c = score_sample.shape[1]
+                labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
+                pos = score_sample[:, torch.arange(c), torch.arange(c)]  # [1, c]
+
+                # Only keep hard negatives
+                keep_mask = score_sample >= (pos[:, :, None] - self.margin)
+
+                # always keep the positive (diagonal)
+                diag = torch.eye(c, device=score_sample.device, dtype=torch.bool)[None]
+                keep_mask = keep_mask | diag
+                score_sample = score_sample.masked_fill(~keep_mask, float("-inf"))
+                loss = F.cross_entropy(
+                    score_sample.flatten(0, 1),
+                    labels.flatten(0, 1),
+                    reduction="none",
+                ) * (self.tau * 2)
+                loss = loss.mean()
+                losses.append(loss)
+                start = end
+
+            if len(losses) == 0:
+                # If no losses were computed, skip this modality
+                # logger.warning("No decoded values for this modality")
                 continue
-            pred_sample = pred[:, start:end, :]
-            target_sample = target[:, start:end, :]
-            score_sample = (
-                torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
-            )
-            c = score_sample.shape[1]
-            labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
-            pos = score_sample[:, torch.arange(c), torch.arange(c)]  # [1, c]
+            loss = torch.stack(losses).mean()
+            total_loss += loss
 
-            # Only keep hard negatives
-            keep_mask = score_sample >= (pos[:, :, None] - self.margin)
-
-            # always keep the positive (diagonal)
-            diag = torch.eye(c, device=score_sample.device, dtype=torch.bool)[None]
-            keep_mask = keep_mask | diag
-            score_sample = score_sample.masked_fill(~keep_mask, float("-inf"))
-            loss = F.cross_entropy(
-                score_sample.flatten(0, 1),
-                labels.flatten(0, 1),
-                reduction="none",
-            ) * (self.tau * 2)
-            loss = loss.mean()
-            losses.append(loss)
-            start = end
-        loss = torch.stack(losses).mean()
-        return self.weight * loss
+        return self.weight * total_loss
 
 
 @LOSS_REGISTRY.register("patch_discrimination")
