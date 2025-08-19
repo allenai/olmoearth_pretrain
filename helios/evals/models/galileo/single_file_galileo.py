@@ -1605,7 +1605,7 @@ class GalileoWrapper(nn.Module):
         """Init GalileoWrapper."""
         super().__init__()
         self.galileo_encoder = Encoder.load_from_folder(pretrained_path, device=get_default_device())
-        self.dim = self.encoder.embedding_size
+        self.dim = self.galileo_encoder.embedding_size
         self.patch_size = patch_size
         self.grid_size: int | None = None
         self.month = month
