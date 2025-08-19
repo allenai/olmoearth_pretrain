@@ -61,7 +61,7 @@ EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,  # True, #False,
         eval_interval=Duration.epochs(5),
-        norm_method=NormMethod.NORM_YES_CLIP_3_STD,
+        norm_method=NormMethod.NORM_YES_CLIP_3_STD_INT,
     ),
     # "m_bigearthnet": DownstreamTaskConfig(
     #     dataset="m-bigearthnet",

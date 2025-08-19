@@ -45,6 +45,9 @@ class NormMethod(StrEnum):
     NORM_NO_CLIP = "norm_no_clip"
     NORM_YES_CLIP = "norm_yes_clip"
     NORM_YES_CLIP_3_STD = "norm_yes_clip_3_std"
+    NORM_YES_CLIP_2_STD = "norm_yes_clip_2_std"
+    NORM_YES_CLIP_3_STD_INT = "norm_yes_clip_3_std_int"
+    NORM_YES_CLIP_2_STD_INT = "norm_yes_clip_2_std_int"
     NORM_YES_CLIP_INT = "norm_yes_clip_int"
     STANDARDIZE = "standardize"
     NO_NORM = "no_norm"
@@ -65,17 +68,20 @@ def normalize_bands(
     elif method == NormMethod.STANDARDIZE:
         image = (image - means) / stds
     else:
-        if method == NormMethod.NORM_YES_CLIP_3_STD:
+        if method == NormMethod.NORM_YES_CLIP_3_STD or method == NormMethod.NORM_YES_CLIP_3_STD_INT:
             min_value = means - 3 * stds
             max_value = means + 3 * stds
+        elif method == NormMethod.NORM_YES_CLIP_2_STD or method == NormMethod.NORM_YES_CLIP_2_STD_INT:
+            min_value = means - 2 * stds
+            max_value = means + 2 * stds
         else:
             min_value = means - stds
             max_value = means + stds
         image = (image - min_value) / (max_value - min_value)
 
-        if method == NormMethod.NORM_YES_CLIP:
+        if method == NormMethod.NORM_YES_CLIP or method == NormMethod.NORM_YES_CLIP_3_STD or method == NormMethod.NORM_YES_CLIP_2_STD:
             image = np.clip(image, 0, 1)
-        elif method == NormMethod.NORM_YES_CLIP_INT:
+        elif method == NormMethod.NORM_YES_CLIP_INT or method == NormMethod.NORM_YES_CLIP_3_STD_INT or method == NormMethod.NORM_YES_CLIP_2_STD_INT:
             # same as clipping between 0 and 1 but rounds to the nearest 1/255
             image = image * 255  # scale
             image = np.clip(image, 0, 255).astype(np.uint8)  # convert to 8-bit integers

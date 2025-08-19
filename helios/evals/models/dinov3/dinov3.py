@@ -92,8 +92,10 @@ class DINOv3(nn.Module):
         # Load the model
         self._load_model(torchhub_id, weights_url)
         if "sat" in model_name:
+            logger.info("Using satellite normalization")
             self.normalize_transform = make_normalize_transform_sat()
         else:
+            logger.info("Using web normalization")
             self.normalize_transform = make_normalize_transform_web()
 
     def _load_model(self, torchhub_id: str, weights_url: str) -> None:

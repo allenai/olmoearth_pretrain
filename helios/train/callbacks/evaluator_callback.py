@@ -126,6 +126,7 @@ class DownstreamEvaluator:
                 partition=self.partition,
                 norm_stats_from_pretrained=self.norm_stats_from_pretrained,
                 input_modalities=self.input_modalities,
+                norm_method=self.norm_method,
             ),
             collate_fn=eval_collate_fn,
             batch_size=self.embedding_batch_size,
