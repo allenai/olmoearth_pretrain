@@ -54,7 +54,7 @@ class TestHeliosSample:
         max_tokens_per_instance = 200
         current_length = 12
         sample: HeliosSample = samples_with_missing_modalities[1][1]
-        subset_sample = sample.subset(
+        subset_sample = sample.subset_default(
             patch_size=patch_size,
             max_tokens_per_instance=max_tokens_per_instance,
             sampled_hw_p=sampled_hw_p,

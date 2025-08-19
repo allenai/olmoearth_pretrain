@@ -252,15 +252,15 @@ class MAETrainModule(HeliosTrainModule):
 
                 loss.backward()
 
+        if dry_run:
+            return
+
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
             total_batch_loss,
             ReduceType.mean,
         )
         self.log_regularization(total_batch_reg)
-
-        if dry_run:
-            return
 
         del batch  # In case this helps with memory utilization.
         del masked_batch

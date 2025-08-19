@@ -264,6 +264,7 @@ class Sen1Floods11Dataset(Dataset):
         """Return an instance of the sen1floods11 eval set."""
         image = self.s1[idx]  # (64, 64, 2)
         label = self.labels[idx][0]  # (64, 64)
+
         if not self.norm_stats_from_pretrained:
             image = normalize_bands(
                 image.numpy(), self.means, self.stds, self.norm_method

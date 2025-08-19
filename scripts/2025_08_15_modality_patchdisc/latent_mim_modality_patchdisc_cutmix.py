@@ -1,9 +1,4 @@
-"""Train with NAIP using fixed modality masking (mark some modalities decode-only).
-
-It corresponds to this run:
-- Name: v0.2_base_latent_mim_128_naip_moredata_random_fixed_modality_0.5
-- W&B: https://wandb.ai/eai-ai2/v0.2_sweep/runs/m2b8q004/overview
-"""
+"""Trying to prototype fitting everything into olmo core."""
 
 import logging
 
@@ -72,12 +67,12 @@ def my_build_common_components(
     config.training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
-        Modality.WORLDCOVER.name,
-        Modality.LATLON.name,
-        Modality.SRTM.name,
         Modality.LANDSAT.name,
-        Modality.OPENSTREETMAP_RASTER.name,
-        Modality.NAIP_10.name,
+        # Modality.WORLDCOVER.name,
+        # Modality.LATLON.name,
+        # Modality.SRTM.name,
+        # Modality.OPENSTREETMAP_RASTER.name,
+        # Modality.ERA5_10.name,
     ]
     return config
 
@@ -92,7 +87,6 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         depth=model_size["encoder_depth"],
         mlp_ratio=model_size["mlp_ratio"],
         supported_modality_names=common.training_modalities,
-        min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,
@@ -118,30 +112,25 @@ def build_train_module_config(
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     return LatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
-        warmup_duration=Duration.steps(8000),
-        rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
+        rank_microbatch_size=64,
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "random_fixed_modality",
+                "type": "modality_cross_random",
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
-                "decoded_modalities": [
-                    Modality.WORLDCOVER.name,
-                    Modality.SRTM.name,
-                    Modality.OPENSTREETMAP_RASTER.name,
-                    Modality.NAIP_10.name,
-                ],
+                "allow_encoding_decoding_same_bandset": True,
             }
         ),
         loss_config=LossConfig(
             loss_config={
-                "type": "patch_discrimination_new",
+                "type": "modality_patch_discrimination_new",
+                "tau": 0.1,
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        scheduler=CosWithWarmup(),
+        scheduler=CosWithWarmup(warmup_steps=8000),
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
@@ -160,7 +149,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         global_batch_size=512,
         token_budget=1500,
         prefetch_factor=4,
-        sampled_hw_p_list=list(range(5, 13)),
+        sampled_hw_p_list=list(range(5, 13)),  # try only temporal tokens
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
@@ -171,33 +160,44 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     dataset_configs = [
-        # presto
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892",
-            training_modalities=common.training_modalities,
-        ),
+        # # presto
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469728",
+        #     training_modalities=common.training_modalities,
+        # ),
         # osm_sampling
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1138828",
             training_modalities=common.training_modalities,
+            apply_cutmix=True,  # Enable cutmix for this dataset
         ),
-        # osmbig
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928",
-            training_modalities=common.training_modalities,
-        ),
+        # # osmbig
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1291656",
+        #     training_modalities=common.training_modalities,
+        # ),
+        # # presto_neighbor
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/3507008",
+        #     training_modalities=common.training_modalities,
+        # ),
+        # # worldcover_sampling
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/5662848",
+        #     training_modalities=common.training_modalities,
+        # ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(300)
-    METRICS_COLLECT_INTERVAL = 1
-    CANCEL_CHECK_INTERVAL = 1
+    MAX_DURATION = Duration.epochs(300 * 200)
+    METRICS_COLLECT_INTERVAL = 10
+    CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "v0.2_sweep"
+    WANDB_PROJECT = "2025_07_21_era5_experiments"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -218,6 +218,28 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.steps(4000),
         ),
+        "mados": DownstreamTaskConfig(
+            dataset="mados",
+            embedding_batch_size=128,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            probe_lr=0.01,
+            epochs=50,
+            eval_interval=Duration.steps(4000),
+        ),
+        "sen1floods11": DownstreamTaskConfig(
+            dataset="sen1floods11",
+            embedding_batch_size=128,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            epochs=50,
+            eval_interval=Duration.steps(4000),
+        ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
             embedding_batch_size=32,
@@ -228,7 +250,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
-            epochs=200,
+            epochs=50,
         ),
     }
     trainer_config = (
