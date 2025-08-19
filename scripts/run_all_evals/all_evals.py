@@ -46,6 +46,15 @@ def load_user_module(path):
 
 
 EVAL_TASKS = {
+    "m_eurosat": DownstreamTaskConfig(
+        dataset="m-eurosat",
+        embedding_batch_size=128,
+        num_workers=0,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,  # True, #False,
+        eval_interval=Duration.epochs(5),
+        norm_method=NormMethod.NORM_YES_CLIP_3_STD_INT,
+    ),
     "m_forestnet": DownstreamTaskConfig(
         dataset="m-forestnet",
         embedding_batch_size=128,
@@ -54,15 +63,6 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=False,
         eval_interval=Duration.epochs(5),
         norm_method=NormMethod.NORM_YES_CLIP_3_STD_INT
-    ),
-    "m_eurosat": DownstreamTaskConfig(
-        dataset="m-eurosat",
-        embedding_batch_size=64,
-        num_workers=0,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=False,  # True, #False,
-        eval_interval=Duration.epochs(5),
-        norm_method=NormMethod.NORM_YES_CLIP_3_STD_INT,
     ),
     "m_bigearthnet": DownstreamTaskConfig(
         dataset="m-bigearthnet",

@@ -88,10 +88,11 @@ def no_norm_sweep():
 def get_dino_v3_args():
     """Get the dino v3 arguments."""
     # DATASET ARGS + NORM METHOD ARGS
+    # # std is instead of calculating min max per band per dataset which seems to be the reccomended way to do it
     dino_v3_args = dataset_args
     dino_v3_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method={NormMethod.NORM_YES_CLIP_3_STD_INT}"
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method={NormMethod.NORM_YES_CLIP_MIN_MAX_INT}"
             for task_name in EVAL_TASKS.keys()
         ]
     )

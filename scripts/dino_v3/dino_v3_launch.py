@@ -45,7 +45,7 @@ MIN_PATCH_SIZE = 1
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_config = DINOv3Config(apply_normalization=True, model_name=DinoV3Models.HUGE_PLUS_WEB)
+    model_config = DINOv3Config(apply_normalization=True, model_name=DinoV3Models.LARGE_SATELLITE)
     return model_config
 
 

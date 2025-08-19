@@ -49,17 +49,23 @@ class NormMethod(StrEnum):
     NORM_YES_CLIP_3_STD_INT = "norm_yes_clip_3_std_int"
     NORM_YES_CLIP_2_STD_INT = "norm_yes_clip_2_std_int"
     NORM_YES_CLIP_INT = "norm_yes_clip_int"
+    NORM_YES_CLIP_MIN_MAX_INT = "norm_yes_clip_min_max_int"
     STANDARDIZE = "standardize"
     NO_NORM = "no_norm"
 
 
 def normalize_bands(
     image: np.ndarray,
-    means: np.array,
-    stds: np.array,
+    means: np.ndarray,
+    stds: np.ndarray,
+    mins: np.ndarray | None = None,
+    maxs: np.ndarray | None = None,
     method: str = NormMethod.NORM_NO_CLIP,
 ) -> np.ndarray:
     """Normalize an image with given mean and std arrays, and a normalization method."""
+    if mins is None:
+        # Hack for now for dino for non geobench datasets
+        method = NormMethod.NORM_YES_CLIP_2_STD_INT
     original_dtype = image.dtype
     if method == NormMethod.NO_NORM:
         print("No normalization")
@@ -75,14 +81,19 @@ def normalize_bands(
             # during pretraining we clip at 2 stds
             min_value = means - 2 * stds
             max_value = means + 2 * stds
+        elif method == NormMethod.NORM_YES_CLIP_MIN_MAX_INT:
+            min_value = mins
+            max_value = maxs
         else:
             min_value = means - stds
             max_value = means + stds
+
+
         image = (image - min_value) / (max_value - min_value)
 
         if method == NormMethod.NORM_YES_CLIP or method == NormMethod.NORM_YES_CLIP_3_STD or method == NormMethod.NORM_YES_CLIP_2_STD:
             image = np.clip(image, 0, 1)
-        elif method == NormMethod.NORM_YES_CLIP_INT or method == NormMethod.NORM_YES_CLIP_3_STD_INT or method == NormMethod.NORM_YES_CLIP_2_STD_INT:
+        elif method == NormMethod.NORM_YES_CLIP_INT or method == NormMethod.NORM_YES_CLIP_3_STD_INT or method == NormMethod.NORM_YES_CLIP_2_STD_INT or method == NormMethod.NORM_YES_CLIP_MIN_MAX_INT:
             # same as clipping between 0 and 1 but rounds to the nearest 1/255
             image = image * 255  # scale
             image = np.clip(image, 0, 255).astype(np.uint8)  # convert to 8-bit integers

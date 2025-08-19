@@ -137,10 +137,11 @@ class DINOv3(nn.Module):
                 data_i = data_i[:, HELIOS_LANDSAT_RGB_BANDS, :, :]
 
             # If it is greater than 224 Caleb R comment says don;t resize
-            if original_height > 224:
+            base_resize = 224
+            if original_height > base_resize:
                 new_height = original_height
-            elif original_height <= 224 and original_height > 1:
-                new_height = 224
+            elif original_height <= base_resize and original_height > 1:
+                new_height = base_resize
             else:
                 new_height = self.patch_size
             resize_transform = make_resize_transform(new_height)
