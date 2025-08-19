@@ -119,6 +119,12 @@ def main():
         action="store_true",
         help="If set, use the dino v3 normalization settings",
     )
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        required=False,
+        help="If set, use this as the  base run name",
+    )
     args, extra_cli = parser.parse_known_args()
 
     cluster = args.cluster
@@ -150,10 +156,14 @@ def main():
         parent_dir = os.path.basename(os.path.dirname(checkpoint_path))[:100]
         # the step number is the last part of the checkpoint path
         step_num = os.path.basename(checkpoint_path)
+        base_run_name = f"{parent_dir}_{step_num}"
     else:
-        # TODO: Make this updatable based on the model
-        parent_dir = "dinov3"
-        step_num = "final"
+        if args.model_name is not None:
+            base_run_name = args.model_name
+        else:
+            logger.warning("No model name provided, using random run name")
+            base_run_name = str(uuid.uuid4())[:8]
+
 
     launch_command = "python3" if not sub_command == SubCmd.train else "torchrun"
     if checkpoint_path is not None:
@@ -168,8 +178,7 @@ def main():
         logger.info(
             f"Running defaults: {norm_mode} normalization, lr={lr}, pooling={pooling_type}"
         )
-        base_run_name = f"{parent_dir}_{step_num}_defaults"
-        run_name = base_run_name
+        run_name = f"{base_run_name}_defaults"
 
         if args.dino_v3:
             cmd_args = get_dino_v3_args()
@@ -192,8 +201,7 @@ def main():
             logger.info(
                 f"Running with {norm_mode} normalization and {lr} learning rate"
             )
-            base_run_name = f"{parent_dir}_{step_num}_{norm_mode}_lr{lr}"
-            run_name = base_run_name
+            run_name = f"{base_run_name}_{norm_mode}_lr{lr}"
             cmd_args = lr_args.format(arg=lr)
             cmd_args += pooling_args.format(arg=pooling_type)
 
