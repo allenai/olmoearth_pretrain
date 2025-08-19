@@ -708,6 +708,8 @@ class SoftMoE(Module):
         else:
             combine_logits = dispatch_logits
 
+        print("weight distribution", F.softmax(combine_logits.sum(dim=-1), dim=-1).mean(dim=(0, 1)).detach().cpu().numpy())
+
         # add task expert bias (see deepseek-v3 auxiliary-free loss balancing)
         # if task_emb is not None and self.task_bias is not None:
         #     task_bias = self.task_bias(task_emb)

@@ -506,7 +506,7 @@ class Block(nn.Module):
         self.norm2 = norm_layer(dim)
 
         # Disable task MoE if index is not in task_moe_indices
-        task_moe_kwargs = task_moe_kwargs or {}
+        task_moe_kwargs = (task_moe_kwargs or {}).copy()
         self.use_task_moe = task_moe_kwargs.pop("use_task_moe", False)
         moe_indices = task_moe_kwargs.pop("task_moe_indices", [])
         if task_moe_kwargs.pop("index", None) not in moe_indices:
