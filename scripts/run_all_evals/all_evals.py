@@ -30,6 +30,7 @@ from helios.train.callbacks import (
     HeliosWandBCallback,
 )
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
+from helios.evals.datasets.normalize import NormMethod
 
 logger = getLogger(__name__)
 
@@ -60,6 +61,7 @@ EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,  # True, #False,
         eval_interval=Duration.epochs(5),
+        norm_method=NormMethod.NORM_YES_CLIP_3_STD,
     ),
     # "m_bigearthnet": DownstreamTaskConfig(
     #     dataset="m-bigearthnet",

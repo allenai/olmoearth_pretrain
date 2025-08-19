@@ -44,6 +44,7 @@ class NormMethod(StrEnum):
 
     NORM_NO_CLIP = "norm_no_clip"
     NORM_YES_CLIP = "norm_yes_clip"
+    NORM_YES_CLIP_3_STD = "norm_yes_clip_3_std"
     NORM_YES_CLIP_INT = "norm_yes_clip_int"
     STANDARDIZE = "standardize"
     NO_NORM = "no_norm"
@@ -64,8 +65,12 @@ def normalize_bands(
     elif method == NormMethod.STANDARDIZE:
         image = (image - means) / stds
     else:
-        min_value = means - stds
-        max_value = means + stds
+        if method == NormMethod.NORM_YES_CLIP_3_STD:
+            min_value = means - 3 * stds
+            max_value = means + 3 * stds
+        else:
+            min_value = means - stds
+            max_value = means + stds
         image = (image - min_value) / (max_value - min_value)
 
         if method == NormMethod.NORM_YES_CLIP:
