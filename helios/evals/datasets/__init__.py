@@ -45,6 +45,7 @@ EVAL_DATASET_TO_SUPPORTED_MODALITIES = {
     "cropharvest_Togo_12": [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
     "cropharvest_People's Republic of China_6": [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
     "sen1floods11": [Modality.SENTINEL1.name],
+    "breizhcrops": [Modality.SENTINEL2_L2A.name],
 }
 
 def get_eval_dataset(
