@@ -7,7 +7,7 @@ import argparse
 import os
 import subprocess  # nosec
 from logging import getLogger
-
+import uuid
 from all_evals import EVAL_TASKS
 
 from helios.evals.datasets.configs import dataset_to_config, get_eval_mode
