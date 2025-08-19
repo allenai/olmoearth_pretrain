@@ -46,29 +46,6 @@ def load_user_module(path):
 
 
 EVAL_TASKS = {
-    "sen1floods11": DownstreamTaskConfig(
-        dataset="sen1floods11",
-        embedding_batch_size=128,
-        probe_batch_size=128,
-        num_workers=4,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=False,
-        probe_lr=0.1,
-        eval_interval=Duration.epochs(10),
-    ),
-    "cropharvest_Togo_12_sentinel2_sentinel1": DownstreamTaskConfig(
-        dataset="cropharvest_Togo_12",
-        embedding_batch_size=128,
-        num_workers=2,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        eval_interval=Duration.epochs(20),
-        input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
-        patch_size=1,
-        eval_mode="linear_probe",
-        probe_lr=0.1,
-        epochs=50,
-    ),
     "m_forestnet": DownstreamTaskConfig(
         dataset="m-forestnet",
         embedding_batch_size=128,
