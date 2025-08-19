@@ -70,19 +70,19 @@ class DINOv3(nn.Module):
         self,
         model_name: str = DinoV3Models.LARGE_SATELLITE,
         use_cls_token: bool = False,
-        apply_imagenet_normalization: bool = False,
+        apply_normalization: bool = False,
     ):
         """Initialize the dinov3 wrapper.
 
         Args:
             torchhub_id: The torch hub model ID for dinov3
             use_cls_token: Whether to use the cls token (default False)
-            apply_imagenet_normalization: Whether to apply imagenet normalization to the input data (default False)
+            apply_normalization: Whether to apply imagenet normalization to the input data (default False)
         """
         super().__init__()
         self.use_cls_token = use_cls_token
-        self.apply_imagenet_normalization = apply_imagenet_normalization
-        if self.apply_imagenet_normalization:
+        self.apply_normalization = apply_normalization
+        if self.apply_normalization:
             logger.warning(
                 "Applying imagenet normalization to the input data. Make sure other normalization is not applied."
             )
@@ -145,7 +145,7 @@ class DINOv3(nn.Module):
                 new_height = self.patch_size
             resize_transform = make_resize_transform(new_height)
             data_i = resize_transform(data_i)
-            if self.apply_imagenet_normalization:
+            if self.apply_normalization:
                 # normalize the data
                 data_i = self.normalize_transform(data_i)
             data_list.append(data_i)
@@ -260,12 +260,12 @@ class DINOv3Config(Config):
 
     model_name: DinoV3Models = DinoV3Models.BASE_WEB
     use_cls_token: bool = False
-    apply_imagenet_normalization: bool = False
+    apply_normalization: bool = False
 
     def build(self) -> "DINOv3":
         """Build the DINOv3 from this config."""
         return DINOv3(
             model_name=self.model_name,
             use_cls_token=self.use_cls_token,
-            apply_imagenet_normalization=self.apply_imagenet_normalization,
+            apply_normalization=self.apply_normalization,
         )
