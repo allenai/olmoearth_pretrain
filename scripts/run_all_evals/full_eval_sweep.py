@@ -74,6 +74,14 @@ def loop_through_params():
                     "pooling_type": pooling_type,
                 }
 
+def no_norm_sweep():
+    """Yield a dict of the hps we are sweeping over."""
+    for lr in LP_LRs:
+        for pooling_type in pooling_types:
+            yield {
+                "lr": lr,
+                "pooling_type": pooling_type,
+            }
 
 # TODO: Need to add filtering sentinel 1 data
 
@@ -193,15 +201,15 @@ def main():
         logger.info(cmd)
         subprocess.run(cmd, shell=True, check=True)  # nosec
     else:
-        hp_params = loop_through_params()
+        hp_params = loop_through_params() if not args.dino_v3 else no_norm_sweep()
         for params in hp_params:
-            lr = params["lr"]
-            norm_mode = params["norm_mode"]
-            pooling_type = params["pooling_type"]
+            lr = params.get("lr", None)
+            norm_mode = params.get("norm_mode", "fixed")
+            pooling_type = params.get("pooling_type", "default")
             logger.info(
                 f"Running with {norm_mode} normalization and {lr} learning rate"
             )
-            run_name = f"{base_run_name}_{norm_mode}_lr{lr}"
+            run_name = f"{base_run_name}_{norm_mode}_lr{lr}_pooling{pooling_type}"
             cmd_args = lr_args.format(arg=lr)
             cmd_args += pooling_args.format(arg=pooling_type)
 
