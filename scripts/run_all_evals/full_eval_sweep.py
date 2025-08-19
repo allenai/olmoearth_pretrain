@@ -6,8 +6,9 @@ e.g. python3 scripts/run_all_evals/full_eval_sweep.py --cluster=ai2/saturn-cirra
 import argparse
 import os
 import subprocess  # nosec
-from logging import getLogger
 import uuid
+from logging import getLogger
+
 from all_evals import EVAL_TASKS
 
 from helios.evals.datasets.configs import dataset_to_config, get_eval_mode
@@ -17,7 +18,7 @@ from helios.nn.flexihelios import PoolingType
 
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 Normalization_MODES = ["dataset", "helios"]
-pooling_types = [PoolingType.MAX, PoolingType.MEAN]
+pooling_types = [PoolingType.MEAN, PoolingType.MAX]
 
 logger = getLogger(__name__)
 
@@ -74,16 +75,19 @@ def loop_through_params():
                     "pooling_type": pooling_type,
                 }
 
+
 def no_norm_sweep():
     """Yield a dict of the hps we are sweeping over."""
-    for lr in LP_LRs:
-        for pooling_type in pooling_types:
+    for pooling_type in pooling_types:
+        for lr in LP_LRs:
             yield {
                 "lr": lr,
                 "pooling_type": pooling_type,
             }
 
+
 # TODO: Need to add filtering sentinel 1 data
+
 
 def get_dino_v3_args():
     """Get the dino v3 arguments."""
@@ -99,13 +103,16 @@ def get_dino_v3_args():
     return dino_v3_args
 
 
-
 def main():
     """Run the full evaluation sweep or just the defaults."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--cluster", type=str, required=True, help="Cluster name")
     parser.add_argument(
-        "--checkpoint_path", type=str, default=None, required=False, help="Checkpoint path"
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        required=False,
+        help="Checkpoint path",
     )
     parser.add_argument(
         "--module_path", type=str, required=True, help="Path to module .py"
@@ -144,9 +151,7 @@ def main():
 
     # If we are using a torch hub model we should not specify a checkpoint path
     if checkpoint_path is None:
-        logger.info(
-            f"Running with module path {module_path} on cluster {cluster}"
-        )
+        logger.info(f"Running with module path {module_path} on cluster {cluster}")
     else:
         logger.info(
             f"Running with checkpoint path {checkpoint_path} and module path {module_path} on cluster {cluster}"
@@ -172,7 +177,6 @@ def main():
         else:
             logger.warning("No model name provided, using random run name")
             base_run_name = str(uuid.uuid4())[:8]
-
 
     launch_command = "python3" if not sub_command == SubCmd.train else "torchrun"
     if checkpoint_path is not None:
