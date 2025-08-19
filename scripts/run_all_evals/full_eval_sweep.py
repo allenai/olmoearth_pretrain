@@ -11,6 +11,7 @@ from logging import getLogger
 from all_evals import EVAL_TASKS
 
 from helios.evals.datasets.configs import dataset_to_config, get_eval_mode
+from helios.evals.datasets.normalize import NormMethod
 from helios.internal.experiment import SubCmd
 from helios.nn.flexihelios import PoolingType
 
@@ -80,9 +81,9 @@ def get_dino_v3_args():
     """Get the dino v3 arguments."""
     # DATASET ARGS + NORM METHOD ARGS
     dino_v3_args = dataset_args
-    dino_v3_args += " ".join(
+    dino_v3_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NORM_YES_CLIP_3_STD_INT"
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method={NormMethod.NORM_YES_CLIP_3_STD_INT}"
             for task_name in EVAL_TASKS.keys()
         ]
     )

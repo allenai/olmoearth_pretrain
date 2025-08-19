@@ -59,7 +59,8 @@ HELIOS_LANDSAT_RGB_BANDS = [
 class DINOv3(nn.Module):
     """Wrapper for the dinov3 model that can ingest MaskedHeliosSample objects."""
 
-    patch_size: int = 14
+    patch_size: int = 16
+    # TODO: Should be the supported modality names
     supported_modalities: list[str] = [
         Modality.SENTINEL2_L2A.name,
         Modality.LANDSAT.name,
@@ -141,7 +142,7 @@ class DINOv3(nn.Module):
             elif original_height <= 224 and original_height > 1:
                 new_height = 224
             else:
-                new_height = 1
+                new_height = self.patch_size
             resize_transform = make_resize_transform(new_height)
             data_i = resize_transform(data_i)
             if self.apply_imagenet_normalization:

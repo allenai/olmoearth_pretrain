@@ -13,6 +13,7 @@ from .mados_dataset import MADOS_DIR, MADOSDataset
 from .pastis_dataset import PASTIS_DIR, PASTISRDataset
 from .sickle_dataset import SICKLE_DIR, SICKLEDataset
 from .normalize import NormMethod
+from helios.data.constants import Modality
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +38,13 @@ EVAL_DATASET_TO_SUPPORTED_MODALITIES = {
     "m-so2sat": [Modality.SENTINEL2_L2A.name],
     "m-brick-kiln": [Modality.SENTINEL2_L2A.name],
     "mados": [Modality.SENTINEL2_L2A.name],
-    "pastis": [Modality.SENTINEL2_L2A.name, Modality.Sentinel1.name],
-    "sickle": [Modality.LANDSAT.name, Modality.Sentinel1.name, Modality.SENTINEL2_L2A.name],
+    "pastis": [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+    "sickle": [Modality.LANDSAT.name, Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
     "m-sa-crop-type": [Modality.SENTINEL2_L2A.name],
     "m-cashew-plant": [Modality.SENTINEL2_L2A.name],
-    "cropharvest_Togo_12": [Modality.SENTINEL2_L2A.name, Modality.Sentinel1.name],
-    "cropharvest_People's Republic of China_6": [Modality.SENTINEL2_L2A.name, Modality.Sentinel1.name],
-    "sen1floods11": [Modality.Sentinel1.name],
+    "cropharvest_Togo_12": [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+    "cropharvest_People's Republic of China_6": [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+    "sen1floods11": [Modality.SENTINEL1.name],
 }
 
 def get_eval_dataset(
