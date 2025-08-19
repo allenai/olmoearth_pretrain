@@ -28,6 +28,9 @@ class EvalWrapper:
         patch_size: int,
         pooling_type: PoolingType,
         concat_features: bool = False,
+        use_task_embeds: bool = False,
+        task_embed_path: str | None = None,
+        dataset: str | None = None,
     ):
         """Initialize the eval wrapper.
 
@@ -37,6 +40,9 @@ class EvalWrapper:
             patch_size: The patch size to use for the model.
             pooling_type: The pooling type to use for the model.
             concat_features: Whether to concatenate features across modalities.
+            use_task_embeds: Whether to use task embeddings.
+            task_embed_path: The path to the task embeddings.
+            dataset: The dataset to evaluate on.
         """
         super().__init__()
         self.model = model
@@ -45,6 +51,13 @@ class EvalWrapper:
         self.pooling_type = pooling_type
         self.concat_features = concat_features
         self.spatial_pool = task_type == TaskType.SEGMENTATION
+        
+        if use_task_embeds:
+            self.task_emb = torch.load(task_embed_path)[dataset]
+            self.task_emb = self.task_emb.to(self.device).unsqueeze(0)
+        else:
+
+            self.task_emb = None
 
     @property
     def device(self) -> torch.device:
@@ -76,7 +89,7 @@ class HeliosEvalWrapper(EvalWrapper):
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings: TokensAndMasks = self.model(
-            masked_helios_sample, patch_size=self.patch_size
+            masked_helios_sample, patch_size=self.patch_size, task_emb=self.task_emb
         )[0]  # (bsz, dim)
         # Concat features across modalities in space averaged across time
         tokens_and_masks = batch_embeddings.pool_unmasked_tokens(

@@ -60,6 +60,7 @@ class HeliosDataLoader(DataLoaderBase):
         persistent_workers: bool = True,
         multiprocessing_context: str = "spawn",
         num_dataset_repeats_per_epoch: int = 1,
+        strict_fingerprint_check: bool = True,
     ):
         """Initialize the HeliosDataLoader."""
         super().__init__(
@@ -88,6 +89,7 @@ class HeliosDataLoader(DataLoaderBase):
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = multiprocessing_context
         self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
+        self.strict_fingerprint_check = strict_fingerprint_check
         if self.num_workers > 0 and self.multiprocessing_context == "forkserver":
             # Overhead of loading modules on import by preloading them
             mp.set_forkserver_preload(["torch", "rasterio"])
@@ -272,9 +274,11 @@ class HeliosDataLoader(DataLoaderBase):
                 "this could mean the data has changed"
             )
         elif state_dict["dataset_fingerprint"] != self.dataset.fingerprint:
-            raise RuntimeError(
-                "Restoring state from a different dataset is not supported! (fingerprint doesn't match)"
-            )
+            error = "Restoring state from a different dataset is not supported! (fingerprint doesn't match)"
+            if self.strict_fingerprint_check:
+                raise RuntimeError(error)
+            else:
+                logger.error(error)
 
         if state_dict["seed"] != self.seed:
             logger.warning(
@@ -516,6 +520,7 @@ class HeliosDataLoaderConfig(Config):
     target_device_type: str | None = None
     drop_last: bool = True
     num_dataset_repeats_per_epoch: int = 1
+    strict_fingerprint_check: bool = True
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -558,4 +563,5 @@ class HeliosDataLoaderConfig(Config):
             sampled_hw_p_list=self.sampled_hw_p_list,
             token_budget=self.token_budget,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
+            strict_fingerprint_check=self.strict_fingerprint_check,
         )

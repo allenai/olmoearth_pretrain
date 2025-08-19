@@ -46,6 +46,8 @@ class DownstreamTaskConfig:
     probe_type: str = "linear"
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: str = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
+    use_task_embeds: bool = False
+    task_embed_path: str | None = None
 
 
 class DownstreamEvaluator:
@@ -86,6 +88,8 @@ class DownstreamEvaluator:
         self.probe_type = task.probe_type
         self.partition = task.partition
         self.norm_method = task.norm_method
+        self.use_task_embeds = task.use_task_embeds
+        self.task_embed_path = task.task_embed_path
         if self.eval_mode is None:
             self.eval_mode = get_eval_mode(self.config.task_type)
 
@@ -150,6 +154,9 @@ class DownstreamEvaluator:
             "patch_size": self.patch_size,
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
+            "use_task_embeds": self.use_task_embeds,
+            "task_embed_path": self.task_embed_path,
+            "dataset": self.dataset,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
