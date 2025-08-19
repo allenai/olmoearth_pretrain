@@ -17,6 +17,8 @@ from helios.data.constants import Modality
 from helios.nn.flexihelios import PoolingType
 from helios.train.masking import MaskedHeliosSample
 
+from .constants import DinoV3Models, MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL
+
 logger = logging.getLogger(__name__)
 # Use timm's names
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
@@ -44,7 +46,7 @@ def make_normalize_transform_sat(resize_size: int = 224):
     return normalize
 
 
-# DinoV2 Expects bands ordered as R, G, B
+# DinoV3 Expects bands ordered as R, G, B
 HELIOS_SENTINEL2_RGB_BANDS = [
     Modality.SENTINEL2_L2A.band_order.index(b) for b in ["B04", "B03", "B02"]
 ]
@@ -55,18 +57,6 @@ HELIOS_LANDSAT_RGB_BANDS = [
 REPO_DIR = "/weka/dfive-default/helios/models/dinov3/repo"
 CHECKPOINT_DIR = "/weka/dfive-default/helios/models/dinov3/checkpoints"
 
-
-class DinoV3Models(StrEnum):
-    """Names for different DInoV3 images on torch hub"""
-
-    SMALL_WEB = "dinov3_vits16"
-    SMALL_PLUS_WEB = "dinov3_vits16plus"
-    BASE_WEB = "dinov3_vitb16"
-    LARGE_WEB = "dinov3_vitl16"
-    HUGE_PLUS_WEB = "dinov3_vith16plus"
-    FUll_7B_WEB = "dinov3_vit7b16"
-    LARGE_SATELLITE = "dinov3_vitl16_sat" # just the name I copied too
-    # Not yet clear how to download the satelite models
 
 
 class DINOv3(nn.Module):
@@ -80,7 +70,7 @@ class DINOv3(nn.Module):
 
     def __init__(
         self,
-        torchhub_id: str = "dinov3_vitb14",
+        model_name: str = DinoV3Models.LARGE_SATELLITE,
         use_cls_token: bool = False,
         apply_imagenet_normalization: bool = False,
     ):
@@ -98,24 +88,24 @@ class DINOv3(nn.Module):
             logger.warning(
                 "Applying imagenet normalization to the input data. Make sure other normalization is not applied."
             )
+        torchhub_id, weights_url = MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL[model_name]
         # Load the model
-        self._load_model(torchhub_id)
-        if "sat" in torchhub_id:
+        self._load_model(torchhub_id, weights_url)
+        if "sat" in model_name:
             self.normalize_transform = make_normalize_transform_sat()
         else:
             self.normalize_transform = make_normalize_transform_web()
 
-    def _load_model(self, torchhub_id: str) -> None:
+    def _load_model(self, torchhub_id: str, weights_url: str) -> None:
         """Load the dinov3 model from torch hub."""
         # Hack to get around https://discuss.pytorch.org/t/torch-hub-load-gives-httperror-rate-limit-exceeded/124769
         torch.hub._validate_not_a_forked_repo = lambda a, b, c: True
         for attempt in range(2):
             try:
                 self.model = torch.hub.load(
-                    REPO_DIR + "/dinov3",
-                    torchhub_id,
-                    source="local",
-                    weights=f"{CHECKPOINT_DIR}/{torchhub_id}_pretrain.pth",
+                    repo_or_dir="facebookresearch/dinov3",
+                    model=torchhub_id,
+                    weights=weights_url,
                 )
                 break
             except Exception as e:
@@ -262,14 +252,14 @@ class DINOv3(nn.Module):
 class DINOv3Config(Config):
     """olmo_core style config for DINOv2Wrapper."""
 
-    torchhub_id: DinoV3Models = DinoV3Models.BASE_WEB
+    model_name: DinoV3Models = DinoV3Models.BASE_WEB
     use_cls_token: bool = False
     apply_imagenet_normalization: bool = False
 
     def build(self) -> "DINOv3":
         """Build the DINOv3 from this config."""
         return DINOv3(
-            torchhub_id=self.torchhub_id,
+            model_name=self.model_name,
             use_cls_token=self.use_cls_token,
             apply_imagenet_normalization=self.apply_imagenet_normalization,
         )

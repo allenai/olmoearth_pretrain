@@ -45,46 +45,46 @@ def load_user_module(path):
 
 
 EVAL_TASKS = {
-    "m_forestnet": DownstreamTaskConfig(
-        dataset="m-forestnet",
-        embedding_batch_size=128,
-        num_workers=4,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=False,
-        eval_interval=Duration.epochs(5),
-    ),
+    # "m_forestnet": DownstreamTaskConfig(
+    #     dataset="m-forestnet",
+    #     embedding_batch_size=128,
+    #     num_workers=4,
+    #     pooling_type=PoolingType.MEAN,git a
+    #     norm_stats_from_pretrained=False,
+    #     eval_interval=Duration.epochs(5),
+    # ),
     "m_eurosat": DownstreamTaskConfig(
         dataset="m-eurosat",
         embedding_batch_size=128,
         num_workers=0,
         pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,  # True, #False,
+        norm_stats_from_pretrained=False,  # True, #False,
         eval_interval=Duration.epochs(5),
     ),
-    "m_bigearthnet": DownstreamTaskConfig(
-        dataset="m-bigearthnet",
-        embedding_batch_size=64,
-        num_workers=4,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        eval_interval=Duration.epochs(5),
-    ),
-    "m_so2sat": DownstreamTaskConfig(
-        dataset="m-so2sat",
-        embedding_batch_size=128,
-        num_workers=4,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        eval_interval=Duration.epochs(5),
-    ),
-    "m_brick_kiln": DownstreamTaskConfig(
-        dataset="m-brick-kiln",
-        embedding_batch_size=128,
-        num_workers=4,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        eval_interval=Duration.epochs(5),
-    ),
+    # "m_bigearthnet": DownstreamTaskConfig(
+    #     dataset="m-bigearthnet",
+    #     embedding_batch_size=64,
+    #     num_workers=4,
+    #     pooling_type=PoolingType.MEAN,
+    #     norm_stats_from_pretrained=True,
+    #     eval_interval=Duration.epochs(5),
+    # ),
+    # "m_so2sat": DownstreamTaskConfig(
+    #     dataset="m-so2sat",
+    #     embedding_batch_size=128,
+    #     num_workers=4,
+    #     pooling_type=PoolingType.MEAN,
+    #     norm_stats_from_pretrained=True,
+    #     eval_interval=Duration.epochs(5),
+    # ),
+    # "m_brick_kiln": DownstreamTaskConfig(
+    #     dataset="m-brick-kiln",
+    #     embedding_batch_size=128,
+    #     num_workers=4,
+    #     pooling_type=PoolingType.MEAN,
+    #     norm_stats_from_pretrained=True,
+    #     eval_interval=Duration.epochs(5),
+    # ),
     "mados": DownstreamTaskConfig(
         dataset="mados",
         embedding_batch_size=128,
@@ -92,7 +92,7 @@ EVAL_TASKS = {
         num_workers=8,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
-        probe_lr=0.1,
+        probe_lr=0.01,
         eval_interval=Duration.epochs(10),
     ),
     "pastis_sentinel2": DownstreamTaskConfig(

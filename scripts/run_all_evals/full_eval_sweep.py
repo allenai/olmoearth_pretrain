@@ -79,7 +79,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cluster", type=str, required=True, help="Cluster name")
     parser.add_argument(
-        "--checkpoint_path", type=str, required=True, help="Checkpoint path"
+        "--checkpoint_path", type=str, default=None, required=False, help="Checkpoint path"
     )
     parser.add_argument(
         "--module_path", type=str, required=True, help="Path to module .py"
@@ -104,16 +104,40 @@ def main():
     module_path = args.module_path
     project_name = args.project_name
     extra = " " + " ".join(extra_cli) if extra_cli else ""
-    logger.info(
-        f"Running with checkpoint path {checkpoint_path} and module path {module_path} on cluster {cluster}"
-    )
-    sub_command = SubCmd.launch if not args.dry_run else SubCmd.dry_run
+
+    # If we are using a torch hub model we should not specify a checkpoint path
+    if checkpoint_path is None:
+        logger.info(
+            f"Running with module path {module_path} on cluster {cluster}"
+        )
+    else:
+        logger.info(
+            f"Running with checkpoint path {checkpoint_path} and module path {module_path} on cluster {cluster}"
+        )
+    if args.dry_run:
+        sub_command = SubCmd.dry_run
+    elif cluster == "local":
+        sub_command = SubCmd.train
+    else:
+        sub_command = SubCmd.launch
+
     if project_name is None:
         project_name = "helios_in_loop_evals"
 
-    parent_dir = os.path.basename(os.path.dirname(checkpoint_path))[:100]
-    # the step number is the last part of the checkpoint path
-    step_num = os.path.basename(checkpoint_path)
+    if checkpoint_path is not None:
+        parent_dir = os.path.basename(os.path.dirname(checkpoint_path))[:100]
+        # the step number is the last part of the checkpoint path
+        step_num = os.path.basename(checkpoint_path)
+    else:
+        # TODO: Make this updatable based on the model
+        parent_dir = "dinov3"
+        step_num = "final"
+
+    launch_command = "python3" if not sub_command == SubCmd.train else "torchrun"
+    if checkpoint_path is not None:
+        checkpoint_args = f"--trainer.load_path={checkpoint_path}"
+    else:
+        checkpoint_args = ""
     if args.defaults_only:
         # Just run with the first/default values
         lr = LP_LRs[0]
@@ -126,9 +150,10 @@ def main():
         run_name = base_run_name
 
         cmd = (
-            f"TRAIN_SCRIPT_PATH={module_path} python3 scripts/run_all_evals/all_evals.py "
+            f"TRAIN_SCRIPT_PATH={module_path} {launch_command} scripts/run_all_evals/all_evals.py "
             f"{sub_command} {run_name} {cluster} --launch.priority=high "
-            f"--launch.task_name=eval --trainer.load_path={checkpoint_path} --trainer.callbacks.wandb.project={project_name}{extra}"
+            # TODO: Make a debugging mode
+            f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.enabled=False --trainer.callbacks.wandb.project={project_name}{extra}"
         )
         logger.info(cmd)
         subprocess.run(cmd, shell=True, check=True)  # nosec
@@ -151,9 +176,9 @@ def main():
                 cmd_args += helios_args
 
             cmd = (
-                f"TRAIN_SCRIPT_PATH={module_path} python3 scripts/run_all_evals/all_evals.py "
+                f"TRAIN_SCRIPT_PATH={module_path} {launch_command} scripts/run_all_evals/all_evals.py "
                 f"{sub_command} {run_name} {cluster} --launch.priority=high {cmd_args} "
-                f"--launch.task_name=eval --trainer.load_path={checkpoint_path} --trainer.callbacks.wandb.project={project_name}{extra}"
+                f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
             )
             logger.info(cmd)
             subprocess.run(cmd, shell=True, check=True)  # nosec

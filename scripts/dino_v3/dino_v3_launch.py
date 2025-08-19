@@ -22,6 +22,7 @@ from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.evals.models import DINOv3Config
+from helios.evals.models.dinov3.dinov3 import DinoV3Models
 from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
 from helios.nn.flexihelios import PoolingType
@@ -44,7 +45,7 @@ MIN_PATCH_SIZE = 1
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_config = DINOv3Config()
+    model_config = DINOv3Config(apply_imagenet_normalization=True, model_name=DinoV3Models.LARGE_SATELLITE)
     return model_config
 
 

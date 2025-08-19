@@ -54,10 +54,10 @@ def build_train_module_config(
     scheduler = WSD(
         decay_steps=0,
         decay_fraction=None,
+        warmup_steps=0,
     )
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        warmup_duration=Duration.steps(8000),
         rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
@@ -91,7 +91,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
 
     return HeliosDataLoaderConfig(
-        num_workers=16,
+        num_workers=0,
         global_batch_size=512,
         token_budget=1500,
         prefetch_factor=4,
@@ -106,36 +106,12 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     dataset_configs = [
-        # presto
+        # ENsure this is any existing dataset
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892",
+            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928",
             training_modalities=common.training_modalities,
             dataset_percentage=common.dataset_percentage,
         ),
-        # # osm_sampling
-        # HeliosDatasetConfig(
-        #     h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
-        #     training_modalities=common.training_modalities,
-        #     dataset_percentage=common.dataset_percentage,
-        # ),
-        # # osmbig
-        # HeliosDatasetConfig(
-        #     h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928",
-        #     training_modalities=common.training_modalities,
-        #     dataset_percentage=common.dataset_percentage,
-        # ),
-        # # presto_neighbor
-        # HeliosDatasetConfig(
-        #     h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/3507748",
-        #     training_modalities=common.training_modalities,
-        #     dataset_percentage=common.dataset_percentage,
-        # ),
-        # # worldcover_sampling
-        # HeliosDatasetConfig(
-        #     h5py_dir="/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/6370580",
-        #     training_modalities=common.training_modalities,
-        #     dataset_percentage=common.dataset_percentage,
-        # ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
