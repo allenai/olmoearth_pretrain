@@ -460,7 +460,7 @@ class Attention(nn.Module):
 
 
 class Mlp(nn.Module):
-    """MLP as used in Vision Transformer, MLP-Mixer and related networks"""
+    """MLP as used in Vision Transformer, MLP-Mixer and related networks."""
 
     def __init__(
         self,
@@ -471,6 +471,7 @@ class Mlp(nn.Module):
         bias=True,
         drop=0.0,
     ):
+        """MLP as used in Vision Transformer, MLP-Mixer and related networks."""
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
@@ -482,6 +483,7 @@ class Mlp(nn.Module):
         self.drop2 = nn.Dropout(drop)
 
     def forward(self, x):
+        """Forward."""
         x = self.fc1(x)
         x = self.act(x)
         x = self.drop1(x)
@@ -491,16 +493,20 @@ class Mlp(nn.Module):
 
 
 class LayerScale(nn.Module):
+    """LayerScale."""
     def __init__(self, dim, init_values=1e-5, inplace=False):
+        """LayerScale."""
         super().__init__()
         self.inplace = inplace
         self.gamma = nn.Parameter(init_values * torch.ones(dim))
 
     def forward(self, x):
+        """Forward."""
         return x.mul_(self.gamma) if self.inplace else x * self.gamma
 
 
 def drop_path(x, drop_prob: float = 0.0, training: bool = False):
+    """drop_path."""
     if drop_prob == 0.0 or not training:
         return x
     keep_prob = 1 - drop_prob
@@ -517,14 +523,17 @@ class DropPath(nn.Module):
     """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks)."""
 
     def __init__(self, drop_prob=None):
-        super(DropPath, self).__init__()
+        """Drop Path."""
+        super().__init__()
         self.drop_prob = drop_prob
 
     def forward(self, x):
+        """Forward."""
         return drop_path(x, self.drop_prob, self.training)
 
 
 class Block(nn.Module):
+    """Block."""
     def __init__(
         self,
         dim,
@@ -540,6 +549,7 @@ class Block(nn.Module):
         norm_layer=nn.LayerNorm,
         cross_attn: bool = False,
     ):
+        """Block."""
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
@@ -569,12 +579,14 @@ class Block(nn.Module):
         )
 
     def forward(self, x, y, attn_mask):
+        """Forward."""
         x = x + self.drop_path(self.ls1(self.attn(self.norm1(x), y, attn_mask)))
         x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
         return x
 
 
 class ModuleListWithInit(nn.ModuleList):
+    """ModuleListWithInit."""
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             # we use xavier_uniform following official JAX ViT:
@@ -584,6 +596,7 @@ class ModuleListWithInit(nn.ModuleList):
 
 
 class GalileoBase(nn.Module):
+    """GalileoBase."""
     cross_attn: bool
 
     def __init__(
@@ -597,6 +610,7 @@ class GalileoBase(nn.Module):
         use_channel_embs: bool = True,
         drop_path: float = 0.0,
     ):
+        """Init GalileoBase."""
         super().__init__()
 
         self.space_time_groups = SPACE_TIME_BANDS_GROUPS_IDX
@@ -671,6 +685,7 @@ class GalileoBase(nn.Module):
         t_m: torch.Tensor,
         st_m: torch.Tensor,
     ):
+        """collapse_and_combine_hwtc."""
         s_t_x = rearrange(s_t_x, "b h w t c_g d -> b (h w t c_g) d")
         sp_x = rearrange(sp_x, "b h w c_g d -> b (h w c_g) d")
         t_x = rearrange(t_x, "b t c_g d -> b (t c_g) d")
@@ -703,6 +718,7 @@ class GalileoBase(nn.Module):
         t_c_g: int,
         st_c_g: int,
     ):
+        """split_and_expand_hwtc."""
         n_s_t_t = h * w * t * s_t_c_g
         n_t_t = t * t_c_g
 
@@ -724,6 +740,7 @@ class GalileoBase(nn.Module):
         return s_t_x, sp_x, t_x, st_x
 
     def apply_encodings(self, s_t_x, sp_x, t_x, st_x, months, patch_size, input_res):
+        """apply_encodings."""
         b, h, w, t, s_t_c_g, _ = s_t_x.shape
         sp_c_g, t_c_g = sp_x.shape[-2], t_x.shape[-2]
         st_c_g = st_x.shape[-2]
@@ -797,6 +814,7 @@ class GalileoBase(nn.Module):
 
 
 class Encoder(GalileoBase):
+    """Encoder."""
     cross_attn = False
 
     def __init__(
@@ -810,6 +828,7 @@ class Encoder(GalileoBase):
         freeze_projections: bool = False,
         drop_path: float = 0.0,
     ):
+        """Init Encoder."""
         super().__init__(
             embedding_size,
             depth,
@@ -886,6 +905,7 @@ class Encoder(GalileoBase):
         patch_size: int,
     ):
         """Given a [B, H, W, (T), C] inputs, returns a [B, H, W, (T), C_G, D] output.
+
         We assume that the spatial masks are consistent for the given patch size,
         so that if patch_size == 2 then one possible mask would be
         [0, 0, 1, 1]
@@ -984,6 +1004,7 @@ class Encoder(GalileoBase):
 
     @staticmethod
     def remove_masked_tokens(x, mask):
+        """remove_masked_tokens."""
         org_mask_dtype = mask.dtype
         mask = mask.bool()
         # https://stackoverflow.com/a/68621610/2332296
@@ -1004,6 +1025,7 @@ class Encoder(GalileoBase):
 
     @staticmethod
     def add_removed_tokens(x, indices, mask):
+        """add_removed_tokens."""
         masked_tokens = repeat(
             torch.zeros_like(x[0, 0, :]), "d -> b t d", b=x.shape[0], t=indices.shape[1]
         )
@@ -1043,6 +1065,7 @@ class Encoder(GalileoBase):
         exit_after,
         token_exit_cfg,
     ):
+        """apply_attn."""
         if token_exit_cfg:
             exit_s_t, exit_sp, exit_t, exit_st = self.create_token_exit_ids(
                 s_t_x, sp_x, t_x, st_x, token_exit_cfg
@@ -1127,6 +1150,7 @@ class Encoder(GalileoBase):
     def average_tokens(
         cls, s_t_x, sp_x, t_x, st_x, s_t_m, sp_m, t_m, st_m, pooling: PoolingType
     ):
+        """Compute an average of the unmasked tokens."""
         x, m = cls.collapse_and_combine_hwtc(
             s_t_x, sp_x, t_x, st_x, s_t_m, sp_m, t_m, st_m
         )
@@ -1153,6 +1177,7 @@ class Encoder(GalileoBase):
         t_m: torch.Tensor,
         st_m: torch.Tensor,
     ):
+        """apply_mask_and_average_tokens_per_patch."""
         s_t_x = rearrange(s_t_x, "b t_h t_w t c_g d -> b (t_h t_w) (t c_g) d")
         sp_x = rearrange(sp_x, "b t_h t_w c_g d -> b (t_h t_w) c_g d")
         # repeat time tokens over space
@@ -1177,6 +1202,7 @@ class Encoder(GalileoBase):
         return x_for_mean.sum(dim=2) / torch.sum(1 - m, -1, keepdim=True)
 
     def create_token_exit_ids(self, s_t_x, sp_x, t_x, st_x, token_exit_cfg):
+        """create_token_exit_ids."""
         exit_s_t = torch.zeros_like(s_t_x)
         exit_sp = torch.zeros_like(sp_x)
         exit_t = torch.zeros_like(t_x)
@@ -1212,6 +1238,7 @@ class Encoder(GalileoBase):
         token_exit_cfg: dict | None = None,
         add_layernorm_on_exit: bool = True,
     ):
+        """Forward."""
         (
             s_t_x,
             sp_x,
@@ -1261,6 +1288,10 @@ class Encoder(GalileoBase):
 
     @classmethod
     def load_from_folder(cls, folder: Path, device: torch.device):
+        """Load an encoder from a folder.
+
+        Folder must contain the encoder weights and the config file.
+        """
         if not (folder / CONFIG_FILENAME).exists():
             all_files_in_folder = [f.name for f in folder.glob("*")]
             raise ValueError(
@@ -1288,6 +1319,7 @@ class Encoder(GalileoBase):
 
 
 class Decoder(GalileoBase):
+    """Decoder."""
     cross_attn = True
 
     def __init__(
@@ -1302,6 +1334,7 @@ class Decoder(GalileoBase):
         learnable_channel_embeddings: bool = False,
         output_embedding_size: int | None = None,
     ):
+        """Init Decoder."""
         super().__init__(
             decoder_embedding_size,
             depth,
@@ -1331,6 +1364,7 @@ class Decoder(GalileoBase):
         self.apply(self._init_weights)
 
     def add_masks(self, s_t_x, sp_x, t_x, st_x, s_t_m, sp_m, t_m, st_m):
+        """Add mask tokens to the sequence."""
         def to_kept_boolean(m: torch.Tensor):
             # returns a mask where 1 indicates the value should be decoded
             # (i.e. was 2) and 0 elsewhere
@@ -1367,6 +1401,7 @@ class Decoder(GalileoBase):
 
     @staticmethod
     def split_x_y(tokens, mask):
+        """split_x_y."""
         org_mask_dtype = mask.dtype
         # https://stackoverflow.com/a/68621610/2332296
         # move all non-masked values to the front of their rows
@@ -1399,6 +1434,7 @@ class Decoder(GalileoBase):
 
     @staticmethod
     def combine_x_y(x, y, x_mask, y_mask, indices):
+        """combine_x_y."""
         # multiply by mask to zero out, then add
         B, T = indices.shape[0], indices.shape[1]
         D = x.shape[-1]
@@ -1422,6 +1458,7 @@ class Decoder(GalileoBase):
         patch_size,
         input_res,
     ):
+        """apply_attn."""
         _, h, w, t, s_t_c_g, _ = s_t_x.shape
         sp_c_g, t_c_g, st_c_g = sp_x.shape[3], t_x.shape[-2], st_x.shape[-2]
         s_t_x, sp_x, t_x, st_x = self.apply_encodings(
@@ -1458,6 +1495,7 @@ class Decoder(GalileoBase):
         patch_size: int | None = None,
         input_resolution_m: int | None = BASE_GSD,
     ):
+        """Forward."""
         s_t_x = self.encoder_to_decoder_embed(self.input_norm(s_t_x))
         sp_x = self.encoder_to_decoder_embed(self.input_norm(sp_x))
         t_x = self.encoder_to_decoder_embed(self.input_norm(t_x))
@@ -1552,6 +1590,7 @@ class Decoder(GalileoBase):
 
 
 class GalileoWrapper(nn.Module):
+    """GalileoWrapper."""
     def __init__(
         self,
         pretrained_path: Path,
@@ -1559,6 +1598,7 @@ class GalileoWrapper(nn.Module):
         month: int = 6,
         add_layernorm_on_exit: bool = True,
     ):
+        """Init GalileoWrapper."""
         super().__init__()
         self.encoder = Encoder.load_from_folder(pretrained_path)
         self.dim = self.encoder.embedding_size
@@ -1596,6 +1636,7 @@ class GalileoWrapper(nn.Module):
         s1: torch.Tensor | None = None,
         months: torch.Tensor | None = None,
     ):
+        """Preproccess."""
         # images should have shape (b h w c) or (b h w t c)
         # TODO: mask out imputed indices
         s_t_channels = []
@@ -1696,6 +1737,7 @@ class GalileoWrapper(nn.Module):
         pooling: PoolingType = PoolingType.MEAN,
         spatial_pool: bool = False,
     ):
+        """Forward."""
         s_t_channels = []
         if x.sentinel1 is not None:
             s_t_channels += self.s_t_channels_s1
