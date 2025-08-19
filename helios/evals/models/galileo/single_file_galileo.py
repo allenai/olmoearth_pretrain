@@ -20,6 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from olmo_core.config import Config
+from olmo_core.utils import get_default_device
 from torch import Tensor, vmap
 from torch.jit import Final
 from upath import UPath
@@ -1603,7 +1604,7 @@ class GalileoWrapper(nn.Module):
     ):
         """Init GalileoWrapper."""
         super().__init__()
-        self.encoder = Encoder.load_from_folder(pretrained_path)
+        self.encoder = Encoder.load_from_folder(pretrained_path, device=get_default_device())
         self.dim = self.encoder.embedding_size
         self.patch_size = patch_size
         self.grid_size: int | None = None
