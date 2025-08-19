@@ -74,6 +74,22 @@ def loop_through_params():
                 }
 
 
+# TODO: Need to add filtering sentinel 1 data
+
+def get_dino_v3_args():
+    """Get the dino v3 arguments."""
+    # DATASET ARGS + NORM METHOD ARGS
+    dino_v3_args = dataset_args
+    dino_v3_args += " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NORM_YES_CLIP_3_STD_INT"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return dino_v3_args
+
+
+
 def main():
     """Run the full evaluation sweep or just the defaults."""
     parser = argparse.ArgumentParser()
@@ -96,6 +112,11 @@ def main():
         "--dry_run",
         action="store_true",
         help="If set, only print the commands that would be run",
+    )
+    parser.add_argument(
+        "--dino_v3",
+        action="store_true",
+        help="If set, use the dino v3 normalization settings",
     )
     args, extra_cli = parser.parse_known_args()
 
@@ -149,11 +170,15 @@ def main():
         base_run_name = f"{parent_dir}_{step_num}_defaults"
         run_name = base_run_name
 
+        if args.dino_v3:
+            cmd_args = get_dino_v3_args()
+        else:
+            cmd_args = ""
         cmd = (
             f"TRAIN_SCRIPT_PATH={module_path} {launch_command} scripts/run_all_evals/all_evals.py "
             f"{sub_command} {run_name} {cluster} --launch.priority=high "
             # TODO: Make a debugging mode
-            f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.enabled=False --trainer.callbacks.wandb.project={project_name}{extra}"
+            f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.enabled=False --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
         )
         logger.info(cmd)
         subprocess.run(cmd, shell=True, check=True)  # nosec
@@ -170,7 +195,10 @@ def main():
             run_name = base_run_name
             cmd_args = lr_args.format(arg=lr)
             cmd_args += pooling_args.format(arg=pooling_type)
-            if norm_mode == "dataset":
+
+            if args.dino_v3:
+                cmd_args += get_dino_v3_args()
+            elif norm_mode == "dataset":
                 cmd_args += dataset_args
             elif norm_mode == "helios":
                 cmd_args += helios_args

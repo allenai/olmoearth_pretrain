@@ -234,7 +234,6 @@ class GeobenchDataset(Dataset):
             x = x * 10_000
         # Normalize using the downstream task's normalization stats
         if not self.norm_stats_from_pretrained:
-            print(f"Normalizing with {self.norm_method}")
             x = torch.tensor(normalize_bands(x, self.mean, self.std, self.norm_method))
         # check if label is an object or a number
         if not (isinstance(label, int) or isinstance(label, list)):

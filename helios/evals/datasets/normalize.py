@@ -72,6 +72,7 @@ def normalize_bands(
             min_value = means - 3 * stds
             max_value = means + 3 * stds
         elif method == NormMethod.NORM_YES_CLIP_2_STD or method == NormMethod.NORM_YES_CLIP_2_STD_INT:
+            # during pretraining we clip at 2 stds
             min_value = means - 2 * stds
             max_value = means + 2 * stds
         else:

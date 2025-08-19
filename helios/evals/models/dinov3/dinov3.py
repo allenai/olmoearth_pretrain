@@ -54,9 +54,6 @@ HELIOS_LANDSAT_RGB_BANDS = [
     Modality.LANDSAT.band_order.index(b) for b in ["B4", "B3", "B2"]
 ]
 
-REPO_DIR = "/weka/dfive-default/helios/models/dinov3/repo"
-CHECKPOINT_DIR = "/weka/dfive-default/helios/models/dinov3/checkpoints"
-
 
 
 class DINOv3(nn.Module):
@@ -138,7 +135,13 @@ class DINOv3(nn.Module):
             elif modality == "landsat":
                 data_i = data_i[:, HELIOS_LANDSAT_RGB_BANDS, :, :]
 
-            new_height = self.patch_size if original_height == 1 else 224
+            # If it is greater than 224 Caleb R comment says don;t resize
+            if original_height > 224:
+                new_height = original_height
+            elif original_height <= 224 and original_height > 1:
+                new_height = 224
+            else:
+                new_height = 1
             resize_transform = make_resize_transform(new_height)
             data_i = resize_transform(data_i)
             if self.apply_imagenet_normalization:

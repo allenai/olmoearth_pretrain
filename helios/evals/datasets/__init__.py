@@ -28,6 +28,23 @@ class EvalDatasetPartition(StrEnum):
     TRAIN_020X = "0.20x_train"
     TRAIN_050X = "0.50x_train"
 
+# Supported Modalities per Eval Dataset
+# TODO: Add more datasets
+EVAL_DATASET_TO_SUPPORTED_MODALITIES = {
+    "m-forestnet": [Modality.LANDSAT.name],
+    "m-eurosat": [Modality.SENTINEL2_L2A.name],
+    "m-bigearthnet": [Modality.SENTINEL2_L2A.name],
+    "m-so2sat": [Modality.SENTINEL2_L2A.name],
+    "m-brick-kiln": [Modality.SENTINEL2_L2A.name],
+    "mados": [Modality.SENTINEL2_L2A.name],
+    "pastis": [Modality.SENTINEL2_L2A.name, Modality.Sentinel1.name],
+    "sickle": [Modality.LANDSAT.name, Modality.Sentinel1.name, Modality.SENTINEL2_L2A.name],
+    "m-sa-crop-type": [Modality.SENTINEL2_L2A.name],
+    "m-cashew-plant": [Modality.SENTINEL2_L2A.name],
+    "cropharvest_Togo_12": [Modality.SENTINEL2_L2A.name, Modality.Sentinel1.name],
+    "cropharvest_People's Republic of China_6": [Modality.SENTINEL2_L2A.name, Modality.Sentinel1.name],
+    "sen1floods11": [Modality.Sentinel1.name],
+}
 
 def get_eval_dataset(
     eval_dataset: str,
