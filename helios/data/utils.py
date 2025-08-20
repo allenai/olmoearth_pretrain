@@ -159,3 +159,109 @@ def plot_modality_data_distribution(modality: str, modality_data: dict) -> plt.F
         ax.grid(True, linestyle="--", alpha=0.5)
     fig.tight_layout()
     return fig
+
+
+def haversine(a, b, radius=6_371_000.0):
+    """Compute the haversine distance between two points.
+
+    Parameters
+    ----------
+    a, b : sequence of two floats
+        Latitude and longitude in degrees.
+    radius : float
+        Sphere radius in metres.
+
+    Returns
+    -------
+    float
+        Great circle distance between a and b on a sphere.
+    """
+    lat1, lon1 = map(math.radians, a)
+    lat2, lon2 = map(math.radians, b)
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    sdlat2 = math.sin(dlat / 2.0) ** 2
+    sdlon2 = math.sin(dlon / 2.0) ** 2
+    alpha = sdlat2 + math.cos(lat1) * math.cos(lat2) * sdlon2
+    # guard numeric
+    alpha = min(1.0, max(0.0, alpha))
+    return 2.0 * radius * math.asin(math.sqrt(alpha))
+
+
+def nearest_haversine(latlon, N, return_indices=False, chunk_size=None, radius=6_371_000.0):
+    """Find, for each point, the N nearest other points by haversine distance.
+
+    Args:
+        latlon: [lat_deg, lon_deg] for M points.
+        N: Number of nearest neighbors to return (excludes the point itself).
+        return_indices: If True, also return the indices of those neighbors.
+        chunk_size: If None, process all rows at once (needs ~M*M memory).
+            Otherwise, process rows in blocks of this size to reduce memory.
+        radius: Earth radius in meters.
+
+    Returns:
+        dists: Distances (meters) to the N_eff closest *other* points, sorted asc per row.
+        idx: Indices of those neighbors in the original array (only if return_indices=True).
+
+    Notes:
+        - If N >= M, this returns N_eff = M-1 neighbors (can't include self).
+        - Duplicate coordinates across different rows are allowed and will yield 0m distances.
+    """
+    latlon = np.asarray(latlon, dtype=np.float64)
+    if latlon.ndim != 2 or latlon.shape[1] != 2:
+        raise ValueError("latlon must be an array of shape (M, 2) [lat_deg, lon_deg].")
+
+    M = latlon.shape[0]
+    N_eff = int(min(max(M - 1, 0), N))
+    if M == 0 or N_eff == 0:
+        return (np.empty((M, 0)), np.empty((M, 0), dtype=int)) if return_indices else np.empty((M, 0))
+
+    # Radians + some precomputations
+    lat = np.deg2rad(latlon[:, 0])
+    lon = np.deg2rad(latlon[:, 1])
+    cos_lat = np.cos(lat)  # (M,)
+
+    if chunk_size is None:
+        chunk_size = M
+
+    dists_out = np.empty((M, N_eff), dtype=np.float64)
+    idx_out   = np.empty((M, N_eff), dtype=np.int64) if return_indices else None
+
+    for i0 in range(0, M, chunk_size):
+        i1 = min(M, i0 + chunk_size)
+        L = i1 - i0
+
+        lat_b = lat[i0:i1][:, None]  # (L, 1)
+        lon_b = lon[i0:i1][:, None]  # (L, 1)
+
+        dlat = lat_b - lat[None, :]  # (L, M), broadcast
+        dlon = lon_b - lon[None, :]  # (L, M), broadcast
+
+        # Haversine
+        sdlat2 = np.sin(0.5 * dlat) ** 2
+        sdlon2 = np.sin(0.5 * dlon) ** 2
+        a = sdlat2 + (np.cos(lat[i0:i1])[:, None] * cos_lat[None, :]) * sdlon2
+        np.clip(a, 0.0, 1.0, out=a)  # numeric guard
+        dist = 2.0 * radius * np.arcsin(np.sqrt(a))  # (L, M)
+
+        # Exclude self (set to +inf on the diagonal rows that correspond to original indices)
+        rows = np.arange(L)
+        cols = np.arange(i0, i1)
+        dist[rows, cols] = np.inf
+
+        # Select N_eff smallest per row without full sort
+        # argpartition puts the N_eff smallest into [:, :N_eff] in arbitrary order
+        part_idx = np.argpartition(dist, N_eff - 1, axis=1)[:, :N_eff]
+        sel_d = np.take_along_axis(dist, part_idx, axis=1)
+
+        # Now sort those N_eff per row
+        order = np.argsort(sel_d, axis=1)
+        sel_d_sorted = np.take_along_axis(sel_d, order, axis=1)
+
+        dists_out[i0:i1, :] = sel_d_sorted
+
+        if return_indices:
+            part_idx_sorted = np.take_along_axis(part_idx, order, axis=1)
+            idx_out[i0:i1, :] = part_idx_sorted
+
+    return (dists_out, idx_out) if return_indices else dists_out
