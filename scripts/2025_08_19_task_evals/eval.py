@@ -46,7 +46,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2025_08_05_finetune_evals"
+    WANDB_PROJECT = 'helios-debug' #"2025_08_05_finetune_evals"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = HeliosCheckpointerConfig(work_dir=common.save_folder)
@@ -70,6 +70,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(5),
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="m_forestnet",
         ),
         "m_eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
@@ -80,6 +81,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(5),
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="m_eurosat",
         ),
         "m_bigearthnet": DownstreamTaskConfig(
             dataset="m-bigearthnet",
@@ -90,6 +92,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(5),
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="m_bigearthnet",
         ),
         "m_so2sat": DownstreamTaskConfig(
             dataset="m-so2sat",
@@ -100,6 +103,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(5),
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="m_so2sat",
         ),
         "m_brick_kiln": DownstreamTaskConfig(
             dataset="m-brick-kiln",
@@ -110,6 +114,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(5),
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="m_brick_kiln",
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
@@ -122,6 +127,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(10),
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="mados",
         ),
         "sen1floods11": DownstreamTaskConfig(
             dataset="sen1floods11",
@@ -134,6 +140,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(10),
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="sen1floods11",
         ),
         "sickle_sentinel1": DownstreamTaskConfig(
             dataset="sickle",
@@ -148,6 +155,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             epochs=50,
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="sickle_sentinel1",
         ),
         "sickle_landsat": DownstreamTaskConfig(
             dataset="sickle",
@@ -162,6 +170,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             epochs=50,
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="sickle_landsat",
         ),
         "sickle_sentinel1_landsat": DownstreamTaskConfig(
             dataset="sickle",
@@ -176,6 +185,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             epochs=50,
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="sickle_sentinel1_landsat",
         ),
         "m_sa_crop_type": DownstreamTaskConfig(
             dataset="m-sa-crop-type",
@@ -188,6 +198,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(10),
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="m_sa_crop_type",
         ),
         "m_cashew_plant": DownstreamTaskConfig(
             dataset="m-cashew-plant",
@@ -200,6 +211,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(10),
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="m_cashew_plant",
         ),
         "pastis_sentinel2": DownstreamTaskConfig(
             dataset="pastis",
@@ -214,6 +226,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             epochs=50,
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="pastis_sentinel2",
         ),
         "pastis_sentinel1": DownstreamTaskConfig(
             dataset="pastis",
@@ -228,6 +241,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             epochs=50,
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="pastis_sentinel1",
         ),
         "pastis_sentinel1_sentinel2": DownstreamTaskConfig(
             dataset="pastis",
@@ -242,6 +256,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             epochs=50,
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="pastis_sentinel1_sentinel2",
         ),
         "breizhcrops": DownstreamTaskConfig(
             dataset="breizhcrops",
@@ -257,39 +272,42 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             epochs=50,
             use_task_embeds=True,
             task_embed_path=task_embed_path,
+            name="breizhcrops",
         ),
-        "cropharvest_Togo_12": DownstreamTaskConfig(
-            dataset="cropharvest_Togo_12",
-            embedding_batch_size=128 // factor,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(20),
-            input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
-            patch_size=1,
-            eval_mode="linear_probe",
-            probe_lr=0.1,
-            epochs=50,
-            use_task_embeds=True,
-            task_embed_path=task_embed_path,
-        ),
+        # "cropharvest_Togo_12": DownstreamTaskConfig(
+        #     dataset="cropharvest_Togo_12",
+        #     embedding_batch_size=128 // factor,
+        #     num_workers=2,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     eval_interval=Duration.epochs(20),
+        #     input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        #     patch_size=1,
+        #     eval_mode="linear_probe",
+        #     probe_lr=0.1,
+        #     epochs=50,
+        #     use_task_embeds=True,
+        #     task_embed_path=task_embed_path,
+        #     name="cropharvest_Togo_12",
+        # ),
         # example of "in season" cropland mapping - 6 indicates only the
         # first 6 timesteps are passed to the model
-        "cropharvest_People's Republic of China_6": DownstreamTaskConfig(
-            dataset="cropharvest_People's Republic of China_6",
-            embedding_batch_size=128 // factor,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.epochs(20),
-            input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
-            patch_size=1,
-            eval_mode="linear_probe",
-            probe_lr=0.1,
-            epochs=50,
-            use_task_embeds=True,
-            task_embed_path=task_embed_path,
-        ),
+        # "cropharvest_People's Republic of China_6": DownstreamTaskConfig(
+        #     dataset="cropharvest_People's Republic of China_6",
+        #     embedding_batch_size=128 // factor,
+        #     num_workers=2,
+        #     pooling_type=PoolingType.MEAN,
+        #     norm_stats_from_pretrained=True,
+        #     eval_interval=Duration.epochs(20),
+        #     input_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        #     patch_size=1,
+        #     eval_mode="linear_probe",
+        #     probe_lr=0.1,
+        #     epochs=50,
+        #     use_task_embeds=True,
+        #     task_embed_path=task_embed_path,
+        #     name="cropharvest_People's Republic of China_6",
+        # ),
     }
     trainer_config = (
         TrainerConfig(
