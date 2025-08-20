@@ -341,7 +341,6 @@ class RankLoss(Loss):
         """
         all_preds, all_masks = predictions.flatten_tokens_and_masks()
         all_targets = targets.flatten_tokens_and_masks()[0]
-        print(all_preds.shape)
 
         preds = [
             all_preds[i][all_masks[i] == MaskValue.DECODER.value]
@@ -359,9 +358,7 @@ class RankLoss(Loss):
 
         for b in range(len(preds)):
             cossim = preds[b] @ targs[b].T
-            print(cossim.shape)
             pos = cossim.diagonal()
-            print(pos.shape)
 
             min_sim = torch.min(pos.unsqueeze(1), pos)
             margin = torch.max(torch.zeros_like(min_sim), min_sim)
