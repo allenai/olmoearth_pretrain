@@ -361,17 +361,18 @@ class RankLoss(Loss):
             pos = cossim.diagonal()
 
             min_sim = torch.min(pos.unsqueeze(1), pos)
-            margin = torch.max(torch.zeros_like(min_sim), min_sim)
-            diff = torch.max(cossim - margin, torch.zeros_like(min_sim))
+            # margin = torch.max(torch.zeros_like(min_sim), min_sim)
+            # diff = torch.max(cossim - margin, torch.zeros_like(min_sim))
 
+            diff = cossim - min_sim
             if diff.numel() == 0:
                 continue
 
             # Self similarity
-            batch_loss = (1 - pos).sum()
+            # batch_loss = (1 - pos).sum()
 
             # Other similarity
-            batch_loss += diff.sum()
+            batch_loss = diff.sum()
 
             loss += batch_loss / diff.numel()
 
