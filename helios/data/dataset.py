@@ -767,10 +767,11 @@ class HeliosDataset(Dataset):
         """Normalize the image."""
         # Try computed strategy first, if it fails, try predefined strategy
         # TODO: we can also make modality norm strategy configurable later
-        try:
-            return self.normalizer_computed.normalize(modality, image)
-        except Exception:
-            return self.normalizer_predefined.normalize(modality, image)
+        return self.normalizer_predefined.normalize(modality, image)
+        # try:
+        #     return self.normalizer_computed.normalize(modality, image)
+        # except Exception:
+        #     return self.normalizer_predefined.normalize(modality, image)
 
     def _fill_missing_timesteps(
         self,
