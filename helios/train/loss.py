@@ -361,10 +361,10 @@ class RankLoss(Loss):
             pos = cossim.diagonal()
 
             min_sim = torch.min(pos.unsqueeze(1), pos)
-            # margin = torch.max(torch.zeros_like(min_sim), min_sim)
-            # diff = torch.max(cossim - margin, torch.zeros_like(min_sim))
+            margin = torch.max(0.2 * torch.ones_like(min_sim), min_sim)
+            diff = torch.max(0.2 + cossim - margin, torch.zeros_like(min_sim))
+            diff.fill_diagonal_(0)
 
-            diff = cossim - min_sim
             if diff.numel() == 0:
                 continue
 
