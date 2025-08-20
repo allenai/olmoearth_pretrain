@@ -114,7 +114,7 @@ def build_train_module_config(
 ) -> ContrastiveLatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     # scheduler = CosWithWarmup(warmup_steps=8000)
-    scheduler = ConstantWithWarmup(warmup_steps=8000, value=0.0001)
+    scheduler = ConstantWithWarmup(warmup_steps=8000)
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         rank_microbatch_size=64,
