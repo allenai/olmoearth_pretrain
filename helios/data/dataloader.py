@@ -445,15 +445,12 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
     def __init__(self, data_loader: HeliosDataLoader):
         """Initialize the IterableDatasetWrapper."""
         self.data_loader = data_loader
-        self.rng = get_rng(data_loader.seed + data_loader.epoch + data_loader.dp_rank)
+        workers = data_loader.num_workers or 1
         self.rngs = [
             get_rng(
-                data_loader.seed
-                + data_loader.epoch
-                + data_loader.dp_rank * data_loader.num_workers
-                + i
+                data_loader.seed + data_loader.epoch + data_loader.dp_rank * workers + i
             )
-            for i in range(data_loader.num_workers)
+            for i in range(workers)
         ]
 
     def _get_batch_item_params_iterator(
@@ -470,11 +467,11 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
         patch_size_array = np.array(patch_size_list)
         hw_p_to_sample_array = np.array(hw_p_to_sample)
         instances_processed = 0
+
         # TODO: We need to maintain state and reproducibility here
-        if self.worker_info is not None:
-            rng = self.rngs[self.worker_info.id]
-        else:
-            rng = self.rng
+        worker_id = self.worker_info.id if self.worker_info is not None else 0
+        rng = self.rngs[worker_id]
+
         for idx in indices:
             if instances_processed % rank_batch_size == 0:
                 patch_size = rng.choice(patch_size_array)
