@@ -102,6 +102,7 @@ def build_train_module_config(
                 "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
                 "min_decoded_bandsets": None,
+                "select_encoded_decoded_bandset_modality_consistent": True,
                 # "only_decode_modalities": [
                 #     Modality.OPENSTREETMAP_RASTER.name,
                 #     Modality.WORLDCOVER.name,

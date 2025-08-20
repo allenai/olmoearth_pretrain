@@ -833,7 +833,7 @@ class HeliosDataset(Dataset):
                     k: v[()]
                     for k, v in h5file.items()
                     if k in self.training_modalities
-                    or k in [Modality.LATLON.name, "timestamps"]
+                    or k in ["timestamps"]
                 }
 
                 # Log the dtype for each modality
