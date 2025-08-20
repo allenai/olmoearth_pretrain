@@ -1,5 +1,6 @@
 """Code for configuring and running Helios experiments."""
 
+import datetime
 import logging
 import sys
 from collections.abc import Callable
@@ -262,7 +263,7 @@ class SubCmd(StrEnum):
         ):
             prepare_cli_environment()
         elif self == SubCmd.train:
-            prepare_training_environment()
+            prepare_training_environment(timeout=datetime.timedelta(seconds=300))
         elif self == SubCmd.train_single:
             prepare_training_environment(backend=None)
         else:
