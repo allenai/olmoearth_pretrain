@@ -1,6 +1,6 @@
 {
   "layers": {
-    "era5": {
+    "era5_10": {
       "band_sets": [
         {
           "bands": [
@@ -11,7 +11,8 @@
             "10m-v-component-of-wind",
             "total-precipitation"
           ],
-          "dtype": "float32"
+          "dtype": "float32",
+          "zoom_offset": -8
         }
       ],
       "data_source": {

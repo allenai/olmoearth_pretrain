@@ -96,6 +96,22 @@ WorldCereal can also be processed on one machine. As with OpenStreetMap we use 1
     rslearn dataset ingest --root $DATASET_PATH --group res_10 --workers 16 --no-use-initial-job
     rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 16 --no-use-initial-job
 
+ERA5 can also be processed on one machine:
+
+    cp data/rslearn_dataset_configs/config_era5.json $DATASET_PATH/config.json
+    rslearn dataset prepare --root $DATASET_PATH --group res_160 --workers 64
+    rslearn dataset ingest --root $DATASET_PATH --group res_160 --workers 64 --no-use-initial-job
+    rslearn dataset materialize --root $DATASET_PATH --group res_160 --workers 64 --no-use-initial-job
+
+For 10 m/pixel window/tiling ERA5 data:
+
+    cp data/rslearn_dataset_configs/config_era5_10.json $DATASET_PATH/config.json
+    rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64
+    rslearn dataset ingest --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
+    rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
+
+
+
 The steps above can be performed in a Beaker session:
 
 ```
@@ -130,6 +146,8 @@ Now we convert the data to Helios format.
     python -m helios.dataset_creation.rslearn_to_helios.cdl --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.worldpop --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.wri_canopy_height_map --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
+    python -m helios.dataset_creation.rslearn_to_helios.era5 --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
+    python -m helios.dataset_creation.rslearn_to_helios.era5_10 --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
 
 
 Landsat
@@ -215,6 +233,10 @@ into the per-modality CSVs:
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality cdl
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality worldpop
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality wri_canopy_height_map
+    python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality era5 --time_span two_week
+    python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality era5 --time_span year
+    python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality era5_10 --time_span two_week
+    python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality era5_10 --time_span year
 
 
 Create H5s

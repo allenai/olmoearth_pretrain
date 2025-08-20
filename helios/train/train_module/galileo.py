@@ -223,7 +223,8 @@ class GalileoTrainModule(HeliosTrainModule):
 
         NOTE: For contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
-        self.update_target_encoder()
+        if not dry_run:
+            self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
 

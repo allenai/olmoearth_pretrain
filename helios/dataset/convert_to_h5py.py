@@ -16,7 +16,14 @@ from olmo_core.config import Config
 from tqdm import tqdm
 from upath import UPath
 
-from helios.data.constants import IMAGE_TILE_SIZE, Modality, ModalitySpec, TimeSpan
+from helios.data.constants import (
+    IMAGE_TILE_SIZE,
+    SENTINEL1_NODATA,
+    YEAR_NUM_TIMESTEPS,
+    Modality,
+    ModalitySpec,
+    TimeSpan,
+)
 from helios.data.utils import convert_to_db
 from helios.dataset.parse import parse_helios_dataset
 from helios.dataset.sample import (
@@ -28,6 +35,8 @@ from helios.dataset.sample import (
 from helios.dataset.utils import get_modality_specs_from_names
 
 logger = logging.getLogger(__name__)
+
+mp.set_start_method("spawn", force=True)
 
 
 @dataclass
@@ -47,6 +56,10 @@ class ConvertToH5pyConfig(Config):
         None  # Chunking configuration. None: disabled. True: auto (data_item.shape). tuple: specific shape.
     )
     tile_size: int = IMAGE_TILE_SIZE
+    # Processes may go to sleep state if we use too many processes
+    reserved_cores: int = (
+        10  # Number of cores to reserve and not used for multiprocessing
+    )
     required_modality_names: list[str] = field(
         default_factory=lambda: list()
     )  # Samples without all of these are skipped
@@ -64,6 +77,7 @@ class ConvertToH5pyConfig(Config):
             shuffle=self.shuffle,
             chunk_options=self.chunk_options,
             tile_size=self.tile_size,
+            reserved_cores=self.reserved_cores,
             required_modalities=get_modality_specs_from_names(
                 self.required_modality_names
             ),
@@ -84,12 +98,14 @@ class ConvertToH5py:
         self,
         tile_path: UPath,
         supported_modalities: list[ModalitySpec],
+        multiprocessed_sample_processing: bool = True,
         multiprocessed_h5_creation: bool = True,
         compression: str | None = None,
         compression_opts: int | None = None,
         shuffle: bool | None = None,
         chunk_options: tuple | bool | None = None,
         tile_size: int = IMAGE_TILE_SIZE,
+        reserved_cores: int = 10,
         required_modalities: list[ModalitySpec] = [],
     ) -> None:
         """Initialize the ConvertToH5py object.
@@ -97,6 +113,7 @@ class ConvertToH5py:
         Args:
             tile_path: The path to the tile directory, containing csvs for each modality and tiles
             supported_modalities: The list of modalities to convert to h5py that will be available in this dataset
+            multiprocessed_sample_processing: Whether to process samples in parallel
             multiprocessed_h5_creation: Whether to create the h5py files in parallel
             compression: Compression algorithm to use (None, "gzip", "lzf", "szip")
             compression_opts: Compression level (0-9 for gzip), only used with gzip compression
@@ -108,11 +125,13 @@ class ConvertToH5py:
                                 it's adjusted (padded with full dimension sizes or truncated).
             tile_size: The size of the tile to split the image into. It is based on the IMAGE_TILE_SIZE, so
                 higher-resolution modalities like NAIP would be split up correspondingly.
+            reserved_cores: The number of cores to reserve and not use for multiprocessing.
             required_modalities: Samples without all of these modalities will be skipped.
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
         logger.info(f"Supported modalities: {self.supported_modalities}")
+        self.multiprocessed_sample_processing = multiprocessed_sample_processing
         self.multiprocessed_h5_creation = multiprocessed_h5_creation
         self.compression = compression
         self.compression_opts = compression_opts
@@ -128,6 +147,7 @@ class ConvertToH5py:
         # Tile_size_split_factor is the factor by which the tile size is split into subtiles
         self.num_subtiles_per_dim = IMAGE_TILE_SIZE // tile_size
         self.num_subtiles = self.num_subtiles_per_dim**2
+        self.reserved_cores = reserved_cores
 
     @property
     def compression_settings_suffix(self) -> str:
@@ -164,8 +184,10 @@ class ConvertToH5py:
         """Process a sample into an h5 file."""
         i, (sublock_index, sample) = index_sample_tuple
         h5_file_path = self._get_h5_file_path(i)
-        if h5_file_path.exists():
-            return
+        # Comment out the exist check because if somehow the h5 generation is interrupted
+        # When rerun the process, there're maybe some broken h5 files (partially written, invalid)
+        # if h5_file_path.exists():
+        #     return
         self._create_h5_file(sample, h5_file_path, sublock_index)
 
     def create_h5_dataset(self, samples: list[tuple[int, SampleInformation]]) -> None:
@@ -173,7 +195,7 @@ class ConvertToH5py:
         total_sample_indices = len(samples)
 
         if self.multiprocessed_h5_creation:
-            num_processes = max(1, mp.cpu_count() - 4)
+            num_processes = max(1, mp.cpu_count() - self.reserved_cores)
             logger.info(f"Creating H5 dataset using {num_processes} processes")
             with mp.Pool(processes=num_processes) as pool:
                 # Process samples in parallel and track progress with tqdm
@@ -244,24 +266,24 @@ class ConvertToH5py:
             np.save(f, latlons)
 
     def _find_longest_timestamps_array(
-        self, multi_temporal_timestamps_dict: dict[ModalitySpec, np.ndarray]
+        self, spacetime_varying_modalities: dict[ModalitySpec, np.ndarray]
     ) -> np.ndarray:
         """Find the timestamps for the sample with the most timestamps."""
-        return multi_temporal_timestamps_dict[
+        return spacetime_varying_modalities[
             max(
-                multi_temporal_timestamps_dict,
-                key=lambda k: len(multi_temporal_timestamps_dict[k]),
+                spacetime_varying_modalities,
+                key=lambda k: len(spacetime_varying_modalities[k]),
             )
         ]
 
     def _create_missing_timesteps_masks(
         self,
-        multi_temporal_timestamps_dict: dict[ModalitySpec, np.ndarray],
+        spacetime_varying_modalities: dict[ModalitySpec, np.ndarray],
         longest_timestamps_array: np.ndarray,
     ) -> dict[str, np.ndarray]:
         """Create missing timesteps masks for each modality."""
         missing_timesteps_masks_data: dict[str, np.ndarray] = {}
-        for mod_spec, mod_timestamps in multi_temporal_timestamps_dict.items():
+        for mod_spec, mod_timestamps in spacetime_varying_modalities.items():
             # Create a boolean mask indicating presence of each timestamp from longest_timestamps_array
             # in the current modality's timestamps.
             # np.all(..., axis=1) checks for full row match (day, month, year)
@@ -276,6 +298,64 @@ class ConvertToH5py:
             missing_timesteps_masks_data[mod_spec.name] = mask
         return missing_timesteps_masks_data
 
+    def _remove_bad_modalities_from_sample(
+        self, sample: SampleInformation
+    ) -> SampleInformation:
+        """Remove bad modalities from the sample."""
+        modalities_to_remove = set()
+        for modality in sample.modalities:
+            sample_modality = sample.modalities[modality]
+            image = self.load_sample(sample_modality, sample)
+            # Remove modalities that contains any nan
+            if np.any(np.isnan(image)):
+                logger.warning(
+                    f"Image for modality {modality.name} contains NaN values, removing this modality"
+                )
+                modalities_to_remove.add(modality)
+            # Remove ERA5 and OSM Raster if they are all zeros
+            if (
+                modality == Modality.ERA5_10
+                or modality == Modality.OPENSTREETMAP_RASTER
+            ) and np.all(image == 0):
+                logger.warning(
+                    f"Image for modality {modality.name} is all zeros, removing this modality"
+                )
+                modalities_to_remove.add(modality)
+            # Remove S1 if it contains any nodata values
+            if modality == Modality.SENTINEL1 and np.any(image == SENTINEL1_NODATA):
+                logger.warning(
+                    f"Image for modality {modality.name} contains nodata values, removing this modality"
+                )
+                modalities_to_remove.add(modality)
+        for modality in modalities_to_remove:
+            del sample.modalities[modality]
+        return sample
+
+    def _process_samples(
+        self, samples: list[SampleInformation]
+    ) -> list[SampleInformation]:
+        """Process samples before the filtering process."""
+        total_sample_indices = len(samples)
+        if self.multiprocessed_sample_processing:
+            num_processes = max(1, mp.cpu_count() - self.reserved_cores)
+            logger.info(f"Processing samples using {num_processes} processes")
+            with mp.Pool(processes=num_processes) as pool:
+                # Process samples in parallel and track progress with tqdm
+                processed_samples = list(
+                    tqdm(
+                        pool.imap(self._remove_bad_modalities_from_sample, samples),
+                        total=total_sample_indices,
+                        desc="Processing samples",
+                    )
+                )
+        else:
+            processed_samples = []
+            for i, sample in enumerate(samples):
+                logger.info(f"Processing sample {i}")
+                processed_sample = self._remove_bad_modalities_from_sample(sample)
+                processed_samples.append(processed_sample)
+        return processed_samples
+
     def _create_h5_file(
         self, sample: SampleInformation, h5_file_path: UPath, sublock_index: int
     ) -> dict[str, Any]:
@@ -283,12 +363,22 @@ class ConvertToH5py:
         sample_dict = {}
         sample_dict["latlon"] = sample.get_latlon().astype(np.float32)
         multi_temporal_timestamps_dict = sample.get_timestamps()
-        longest_timestamps_array = self._find_longest_timestamps_array(
-            multi_temporal_timestamps_dict
-        )
 
+        # Compute longest timestamps from only spacetime varying modalities
+        # This is used to deal with the case that when ERA5 is available, it always has full 12 months
+        # But other spacetime varying modalities may have way less months
+        spacetime_varying_modalities = {
+            modality: timestamps
+            for modality, timestamps in multi_temporal_timestamps_dict.items()
+            if modality.is_spacetime_varying
+        }
+        # Note that with the longest timestamps array, we cut all modalities to this range
+        # Anything outside of this range is considered missing
+        longest_timestamps_array = self._find_longest_timestamps_array(
+            spacetime_varying_modalities
+        )
         missing_timesteps_masks_data = self._create_missing_timesteps_masks(
-            multi_temporal_timestamps_dict, longest_timestamps_array
+            spacetime_varying_modalities, longest_timestamps_array
         )
 
         sample_dict["timestamps"] = longest_timestamps_array
@@ -297,8 +387,9 @@ class ConvertToH5py:
         for modality in sample.modalities:
             sample_modality = sample.modalities[modality]
             image = self.load_sample(sample_modality, sample)
-            # Convert Sentinel1 data to dB
+
             if modality == Modality.SENTINEL1:
+                # Convert Sentinel1 data to dB
                 image = convert_to_db(image)
 
             if modality.is_spatial:
@@ -316,6 +407,7 @@ class ConvertToH5py:
                 logger.info(f"Image shape: {image.shape}")
                 image = image[row : row + tile_size, col : col + tile_size, ...]
                 logger.info(f"Image shape after slicing: {image.shape}")
+
             sample_dict[modality.name] = image
 
         # w+b as sometimes metadata needs to be read as well for different chunking/compression settings
@@ -470,8 +562,15 @@ class ConvertToH5py:
 
         if image.ndim == 4:
             modality_data = rearrange(image, "t c h w -> h w t c")
-        else:
+        elif image.ndim == 3:
             modality_data = rearrange(image, "c h w -> h w c")
+        elif image.ndim == 2:
+            # It is already in the correct shape (t, c)
+            modality_data = image
+        else:
+            raise ValueError(
+                f"Unexpected image shape {image.shape} for modality {sample_modality.modality.name}"
+            )
         return modality_data
 
     def _filter_samples(
@@ -479,8 +578,12 @@ class ConvertToH5py:
     ) -> list[SampleInformation]:
         """Filter samples to adjust to the HeliosSample format."""
         logger.info(f"Number of samples before filtering: {len(samples)}")
+
+        # Remove bad modalities from samples
+        # This ensures that the metadata is consistent with the actual data saved in h5
+        processed_samples = self._process_samples(samples)
         filtered_samples = []
-        for sample in samples:
+        for sample in processed_samples:
             if not all(
                 modality in self.supported_modalities
                 for modality in sample.modalities
@@ -504,18 +607,33 @@ class ConvertToH5py:
                 )
                 continue
 
-            multitemporal_modalities = [
-                modality for modality in sample.modalities if modality.is_multitemporal
-            ]
+            multi_temporal_timestamps_dict = sample.get_timestamps()
+            spacetime_varying_modalities = {
+                modality: timestamps
+                for modality, timestamps in multi_temporal_timestamps_dict.items()
+                if modality.is_spacetime_varying
+            }
 
-            # If there's no multitemporal modalities, skip the sample
-            if not len(multitemporal_modalities):
+            if len(spacetime_varying_modalities) == 0:
                 logger.info(
-                    "Skipping sample because it has no multitemporal modalities"
+                    "Skipping sample because it has no spacetime varying modalities"
+                )
+                continue
+
+            # To align with ERA5, which either missing (for ocean) or has 12 timesteps
+            # We require at least one spacetime varying modality to have 12 timesteps
+            # e.g., for Presto dataset, only 43 samples not meeting this requirement
+            longest_timestamps_array = self._find_longest_timestamps_array(
+                spacetime_varying_modalities
+            )
+            if len(longest_timestamps_array) < YEAR_NUM_TIMESTEPS:
+                logger.info(
+                    "Skipping sample because it does not have at least 12 timesteps"
                 )
                 continue
 
             filtered_samples.append(sample)
+
         logger.info("Distribution of samples after filtering:")
         self._log_modality_distribution(filtered_samples)
         return filtered_samples

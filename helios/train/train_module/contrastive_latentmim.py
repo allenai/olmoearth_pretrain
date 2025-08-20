@@ -180,7 +180,8 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
 
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
-        self.update_target_encoder()
+        if not dry_run:
+            self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
@@ -247,15 +248,15 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                 del latent_a, latent_b
                 loss.backward()
 
+        if dry_run:
+            return
+
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
             total_batch_loss,
             ReduceType.mean,
         )
         self.log_regularization(total_batch_reg)
-
-        if dry_run:
-            return
 
         del batch, batch_data  # In case this helps with memory utilization.
         del masked_batch_a, masked_batch_b

@@ -225,6 +225,17 @@ def load_image_for_sample(
                     raise ValueError(
                         f"expected tile to be square but width={raster.width} != height={raster.height}"
                     )
+                # If the modality does not vary in space (e.g., ERA5), we read the entire tile.
+                if not image_tile.modality.is_spatial:
+                    logger.debug(
+                        f"reading entire tile {fname} for modality {image_tile.modality.name}"
+                    )
+                    image: npt.NDArray = raster.read()
+                    # Remove spatial dimension since they're not needed.
+                    image = image.reshape(-1, len(band_set.bands))
+                    band_set_images.append(image)
+                    continue
+
                 # Assuming all tiles cover the same area as the resolution factor 16 tile
                 subtile_size = raster.width // factor
                 col_offset = subtile_size * (sample.grid_tile.col % factor)
@@ -238,7 +249,7 @@ def load_image_for_sample(
                     height=subtile_size,
                 )
                 logger.debug(f"reading window={rasterio_window} from {fname}")
-                image: npt.NDArray = raster.read(window=rasterio_window)
+                image: npt.NDArray = raster.read(window=rasterio_window)  # type: ignore
                 logger.debug(f"image.shape={image.shape}")
 
                 # And then for now resample it to the grid resolution.
