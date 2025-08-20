@@ -2,8 +2,13 @@
 
 import logging
 
+from olmo_core.config import DType
+from olmo_core.distributed.parallel.data_parallel import (
+    DataParallelConfig,
+    DataParallelType,
+)
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import WSD
+from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -20,10 +25,19 @@ from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
-from helios.evals.models import DINOv2Config
 from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
-from helios.nn.flexihelios import PoolingType
+from helios.internal.experiment import (
+    CommonComponents,
+    HeliosVisualizeConfig,
+    SubCmd,
+    main,
+)
+from helios.internal.utils import MODEL_SIZE_ARGS
+from helios.nn.flexihelios import (
+    EncoderConfig,
+    PoolingType,
+    PredictorConfig,
+)
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -41,9 +55,55 @@ MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
 
+def my_build_common_components(
+    script: str,
+    cmd: SubCmd,
+    run_name: str,
+    cluster: str,
+    overrides: list[str],
+) -> CommonComponents:
+    """Build the common components for an experiment."""
+    config = build_common_components(script, cmd, run_name, cluster, overrides)
+    config.training_modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.LANDSAT.name,
+        # Modality.WORLDCOVER.name,
+        # Modality.LATLON.name,
+        # Modality.SRTM.name,
+        # Modality.OPENSTREETMAP_RASTER.name,
+        # Modality.ERA5_10.name,
+    ]
+    return config
+
+
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_config = DINOv2Config()
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+    )
+    model_config = LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
     return model_config
 
 
@@ -51,38 +111,32 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    scheduler = WSD(
-        warmup=8000,
-        decay_steps=0,
-        decay_fraction=None,
-    )
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        rank_microbatch_size=64,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
+        rank_microbatch_size=64,
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "modality_cross_random",
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
-                "min_decoded_bandsets": 6,
-                "only_decode_modalities": [
-                    Modality.OPENSTREETMAP_RASTER.name,
-                    Modality.WORLDCOVER.name,
-                    Modality.SRTM.name,
-                ],
             }
         ),
         loss_config=LossConfig(
             loss_config={
-                "type": "patch_discrimination_new",
+                "type": "modality_patch_discrimination_new",
+                "tau": 0.1,
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        scheduler=scheduler,
+        scheduler=CosWithWarmup(warmup_steps=8000),
         ema_decay=(1.0, 1.0),
-        dp_config=None,  # FSDP is not supported for DINOv2
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
     )
 
 
@@ -95,7 +149,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         global_batch_size=512,
         token_budget=1500,
         prefetch_factor=4,
-        sampled_hw_p_list=list(range(5, 13)),
+        sampled_hw_p_list=list(range(5, 13)),  # try only temporal tokens
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
@@ -106,35 +160,30 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
     dataset_configs = [
-        # presto
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892",
-            training_modalities=common.training_modalities,
-            dataset_percentage=common.dataset_percentage,
-        ),
-        # # osm_sampling
+        # # presto
         # HeliosDatasetConfig(
-        #     h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
+        #     h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469728",
         #     training_modalities=common.training_modalities,
-        #     dataset_percentage=common.dataset_percentage,
         # ),
+        # osm_sampling
+        HeliosDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1138828",
+            training_modalities=common.training_modalities,
+        ),
         # # osmbig
         # HeliosDatasetConfig(
-        #     h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928",
+        #     h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1291656",
         #     training_modalities=common.training_modalities,
-        #     dataset_percentage=common.dataset_percentage,
         # ),
         # # presto_neighbor
         # HeliosDatasetConfig(
-        #     h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/3507748",
+        #     h5py_dir="/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/3507008",
         #     training_modalities=common.training_modalities,
-        #     dataset_percentage=common.dataset_percentage,
         # ),
         # # worldcover_sampling
         # HeliosDatasetConfig(
-        #     h5py_dir="/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/6370580",
+        #     h5py_dir="/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/5662848",
         #     training_modalities=common.training_modalities,
-        #     dataset_percentage=common.dataset_percentage,
         # ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
@@ -142,12 +191,12 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(75)
+    MAX_DURATION = Duration.epochs(300 * 200)
     METRICS_COLLECT_INTERVAL = 10
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "v0.2_sweep"
+    WANDB_PROJECT = "2025_07_21_era5_experiments"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -166,6 +215,28 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
+            eval_interval=Duration.steps(4000),
+        ),
+        "mados": DownstreamTaskConfig(
+            dataset="mados",
+            embedding_batch_size=128,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            probe_lr=0.01,
+            epochs=50,
+            eval_interval=Duration.steps(4000),
+        ),
+        "sen1floods11": DownstreamTaskConfig(
+            dataset="sen1floods11",
+            embedding_batch_size=128,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            epochs=50,
             eval_interval=Duration.steps(4000),
         ),
         "pastis": DownstreamTaskConfig(
@@ -225,7 +296,7 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
 
 if __name__ == "__main__":
     main(
-        common_components_builder=build_common_components,
+        common_components_builder=my_build_common_components,
         model_config_builder=build_model_config,
         train_module_config_builder=build_train_module_config,
         dataset_config_builder=build_dataset_config,
