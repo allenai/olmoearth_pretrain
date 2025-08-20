@@ -8,7 +8,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import CosWithWarmup, ConstantWithWarmup
+from olmo_core.optim.scheduler import ConstantWithWarmup
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -278,20 +278,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.steps(25000),
-    ),
-    "breizhcrops": DownstreamTaskConfig(
-        dataset="breizhcrops",
-        embedding_batch_size=128,
-        probe_batch_size=128,
-        num_workers=0,
-        pooling_type=PoolingType.MAX,
-        norm_stats_from_pretrained=True,
-        eval_interval=Duration.epochs(50),
-        patch_size=1,
-        eval_mode="linear_probe",
-        probe_lr=0.001,
-        epochs=50,
-    ),
+        ),
     }
     trainer_config = (
         TrainerConfig(
