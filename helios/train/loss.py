@@ -372,9 +372,9 @@ class RankLoss(Loss):
             batch_loss = (1 - pos).sum()
 
             # Other similarity
-            batch_loss += diff.sum()
+            # batch_loss += diff.sum()
 
-            loss += batch_loss / diff.numel()
+            loss += batch_loss / pos.numel()
 
         return loss
 
