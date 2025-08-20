@@ -369,10 +369,10 @@ class RankLoss(Loss):
                 continue
 
             # Self similarity
-            # batch_loss = (1 - pos).sum()
+            batch_loss = (1 - pos).sum()
 
             # Other similarity
-            batch_loss = diff.sum()
+            batch_loss += diff.sum()
 
             loss += batch_loss / diff.numel()
 
