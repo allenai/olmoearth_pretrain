@@ -348,6 +348,12 @@ class HeliosDataLoader(DataLoaderBase):
                 dtype=np.float32,
             )
             output_dict["worldpop"] = mock_worldpop
+        if Modality.WRI_CANOPY_HEIGHT_MAP.name in self.dataset.training_modalities:
+            mock_wri_canopy_height_map = rng.random(
+                (standard_hw, standard_hw, 1, Modality.WRI_CANOPY_HEIGHT_MAP.num_bands),
+                dtype=np.float32,
+            )
+            output_dict["wri_canopy_height_map"] = mock_wri_canopy_height_map
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))

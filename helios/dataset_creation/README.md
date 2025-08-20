@@ -73,9 +73,9 @@ ingesting since processing the PBF can use a lot of memory:
     rslearn dataset ingest --root $DATASET_PATH --group res_10 --workers 16 --no-use-initial-job
     rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
 
-WorldCover, SRTM, CDL, and WorldPop can also be processed on one machine:
+WorldCover, SRTM, CDL, WorldPop, WRI Canopy Height Map can also be processed on one machine:
 
-    cp data/rslearn_dataset_configs/config_{worldcover,srtm,cdl,worldpop}.json $DATASET_PATH/config.json
+    cp data/rslearn_dataset_configs/config_{worldcover,srtm,cdl,worldpop,wri_canopy_height_map}.json $DATASET_PATH/config.json
     rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64
     rslearn dataset ingest --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
     rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
@@ -129,6 +129,7 @@ Now we convert the data to Helios format.
     python -m helios.dataset_creation.rslearn_to_helios.worldcereal --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.cdl --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.worldpop --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
+    python -m helios.dataset_creation.rslearn_to_helios.wri_canopy_height_map --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
 
 
 Landsat
@@ -213,6 +214,7 @@ into the per-modality CSVs:
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality worldcereal
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality cdl
     python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality worldpop
+    python -m helios.dataset_creation.make_meta_summary --helios_path $HELIOS_PATH --modality wri_canopy_height_map
 
 
 Create H5s

@@ -99,6 +99,8 @@ class TokensAndMasks(NamedTuple):
     worldpop_mask: Tensor | None = None
     worldcereal: Tensor | None = None
     worldcereal_mask: Tensor | None = None
+    wri_canopy_height_map: Tensor | None = None
+    wri_canopy_height_map_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
