@@ -58,11 +58,11 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
+model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-
     model_config = LatentMIMConfig(
         encoder_config=EncoderConfig(
             embedding_size=model_size["encoder_embedding_size"],
@@ -105,12 +105,12 @@ def build_train_module_config(
         ),
         loss_config=LossConfig(
             loss_config={
-                "type": "patch_discrimination_new",
+                "type": "rankloss",
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        scheduler=ConstantWithWarmup(warmup=2000),
+        scheduler=ConstantWithWarmup(warmup=8000),
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
@@ -143,12 +143,12 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         dataset_configs=[
             # presto
             HeliosDatasetConfig(
-                h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892",
+                h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469728",
                 training_modalities=common.training_modalities,
             ),
             # osm_sampling
             HeliosDatasetConfig(
-                h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
+                h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152",
                 training_modalities=common.training_modalities,
             ),
         ]
@@ -189,7 +189,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                         num_workers=8,
                         pooling_type=PoolingType.MEAN,
                         norm_stats_from_pretrained=True,
-                        eval_interval=Duration.steps(4000),
+                        eval_interval=Duration.steps(5000),
                     ),
                     "pastis": DownstreamTaskConfig(
                         dataset="pastis",
@@ -199,9 +199,30 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                         pooling_type=PoolingType.MEAN,
                         norm_stats_from_pretrained=True,
                         probe_lr=0.1,
-                        eval_interval=Duration.steps(20000),
+                        eval_interval=Duration.steps(5000),
                         input_modalities=[Modality.SENTINEL2_L2A.name],
                         epochs=50,
+                    ),
+                    "mados": DownstreamTaskConfig(
+                        dataset="mados",
+                        embedding_batch_size=128,
+                        probe_batch_size=128,
+                        num_workers=8,
+                        pooling_type=PoolingType.MEAN,
+                        norm_stats_from_pretrained=False,
+                        probe_lr=0.01,
+                        epochs=50,
+                        eval_interval=Duration.steps(5000),
+                    ),
+                    "m_cashew_plant": DownstreamTaskConfig(
+                        dataset="m-cashew-plant",
+                        embedding_batch_size=32,
+                        probe_batch_size=8,
+                        num_workers=2,
+                        pooling_type=PoolingType.MEAN,
+                        norm_stats_from_pretrained=True,
+                        probe_lr=0.1,
+                        eval_interval=Duration.steps(5000),
                     ),
                 },
             ),

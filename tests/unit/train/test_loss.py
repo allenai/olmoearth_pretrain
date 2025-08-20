@@ -13,10 +13,34 @@ from helios.train.loss import (
     L2Loss,
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
+    RankLoss,
 )
 from helios.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
+
+
+def test_rank_loss() -> None:
+    """Just test that it runs as expected."""
+    b, t_h, t_w, t, d = 3, 4, 4, 2, 2
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.zeros((b, t_h, t_w, t)),
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.zeros((b, 1)),
+    )
+    loss = RankLoss()
+    loss_value = loss.compute(preds, targets)
+    # not very good! since they are all the same
+    # predictions and values
+    assert loss_value > 0.5
 
 
 def test_patch_disc_loss() -> None:

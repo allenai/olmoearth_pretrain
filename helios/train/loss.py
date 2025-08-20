@@ -264,6 +264,120 @@ class PatchDiscriminationLossNew(Loss):
         return self.weight * loss
 
 
+@LOSS_REGISTRY.register("smoothl1")
+class SmoothL1Loss(Loss):
+    """Loss function for L1 (mean average error)."""
+
+    name = "SmoothL1"
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute L1 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+        pred = all_preds[all_masks == MaskValue.DECODER.value]
+        target = all_targets[all_masks == MaskValue.DECODER.value]
+
+        return F.smooth_l1_loss(pred, target)
+
+
+@LOSS_REGISTRY.register("cossim")
+class CosineSimilarityLoss(Loss):
+    """Loss function for cosine similarity."""
+
+    name = "CosineSimilarity"
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute L1 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+        pred = all_preds[all_masks == MaskValue.DECODER.value]
+        target = all_targets[all_masks == MaskValue.DECODER.value]
+
+        return F.cosine_embedding_loss(
+            pred, target, torch.ones(pred.shape[0], device=pred.device)
+        )
+
+
+@LOSS_REGISTRY.register("rankloss")
+class RankLoss(Loss):
+    """Loss function for rank cosine similarity."""
+
+    name = "RankLoss"
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute L1 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+        print(all_preds.shape)
+
+        preds = [
+            all_preds[i][all_masks[i] == MaskValue.DECODER.value]
+            for i in range(all_preds.shape[0])
+        ]
+        targs = [
+            all_targets[i][all_masks[i] == MaskValue.DECODER.value]
+            for i in range(all_targets.shape[0])
+        ]
+
+        preds = [F.normalize(pred, p=2, dim=-1) for pred in preds]
+        targs = [F.normalize(target, p=2, dim=-1) for target in targs]
+
+        loss = torch.zeros([], device=all_preds.device)
+
+        for b in range(len(preds)):
+            cossim = preds[b] @ targs[b].T
+            print(cossim.shape)
+            pos = cossim.diagonal()
+            print(pos.shape)
+
+            min_sim = torch.min(pos.unsqueeze(1), pos)
+            margin = torch.max(torch.zeros_like(min_sim), min_sim)
+            diff = torch.max(cossim - margin, torch.zeros_like(min_sim))
+
+            # Self similarity
+            batch_loss = (1 - pos).sum()
+
+            # Other similarity
+            batch_loss += diff.sum()
+
+            loss += batch_loss / diff.numel()
+
+        return loss
+
+
 @LOSS_REGISTRY.register("modality_patch_discrimination_new")
 class ModalityPatchDiscriminationLossNew(Loss):
     """Loss function for per-modality patch discrimination task.
