@@ -710,5 +710,13 @@
       "std": 100,
       "var": 2500
     }
+  },
+  "wri_canopy_height_map": {
+    "B1": {
+      "count": 100,
+      "mean": 10,
+      "std": 5,
+      "var": 25
+    }
   }
 }
