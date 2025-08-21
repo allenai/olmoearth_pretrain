@@ -23,7 +23,7 @@ from upath import UPath
 
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
-from helios.data.dataloader import HeliosDataLoaderConfig
+from helios.data.geo_aware_data_loader import GeoAwareDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
 from helios.internal.experiment import (
@@ -150,11 +150,11 @@ def build_train_module_config(
     )
 
 
-def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
+def build_dataloader_config(common: CommonComponents) -> GeoAwareDataLoaderConfig:
     """Build the dataloader config for an experiment."""
-    # things should be set during building
-
-    return HeliosDataLoaderConfig(
+    return GeoAwareDataLoaderConfig(
+        min_neighbor_radius=1000.0, # 1 km
+        max_neighbor_radius=100_000.0, # 100 km
         num_workers=16,
         global_batch_size=512,
         token_budget=1500,

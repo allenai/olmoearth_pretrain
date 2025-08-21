@@ -169,12 +169,8 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
             batch_indices.extend(random_points)
             # select the rbs // 2  ring neighbors randomly
             # THIS ACTUALLY SHOULD BE THE GLOBAL INDICES
-            import time
-            start_time = time.time()
             # For now we pull the ring neighbors from the global indices
             ring_neighbors = self.data_loader.get_per_instance_donut_indices(anchor_idx, global_indices)
-            end_time = time.time()
-            logger.info(f"Time taken to get ring neighbors: {end_time - start_time} seconds")
             # Remove any ring neighbors that are already in the batch
             # TODO: do thi with np.intersect1d
             ring_neighbors = [n for n in ring_neighbors if n not in batch_indices]
