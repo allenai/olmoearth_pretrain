@@ -27,7 +27,7 @@ from upath import UPath
 from helios.data.concat import HeliosConcatDataset
 from helios.data.constants import IMAGE_TILE_SIZE, Modality
 from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
-from helios.data.dataloader import HeliosDataLoader, _IterableDatasetWrapper
+from helios.data.dataloader import HeliosDataLoader, _IterableDatasetWrapper, HeliosDataLoaderConfig
 from helios.data.utils import nearest_haversine
 
 logger = logging.getLogger(__name__)
@@ -75,9 +75,6 @@ class GeoAwareDataLoader(HeliosDataLoader):
         donut_mask = (neighbor_distances >= self.min_neighbor_radius) & (neighbor_distances <= self.max_neighbor_radius)
         donut_indices = neighbor_indices[donut_mask]
         return donut_indices
-
-
-
 
 
 
@@ -179,34 +176,22 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
 
 
 @dataclass
-class HeliosDataLoaderConfig(Config):
+class GeoAwareDataLoaderConfig(HeliosDataLoaderConfig):
     """Configuration for the HeliosDataLoader."""
 
-    work_dir: str
-    global_batch_size: int
-    min_patch_size: int
-    max_patch_size: int
-    sampled_hw_p_list: list[int]
-    seed: int
-    token_budget: int | None = None  # No subsetting if None
-    shuffle: bool = True
-    num_workers: int = 0
-    prefetch_factor: int | None = None
-    target_device_type: str | None = None
-    drop_last: bool = True
-    num_dataset_repeats_per_epoch: int = 1
+    num_neighbors: int = 10000
+    min_neighbor_radius: float = 1000.0
+    max_neighbor_radius: float = 100_000.0
 
     def validate(self) -> None:
         """Validate the configuration."""
-        if self.work_dir is None:
-            raise ValueError("Work directory is not set")
-        if self.min_patch_size > self.max_patch_size:
-            raise ValueError("min_patch_size must be less than max_patch_size")
-
-    @property
-    def work_dir_upath(self) -> UPath:
-        """Get the work directory."""
-        return UPath(self.work_dir)
+        super().validate()
+        if self.num_neighbors < 0:
+            raise ValueError("num_neighbors must be greater than 0")
+        if self.min_neighbor_radius < 0:
+            raise ValueError("min_neighbor_radius must be greater than 0")
+        if self.max_neighbor_radius < self.min_neighbor_radius:
+            raise ValueError("max_neighbor_radius must be greater than min_neighbor_radius")
 
     def build(
         self,
@@ -217,24 +202,12 @@ class HeliosDataLoaderConfig(Config):
         """Build the HeliosDataLoader."""
         self.validate()
         dataset.prepare()
-
-        return HeliosDataLoader(
-            dataset=dataset,
-            work_dir=self.work_dir_upath,
-            global_batch_size=self.global_batch_size,
-            dp_world_size=get_world_size(dp_process_group),
-            dp_rank=get_rank(dp_process_group),
-            fs_local_rank=get_fs_local_rank(),
-            seed=self.seed,
-            shuffle=self.shuffle,
-            num_workers=self.num_workers,
-            prefetch_factor=self.prefetch_factor,
-            target_device_type=self.target_device_type or get_default_device().type,
-            collator=collator,
-            drop_last=self.drop_last,
-            min_patch_size=self.min_patch_size,
-            max_patch_size=self.max_patch_size,
-            sampled_hw_p_list=self.sampled_hw_p_list,
-            token_budget=self.token_budget,
-            num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
-        )
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        kwargs["dp_world_size"] = get_world_size(dp_process_group)
+        kwargs["dp_rank"] = get_rank(dp_process_group)
+        kwargs["fs_local_rank"] = get_fs_local_rank()
+        kwargs["target_device_type"] = self.target_device_type or get_default_device().type
+        kwargs["collator"] = collator
+        kwargs["work_dir"] = self.work_dir_upath # replacing the work_dir with the upath
+        kwargs["dataset"] = dataset
+        return GeoAwareDataLoader(**kwargs)
