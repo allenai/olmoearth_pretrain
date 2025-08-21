@@ -190,18 +190,17 @@ class TaskLoRALinear(nn.Module):
         vec_b = self.gen_b(task_eff)  # (B_eff, rnk*in)
         a = vec_a.view(b_eff, self.out_features, rnk)  # (B_eff, out, rnk)
         b = vec_b.view(b_eff, rnk, self.in_features)  # (B_eff, rnk, in)
-        delta = torch.bmm(a, b)  # (B_eff, out, in)
 
         # LoRA delta path: y_delta = x_drop @ ΔW^T per sample
+        # Don't materialize the full delta matrix since it's too large
         x2d_drop = F.dropout(x2d, p=self.dropout, training=self.training)
-        y_delta = torch.einsum("bi,boi->bo", x2d_drop, delta)  # (B_eff, out)
+        tmp = torch.bmm(x2d_drop.unsqueeze(1), b.transpose(1, 2)).squeeze(1)   # (B_eff, rnk)
+        y_delta = torch.bmm(tmp.unsqueeze(1), a.transpose(1, 2)).squeeze(1)    # (B_eff, out)
         print(
             "DELTA NORM",
             y_delta.norm(),
             "BASE NORM",
             base_out.norm(),
-            "WEIGHT NORM",
-            delta.norm(),
         )
 
         y = base_out.reshape(-1, self.out_features) + self.scaling * y_delta
