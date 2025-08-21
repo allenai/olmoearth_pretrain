@@ -13,6 +13,9 @@ from helios.train.train_module.contrastive_latentmim import (
 from helios.train.train_module.galileo import GalileoTrainModule
 from helios.train.train_module.latent_mim import LatentMIMTrainModule
 from helios.train.train_module.mae import MAETrainModule
+from helios.train.train_module.supervised_contrastive_latentmim import (
+    SupervisedContrastiveLatentMIMTrainModule,
+)
 from helios.train.train_module.supervised_latent_mim import (
     SupervisedLatentMIMTrainModule,
 )
@@ -39,7 +42,8 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
             MAETrainModule
             | LatentMIMTrainModule
             | ContrastiveLatentMIMTrainModule
-            | SupervisedLatentMIMTrainModule,
+            | SupervisedLatentMIMTrainModule
+            | SupervisedContrastiveLatentMIMTrainModule,
         ):
             # Unwrap if the model is in DDP
             self._encoder_ratio = train_module.masking_strategy.encode_ratio
