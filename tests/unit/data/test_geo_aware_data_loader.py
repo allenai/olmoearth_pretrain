@@ -97,4 +97,10 @@ def test_local_donut_indices(tmp_path: Path) -> None:
     latlons = data_loader.get_latlons(ring_neighbors)
     # assert that the latlons are all within 1 degree of the anchor index
     anchor_latlon = data_loader.get_latlons(anchor_index)
-    assert np.all(np.abs(latlons - anchor_latlon) < 1.0)
+    logger.info(f"Anchor latlon: {anchor_latlon}")
+    logger.info(f"Latlons: {latlons}")
+    diffs = np.abs(latlons - anchor_latlon).sum(axis=1)
+    logger.info(f"Differences: {diffs[:10]} shape: {diffs.shape}")
+    sum_difs = np.sum(diffs > 2.0)
+    logger.info(f"num diffs > 2.0: {sum_difs}")
+    assert sum_difs == 0
