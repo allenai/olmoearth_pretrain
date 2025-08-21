@@ -489,6 +489,9 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
     def __iter__(self) -> Iterator[HeliosSample]:
         """Iterate over the dataset."""
         global_indices = self.data_loader.get_global_indices()
+        # I need to get the global ring neighbor indices
+        # I need to filter to the local shard so I am only passing the neighbor indices to the anchor points
+        # in the local shard
         indices = self.data_loader._get_local_instance_indices(global_indices)
         instance_iterator = (
             self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)

@@ -161,6 +161,8 @@ def plot_modality_data_distribution(modality: str, modality_data: dict) -> plt.F
     return fig
 
 
+# TODO: make earth radius a constant
+# TODO: is this haversine helper even used?
 def haversine(a, b, radius=6_371_000.0):
     """Compute the haversine distance between two points.
 
