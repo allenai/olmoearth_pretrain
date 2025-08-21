@@ -65,17 +65,6 @@ class GeoAwareDataLoader(HeliosDataLoader):
         """Get the latlons for the given indices."""
         return self.dataset.latlon_distribution[indices]
 
-    def get_local_donut_indices(self, local_indices: np.ndarray) -> np.ndarray:
-        """Get the local donut indices."""
-        latlons = self.get_latlons(local_indices)
-        # Get an index where for a given local index, I can easily find all the indexes where get item returns a neighbor
-        neighbor_distances, neighbor_indices = nearest_haversine(latlons, self.num_neighbors, chunk_size=1000,return_indices=True)
-
-        # Filter the indices to the min and max neighbor radius
-        donut_mask = (neighbor_distances >= self.min_neighbor_radius) & (neighbor_distances <= self.max_neighbor_radius)
-        donut_indices = neighbor_indices[donut_mask]
-        return donut_indices
-
     # .11 to get all ring indices does this matter
     def get_per_instance_donut_indices(self, anchor_index: np.ndarray, global_indices: np.ndarray) -> np.ndarray:
         """Get the per instance donut indices."""
@@ -118,6 +107,7 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
             self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
             for idx, patch_size, sampled_hw_p in self._get_batch_item_params_iterator(
                 indices,
+                global_indices,
                 self.data_loader.patch_sizes,
                 self.data_loader.sampled_hw_p_list,
                 self.data_loader.rank_batch_size,
@@ -136,6 +126,7 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
     def _get_batch_item_params_iterator(
         self,
         indices: np.ndarray,
+        global_indices: np.ndarray,
         patch_size_list: list[int],
         hw_p_to_sample: list[int],
         rank_batch_size: int,
@@ -154,8 +145,6 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
         # select an anchor index
         # select the rbs // 2 ring neighbors
         # select the rbs // 2 - 1 random points
-        # move on to the next batch
-        # I s
         random_batch_group_size = rank_batch_size // 2
         num_anchor_points = len(indices) // random_batch_group_size
         for i in range(num_anchor_points):
@@ -182,7 +171,8 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
             # THIS ACTUALLY SHOULD BE THE GLOBAL INDICES
             import time
             start_time = time.time()
-            ring_neighbors = self.data_loader.get_per_instance_donut_indices(anchor_idx, indices)
+            # For now we pull the ring neighbors from the global indices
+            ring_neighbors = self.data_loader.get_per_instance_donut_indices(anchor_idx, global_indices)
             end_time = time.time()
             logger.info(f"Time taken to get ring neighbors: {end_time - start_time} seconds")
             # Remove any ring neighbors that are already in the batch

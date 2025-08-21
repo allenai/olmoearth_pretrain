@@ -95,6 +95,6 @@ def test_local_donut_indices(tmp_path: Path) -> None:
     logger.info(f"Ring neighbors: {ring_neighbors}")
     # get the latlons of each of them
     latlons = data_loader.get_latlons(ring_neighbors)
-    logger.info(f"Latlons: {latlons}")
-    fig = plot_latlon_distribution(latlons, f"latlon distribution_ring_neighbors_{uuid}", s=1.0)
-    fig.savefig(f"./latlon_distribution_ring_neighbors_{uuid}.png")
+    # assert that the latlons are all within 1 degree of the anchor index
+    anchor_latlon = data_loader.get_latlons(anchor_index)
+    assert np.all(np.abs(latlons - anchor_latlon) < 1.0)
