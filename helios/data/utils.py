@@ -1,11 +1,13 @@
 """Utils for the data module."""
 
 import math
-
+import logging
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.pyplot as plt
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def to_cartesian(lat: float, lon: float) -> np.ndarray:
@@ -189,81 +191,152 @@ def haversine(a, b, radius=6_371_000.0):
     alpha = min(1.0, max(0.0, alpha))
     return 2.0 * radius * math.asin(math.sqrt(alpha))
 
+import numpy as np
 
-def nearest_haversine(latlon, N, return_indices=False, chunk_size=None, radius=6_371_000.0):
-    """Find, for each point, the N nearest other points by haversine distance.
+def nearest_haversine(
+    latlon_a,
+    N=None,
+    latlon_b=None,
+    return_indices=False,
+    chunk_size=None,
+    radius=6_371_000.0,
+):
+    """
+    Haversine distances with optional k-NN selection and optional second set.
 
     Args:
-        latlon: [lat_deg, lon_deg] for M points.
-        N: Number of nearest neighbors to return (excludes the point itself).
-        return_indices: If True, also return the indices of those neighbors.
-        chunk_size: If None, process all rows at once (needs ~M*M memory).
-            Otherwise, process rows in blocks of this size to reduce memory.
+        latlon_a: array-like, shape (M, 2) with [lat_deg, lon_deg].
+        N: None for all pairwise distances, or int for N nearest neighbors per row of A.
+        latlon_b: optional array-like, shape (K, 2). If None, uses latlon_a.
+        return_indices: if True, also return column indices (into B; into A if B is None).
+        chunk_size: process rows of A in blocks of this size (reduces peak memory).
         radius: Earth radius in meters.
 
     Returns:
-        dists: Distances (meters) to the N_eff closest *other* points, sorted asc per row.
-        idx: Indices of those neighbors in the original array (only if return_indices=True).
-
-    Notes:
-        - If N >= M, this returns N_eff = M-1 neighbors (can't include self).
-        - Duplicate coordinates across different rows are allowed and will yield 0m distances.
+        If N is None (all pairs):
+            dists: (M, K) float array of all pairwise distances.
+            idx:   (M, K) int array of column indices (0..K-1), if return_indices=True.
+        If N is an int (k-NN per row):
+            dists: (M, N_eff) float array of nearest distances (ascending per row).
+            idx:   (M, N_eff) int array of corresponding column indices (into B/A).
+            Note: when latlon_b is None (within-set), self is excluded.
+                  N_eff = min(N, K) for cross-set, or min(N, M-1) for within-set.
     """
-    latlon = np.asarray(latlon, dtype=np.float64)
-    if latlon.ndim != 2 or latlon.shape[1] != 2:
-        raise ValueError("latlon must be an array of shape (M, 2) [lat_deg, lon_deg].")
+    latlon_a = np.asarray(latlon_a, dtype=np.float64)
+    if latlon_a.ndim != 2 or latlon_a.shape[1] != 2:
+        raise ValueError("latlon_a must have shape (M, 2) [lat_deg, lon_deg].")
 
-    M = latlon.shape[0]
-    N_eff = int(min(max(M - 1, 0), N))
-    if M == 0 or N_eff == 0:
-        return (np.empty((M, 0)), np.empty((M, 0), dtype=int)) if return_indices else np.empty((M, 0))
+    if latlon_b is None:
+        latlon_b = latlon_a
+        same_set = True
+    else:
+        latlon_b = np.asarray(latlon_b, dtype=np.float64)
+        if latlon_b.ndim != 2 or latlon_b.shape[1] != 2:
+            raise ValueError("latlon_b must have shape (K, 2) [lat_deg, lon_deg].")
+        same_set = False
 
-    # Radians + some precomputations
-    lat = np.deg2rad(latlon[:, 0])
-    lon = np.deg2rad(latlon[:, 1])
-    cos_lat = np.cos(lat)  # (M,)
+    M = latlon_a.shape[0]
+    K = latlon_b.shape[0]
+
+    # Handle empties early
+    if M == 0 or K == 0:
+        if N is None:
+            out = np.empty((M, K), dtype=np.float64)
+            return (out, np.empty((M, K), dtype=np.int64)) if return_indices else out
+        # k-NN case with zero columns
+        out = np.empty((M, 0), dtype=np.float64)
+        return (out, np.empty((M, 0), dtype=np.int64)) if return_indices else out
+
+    # Convert to radians
+    lat_a = np.deg2rad(latlon_a[:, 0])
+    lon_a = np.deg2rad(latlon_a[:, 1])
+    lat_b = np.deg2rad(latlon_b[:, 0])
+    lon_b = np.deg2rad(latlon_b[:, 1])
+
+    cos_lat_b = np.cos(lat_b)
 
     if chunk_size is None:
         chunk_size = M
 
+    if N is None:
+        # All pairwise distances
+        dists_out = np.empty((M, K), dtype=np.float64)
+        # Precompute a reusable column index row if indices requested
+        idx_cols = None
+        if return_indices:
+            idx_cols = np.arange(K, dtype=np.int64)
+
+        for i0 in range(0, M, chunk_size):
+            i1 = min(M, i0 + chunk_size)
+            L = i1 - i0
+
+            lat_blk = lat_a[i0:i1][:, None]      # (L, 1)
+            lon_blk = lon_a[i0:i1][:, None]      # (L, 1)
+            dlat = lat_blk - lat_b[None, :]      # (L, K)
+            dlon = lon_blk - lon_b[None, :]      # (L, K)
+
+            sdlat2 = np.sin(0.5 * dlat) ** 2
+            sdlon2 = np.sin(0.5 * dlon) ** 2
+            a = sdlat2 + (np.cos(lat_a[i0:i1])[:, None] * cos_lat_b[None, :]) * sdlon2
+            np.clip(a, 0.0, 1.0, out=a)
+            dist = 2.0 * radius * np.arcsin(np.sqrt(a))
+
+            dists_out[i0:i1, :] = dist
+
+        if return_indices:
+            # Each row simply maps to columns 0..K-1
+            idx_out = np.broadcast_to(idx_cols, (M, K)).copy()
+            return dists_out, idx_out
+        return dists_out
+
+    # ---- k-NN selection per row ----
+    if same_set:
+        N_eff = int(min(max(M - 1, 0), N))
+    else:
+        N_eff = int(min(K, N))
+
+    if N_eff <= 0:
+        out = np.empty((M, 0), dtype=np.float64)
+        return (out, np.empty((M, 0), dtype=np.int64)) if return_indices else out
+
     dists_out = np.empty((M, N_eff), dtype=np.float64)
-    idx_out   = np.empty((M, N_eff), dtype=np.int64) if return_indices else None
+    idx_out = np.empty((M, N_eff), dtype=np.int64) if return_indices else None
 
     for i0 in range(0, M, chunk_size):
         i1 = min(M, i0 + chunk_size)
         L = i1 - i0
 
-        lat_b = lat[i0:i1][:, None]  # (L, 1)
-        lon_b = lon[i0:i1][:, None]  # (L, 1)
+        lat_blk = lat_a[i0:i1][:, None]        # (L, 1)
+        lon_blk = lon_a[i0:i1][:, None]        # (L, 1)
+        dlat = lat_blk - lat_b[None, :]        # (L, K)
+        dlon = lon_blk - lon_b[None, :]        # (L, K)
 
-        dlat = lat_b - lat[None, :]  # (L, M), broadcast
-        dlon = lon_b - lon[None, :]  # (L, M), broadcast
-
-        # Haversine
         sdlat2 = np.sin(0.5 * dlat) ** 2
         sdlon2 = np.sin(0.5 * dlon) ** 2
-        a = sdlat2 + (np.cos(lat[i0:i1])[:, None] * cos_lat[None, :]) * sdlon2
-        np.clip(a, 0.0, 1.0, out=a)  # numeric guard
-        dist = 2.0 * radius * np.arcsin(np.sqrt(a))  # (L, M)
+        a = sdlat2 + (np.cos(lat_a[i0:i1])[:, None] * cos_lat_b[None, :]) * sdlon2
+        np.clip(a, 0.0, 1.0, out=a)
+        dist = 2.0 * radius * np.arcsin(np.sqrt(a))  # (L, K)
 
-        # Exclude self (set to +inf on the diagonal rows that correspond to original indices)
-        rows = np.arange(L)
-        cols = np.arange(i0, i1)
-        dist[rows, cols] = np.inf
+        # Exclude self for within-set
+        if same_set:
+            rows = np.arange(L)
+            cols = np.arange(i0, i1)  # global column indices
+            dist[rows, cols] = np.inf
 
-        # Select N_eff smallest per row without full sort
-        # argpartition puts the N_eff smallest into [:, :N_eff] in arbitrary order
-        part_idx = np.argpartition(dist, N_eff - 1, axis=1)[:, :N_eff]
-        sel_d = np.take_along_axis(dist, part_idx, axis=1)
+        # Argpartition to get N_eff smallest (unsorted)
+        part_idx = np.argpartition(dist, N_eff - 1, axis=1)[:, :N_eff]          # (L, N_eff)
+        sel_d = np.take_along_axis(dist, part_idx, axis=1)                      # (L, N_eff)
 
-        # Now sort those N_eff per row
+        # Sort those N_eff per row
         order = np.argsort(sel_d, axis=1)
-        sel_d_sorted = np.take_along_axis(sel_d, order, axis=1)
-
+        sel_d_sorted = np.take_along_axis(sel_d, order, axis=1)                 # (L, N_eff)
         dists_out[i0:i1, :] = sel_d_sorted
 
         if return_indices:
-            part_idx_sorted = np.take_along_axis(part_idx, order, axis=1)
+            part_idx_sorted = np.take_along_axis(part_idx, order, axis=1)       # (L, N_eff)
             idx_out[i0:i1, :] = part_idx_sorted
+
+    return (dists_out, idx_out) if return_indices else dists_out
+
 
     return (dists_out, idx_out) if return_indices else dists_out

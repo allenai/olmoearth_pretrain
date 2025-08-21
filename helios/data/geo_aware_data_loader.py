@@ -27,7 +27,7 @@ from upath import UPath
 from helios.data.concat import HeliosConcatDataset
 from helios.data.constants import IMAGE_TILE_SIZE, Modality
 from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
-from helios.data.dataloader import HeliosDataLoader, _IterableDatasetWrapper, HeliosDataLoaderConfig
+from helios.data.dataloader import HeliosDataLoader, _IterableDatasetWrapper, HeliosDataLoaderConfig, iter_batched
 from helios.data.utils import nearest_haversine
 
 logger = logging.getLogger(__name__)
@@ -69,12 +69,29 @@ class GeoAwareDataLoader(HeliosDataLoader):
         """Get the local donut indices."""
         latlons = self.get_latlons(local_indices)
         # Get an index where for a given local index, I can easily find all the indexes where get item returns a neighbor
-        neighbor_distances, neighbor_indices = nearest_haversine(latlons, self.num_neighbors, return_indices=True)
+        neighbor_distances, neighbor_indices = nearest_haversine(latlons, self.num_neighbors, chunk_size=1000,return_indices=True)
 
         # Filter the indices to the min and max neighbor radius
         donut_mask = (neighbor_distances >= self.min_neighbor_radius) & (neighbor_distances <= self.max_neighbor_radius)
         donut_indices = neighbor_indices[donut_mask]
         return donut_indices
+
+    # .11 to get all ring indices does this matter
+    def get_per_instance_donut_indices(self, anchor_index: np.ndarray, global_indices: np.ndarray) -> np.ndarray:
+        """Get the per instance donut indices."""
+        latlons = self.get_latlons(global_indices)
+        anchor_latlon = self.get_latlons(anchor_index)
+        # add new axis to anchor_latlon to make it 1, 2
+        anchor_latlon = anchor_latlon[np.newaxis, :]
+        logger.info(f"Anchor latlon: {anchor_latlon} shape: {anchor_latlon.shape}")
+        logger.info(f"Latlons shape: {latlons.shape}")
+        neighbor_distances, neighbor_indices = nearest_haversine(anchor_latlon, self.num_neighbors, latlon_b=latlons, return_indices=True)
+        # Filter the indices to the min and max neighbor radius
+        donut_mask = (neighbor_distances >= self.min_neighbor_radius) & (neighbor_distances <= self.max_neighbor_radius)
+        donut_indices = neighbor_indices[donut_mask]
+        return donut_indices
+
+
 
 
 
@@ -93,13 +110,12 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
         # I need to filter to the local shard so I am only passing the neighbor indices to the anchor points
         # in the local shard
         indices = self.data_loader._get_local_instance_indices(global_indices)
-        donut_indices = self.data_loader.get_local_donut_indices(indices)
+        # donut_indices = self.data_loader.get_local_donut_indices(indices)
         # TODO: now that this is self we may not need to pass as much in
         instance_iterator = (
             self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
             for idx, patch_size, sampled_hw_p in self._get_batch_item_params_iterator(
                 indices,
-                donut_indices,
                 self.data_loader.patch_sizes,
                 self.data_loader.sampled_hw_p_list,
                 self.data_loader.rank_batch_size,
@@ -118,7 +134,6 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
     def _get_batch_item_params_iterator(
         self,
         indices: np.ndarray,
-        donut_indices: np.ndarray,
         patch_size_list: list[int],
         hw_p_to_sample: list[int],
         rank_batch_size: int,
@@ -158,15 +173,22 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
             batch_indices.append(anchor_idx)
             # Use the next rbs // 2 - 1 locals as the global random points
             start_idx = 1 + local_idx_of_anchor
-            end_idx = start_idx + random_batch_group_size
+            end_idx = start_idx + random_batch_group_size - 1
             random_points = indices[start_idx:end_idx]
+            logger.info(f"num random points: {len(random_points)}")
             batch_indices.extend(random_points)
             # select the rbs // 2  ring neighbors randomly
-            ring_neighbors = donut_indices[local_idx_of_anchor]
+            # THIS ACTUALLY SHOULD BE THE GLOBAL INDICES
+            import time
+            start_time = time.time()
+            ring_neighbors = self.data_loader.get_per_instance_donut_indices(anchor_idx, indices)
+            end_time = time.time()
+            logger.info(f"Time taken to get ring neighbors: {end_time - start_time} seconds")
             # Remove any ring neighbors that are already in the batch
             # TODO: do thi with np.intersect1d
             ring_neighbors = [n for n in ring_neighbors if n not in batch_indices]
-            ring_neighbors = rng.choice(ring_neighbors, size=random_batch_group_size // 2)
+            ring_neighbors = rng.choice(ring_neighbors, size=random_batch_group_size)
+            logger.info(f"num ring neighbors: {len(ring_neighbors)}")
             batch_indices.extend(ring_neighbors)
             assert len(batch_indices) == rank_batch_size, f"Batch indices length is not equal to rank batch size got {len(batch_indices)} expected {rank_batch_size}"
             for idx in batch_indices:
