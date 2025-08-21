@@ -508,6 +508,7 @@ class Block(nn.Module):
         # Disable task MoE if index is not in task_moe_indices
         task_moe_kwargs = (task_moe_kwargs or {}).copy()
         self.use_task_moe = task_moe_kwargs.pop("use_task_moe", False)
+        self.replace_ffn = task_moe_kwargs.pop("replace_ffn", False)
         moe_indices = task_moe_kwargs.pop("task_moe_indices", [])
         if task_moe_kwargs.pop("index", None) not in moe_indices:
             self.use_task_moe = False
@@ -516,12 +517,13 @@ class Block(nn.Module):
             self.moe = SoftMoE(dim, **task_moe_kwargs)
             self.moe_proj = nn.Linear(dim * 2, dim, bias=False)
 
-        self.mlp = Mlp(
-            in_features=dim,
-            hidden_features=int(dim * mlp_ratio),
-            act_layer=act_layer,
-            drop=drop,
-        )
+        if not self.replace_ffn:
+            self.mlp = Mlp(
+                in_features=dim,
+                hidden_features=int(dim * mlp_ratio),
+                act_layer=act_layer,
+                drop=drop,
+            )
         self.ls2 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         )
@@ -573,12 +575,14 @@ class Block(nn.Module):
             )
         )
 
-        mlp_out = self.mlp(self.norm2(x))
-        if self.use_task_moe:
-            moe_out = self.moe(mlp_out, task_emb=task_emb)["outputs"]
-            print(f"MoE out norm: {moe_out.norm()}, mlp out norm: {mlp_out.norm()}")
+        x = self.norm2(x)
+        mlp_fn = self.moe if self.replace_ffn else self.mlp
+        mlp_out = mlp_fn(x)
+
+        if self.use_task_moe and not self.replace_ffn:
+            moe_out = self.moe(x, task_emb=task_emb)["outputs"]
             mlp_out = self.moe_proj(torch.concat([moe_out, mlp_out], dim=-1))
-            print(f"Post-proj norm: {mlp_out.norm()}")
+
         x = x + self.drop_path(self.ls2(mlp_out))
         return x
 

@@ -228,23 +228,28 @@ class RMSNorm(Module):
 # expert
 
 
-def FeedForward(dim: int, mult: int | float = 4, dropout: float = 0.0) -> nn.Sequential:
+def FeedForward(
+    dim: int, mult: int | float = 4, dropout: float = 0.0, out_dim: int | None = None
+) -> nn.Sequential:
     """Create a feedforward neural network.
 
     Args:
         dim: The input and output dimension.
         mult: The multiplier for the hidden dimension.
         dropout: The dropout rate.
+        out_dim: The output dimension. If None, the output dimension is the same as the input dimension.
 
     Returns:
         nn.Sequential: A feedforward network with GELU activation.
     """
     dim_hidden = int(dim * mult)
+    if out_dim is None:
+        out_dim = dim
     return nn.Sequential(
         nn.Linear(dim, dim_hidden),
         nn.GELU(),
         nn.Dropout(dropout),
-        nn.Linear(dim_hidden, dim),
+        nn.Linear(dim_hidden, out_dim),
     )
 
 
@@ -268,7 +273,7 @@ class GEGLU(Module):
 
 
 def GLUFeedForward(
-    dim: int, mult: int | float = 4, dropout: float = 0.0
+    dim: int, mult: int | float = 4, dropout: float = 0.0, out_dim: int | None = None
 ) -> nn.Sequential:
     """Create a feedforward neural network with GLU activation.
 
@@ -276,17 +281,19 @@ def GLUFeedForward(
         dim: The input and output dimension.
         mult: The multiplier for the hidden dimension.
         dropout: The dropout rate.
+        out_dim: The output dimension. If None, the output dimension is the same as the input dimension.
 
     Returns:
         nn.Sequential: A feedforward network with GLU activation.
     """
     dim_hidden = int(dim * mult * 2 / 3)
-
+    if out_dim is None:
+        out_dim = dim
     return nn.Sequential(
         nn.Linear(dim, dim_hidden * 2),
         GEGLU(),
         nn.Dropout(dropout),
-        nn.Linear(dim_hidden, dim),
+        nn.Linear(dim_hidden, out_dim),
     )
 
 
@@ -581,6 +588,8 @@ class SoftMoE(Module):
         use_layernorm: bool = False,
         add_noise: bool = False,
         noise_mult: float = 1.0,
+        compute_slots_from_task: bool = False,
+        use_task_as_weight_key: bool = False,
     ) -> None:
         """Initialize the SoftMoE module.
 
@@ -598,6 +607,8 @@ class SoftMoE(Module):
             use_layernorm: Whether to use LayerNorm instead of RMSNorm.
             add_noise: Whether to add Gumbel noise to the routing logits.
             noise_mult: Multiplier for the Gumbel noise.
+            compute_slots_from_task: If true, compute slots from task embedding instead of a fixed parameter.
+            use_task_as_weight_key: If true, use task embedding as weight key if it's not specified in forward.
 
         Raises:
             AssertionError: If neither seq_len nor num_slots is provided, or if both are provided.
@@ -619,10 +630,21 @@ class SoftMoE(Module):
         norm_klass = LayerNorm if use_layernorm else RMSNorm
         self.norm: Callable = norm_klass(dim)  # type: ignore
 
+        self.compute_slots_from_task = compute_slots_from_task
         self.slot_norm: Callable = norm_klass(dim)  # type: ignore
-        self.slot_embeds = nn.Parameter(torch.randn(num_experts, num_slots, dim))
 
         expert_klass = GLUFeedForward if geglu else FeedForward
+
+        if self.compute_slots_from_task:
+            assert task_dim is not None, "must specify task dim"
+            self.slot_embed_weights = expert_klass(
+                dim=task_dim,  # type: ignore
+                mult=max(expert_mult / 2, 0.5),  # reduce the number of parameters
+                dropout=dropout,
+                out_dim=num_experts * num_slots * dim,  # type: ignore
+            )
+        else:
+            self.slot_embeds = nn.Parameter(torch.randn(num_experts, num_slots, dim))
 
         self.experts = Experts(
             experts=[
@@ -636,14 +658,38 @@ class SoftMoE(Module):
         self.num_experts = num_experts
         self.num_slots = num_slots
 
-        if task_dim is not None:
-            # self.task_bias = TaskBias(task_dim, num_experts * num_slots)
+        self.add_noise = add_noise
+        self.noise_mult = noise_mult
+
+        self.use_task_as_weight_key = use_task_as_weight_key
+        if task_dim is not None and use_task_as_weight_key:
             self.task_bias = nn.Linear(task_dim, dim)
         else:
             self.task_bias = None
 
-        self.add_noise = add_noise
-        self.noise_mult = noise_mult
+    def compute_slot_embeds(self, task_emb: Tensor | None) -> Tensor:
+        """Compute the slot embeddings from the task embedding.
+
+        Args:
+            task_emb: The task embedding tensor of shape (B, task_dim) or (task_dim,).
+
+        Returns:
+            Tensor: The slot embeddings tensor of shape (num_experts, num_slots, dim).
+        """
+        if self.compute_slots_from_task:
+            assert task_emb is not None, "task_emb must be provided"
+            if task_emb.dim() != 1:
+                # Assume all examples in the batch have the same task embedding
+                # This is convenient since slot_embeds does not have a batch dimension either
+                task_emb = task_emb[0]
+            out = self.slot_embed_weights(task_emb)
+            out = rearrange(
+                out, "(e s d) -> e s d", e=self.num_experts, s=self.num_slots
+            )
+            return out
+        else:
+            out = self.slot_embeds
+        return out
 
     def forward(
         self,
@@ -690,12 +736,12 @@ class SoftMoE(Module):
 
         # following Algorithm 1, with the normalization they proposed, but with scaling of both (the now popular rmsnorm + gamma)
         x = self.norm(x)
-        slot_embeds = self.slot_norm(self.slot_embeds)
+        slot_embeds = self.slot_norm(self.compute_slot_embeds(task_emb))
 
         dispatch_logits = einsum("b n d, e s d -> b n e s", x, slot_embeds)
 
         # if weight_key is not provided, use task embedding to compute it
-        if task_emb is not None and weight_key is None:
+        if task_emb is not None and weight_key is None and self.use_task_as_weight_key:
             weight_key = self.task_bias(task_emb)
             weight_key = weight_key.unsqueeze(1).repeat(1, x.shape[1], 1)
 
@@ -708,25 +754,15 @@ class SoftMoE(Module):
         else:
             combine_logits = dispatch_logits
 
-        print(
-            "weight distribution",
-            F.softmax(combine_logits.sum(dim=-1), dim=-1)
-            .mean(dim=(0, 1))
-            .detach()
-            .cpu()
-            .numpy(),
-        )
-
-        # add task expert bias (see deepseek-v3 auxiliary-free loss balancing)
-        # if task_emb is not None and self.task_bias is not None:
-        #     task_bias = self.task_bias(task_emb)
-        #     task_bias = rearrange(task_bias, 'b (e s) -> b () e s', e=self.num_experts, s=self.num_slots)
-        #     print("without task bias", F.softmax(combine_logits.sum(dim=-1), dim=-1).mean(dim=(0, 1)))
-        #     print("combine norm", combine_logits.sum(dim=-1).norm(), "task bias norm", task_bias.norm())
-        #     # combine_logits += task_bias * 10
-        #     task_bias = task_bias.repeat(1, combine_logits.shape[1], 1, 1)
-        #     combine_logits = task_bias
-        #     print("with task bias", F.softmax(combine_logits.sum(dim=-1), dim=-1).mean(dim=(0, 1)))
+        if torch.rand(1) < 0.01:
+            print(
+                "combine weight distribution",
+                F.softmax(combine_logits.sum(dim=-1), dim=-1)
+                .mean(dim=(0, 1))
+                .detach()
+                .cpu()
+                .numpy(),
+            )
 
         # noised dispatch and combine gate logits, with annealing if needed
         if self.add_noise:
