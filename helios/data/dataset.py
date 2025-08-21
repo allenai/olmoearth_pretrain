@@ -996,7 +996,8 @@ class HeliosDataset(Dataset):
 
         if self.normalize:
             for modality_name in sample_dict.keys():
-                if modality_name == "timestamps":
+                # Not normalizing these so I can plot the batches more easily
+                if modality_name == "timestamps" or modality_name == "latlon":
                     continue
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality_name in missing_modalities:

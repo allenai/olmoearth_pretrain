@@ -121,7 +121,7 @@ def update_streaming_stats(
     return new_count, new_mean, new_var
 
 
-def plot_latlon_distribution(latlons: np.ndarray, title: str) -> plt.Figure:
+def plot_latlon_distribution(latlons: np.ndarray, title: str, s=0.01) -> plt.Figure:
     """Plot the geographic distribution of the data."""
     fig = plt.figure(figsize=(12, 8))
     ax = plt.axes(projection=ccrs.PlateCarree())
@@ -137,7 +137,7 @@ def plot_latlon_distribution(latlons: np.ndarray, title: str) -> plt.Figure:
         latlons[:, 0],
         transform=ccrs.PlateCarree(),
         alpha=0.5,
-        s=0.01,
+        s=s,
     )
 
     ax.set_global()  # Show the entire globe
@@ -192,6 +192,57 @@ def haversine(a, b, radius=6_371_000.0):
     return 2.0 * radius * math.asin(math.sqrt(alpha))
 
 import numpy as np
+
+def haversine_distance_radians(
+    coords1, coords2
+) -> np.ndarray:
+    """
+    Calculate the haversine distance between two arrays of points in meters.
+
+    Parameters
+    ----------
+    coords1 : array-like, shape (M, 2)
+        Array of [lat_deg, lon_deg] for the first set of points.
+    coords2 : array-like, shape (N, 2)
+        Array of [lat_deg, lon_deg] for the second set of points.
+
+    Returns
+    -------
+    np.ndarray
+        Array of distances in meters. If coords1 is (M,2) and coords2 is (N,2),
+        returns (M,N) array of distances.
+        If coords2 is (2,) (a single point), returns (M,) array of distances.
+    """
+    coords1 = np.asarray(coords1, dtype=np.float64)
+    coords2 = np.asarray(coords2, dtype=np.float64)
+
+    # Earth's radius in meters
+    R = 6371000.0
+
+    # If coords2 is a single point, reshape for broadcasting
+    if coords2.ndim == 1:
+        coords2 = coords2[np.newaxis, :]
+
+    lat1 = np.radians(coords1[:, 0])[:, np.newaxis]
+    lon1 = np.radians(coords1[:, 1])[:, np.newaxis]
+    lat2 = np.radians(coords2[:, 0])[np.newaxis, :]
+    lon2 = np.radians(coords2[:, 1])[np.newaxis, :]
+
+    delta_lat = lat2 - lat1
+    delta_lon = lon2 - lon1
+
+    a = (
+        np.sin(delta_lat / 2) ** 2
+        + np.cos(lat1) * np.cos(lat2) * np.sin(delta_lon / 2) ** 2
+    )
+    c = 2 * np.arcsin(np.sqrt(a))
+    distances = R * c
+
+    # If coords2 was a single point, return (M,) shape
+    if distances.shape[1] == 1:
+        return distances[:, 0]
+    return distances
+
 
 def nearest_haversine(
     latlon_a,
@@ -335,8 +386,5 @@ def nearest_haversine(
         if return_indices:
             part_idx_sorted = np.take_along_axis(part_idx, order, axis=1)       # (L, N_eff)
             idx_out[i0:i1, :] = part_idx_sorted
-
-    return (dists_out, idx_out) if return_indices else dists_out
-
 
     return (dists_out, idx_out) if return_indices else dists_out
