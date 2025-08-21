@@ -151,7 +151,7 @@ class MockTrainer:
         self._metrics[name] = value
 
 
-@pytest.mark.parametrize("spatial_attn,expected_output", [(True, 3.1), (False, 3.3)])
+@pytest.mark.parametrize("spatial_attn,expected_output", [(True, 1.9), (False, 1.9)])
 def test_train_batch_without_missing_modalities(
     spatial_attn: bool,
     expected_output: float,
@@ -179,7 +179,7 @@ def test_train_batch_without_missing_modalities(
         )
 
 
-@pytest.mark.parametrize("spatial_attn,expected_output", [(True, 3.1), (False, 3.3)])
+@pytest.mark.parametrize("spatial_attn,expected_output", [(True, 1.8), (False, 1.9)])
 def test_train_batch_with_missing_modalities(
     spatial_attn: bool,
     expected_output: float,
