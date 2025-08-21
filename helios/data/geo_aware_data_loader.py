@@ -178,8 +178,15 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
             # Remove any ring neighbors that are already in the batch
             # TODO: do thi with np.intersect1d
             ring_neighbors = [n for n in ring_neighbors if n not in batch_indices]
+            # what if there are not enough ring neighbors # Then maybe we just fill out batch
+            # with global indices
             ring_neighbors = rng.choice(ring_neighbors, size=random_batch_group_size)
             batch_indices.extend(ring_neighbors)
+            if len(batch_indices) < rank_batch_size:
+                logger.warning(f"Not enough ring neighbors, filling out batch with global indices")
+                # fill out the rest of the batch with global indices
+                remaining_indices = np.setdiff1d(global_indices, batch_indices)
+                batch_indices.extend(rng.choice(remaining_indices, size=rank_batch_size - len(batch_indices)))
             assert len(batch_indices) == rank_batch_size, f"Batch indices length is not equal to rank batch size got {len(batch_indices)} expected {rank_batch_size}"
             for idx in batch_indices:
                 yield idx, int(patch_size), int(sampled_hw_p)

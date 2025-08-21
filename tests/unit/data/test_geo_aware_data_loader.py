@@ -52,7 +52,7 @@ def test_geo_aware_data_loader(tmp_path: Path) -> None:
     # plot the first 16 points first
     import uuid
     uuid = str(uuid.uuid4())[:8]
-    fig = plot_latlon_distribution(latlons[:32], f"latlon distribution_neighbors_{uuid}", s=1.0)
+    fig = plot_latlon_distribution(latlons[32:], f"latlon distribution_neighbors_{uuid}", s=1.0)
     fig.savefig(f"./latlon_distribution_neighbors_{uuid}.png")
 
     fig = plot_latlon_distribution(latlons, f"latlon distribution_all_{uuid}", s=1.0)
