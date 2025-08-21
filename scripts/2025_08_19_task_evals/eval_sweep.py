@@ -1,7 +1,7 @@
 """Eval sweep."""
 
-import subprocess
 import argparse
+import subprocess
 import sys
 
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
@@ -20,7 +20,7 @@ lr_args = " ".join(
     ]
 )
 checkpoints = {
-    #"base": "/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5/step320000",
+    # "base": "/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5/step320000",
     # "detect": "/weka/dfive-default/ryanp/scratch/detect_all_v2_helios_encoder"
     "classify_lora_v3": "/weka/dfive-default/ryanp/scratch/distributed_ckpts/classify_lora_v3"
 }

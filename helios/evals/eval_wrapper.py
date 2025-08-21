@@ -51,12 +51,11 @@ class EvalWrapper:
         self.pooling_type = pooling_type
         self.concat_features = concat_features
         self.spatial_pool = task_type == TaskType.SEGMENTATION
-        
+
         if use_task_embeds:
             self.task_emb = torch.load(task_embed_path)[dataset]
             self.task_emb = self.task_emb.to(self.device).unsqueeze(0)
         else:
-
             self.task_emb = None
 
     @property

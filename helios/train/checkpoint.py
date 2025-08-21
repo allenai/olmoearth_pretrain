@@ -1,84 +1,47 @@
-"""
-Updating the checkpointer to allow for partial loading of the model
-"""
+"""Updating the checkpointer to allow for partial loading of the model"""
 
 from __future__ import annotations
-from olmo_core.train import checkpoint
-from dataclasses import dataclass
-from cached_path import cached_path
 
-import logging
-from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Generator, Iterable, List, Optional, Tuple
+from typing import (
+    Any,
+)
 
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dist_cp
-import torch.distributed.checkpoint.state_dict as dist_cp_sd
-from torch.distributed.checkpoint import DefaultLoadPlanner
-import torch.nn as nn
-from rich.progress import track
-from torch.distributed.checkpoint.default_planner import DefaultSavePlanner
-from torch.distributed.checkpoint.metadata import Metadata, TensorStorageMetadata
-import json
-import logging
-import os
-import re
-import tempfile
-from concurrent.futures import Future
-from contextlib import contextmanager
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, ClassVar, Dict, Generator, Optional, Tuple, Union
-
-import torch
-import torch.distributed as dist
 from cached_path import cached_path
-from torch.distributed.checkpoint.metadata import Metadata
-
-from olmo_core.aliases import PathOrStr
-from olmo_core.config import Config
 from olmo_core.distributed.checkpoint import (
-    async_save_state_dict,
     get_checkpoint_metadata,
     load_state_dict,
-    save_state_dict,
-)
-from olmo_core.exceptions import OLMoConfigurationError
-
-from olmo_core.io import (
-    clear_directory,
-    dir_is_empty,
-    file_exists,
-    is_url,
-    list_directory,
-    normalize_path,
-    upload,
-)
-from olmo_core.exceptions import OLMoConfigurationError
-from olmo_core.distributed.utils import (
-    barrier,
-    get_fs_local_rank,
-    get_rank,
-    is_distributed,
-    scatter_object,
 )
 from olmo_core.distributed.checkpoint.filesystem import RemoteFileSystemReader
+from olmo_core.distributed.utils import (
+    get_rank,
+    scatter_object,
+)
+from olmo_core.exceptions import OLMoConfigurationError
+from olmo_core.io import (
+    is_url,
+    normalize_path,
+)
+from olmo_core.train import checkpoint
+from torch.distributed.checkpoint import DefaultLoadPlanner
+from torch.distributed.checkpoint.metadata import Metadata
+
 
 @torch.no_grad()
 def load_state_dict(
     dir: str,
-    state_dict: Dict[str, Any],
+    state_dict: dict[str, Any],
     *,
-    process_group: Optional[dist.ProcessGroup] = None,
+    process_group: dist.ProcessGroup | None = None,
     pre_download: bool = False,
-    work_dir: Optional[str] = None,
-    thread_count: Optional[int] = None,
+    work_dir: str | None = None,
+    thread_count: int | None = None,
 ):
-    """
-    Load an arbitrary state dict in-place from a checkpoint saved with :func:`save_state_dict()`.
+    """Load an arbitrary state dict in-place from a checkpoint saved with :func:`save_state_dict()`.
 
     :param dir: Path/URL to the checkpoint saved via :func:`save_state_dict()`.
     :param state_dict: The state dict to load the state into.
@@ -97,56 +60,64 @@ def load_state_dict(
         planner=DefaultLoadPlanner(allow_partial_load=True),
     )
 
+
 @dataclass
 class HeliosCheckpointerConfig(checkpoint.CheckpointerConfig):
-    """
-    Config for the Helios checkpointer
-    """
-    def build(self, process_group: Optional[dist.ProcessGroup] = None, **kwargs) -> "HeliosCheckpointer":
+    """Config for the Helios checkpointer"""
+
+    def build(
+        self, process_group: dist.ProcessGroup | None = None, **kwargs
+    ) -> HeliosCheckpointer:
         kwargs = {**self.as_dict(exclude_none=True, recurse=False), **kwargs}
         work_dir = kwargs.pop("work_dir", None)
         if work_dir is None:
-            raise OLMoConfigurationError("'work_dir' must be provided to build a Checkpointer")
-        return HeliosCheckpointer(work_dir=Path(work_dir), process_group=process_group, **kwargs)
+            raise OLMoConfigurationError(
+                "'work_dir' must be provided to build a Checkpointer"
+            )
+        return HeliosCheckpointer(
+            work_dir=Path(work_dir), process_group=process_group, **kwargs
+        )
+
 
 @dataclass
 class HeliosCheckpointer(checkpoint.Checkpointer):
-    """
-    Checkpointer that allows for partial loading of the model
-    """
+    """Checkpointer that allows for partial loading of the model"""
 
     def load(
         self,
         dir: str,
         train_module: TrainModule,
         *,
-        load_trainer_state: Optional[bool] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Load model, optim, and other training state from a local or remote checkpoint directory
+        load_trainer_state: bool | None = None,
+    ) -> dict[str, Any] | None:
+        """Load model, optim, and other training state from a local or remote checkpoint directory
         created via :meth:`save()` or :meth:`save_async()`.
         """
         dir = normalize_path(dir)
 
         # Maybe load trainer state.
-        trainer_state: Optional[Dict[str, Any]] = None
+        trainer_state: dict[str, Any] | None = None
         if load_trainer_state is not False:
             # Try loading the given rank's state first, then fall back to rank 0 train state if it
             # doesn't exist, which can happen when we're restoring a checkpoint with a different world size.
             for path in (f"{dir}/train/rank{get_rank()}.pt", f"{dir}/train/rank0.pt"):
                 try:
-                    trainer_state = torch.load(cached_path(path, quiet=True), weights_only=False)
+                    trainer_state = torch.load(
+                        cached_path(path, quiet=True), weights_only=False
+                    )
                     break
                 except FileNotFoundError:
                     pass
                 print("looking to use rank 0 trainer state")
 
             if load_trainer_state is True and trainer_state is None:
-                raise FileNotFoundError(f"Missing trainer state in checkpoint dir '{dir}'")
+                raise FileNotFoundError(
+                    f"Missing trainer state in checkpoint dir '{dir}'"
+                )
 
         # Load train module state.
         train_module_dir = f"{dir}/model_and_optim"
-        metadata: Optional[Metadata] = None
+        metadata: Metadata | None = None
         if get_rank(self.process_group) == 0:
             try:
                 metadata = get_checkpoint_metadata(train_module_dir)

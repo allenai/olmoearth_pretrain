@@ -194,8 +194,12 @@ class TaskLoRALinear(nn.Module):
         # LoRA delta path: y_delta = x_drop @ ΔW^T per sample
         # Don't materialize the full delta matrix since it's too large
         x2d_drop = F.dropout(x2d, p=self.dropout, training=self.training)
-        tmp = torch.bmm(x2d_drop.unsqueeze(1), b.transpose(1, 2)).squeeze(1)   # (B_eff, rnk)
-        y_delta = torch.bmm(tmp.unsqueeze(1), a.transpose(1, 2)).squeeze(1)    # (B_eff, out)
+        tmp = torch.bmm(x2d_drop.unsqueeze(1), b.transpose(1, 2)).squeeze(
+            1
+        )  # (B_eff, rnk)
+        y_delta = torch.bmm(tmp.unsqueeze(1), a.transpose(1, 2)).squeeze(
+            1
+        )  # (B_eff, out)
         print(
             "DELTA NORM",
             y_delta.norm(),

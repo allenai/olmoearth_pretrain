@@ -19,7 +19,6 @@ from olmo_core.train.callbacks import (
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
 )
-from helios.train.checkpoint import HeliosCheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
@@ -37,6 +36,7 @@ from helios.train.callbacks import (
     HeliosWandBCallback,
 )
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
+from helios.train.checkpoint import HeliosCheckpointerConfig
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
