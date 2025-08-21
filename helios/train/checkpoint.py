@@ -1,4 +1,4 @@
-"""Updating the checkpointer to allow for partial loading of the model"""
+"""Updating the checkpointer to allow for partial loading of the model."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ import torch.distributed.checkpoint as dist_cp
 from cached_path import cached_path
 from olmo_core.distributed.checkpoint import (
     get_checkpoint_metadata,
-    load_state_dict,
 )
 from olmo_core.distributed.checkpoint.filesystem import RemoteFileSystemReader
 from olmo_core.distributed.utils import (
@@ -40,7 +39,7 @@ def load_state_dict(
     pre_download: bool = False,
     work_dir: str | None = None,
     thread_count: int | None = None,
-):
+) -> None:
     """Load an arbitrary state dict in-place from a checkpoint saved with :func:`save_state_dict()`.
 
     :param dir: Path/URL to the checkpoint saved via :func:`save_state_dict()`.
@@ -63,11 +62,22 @@ def load_state_dict(
 
 @dataclass
 class HeliosCheckpointerConfig(checkpoint.CheckpointerConfig):
-    """Config for the Helios checkpointer"""
+    """Config for the Helios checkpointer."""
 
     def build(
-        self, process_group: dist.ProcessGroup | None = None, **kwargs
+        self,
+        process_group: dist.ProcessGroup | None = None,
+        **kwargs: Any,
     ) -> HeliosCheckpointer:
+        """Build the checkpointer.
+
+        Args:
+            process_group: The process group to use for distributed collectives.
+            **kwargs: Additional keyword arguments to pass to the checkpointer.
+
+        Returns:
+            HeliosCheckpointer: The built checkpointer.
+        """
         kwargs = {**self.as_dict(exclude_none=True, recurse=False), **kwargs}
         work_dir = kwargs.pop("work_dir", None)
         if work_dir is None:
@@ -81,17 +91,24 @@ class HeliosCheckpointerConfig(checkpoint.CheckpointerConfig):
 
 @dataclass
 class HeliosCheckpointer(checkpoint.Checkpointer):
-    """Checkpointer that allows for partial loading of the model"""
+    """Checkpointer that allows for partial loading of the model."""
 
     def load(
         self,
         dir: str,
-        train_module: TrainModule,
+        train_module: Any,
         *,
         load_trainer_state: bool | None = None,
     ) -> dict[str, Any] | None:
-        """Load model, optim, and other training state from a local or remote checkpoint directory
-        created via :meth:`save()` or :meth:`save_async()`.
+        """Load model, optim, and other training state from a local or remote checkpoint directory.
+
+        Args:
+            dir: The directory to load the checkpoint from.
+            train_module: The train module to load the state into.
+            load_trainer_state: Whether to load the trainer state.
+
+        Returns:
+            dict[str, Any] | None: The trainer state.
         """
         dir = normalize_path(dir)
 
