@@ -99,6 +99,43 @@ def test_geo_aware_data_loader_concat(tmp_path: Path) -> None:
     assert isinstance(sample, HeliosSample)
     assert isinstance(patch_size, int)
 
+def test_concat_dataset_latlon_pickle(tmp_path: Path) -> None:
+    training_modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.WORLDCOVER.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+    ]
+    # what If I use a real dir for now
+    dataset_configs = [
+        HeliosDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1138828",
+            training_modalities=training_modalities,
+        ),
+    ]
+    dataset = HeliosConcatDatasetConfig(dataset_configs=dataset_configs).build()
+
+    data_loader_config = GeoAwareDataLoaderConfig(work_dir=tmp_path,
+        global_batch_size=64,
+        min_patch_size=1,
+        max_patch_size=8,
+        sampled_hw_p_list=[4, 5, 6],
+        seed=0,
+        token_budget=15000,
+        min_neighbor_radius=100.0,
+        max_neighbor_radius=10000.0,
+        neighbor_percentage=0.5,
+    )
+    data_loader = data_loader_config.build(dataset=dataset, collator=collate_helios)
+
+    data_loader.reshuffle()
+    data_loader_torch = data_loader._iter_batches()
+    import pickle
+    state = pickle.loads(pickle.dumps(data_loader))  # simulate spawn pickling
+    print("has latlon_distribution?", hasattr(state.dataset, "latlon_distribution"),
+        state.dataset.latlon_distribution is not None)
+    print("dict keys:", state.__dict__.keys())
+
 def test_local_donut_indices(tmp_path: Path) -> None:
     """Test the local donut indices."""
     training_modalities = [
