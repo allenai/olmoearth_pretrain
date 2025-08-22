@@ -67,6 +67,7 @@ SUPERVISORY_MODALITIES = {
     Modality.OPENSTREETMAP_RASTER.name: 0.1,
     Modality.WORLDCEREAL.name: 0.1,
     Modality.CDL.name: 0.1,
+    Modality.WRI_CANOPY_HEIGHT_MAP.name: 0.1,
 }
 
 
@@ -90,6 +91,7 @@ def my_build_common_components(
         Modality.GSE.name,
         Modality.WORLDCEREAL.name,
         Modality.CDL.name,
+        Modality.WRI_CANOPY_HEIGHT_MAP.name,
     ]
     return config
 
@@ -114,8 +116,8 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         probe_modalities=list(SUPERVISORY_MODALITIES.keys()),
         use_spatial_attn=False,
         probe_dims=[
-            model_size["encoder_embedding_size"],
-            model_size["encoder_embedding_size"],
+            # model_size["encoder_embedding_size"],
+            # model_size["encoder_embedding_size"],
         ],
     )
     decoder_config = PredictorConfig(
@@ -199,7 +201,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     dataset_configs = [
         # osm_sampling
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover_worldpop/1141152",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover_worldpop_wri_canopy_height_map/1141152",
             training_modalities=common.training_modalities,
         ),
         # presto sampling
