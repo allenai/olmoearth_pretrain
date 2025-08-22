@@ -51,6 +51,10 @@ class GeoAwareDataLoader(HeliosDataLoader):
 
     def _iter_batches(self) -> Iterable[HeliosSample]:
         """Iterate over the dataset in batches."""
+        multiprocessing_context = (
+            self.multiprocessing_context if self.num_workers > 0 else None
+        )
+        logger.warning(f"Multiprocessing context: {multiprocessing_context}")
         return torch.utils.data.DataLoader(
             _GeoAwareIterableDatasetWrapper(self),
             batch_size=None,
@@ -60,9 +64,7 @@ class GeoAwareDataLoader(HeliosDataLoader):
             persistent_workers=(
                 self.persistent_workers if self.num_workers > 0 else False
             ),
-            multiprocessing_context=(
-                self.multiprocessing_context if self.num_workers > 0 else None
-            ),
+            multiprocessing_context=multiprocessing_context,
             timeout=0,
         )
 

@@ -10,6 +10,7 @@ from helios.data.geo_aware_data_loader import GeoAwareDataLoader, GeoAwareDataLo
 from helios.data.dataset import collate_helios, HeliosSample
 import logging
 from helios.data.utils import plot_latlon_distribution
+from helios.data.concat import HeliosConcatDatasetConfig
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def test_geo_aware_data_loader(tmp_path: Path) -> None:
 
 
 # test with a concat dataset
-def test_geo_aware_data_loader(tmp_path: Path) -> None:
+def test_geo_aware_data_loader_concat(tmp_path: Path) -> None:
     """Test the GeoAwareDataLoader class."""
     training_modalities = [
         Modality.SENTINEL2_L2A.name,
@@ -72,7 +73,7 @@ def test_geo_aware_data_loader(tmp_path: Path) -> None:
     dataset_configs = [
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1138828",
-            training_modalities=common.training_modalities,
+            training_modalities=training_modalities,
         ),
     ]
     dataset = HeliosConcatDatasetConfig(dataset_configs=dataset_configs).build()
