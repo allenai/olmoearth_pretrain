@@ -144,11 +144,13 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         """
         total_loss = 0
         # sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
-        count = 0
+        count = 0.00001
         for modality_name in predictions.modalities:
             preds = getattr(predictions, modality_name).renorm(p=2, dim=-1, maxnorm=10)
             targs = getattr(targets, modality_name).renorm(p=2, dim=-1, maxnorm=10)
-            # masks = getattr(predictions, predictions.get_masked_modality_name(modality_name))
+            masks = getattr(
+                predictions, predictions.get_masked_modality_name(modality_name)
+            )
             preds_flat = rearrange(preds, "b ... d -> b (...) d")
             targs_flat = rearrange(targs, "b ... d -> b (...) d")
             score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat)
@@ -159,21 +161,23 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                 reduction="none",
                 label_smoothing=0.01,
             )
-            total_loss += loss.sum()
-            count += loss.numel()
+            loss[masks.flatten() != MaskValue.DECODER.value] = 0
 
-            preds_flat = rearrange(preds, "b ... d -> (...) b d")
-            targs_flat = rearrange(targs, "b ... d -> (...) b d")
-            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat)
-            label = torch.arange(score.shape[2], dtype=torch.long, device=score.device)
-            loss = F.cross_entropy(
-                score.flatten(0, 1),
-                label.repeat(score.shape[0]),
-                reduction="none",
-                label_smoothing=0.01,
-            )
             total_loss += loss.sum()
-            count += loss.numel()
+            count += (masks.flatten() == MaskValue.DECODER.value).sum()
+
+            # preds_flat = rearrange(preds, "b ... d -> (...) b d")
+            # targs_flat = rearrange(targs, "b ... d -> (...) b d")
+            # score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat)
+            # label = torch.arange(score.shape[2], dtype=torch.long, device=score.device)
+            # loss = F.cross_entropy(
+            #     score.flatten(0, 1),
+            #     label.repeat(score.shape[0]),
+            #     reduction="none",
+            #     label_smoothing=0.01,
+            # )
+            # total_loss += loss.sum()
+            # count += loss.numel()
 
         return self.weight * (total_loss / count)
 
