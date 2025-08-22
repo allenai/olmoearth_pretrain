@@ -224,7 +224,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                         norm_stats_from_pretrained=False,
                         probe_lr=0.01,
                         epochs=50,
-                        eval_interval=Duration.steps(2000),
+                        eval_interval=Duration.steps(10000),
                     ),
                     "m_cashew_plant": DownstreamTaskConfig(
                         dataset="m-cashew-plant",
@@ -242,7 +242,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                         num_workers=4,
                         pooling_type=PoolingType.MEAN,
                         norm_stats_from_pretrained=True,
-                        eval_interval=Duration.steps(2000),
+                        eval_interval=Duration.steps(10000),
                     ),
                 },
             ),
