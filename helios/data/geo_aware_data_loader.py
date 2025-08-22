@@ -208,6 +208,7 @@ class GeoAwareDataLoaderConfig(HeliosDataLoaderConfig):
     neighbor_percentage: float = 0.5
     min_neighbor_radius: float = 1000.0
     max_neighbor_radius: float = 100_000.0
+    multiprocessing_context: str | None = "spawn"
 
     def validate(self) -> None:
         """Validate the configuration."""
