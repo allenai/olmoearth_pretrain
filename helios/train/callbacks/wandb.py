@@ -128,7 +128,7 @@ class HeliosWandBCallback(WandBCallback):
                 )
                 plt.close(fig)
                 # Delete the latlon distribution from the dataset so it doesn't get pickled into data worker processes
-                del dataset.latlon_distribution
+                # del dataset.latlon_distribution
                 if self.upload_modality_data_band_distribution_pre_train:
                     logger.info("Gathering normalized data distribution")
                     sample_data = get_sample_data_for_histogram(dataset)
