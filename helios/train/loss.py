@@ -146,9 +146,9 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         # sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
         count = 0
         for modality_name in predictions.modalities:
-            preds = getattr(predictions, modality_name)
+            preds = getattr(predictions, modality_name).renorm(p=2, dim=-1, maxnorm=10)
+            targs = getattr(targets, modality_name).renorm(p=2, dim=-1, maxnorm=10)
             # masks = getattr(predictions, predictions.get_masked_modality_name(modality_name))
-            targs = getattr(targets, modality_name)
             preds_flat = rearrange(preds, "b ... d -> b (...) d")
             targs_flat = rearrange(targs, "b ... d -> b (...) d")
             score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat)
