@@ -181,6 +181,8 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
             # TODO: do thi with np.intersect1d
             ring_neighbors = [n for n in ring_neighbors if n not in batch_indices]
             size_to_sample = min(self.data_loader.ring_batch_group_size, len(ring_neighbors))
+            if size_to_sample == 0:
+                logger.warning(f"No ring neighbors found for anchor index {anchor_idx}, with latlon {self.data_loader.get_latlons(anchor_idx)}, filling out batch with global indices")
             # what if there are not enough ring neighbors # Then maybe we just fill out batch
             # with global indices
             ring_neighbors = rng.choice(ring_neighbors, size=size_to_sample)
