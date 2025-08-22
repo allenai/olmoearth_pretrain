@@ -79,17 +79,13 @@ class GeoAwareDataLoader(HeliosDataLoader):
         anchor_latlon = self.get_latlons(anchor_index)
         # add new axis to anchor_latlon to make it 1, 2
         anchor_latlon = anchor_latlon[np.newaxis, :]
-        logger.info(f"Anchor latlon: {anchor_latlon} shape: {anchor_latlon.shape}")
-        logger.info(f"Latlons shape: {latlons.shape}")
         # maybe we will need chunking maybe not
         neighbor_distances = haversine_distance_radians(anchor_latlon, latlons)
         # squueze the first axis
         neighbor_distances = neighbor_distances.squeeze(axis=0)
         # Filter the indices to the min and max neighbor radius
         donut_mask = (neighbor_distances >= self.min_neighbor_radius) & (neighbor_distances <= self.max_neighbor_radius)
-        logger.info(f"Donut mask shape: {donut_mask.shape}")
         donut_indices = global_indices[donut_mask]
-        logger.info(f"Number of donut indices: {len(donut_indices)}")
         return donut_indices
 
 
