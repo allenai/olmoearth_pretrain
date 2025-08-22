@@ -8,7 +8,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import ConstantWithWarmup
+from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -23,8 +23,8 @@ from upath import UPath
 
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
-from helios.data.geo_aware_data_loader import GeoAwareDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
+from helios.data.geo_aware_data_loader import GeoAwareDataLoaderConfig
 from helios.internal.common import build_common_components
 from helios.internal.experiment import (
     CommonComponents,
@@ -113,8 +113,8 @@ def build_train_module_config(
     common: CommonComponents,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
-    # scheduler = CosWithWarmup(warmup_steps=8000)
-    scheduler = ConstantWithWarmup(warmup_steps=8000)
+    scheduler = CosWithWarmup(warmup_steps=8000)
+    # scheduler = ConstantWithWarmup(warmup_steps=8000)
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         rank_microbatch_size=64,
@@ -153,8 +153,8 @@ def build_train_module_config(
 def build_dataloader_config(common: CommonComponents) -> GeoAwareDataLoaderConfig:
     """Build the dataloader config for an experiment."""
     return GeoAwareDataLoaderConfig(
-        min_neighbor_radius=1000.0, # 1 km
-        max_neighbor_radius=100_000.0, # 100 km
+        min_neighbor_radius=1000.0,  # 1 km
+        max_neighbor_radius=100_000.0,  # 100 km
         num_workers=16,
         global_batch_size=512,
         token_budget=1500,
