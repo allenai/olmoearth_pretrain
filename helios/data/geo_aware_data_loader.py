@@ -36,11 +36,18 @@ logger = logging.getLogger(__name__)
 class GeoAwareDataLoader(HeliosDataLoader):
     """Geo-aware data loader."""
 
-    def __init__(self, num_neighbors: int = 10000, min_neighbor_radius: float = 1000.0, max_neighbor_radius: float = 100_000.0, *args, **kwargs):
+    def __init__(self, neighbor_percentage: float = 0.5, min_neighbor_radius: float = 1000.0, max_neighbor_radius: float = 100_000.0, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.num_neighbors = num_neighbors
         self.min_neighbor_radius = min_neighbor_radius
         self.max_neighbor_radius = max_neighbor_radius
+        self.neighbor_percentage = neighbor_percentage
+        self.ring_batch_group_size = int(self.rank_batch_size * self.neighbor_percentage)
+
+        # the neighbor percentage doesn't work yet beyond 0.5 or 0.25
+        if self.neighbor_percentage > 0.5:
+            raise ValueError("neighbor_percentage must be less than 0.5")
+        if self.neighbor_percentage < 0.25:
+            raise ValueError("neighbor_percentage must be greater than 0.25")
 
     def _iter_batches(self) -> Iterable[HeliosSample]:
         """Iterate over the dataset in batches."""
@@ -143,10 +150,10 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
         worker_id = self.worker_info.id if self.worker_info is not None else 0
         rng = self.rngs[worker_id]
         # select an anchor index
-        # select the rbs // 2 ring neighbors
+        # select the rbs // 2  ring neighbors
         # select the rbs // 2 - 1 random points
-        random_batch_group_size = rank_batch_size // 2
-        num_anchor_points = len(indices) // random_batch_group_size
+        local_random_batch_group_size = rank_batch_size - self.data_loader.ring_batch_group_size - 1
+        num_anchor_points = len(indices) // (rank_batch_size - self.data_loader.ring_batch_group_size)
         for i in range(num_anchor_points):
             if instances_processed % rank_batch_size == 0:
                 patch_size = rng.choice(patch_size_array)
@@ -159,13 +166,14 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
                 ]
                 sampled_hw_p = rng.choice(filtered_hw_p_to_sample_array)
             batch_indices = []
-            local_idx_of_anchor = i * random_batch_group_size
+            local_idx_of_anchor = i * self.data_loader.ring_batch_group_size
             anchor_idx = indices[local_idx_of_anchor]
             batch_indices.append(anchor_idx)
-            # Use the next rbs // 2 - 1 locals as the global random points
+            # Use the next rbs // 2 - 1 locals indexes
             start_idx = 1 + local_idx_of_anchor
-            end_idx = start_idx + random_batch_group_size - 1
+            end_idx = start_idx + local_random_batch_group_size
             random_points = indices[start_idx:end_idx]
+            # logger.info(f"num random points: {len(random_points)}")
             batch_indices.extend(random_points)
             # select the rbs // 2  ring neighbors randomly
             # THIS ACTUALLY SHOULD BE THE GLOBAL INDICES
@@ -176,8 +184,10 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
             ring_neighbors = [n for n in ring_neighbors if n not in batch_indices]
             # what if there are not enough ring neighbors # Then maybe we just fill out batch
             # with global indices
-            ring_neighbors = rng.choice(ring_neighbors, size=random_batch_group_size)
+            ring_neighbors = rng.choice(ring_neighbors, size=self.data_loader.ring_batch_group_size)
+            # logger.info(f"num ring neighbors: {len(ring_neighbors)}")
             batch_indices.extend(ring_neighbors)
+            # assert len(batch_indices) == rank_batch_size, f"Batch indices length is not equal to rank batch size got {len(batch_indices)} expected {rank_batch_size}"
             if len(batch_indices) < rank_batch_size:
                 logger.warning(f"Not enough ring neighbors, filling out batch with global indices")
                 # fill out the rest of the batch with global indices
@@ -194,15 +204,13 @@ class _GeoAwareIterableDatasetWrapper(_IterableDatasetWrapper):
 class GeoAwareDataLoaderConfig(HeliosDataLoaderConfig):
     """Configuration for the HeliosDataLoader."""
 
-    num_neighbors: int = 10000
+    neighbor_percentage: float = 0.5
     min_neighbor_radius: float = 1000.0
     max_neighbor_radius: float = 100_000.0
 
     def validate(self) -> None:
         """Validate the configuration."""
         super().validate()
-        if self.num_neighbors < 0:
-            raise ValueError("num_neighbors must be greater than 0")
         if self.min_neighbor_radius < 0:
             raise ValueError("min_neighbor_radius must be greater than 0")
         if self.max_neighbor_radius < self.min_neighbor_radius:

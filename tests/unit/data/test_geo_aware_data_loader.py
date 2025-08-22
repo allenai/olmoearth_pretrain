@@ -33,10 +33,10 @@ def test_geo_aware_data_loader(tmp_path: Path) -> None:
         max_patch_size=8,
         sampled_hw_p_list=[4, 5, 6],
         seed=0,
-        num_neighbors=10000,
         token_budget=15000,
         min_neighbor_radius=100.0,
         max_neighbor_radius=10000.0,
+        neighbor_percentage=0.5,
     )
     data_loader = data_loader_config.build(dataset=dataset, collator=collate_helios)
     assert isinstance(data_loader, GeoAwareDataLoader)
@@ -47,16 +47,16 @@ def test_geo_aware_data_loader(tmp_path: Path) -> None:
     patch_size, sample = next(iterator)
     assert isinstance(sample, HeliosSample)
     assert isinstance(patch_size, int)
-    latlons = sample.latlon
-    logger.info(f"latlons: {latlons}")
-    # plot the first 16 points first
-    import uuid
-    uuid = str(uuid.uuid4())[:8]
-    fig = plot_latlon_distribution(latlons[32:], f"latlon distribution_neighbors_{uuid}", s=1.0)
-    fig.savefig(f"./latlon_distribution_neighbors_{uuid}.png")
+    # latlons = sample.latlon
+    # logger.info(f"latlons: {latlons}")
+    # # plot the first 16 points first
+    # import uuid
+    # uuid = str(uuid.uuid4())[:8]
+    # fig = plot_latlon_distribution(latlons[32:], f"latlon distribution_neighbors_{uuid}", s=1.0)
+    # fig.savefig(f"./latlon_distribution_neighbors_{uuid}.png")
 
-    fig = plot_latlon_distribution(latlons, f"latlon distribution_all_{uuid}", s=1.0)
-    fig.savefig(f"./latlon_distribution_all_{uuid}.png")
+    # fig = plot_latlon_distribution(latlons, f"latlon distribution_all_{uuid}", s=1.0)
+    # fig.savefig(f"./latlon_distribution_all_{uuid}.png")
 
 
 def test_local_donut_indices(tmp_path: Path) -> None:
@@ -79,7 +79,7 @@ def test_local_donut_indices(tmp_path: Path) -> None:
         max_patch_size=8,
         sampled_hw_p_list=[4, 5, 6],
         seed=0,
-        num_neighbors=10000,
+        neighbor_percentage=0.5,
         token_budget=15000,
         min_neighbor_radius=1000.0,
         max_neighbor_radius=100_000.0,
@@ -89,8 +89,8 @@ def test_local_donut_indices(tmp_path: Path) -> None:
     global_indices = data_loader.get_global_indices()
     indices = data_loader._get_local_instance_indices(global_indices)
     anchor_index = indices[0]
-    import uuid
-    uuid = str(uuid.uuid4())[:8]
+    # import uuid
+    # uuid = str(uuid.uuid4())[:8]
     ring_neighbors = data_loader.get_per_instance_donut_indices(anchor_index, indices)
     logger.info(f"Ring neighbors: {ring_neighbors}")
     # get the latlons of each of them
