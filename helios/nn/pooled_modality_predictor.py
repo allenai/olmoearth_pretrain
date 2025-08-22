@@ -156,213 +156,6 @@ class AttnPool(nn.Module):
         return z
 
 
-class PooledModalityPredictor(PredictorBase):
-    """Predictor that pools the tokens across modalities."""
-
-    def __init__(
-        self,
-        include_encoder_encodings: bool = True,
-        dims_to_pool: str = "modality",
-        *args: Any,
-        **kwargs: Any,
-    ) -> None:
-        """Initialize the PooledModalityPredictor."""
-        super().__init__(*args, **kwargs)
-        self.include_encoder_encodings = include_encoder_encodings
-        self.dims_to_pool = dims_to_pool
-        if self.use_flash_attn:
-            raise NotImplementedError("Flash attn not implemented")
-
-    def _which_encodings_to_use(self) -> dict[str, bool]:
-        # TODO: Not great probably should jsut compute bools that we pass instead of this
-        if self.dims_to_pool == DimsToPool.MODALITY:
-            return {"use_modality_encodings": False, "use_temporal_encodings": True}
-        elif self.dims_to_pool == DimsToPool.TEMPORAL:
-            return {"use_modality_encodings": True, "use_temporal_encodings": False}
-        elif self.dims_to_pool == DimsToPool.MODALITY_TEMPORAL:
-            return {"use_modality_encodings": False, "use_temporal_encodings": False}
-        else:
-            raise NotImplementedError(
-                f"Dims to pool {self.dims_to_pool} not implemented"
-            )
-
-    def apply_attn(
-        self,
-        x: dict[str, Tensor],
-        timestamps: Tensor,
-        patch_size: int,
-        input_res: int,
-        pooled_tokens_and_masks: dict[str, Tensor],
-    ) -> dict[str, Tensor]:
-        """Apply attention to the tokens."""
-        logger.warning("Calling apply_attn for PooledModalityPredictor")
-        tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
-            self.split_tokens_masks_and_dims(x)
-        )
-        tokens_dict = self.composite_encodings(
-            tokens_only_dict, timestamps, patch_size, input_res
-        )
-        tokens_dict.update(original_masks_dict)
-
-        pooled_tokens = pooled_tokens_and_masks["modality_pooled_tokens"]
-        if self.include_encoder_encodings:
-            encoding_kwargs = self._which_encodings_to_use()
-            logger.info(f"encoding_kwargs: {encoding_kwargs}")
-            pooled_tokens = self.composite_encodings._apply_encodings_per_modality(
-                Modality.SENTINEL2_L2A.name,
-                pooled_tokens,
-                timestamps,
-                patch_size,
-                input_res,
-                **encoding_kwargs,
-            )
-        pooled_tokens = rearrange(pooled_tokens, "b ... d -> b (...) d")
-        pooled_attn_mask = rearrange(
-            pooled_tokens_and_masks["modality_pooled_masks"], "b ... -> b (...)"
-        )
-
-        (
-            _,
-            pooled_tokens,
-            _,
-            pooled_attn_mask,
-            _,
-            _,
-            _,
-            _,
-            _,
-        ) = self.split_x_y(pooled_tokens, pooled_attn_mask)
-
-        # I need to do a step where I basically split the pooled tokens up so that I have an instance wide
-        # collapsed mask of these
-
-        all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
-        # X contains the tokens to decode, Y contains the tokens to attend to for context
-        (
-            tokens_to_decode,
-            unmasked_tokens,
-            tokens_to_decode_mask,
-            unmasked_tokens_mask,
-            indices,
-            seqlens_tokens_to_decode,
-            seqlens_unmasked_tokens,
-            max_length_of_tokens_to_decode,
-            max_length_of_unmasked_tokens,
-        ) = self.split_x_y(all_tokens, mask)
-        # Pack x tokens
-        if self.use_flash_attn:
-            raise NotImplementedError("Flash attn not implemented")
-
-        for blk in self.blocks:
-            # note that we are not taking the inverse of the mask, since split_x_y gives us
-            # true values for values we want to take part in attention
-            tokens_to_decode = blk(
-                x=tokens_to_decode,
-                y=pooled_tokens,
-                attn_mask=(
-                    pooled_attn_mask.bool() if not self.use_flash_attn else None
-                ),  # only for flash attn though this should not be left in
-            )
-
-        x = self.combine_x_y(
-            tokens_to_decode=tokens_to_decode,
-            unmasked_tokens=unmasked_tokens,
-            tokens_to_decode_mask=tokens_to_decode_mask,
-            unmasked_tokens_mask=unmasked_tokens_mask,
-            indices=indices,
-        )
-        tokens_per_modality_dict = self.split_and_expand_per_modality(
-            x, modalities_to_dims_dict
-        )
-        tokens_per_modality_dict.update(original_masks_dict)
-        return tokens_per_modality_dict
-
-    def forward(
-        self,
-        x: TokensAndMasks,
-        pooled_tokens_and_masks: dict[str, Tensor],
-        timestamps: Tensor,
-        patch_size: int,
-        input_res: int = BASE_GSD,
-    ) -> TokensAndMasks:
-        """Generate predictions from encoded token representations.
-
-        Args:
-            x: TokensAndMasks containing the masks to use to make decodings.
-                These tokens are discarded in this function - only the masks are used
-            pooled_tokens_and_masks: Dictionary containing the pooled tokens and their masks
-            timestamps: Timestamps of the tokens
-            patch_size: Patch size of the tokens
-            input_res: Input resolution of the tokens
-        Returns:
-            TokensAndMasks containing the predicted tokens and their masks
-        """
-        # Apply Input Norms and encoder to decoder embeds to each modality
-        available_modalities = x.modalities
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
-        )
-
-        # Apply input norma nd projection on pooled tokens
-        pooled_tokens = pooled_tokens_and_masks["modality_pooled_tokens"]
-        pooled_tokens = self.input_norm(pooled_tokens)
-        pooled_tokens = self.encoder_to_decoder_embed(pooled_tokens)
-        pooled_tokens_and_masks["modality_pooled_tokens"] = pooled_tokens
-
-        # Prepare the Learnable Masked Outputs on the original Unpooled Tokens
-        decoder_emedded_dict = x.as_dict(return_none=False)
-        tokens_only_dict = self.add_masks(decoder_emedded_dict)
-        decoder_emedded_dict.update(tokens_only_dict)
-        tokens_and_masks = self.apply_attn(
-            decoder_emedded_dict,
-            timestamps,
-            patch_size,
-            input_res,
-            pooled_tokens_and_masks=pooled_tokens_and_masks,
-        )
-
-        # Project and Normalize Output Tokens
-        output_dict = {}
-        available_modalities = return_modalities_from_dict(tokens_and_masks)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
-        )
-        for modality in modalities_to_process:
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
-            modality_mask = tokens_and_masks[masked_modality_name]
-            # patchify masked data
-            per_modality_output_tokens = []
-            modality_data = tokens_and_masks[modality]
-
-            band_sets = Modality.get(modality).band_sets
-            for idx in range(len(band_sets)):
-                per_channel_modality_data = modality_data[..., idx, :]
-                output_data = self.to_output_embed(self.norm(per_channel_modality_data))
-                per_modality_output_tokens.append(output_data)
-            output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
-            output_dict[masked_modality_name] = modality_mask
-        return TokensAndMasks(**output_dict)
-
-
-@dataclass
-class PooledModalityPredictorConfig(PredictorConfig):
-    """Configuration for the PooledModalityPredictor."""
-
-    include_encoder_encodings: bool = True
-    dims_to_pool: DimsToPool = DimsToPool.MODALITY
-
-    def build(self) -> "PooledModalityPredictor":
-        """Build the predictor."""
-        self.validate()
-        kwargs = self.as_dict(exclude_none=True, recurse=False)
-        # supported_modality_names is replaced by supported_modalities
-        kwargs.pop("supported_modality_names")
-        kwargs["supported_modalities"] = self.supported_modalities
-        logger.info(f"Predictor kwargs: {kwargs}")
-        return PooledModalityPredictor(**kwargs)
-
-
-# TODO: make sure 12 doing all the layers first still works
 class EncodeEarlyAttnPool(Encoder):
     """Encoder that pools the tokens across modalities."""
 
@@ -843,3 +636,209 @@ class EncoderEarlyAttnPoolConfig(EncoderConfig):
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Encoder kwargs: {kwargs}")
         return EncodeEarlyAttnPool(**kwargs)
+
+
+class PooledModalityPredictor(PredictorBase):
+    """Predictor that pools the tokens across modalities."""
+
+    def __init__(
+        self,
+        include_encoder_encodings: bool = True,
+        dims_to_pool: str = "modality",
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the PooledModalityPredictor."""
+        super().__init__(*args, **kwargs)
+        self.include_encoder_encodings = include_encoder_encodings
+        self.dims_to_pool = dims_to_pool
+        if self.use_flash_attn:
+            raise NotImplementedError("Flash attn not implemented")
+
+    def _which_encodings_to_use(self) -> dict[str, bool]:
+        # TODO: Not great probably should jsut compute bools that we pass instead of this
+        if self.dims_to_pool == DimsToPool.MODALITY:
+            return {"use_modality_encodings": False, "use_temporal_encodings": True}
+        elif self.dims_to_pool == DimsToPool.TEMPORAL:
+            return {"use_modality_encodings": True, "use_temporal_encodings": False}
+        elif self.dims_to_pool == DimsToPool.MODALITY_TEMPORAL:
+            return {"use_modality_encodings": False, "use_temporal_encodings": False}
+        else:
+            raise NotImplementedError(
+                f"Dims to pool {self.dims_to_pool} not implemented"
+            )
+
+    def apply_attn(
+        self,
+        x: dict[str, Tensor],
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int,
+        pooled_tokens_and_masks: dict[str, Tensor],
+    ) -> dict[str, Tensor]:
+        """Apply attention to the tokens."""
+        logger.warning("Calling apply_attn for PooledModalityPredictor")
+        tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
+            self.split_tokens_masks_and_dims(x)
+        )
+        tokens_dict = self.composite_encodings(
+            tokens_only_dict, timestamps, patch_size, input_res
+        )
+        tokens_dict.update(original_masks_dict)
+
+        pooled_tokens = pooled_tokens_and_masks["modality_pooled_tokens"]
+        if self.include_encoder_encodings:
+            encoding_kwargs = self._which_encodings_to_use()
+            logger.info(f"encoding_kwargs: {encoding_kwargs}")
+            pooled_tokens = self.composite_encodings._apply_encodings_per_modality(
+                Modality.SENTINEL2_L2A.name,
+                pooled_tokens,
+                timestamps,
+                patch_size,
+                input_res,
+                **encoding_kwargs,
+            )
+        pooled_tokens = rearrange(pooled_tokens, "b ... d -> b (...) d")
+        pooled_attn_mask = rearrange(
+            pooled_tokens_and_masks["modality_pooled_masks"], "b ... -> b (...)"
+        )
+
+        (
+            _,
+            pooled_tokens,
+            _,
+            pooled_attn_mask,
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) = self.split_x_y(pooled_tokens, pooled_attn_mask)
+
+        # I need to do a step where I basically split the pooled tokens up so that I have an instance wide
+        # collapsed mask of these
+
+        all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        # X contains the tokens to decode, Y contains the tokens to attend to for context
+        (
+            tokens_to_decode,
+            unmasked_tokens,
+            tokens_to_decode_mask,
+            unmasked_tokens_mask,
+            indices,
+            seqlens_tokens_to_decode,
+            seqlens_unmasked_tokens,
+            max_length_of_tokens_to_decode,
+            max_length_of_unmasked_tokens,
+        ) = self.split_x_y(all_tokens, mask)
+        # Pack x tokens
+        if self.use_flash_attn:
+            raise NotImplementedError("Flash attn not implemented")
+
+        for blk in self.blocks:
+            # note that we are not taking the inverse of the mask, since split_x_y gives us
+            # true values for values we want to take part in attention
+            tokens_to_decode = blk(
+                x=tokens_to_decode,
+                y=pooled_tokens,
+                attn_mask=(
+                    pooled_attn_mask.bool() if not self.use_flash_attn else None
+                ),  # only for flash attn though this should not be left in
+            )
+
+        x = self.combine_x_y(
+            tokens_to_decode=tokens_to_decode,
+            unmasked_tokens=unmasked_tokens,
+            tokens_to_decode_mask=tokens_to_decode_mask,
+            unmasked_tokens_mask=unmasked_tokens_mask,
+            indices=indices,
+        )
+        tokens_per_modality_dict = self.split_and_expand_per_modality(
+            x, modalities_to_dims_dict
+        )
+        tokens_per_modality_dict.update(original_masks_dict)
+        return tokens_per_modality_dict
+
+    def forward(
+        self,
+        x: TokensAndMasks,
+        pooled_tokens_and_masks: dict[str, Tensor],
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+    ) -> TokensAndMasks:
+        """Generate predictions from encoded token representations.
+
+        Args:
+            x: TokensAndMasks containing the masks to use to make decodings.
+                These tokens are discarded in this function - only the masks are used
+            pooled_tokens_and_masks: Dictionary containing the pooled tokens and their masks
+            timestamps: Timestamps of the tokens
+            patch_size: Patch size of the tokens
+            input_res: Input resolution of the tokens
+        Returns:
+            TokensAndMasks containing the predicted tokens and their masks
+        """
+        # Apply Input Norms and encoder to decoder embeds to each modality
+        available_modalities = x.modalities
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+
+        # Apply input norma nd projection on pooled tokens
+        pooled_tokens = pooled_tokens_and_masks["modality_pooled_tokens"]
+        pooled_tokens = self.input_norm(pooled_tokens)
+        pooled_tokens = self.encoder_to_decoder_embed(pooled_tokens)
+        pooled_tokens_and_masks["modality_pooled_tokens"] = pooled_tokens
+
+        # Prepare the Learnable Masked Outputs on the original Unpooled Tokens
+        decoder_emedded_dict = x.as_dict(return_none=False)
+        tokens_only_dict = self.add_masks(decoder_emedded_dict)
+        decoder_emedded_dict.update(tokens_only_dict)
+        tokens_and_masks = self.apply_attn(
+            decoder_emedded_dict,
+            timestamps,
+            patch_size,
+            input_res,
+            pooled_tokens_and_masks=pooled_tokens_and_masks,
+        )
+
+        # Project and Normalize Output Tokens
+        output_dict = {}
+        available_modalities = return_modalities_from_dict(tokens_and_masks)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            modality_mask = tokens_and_masks[masked_modality_name]
+            # patchify masked data
+            per_modality_output_tokens = []
+            modality_data = tokens_and_masks[modality]
+
+            band_sets = Modality.get(modality).band_sets
+            for idx in range(len(band_sets)):
+                per_channel_modality_data = modality_data[..., idx, :]
+                output_data = self.to_output_embed(self.norm(per_channel_modality_data))
+                per_modality_output_tokens.append(output_data)
+            output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
+            output_dict[masked_modality_name] = modality_mask
+        return TokensAndMasks(**output_dict)
+
+
+@dataclass
+class PooledModalityPredictorConfig(PredictorConfig):
+    """Configuration for the PooledModalityPredictor."""
+
+    include_encoder_encodings: bool = True
+    dims_to_pool: DimsToPool = DimsToPool.MODALITY
+
+    def build(self) -> "PooledModalityPredictor":
+        """Build the predictor."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        # supported_modality_names is replaced by supported_modalities
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"Predictor kwargs: {kwargs}")
+        return PooledModalityPredictor(**kwargs)
