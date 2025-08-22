@@ -1,4 +1,4 @@
-"""Post-process ingested ERA5 data into the Helios dataset."""
+"""Post-process ingested ERA5_10 data into the Helios dataset."""
 
 import argparse
 import csv
@@ -20,9 +20,10 @@ from helios.dataset.utils import get_modality_fname
 
 from ..constants import METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
+from .multitemporal_raster import get_adjusted_projection_and_bounds
 
 # Layer name in the input rslearn dataset.
-LAYER_NAME = "era5"
+LAYER_NAME = "era5_10"
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
         window_path: the rslearn window directory to read data from.
         helios_path: Helios dataset path to write to.
     """
-    modality = Modality.ERA5
+    modality = Modality.ERA5_10
     assert len(modality.band_sets) == 1
     band_set = modality.band_sets[0]
 
@@ -45,7 +46,7 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
 
     logger.debug(f"processing window {window.name}")
 
-    # Skip windows that are not prepared for ERA5.
+    # Skip windows that are not prepared for ERA5_10.
     if LAYER_NAME not in layer_datas:
         logger.warning(
             f"skipping window {window.name} because it is not prepared for {LAYER_NAME}"
@@ -70,9 +71,14 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
         # Use first item in the group to get the start time for this image.
         time_range = Item.deserialize(group[0]).geometry.time_range
 
+        # Compute bounds of this raster adjusted for the resolution.
+        adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
+            Modality.ERA5_10, band_set, window.projection, window.bounds
+        )
+
         raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands, group_idx)
         image = raster_format.decode_raster(
-            raster_dir, window.projection, window.bounds
+            raster_dir, adjusted_projection, adjusted_bounds
         )
 
         year_images.append(image)
@@ -110,7 +116,7 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
     year_stacked_image = np.concatenate(year_images, axis=0)
     year_dst_fname = get_modality_fname(
         helios_path,
-        Modality.ERA5,
+        Modality.ERA5_10,
         TimeSpan.YEAR,
         window_metadata,
         band_set.get_resolution(),
@@ -118,13 +124,13 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
     )
     raster_format.encode_raster(
         path=year_dst_fname.parent,
-        projection=window.projection,
-        bounds=window.bounds,
+        projection=adjusted_projection,
+        bounds=adjusted_bounds,
         array=year_stacked_image,
         fname=year_dst_fname.name,
     )
     year_metadata_fname = get_modality_temp_meta_fname(
-        helios_path, Modality.ERA5, TimeSpan.YEAR, window.name
+        helios_path, Modality.ERA5_10, TimeSpan.YEAR, window.name
     )
     year_metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with year_metadata_fname.open("w") as f:
@@ -146,7 +152,7 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
     # Save the two-week image and metadata.
     two_week_dst_fname = get_modality_fname(
         helios_path,
-        Modality.ERA5,
+        Modality.ERA5_10,
         TimeSpan.TWO_WEEK,
         window_metadata,
         band_set.get_resolution(),
@@ -154,13 +160,13 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
     )
     raster_format.encode_raster(
         path=two_week_dst_fname.parent,
-        projection=window.projection,
-        bounds=window.bounds,
+        projection=adjusted_projection,
+        bounds=adjusted_bounds,
         array=two_week_image,
         fname=two_week_dst_fname.name,
     )
     two_week_metadata_fname = get_modality_temp_meta_fname(
-        helios_path, Modality.ERA5, TimeSpan.TWO_WEEK, window.name
+        helios_path, Modality.ERA5_10, TimeSpan.TWO_WEEK, window.name
     )
     two_week_metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with two_week_metadata_fname.open("w") as f:
@@ -208,7 +214,7 @@ if __name__ == "__main__":
     ds_path = UPath(args.ds_path)
     helios_path = UPath(args.helios_path)
 
-    metadata_fnames = ds_path.glob("windows/res_160/*/metadata.json")
+    metadata_fnames = ds_path.glob("windows/res_10/*/metadata.json")
     jobs = []
     for metadata_fname in metadata_fnames:
         jobs.append(

@@ -19,7 +19,7 @@ from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
 from helios.evals.eval_wrapper import get_eval_wrapper
 from helios.evals.knn import run_knn
-from helios.evals.linear_probe import train_and_eval_probe
+from helios.evals.linear_probe import ProbeType, train_and_eval_probe
 from helios.nn.flexihelios import PoolingType
 from helios.train.callbacks.wandb import HeliosWandBCallback
 
@@ -43,7 +43,7 @@ class DownstreamTaskConfig:
     epochs: int = 50  # Number of training epochs for linear probing task
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
     eval_mode: str | None = None
-    probe_type: str = "linear"
+    probe_type: ProbeType = ProbeType.LINEAR
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: str = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
     use_task_embeds: bool = False
