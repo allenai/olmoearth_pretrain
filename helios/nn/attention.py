@@ -509,13 +509,18 @@ class Block(nn.Module):
         task_moe_kwargs = (task_moe_kwargs or {}).copy()
         self.use_task_moe = task_moe_kwargs.pop("use_task_moe", False)
         self.replace_ffn = task_moe_kwargs.pop("replace_ffn", False)
-        moe_indices = task_moe_kwargs.pop("task_moe_indices", [])
-        if task_moe_kwargs.pop("index", None) not in moe_indices:
+
+        index = task_moe_kwargs.pop("index", None)
+        moe_indices = task_moe_kwargs.pop("task_moe_indices", None)
+        if moe_indices is not None and index not in moe_indices:
             self.use_task_moe = False
+            self.replace_ffn = False
+
         if self.use_task_moe:
-            # Project [MoE, MLP] to dim to control increased activation norm
             self.moe = SoftMoE(dim, **task_moe_kwargs)
-            self.moe_proj = nn.Linear(dim * 2, dim, bias=False)
+            if not self.replace_ffn:
+                # Project [MoE, MLP] to dim to control increased activation norm
+                self.moe_proj = nn.Linear(dim * 2, dim, bias=False)
 
         if not self.replace_ffn:
             self.mlp = Mlp(
@@ -524,9 +529,27 @@ class Block(nn.Module):
                 act_layer=act_layer,
                 drop=drop,
             )
+        else:
+            assert self.use_task_moe, "cannot replace ffn without using moe"
+
         self.ls2 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         )
+    
+    def mlp_fn(self, x: torch.Tensor, task_emb: torch.Tensor | None = None) -> torch.Tensor:
+        """Return FFN output or MoE output depending on configuration.
+
+        Args:
+            x: Input tensor of shape (B, N, C)
+            task_emb: Optional task embedding tensor of shape (B, task_dim)
+
+        Returns:
+            Output tensor of shape (B, N, C)
+        """
+        if self.replace_ffn:
+            return self.moe(x, task_emb=task_emb)["outputs"]
+        else:
+            return self.mlp(x)
 
     def forward(
         self,
@@ -576,8 +599,7 @@ class Block(nn.Module):
         )
 
         x = self.norm2(x)
-        mlp_fn = self.moe if self.replace_ffn else self.mlp
-        mlp_out = mlp_fn(x)
+        mlp_out = self.mlp_fn(x, task_emb=task_emb)
 
         if self.use_task_moe and not self.replace_ffn:
             moe_out = self.moe(x, task_emb=task_emb)["outputs"]

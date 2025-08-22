@@ -697,9 +697,9 @@ class SoftMoE(Module):
         task_emb: Tensor | None = None,
         mask: Tensor | None = None,
         weight_key: Tensor | None = None,
-        return_load_balance_loss: bool = True,
-        return_dispatch_weights: bool = True,
-        return_combine_weights: bool = True,
+        return_load_balance_loss: bool = False,
+        return_dispatch_weights: bool = False,
+        return_combine_weights: bool = False,
     ) -> dict[str, Tensor]:
         """Forward pass of the SoftMoE module.
 
@@ -760,8 +760,6 @@ class SoftMoE(Module):
                 F.softmax(combine_logits.sum(dim=-1), dim=-1)
                 .mean(dim=(0, 1))
                 .detach()
-                .cpu()
-                .numpy(),
             )
 
         # noised dispatch and combine gate logits, with annealing if needed
