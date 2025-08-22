@@ -107,6 +107,77 @@ class AllDiscriminationLoss(Loss):
         return loss
 
 
+@LOSS_REGISTRY.register("modality_batch_patch_discrimination")
+class ModalityBatchPatchDiscriminationLoss(Loss):
+    """Loss function for per-modality patch discrimination task.
+
+    This has lower memory consumption than the old patch discrimination loss.
+    It does not support all discrimination loss.
+    """
+
+    name = "ModalityBatchPatchDisc"
+
+    def __init__(self, tau: float = 0.1, pred2unit: bool = False, weight: float = 1.0):
+        """Initialize patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            weight: the weight to apply to this loss
+        """
+        self.tau = tau
+        self.pred2unit = pred2unit
+        self.weight = weight
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute patch discrimination loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        total_loss = 0
+        # sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
+        count = 0
+        for modality_name in predictions.modalities:
+            preds = getattr(predictions, modality_name)
+            # masks = getattr(predictions, predictions.get_masked_modality_name(modality_name))
+            targs = getattr(targets, modality_name)
+            preds_flat = rearrange(preds, "b ... d -> b (...) d")
+            targs_flat = rearrange(targs, "b ... d -> b (...) d")
+            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat)
+            label = torch.arange(score.shape[2], dtype=torch.long, device=score.device)
+            loss = F.cross_entropy(
+                score.flatten(0, 1),
+                label.repeat(score.shape[0]),
+                reduction="none",
+                label_smoothing=0.01,
+            )
+            total_loss += loss.sum()
+            count += loss.numel()
+
+            preds_flat = rearrange(preds, "b ... d -> (...) b d")
+            targs_flat = rearrange(targs, "b ... d -> (...) b d")
+            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat)
+            label = torch.arange(score.shape[2], dtype=torch.long, device=score.device)
+            loss = F.cross_entropy(
+                score.flatten(0, 1),
+                label.repeat(score.shape[0]),
+                reduction="none",
+                label_smoothing=0.01,
+            )
+            total_loss += loss.sum()
+            count += loss.numel()
+
+        return self.weight * (total_loss / count)
+
+
 @LOSS_REGISTRY.register("modality_all_discrimination")
 class ModalityAllDiscriminationLoss(Loss):
     """Loss function for all discrimination task.
