@@ -475,6 +475,14 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    WRI_CANOPY_HEIGHT_MAP = ModalitySpec(
+        name="wri_canopy_height_map",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["B1"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     @classmethod
     def get(self, name: str) -> ModalitySpec:
         """Get the ModalitySpec with the specified name."""

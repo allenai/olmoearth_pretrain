@@ -59,6 +59,7 @@ class HeliosSample(NamedTuple):
     cdl: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
     worldpop: ArrayTensor | None = None  # [B, H, W, 1, len(WORLDPOP_bands)]
     worldcereal: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
+    wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
     # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
 
