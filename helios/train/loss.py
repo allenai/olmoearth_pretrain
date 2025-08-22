@@ -149,7 +149,7 @@ class PatchDiscriminationAllTargetsLoss(Loss):
             preds = getattr(predictions, modality_name)
             targs = getattr(targets, modality_name)
             preds = 4 * F.normalize(preds, p=2, dim=-1)
-            targs = 4 * F.normalize(preds, p=2, dim=-1)
+            targs = 4 * F.normalize(targs, p=2, dim=-1)
             masks = getattr(
                 predictions, predictions.get_masked_modality_name(modality_name)
             )
@@ -215,7 +215,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             preds = getattr(predictions, modality_name)
             targs = getattr(targets, modality_name)
             preds = 4 * F.normalize(preds, p=2, dim=-1)
-            targs = 4 * F.normalize(preds, p=2, dim=-1)
+            targs = 4 * F.normalize(targs, p=2, dim=-1)
             masks = getattr(
                 predictions, predictions.get_masked_modality_name(modality_name)
             )
