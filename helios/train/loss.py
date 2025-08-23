@@ -107,78 +107,6 @@ class AllDiscriminationLoss(Loss):
         return loss
 
 
-@LOSS_REGISTRY.register("patch_discrimination_alltargets")
-class PatchDiscriminationAllTargetsLoss(Loss):
-    """Loss function for per-modality patch discrimination task.
-
-    This has lower memory consumption than the old patch discrimination loss.
-    It does not support all discrimination loss.
-    """
-
-    name = "PatchDisc"
-
-    def __init__(
-        self,
-        alpha: float = 1,
-        tau: float = 1,
-        label_smoothing: float = 0.01,
-        weight: float = 1.0,
-    ):
-        """Initialize patch discrimination loss.
-
-        Args:
-            alpha: scalar multiple for norm
-            tau: the softmax temperature
-            label_smoothing: label smoothing [0,1], 0=none, 1=too much
-            weight: the weight to apply to this loss
-        """
-        self.alpha = alpha
-        self.label_smoothing = label_smoothing
-        self.tau = tau
-        self.weight = weight
-
-    def compute(
-        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
-    ) -> Tensor:
-        """Compute patch discrimination loss between predictions and targets.
-
-        Args:
-            predictions: Model predictions.
-            targets: Ground truth targets.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            The computed loss value.
-        """
-        total_loss = 0
-        # sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
-        count = 0.00001
-        for modality_name in predictions.modalities:
-            preds = getattr(predictions, modality_name)
-            targs = getattr(targets, modality_name)
-            preds = self.alpha * F.normalize(preds, p=2, dim=-1)
-            targs = self.alpha * F.normalize(targs, p=2, dim=-1)
-            masks = getattr(
-                predictions, predictions.get_masked_modality_name(modality_name)
-            )
-            preds_flat = rearrange(preds, "b ... d -> b (...) d")
-            targs_flat = rearrange(targs, "b ... d -> b (...) d")
-            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
-            label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
-            loss = F.cross_entropy(
-                score.flatten(0, 1),
-                label.repeat(score.shape[0]),
-                reduction="none",
-                label_smoothing=self.label_smoothing,
-            )
-            loss[masks.flatten() != MaskValue.DECODER.value] = 0
-
-            total_loss += loss.sum()
-            count += (masks.flatten() == MaskValue.DECODER.value).sum()
-
-        return self.weight * (total_loss / count)
-
-
 @LOSS_REGISTRY.register("modality_batch_patch_discrimination")
 class ModalityBatchPatchDiscriminationLoss(Loss):
     """Loss function for per-modality patch discrimination task.
@@ -191,9 +119,12 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
 
     def __init__(
         self,
-        alpha: float = 1,
         tau: float = 1,
-        label_smoothing: float = 0.01,
+        label_smoothing: float = 0,
+        prediction_norm: float | None = None,
+        target_norm: float | None = None,
+        modality_loss: bool = True,
+        batch_loss: bool = True,
         weight: float = 1.0,
     ):
         """Initialize patch discrimination loss.
@@ -202,12 +133,19 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             alpha: scalar multiple for norm
             tau: the softmax temperature
             label_smoothing: label smoothing [0,1], 0=none, 1=too much
+            prediction_norm: norm for predictions,
+            target_norm: norm for targets,
+            modality_loss: calculate loss across each modality,
+            batch_loss: caluclate loss across batches,
             weight: the weight to apply to this loss
         """
-        self.alpha = alpha
         self.tau = tau
         self.label_smoothing = label_smoothing
         self.weight = weight
+        self.prediction_norm = prediction_norm
+        self.target_norm = target_norm
+        self.modality_loss = modality_loss
+        self.batch_loss = batch_loss
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -228,41 +166,51 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         for modality_name in predictions.modalities:
             preds = getattr(predictions, modality_name)
             targs = getattr(targets, modality_name)
-            targs = self.alpha * F.normalize(targs, p=2, dim=-1)
-            preds = self.alpha * F.normalize(preds, p=2, dim=-1)
+
+            if self.target_norm is not None:
+                targs = self.target_norm * F.normalize(targs, p=2, dim=-1)
+            if self.prediction_norm is not None:
+                preds = self.prediction_norm * F.normalize(preds, p=2, dim=-1)
+
             masks = getattr(
                 predictions, predictions.get_masked_modality_name(modality_name)
             )
-            preds_flat = rearrange(preds, "b ... d -> b (...) d")
-            targs_flat = rearrange(targs, "b ... d -> b (...) d")
-            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
-            label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
-            loss = F.cross_entropy(
-                score.flatten(0, 1),
-                label.repeat(score.shape[0]),
-                reduction="none",
-                label_smoothing=self.label_smoothing,
-            )
-            loss[masks.flatten() != MaskValue.DECODER.value] = 0
+            if self.modality_loss:
+                preds_flat = rearrange(preds, "b ... d -> b (...) d")
+                targs_flat = rearrange(targs, "b ... d -> b (...) d")
+                score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
+                label = torch.arange(
+                    score.shape[1], dtype=torch.long, device=score.device
+                )
+                loss = F.cross_entropy(
+                    score.flatten(0, 1),
+                    label.repeat(score.shape[0]),
+                    reduction="none",
+                    label_smoothing=self.label_smoothing,
+                )
+                loss[masks.flatten() != MaskValue.DECODER.value] = 0
 
-            total_loss += loss.sum()
-            count += (masks.flatten() == MaskValue.DECODER.value).sum()
+                total_loss += loss.sum()
+                count += (masks.flatten() == MaskValue.DECODER.value).sum()
 
-            preds_flat = rearrange(preds, "b ... d -> (...) b d")
-            targs_flat = rearrange(targs, "b ... d -> (...) b d")
-            masks_flat = rearrange(masks, "b ... -> (... b)")
-            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
-            label = torch.arange(score.shape[2], dtype=torch.long, device=score.device)
-            loss = F.cross_entropy(
-                score.flatten(0, 1),
-                label.repeat(score.shape[0]),
-                reduction="none",
-                label_smoothing=self.label_smoothing,
-            )
-            loss[masks_flat != MaskValue.DECODER.value] = 0
+            if self.batch_loss:
+                preds_flat = rearrange(preds, "b ... d -> (...) b d")
+                targs_flat = rearrange(targs, "b ... d -> (...) b d")
+                masks_flat = rearrange(masks, "b ... -> (... b)")
+                score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
+                label = torch.arange(
+                    score.shape[2], dtype=torch.long, device=score.device
+                )
+                loss = F.cross_entropy(
+                    score.flatten(0, 1),
+                    label.repeat(score.shape[0]),
+                    reduction="none",
+                    label_smoothing=self.label_smoothing,
+                )
+                loss[masks_flat != MaskValue.DECODER.value] = 0
 
-            total_loss += loss.sum()
-            count += (masks_flat == MaskValue.DECODER.value).sum()
+                total_loss += loss.sum()
+                count += (masks_flat == MaskValue.DECODER.value).sum()
 
         return self.weight * (total_loss / count)
 
