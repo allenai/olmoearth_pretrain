@@ -108,6 +108,7 @@ def build_train_module_config(
         loss_config=LossConfig(
             loss_config={
                 "type": "modality_batch_patch_discrimination",
+                "target_norm": 1,
             }
         ),
         contrastive_config=LossConfig(
