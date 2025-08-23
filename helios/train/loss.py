@@ -189,8 +189,11 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             preds = getattr(predictions, modality_name)
             targs = getattr(targets, modality_name)
             if self.norm_lambda is not None:
-                total_loss += self.norm_lambda * smooth_l1_regularization(
-                    preds, dim=-1, beta=self.norm_beta
+                total_loss += (
+                    self.norm_lambda
+                    * smooth_l1_regularization(
+                        preds, dim=-1, beta=self.norm_beta
+                    ).mean()
                 )
             if self.target_norm is not None:
                 targs = self.target_norm * F.normalize(targs, p=2, dim=-1)
