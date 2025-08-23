@@ -166,7 +166,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
 
     return HeliosDataLoaderConfig(
-        num_workers=16,
+        num_workers=4,
         global_batch_size=512,
         token_budget=1500,
         prefetch_factor=2,
@@ -222,20 +222,20 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                     "m-eurosat": DownstreamTaskConfig(
                         dataset="m-eurosat",
                         embedding_batch_size=128,
-                        num_workers=8,
+                        num_workers=2,
                         pooling_type=PoolingType.MEAN,
                         norm_stats_from_pretrained=True,
-                        eval_interval=Duration.steps(2000),
+                        eval_interval=Duration.steps(10000),
                     ),
                     "pastis": DownstreamTaskConfig(
                         dataset="pastis",
                         embedding_batch_size=32,
                         probe_batch_size=8,
-                        num_workers=8,
+                        num_workers=2,
                         pooling_type=PoolingType.MEAN,
                         norm_stats_from_pretrained=True,
                         probe_lr=0.1,
-                        eval_interval=Duration.steps(2000),
+                        eval_interval=Duration.steps(10000),
                         input_modalities=[Modality.SENTINEL2_L2A.name],
                         epochs=50,
                     ),
@@ -243,7 +243,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                         dataset="mados",
                         embedding_batch_size=128,
                         probe_batch_size=128,
-                        num_workers=8,
+                        num_workers=2,
                         pooling_type=PoolingType.MEAN,
                         norm_stats_from_pretrained=False,
                         probe_lr=0.01,
@@ -263,7 +263,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                     "m-so2sat": DownstreamTaskConfig(
                         dataset="m-so2sat",
                         embedding_batch_size=128,
-                        num_workers=4,
+                        num_workers=2,
                         pooling_type=PoolingType.MEAN,
                         norm_stats_from_pretrained=True,
                         eval_interval=Duration.steps(10000),
