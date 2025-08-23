@@ -107,6 +107,22 @@ class AllDiscriminationLoss(Loss):
         return loss
 
 
+def smooth_l1_regularization(x: Tensor, dim: int = -1, beta: float = 1) -> Tensor:
+    """Smooth l1 regularization on tensor?
+
+    I made this up i think it's right
+    Args:
+        x: input
+        dim: dimension to calculate norm over
+        beta: idk but it's in the pytorch version it's probably always 1
+    """
+    l2 = (x**2).sum(dim=-1) / beta
+    l1 = 2 * (x**2).sum(dim=-1).sqrt() - beta
+    mask = l1 < beta
+    sl1r = l2 * mask + l1 * (~mask)
+    return sl1r
+
+
 @LOSS_REGISTRY.register("modality_batch_patch_discrimination")
 class ModalityBatchPatchDiscriminationLoss(Loss):
     """Loss function for per-modality patch discrimination task.
@@ -126,6 +142,8 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         modality_loss: bool = True,
         batch_loss: bool = True,
         weight: float = 1.0,
+        norm_lambda: float | None = None,
+        norm_beta: float = 1,
     ):
         """Initialize patch discrimination loss.
 
@@ -138,6 +156,8 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             modality_loss: calculate loss across each modality,
             batch_loss: caluclate loss across batches,
             weight: the weight to apply to this loss
+            norm_lambda: weight for embedding regularization loss
+            norm_beta: beta for embedding regularization loss
         """
         self.tau = tau
         self.label_smoothing = label_smoothing
@@ -146,6 +166,8 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         self.target_norm = target_norm
         self.modality_loss = modality_loss
         self.batch_loss = batch_loss
+        self.norm_lambda = norm_lambda
+        self.norm_beta = norm_beta
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -166,7 +188,10 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         for modality_name in predictions.modalities:
             preds = getattr(predictions, modality_name)
             targs = getattr(targets, modality_name)
-
+            if self.norm_lambda is not None:
+                total_loss += self.norm_lambda * smooth_l1_regularization(
+                    preds, dim=-1, beta=self.norm_beta
+                )
             if self.target_norm is not None:
                 targs = self.target_norm * F.normalize(targs, p=2, dim=-1)
             if self.prediction_norm is not None:

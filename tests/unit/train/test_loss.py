@@ -3,6 +3,7 @@
 import logging
 
 import torch
+import torch.nn.functional as F
 
 from helios.nn.flexihelios import TokensAndMasks
 from helios.train.loss import (
@@ -14,10 +15,23 @@ from helios.train.loss import (
     ModalityBatchPatchDiscriminationLoss,
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
+    smooth_l1_regularization,
 )
 from helios.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
+
+
+def test_smooth_l1_regularization() -> None:
+    """Test it."""
+    x = torch.rand(10, 10)
+    reg = smooth_l1_regularization(F.normalize(x, p=2, dim=-1))
+    assert torch.isclose(reg.mean(), torch.tensor(1.0))
+    reg = smooth_l1_regularization(2 * F.normalize(x, p=2, dim=-1))
+    # why tho?
+    assert torch.isclose(reg.mean(), torch.tensor(3.0))
+    reg = smooth_l1_regularization(0.1 * F.normalize(x, p=2, dim=-1))
+    assert torch.isclose(reg.mean(), torch.tensor(0.01))
 
 
 def test_modality_batch_patch_discrimination_loss() -> None:
