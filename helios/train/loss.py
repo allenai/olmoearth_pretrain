@@ -117,16 +117,24 @@ class PatchDiscriminationAllTargetsLoss(Loss):
 
     name = "PatchDisc"
 
-    def __init__(self, tau: float = 1, pred2unit: bool = False, weight: float = 1.0):
+    def __init__(
+        self,
+        alpha: float = 4,
+        tau: float = 1,
+        label_smoothing: float = 0.01,
+        weight: float = 1.0,
+    ):
         """Initialize patch discrimination loss.
 
         Args:
+            alpha: scalar multiple for norm
             tau: the softmax temperature
-            pred2unit: whether to standardize the predictions using batch statistics
+            label_smoothing: label smoothing [0,1], 0=none, 1=too much
             weight: the weight to apply to this loss
         """
+        self.alpha = alpha
+        self.label_smoothing = label_smoothing
         self.tau = tau
-        self.pred2unit = pred2unit
         self.weight = weight
 
     def compute(
@@ -148,20 +156,20 @@ class PatchDiscriminationAllTargetsLoss(Loss):
         for modality_name in predictions.modalities:
             preds = getattr(predictions, modality_name)
             targs = getattr(targets, modality_name)
-            preds = 4 * F.normalize(preds, p=2, dim=-1)
-            targs = 4 * F.normalize(targs, p=2, dim=-1)
+            preds = self.alpha * F.normalize(preds, p=2, dim=-1)
+            targs = self.alpha * F.normalize(targs, p=2, dim=-1)
             masks = getattr(
                 predictions, predictions.get_masked_modality_name(modality_name)
             )
             preds_flat = rearrange(preds, "b ... d -> b (...) d")
             targs_flat = rearrange(targs, "b ... d -> b (...) d")
-            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat)
+            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
             label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
             loss = F.cross_entropy(
                 score.flatten(0, 1),
                 label.repeat(score.shape[0]),
                 reduction="none",
-                label_smoothing=0.01,
+                label_smoothing=self.label_smoothing,
             )
             loss[masks.flatten() != MaskValue.DECODER.value] = 0
 
@@ -182,15 +190,21 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
     name = "ModalityBatchPatchDisc"
 
     def __init__(
-        self, tau: float = 1, label_smoothing: float = 0.01, weight: float = 1.0
+        self,
+        alpha: float = 4,
+        tau: float = 1,
+        label_smoothing: float = 0.01,
+        weight: float = 1.0,
     ):
         """Initialize patch discrimination loss.
 
         Args:
+            alpha: scalar multiple for norm
             tau: the softmax temperature
             label_smoothing: label smoothing [0,1], 0=none, 1=too much
             weight: the weight to apply to this loss
         """
+        self.alpha = alpha
         self.tau = tau
         self.label_smoothing = label_smoothing
         self.weight = weight
@@ -214,14 +228,14 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         for modality_name in predictions.modalities:
             preds = getattr(predictions, modality_name)
             targs = getattr(targets, modality_name)
-            preds = 4 * F.normalize(preds, p=2, dim=-1)
-            targs = 4 * F.normalize(targs, p=2, dim=-1)
+            preds = self.alpha * F.normalize(preds, p=2, dim=-1)
+            targs = self.alpha * F.normalize(targs, p=2, dim=-1)
             masks = getattr(
                 predictions, predictions.get_masked_modality_name(modality_name)
             )
             preds_flat = rearrange(preds, "b ... d -> b (...) d")
             targs_flat = rearrange(targs, "b ... d -> b (...) d")
-            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat)
+            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
             label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
             loss = F.cross_entropy(
                 score.flatten(0, 1),
@@ -237,7 +251,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             preds_flat = rearrange(preds, "b ... d -> (...) b d")
             targs_flat = rearrange(targs, "b ... d -> (...) b d")
             masks_flat = rearrange(masks, "b ... -> (... b)")
-            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat)
+            score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
             label = torch.arange(score.shape[2], dtype=torch.long, device=score.device)
             loss = F.cross_entropy(
                 score.flatten(0, 1),
