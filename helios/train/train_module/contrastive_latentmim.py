@@ -256,6 +256,12 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
             total_batch_loss,
             ReduceType.mean,
         )
+        if self.contrastive_loss is not None:
+            self.trainer.record_metric(
+                f"train/{self.contrastive_loss.name}",
+                total_batch_con,
+                ReduceType.mean,
+            )
         self.log_regularization(total_batch_reg)
 
         del batch, batch_data  # In case this helps with memory utilization.
