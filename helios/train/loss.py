@@ -197,6 +197,9 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                 )
                 total_loss += self.norm_lambda * reg_loss.sum()
                 count += reg_loss.numel()
+            # print(f'{modality_name} targ norm: {(targs[masks == MaskValue.DECODER.value]**2).sum(dim=-1).mean()}')
+            # print(f'{modality_name} pred norm: {(preds[masks == MaskValue.DECODER.value]**2).sum(dim=-1).mean()}')
+            # print(f'{modality_name} dot prod: {(preds[masks == MaskValue.DECODER.value]*targs[masks == MaskValue.DECODER.value]).sum(dim=-1).mean()}')
             if self.target_norm is not None:
                 targs = self.target_norm * F.normalize(targs, p=2, dim=-1)
             if self.prediction_norm is not None:

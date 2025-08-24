@@ -124,6 +124,8 @@ def build_train_module_config(
         loss_config=LossConfig(
             loss_config={
                 "type": "modality_batch_patch_discrimination",
+                "target_norm": 10,
+                "prediction_norm": 10,
             }
         ),
         contrastive_config=LossConfig(
@@ -167,7 +169,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
     return HeliosDataLoaderConfig(
         num_workers=4,
-        global_batch_size=512,
+        global_batch_size=128,
         token_budget=1500,
         prefetch_factor=2,
         sampled_hw_p_list=list(range(5, 13)),
