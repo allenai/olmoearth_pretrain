@@ -123,6 +123,7 @@ def build_train_module_config(
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
+                "only_decode_modalities": ["naip_10"],
             }
         ),
         loss_config=LossConfig(
