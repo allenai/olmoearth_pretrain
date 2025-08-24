@@ -86,8 +86,10 @@ class Pyrois(nn.Module, DistributedMixins):
 
         self.encoder.apply_fsdp(**fsdp_config)
         self.decoder.apply_fsdp(**fsdp_config)
+        self.proj_decoder.apply_fsdp(**fsdp_config)
         self.reconstructor.apply_fsdp(**fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
+        fully_shard(self.projector, **fsdp_config)
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.projector, "forward")
         register_fsdp_forward_method(self.encoder, "forward")
