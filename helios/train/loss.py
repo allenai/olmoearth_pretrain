@@ -188,21 +188,20 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         for modality_name in predictions.modalities:
             preds = getattr(predictions, modality_name)
             targs = getattr(targets, modality_name)
+            masks = getattr(
+                predictions, predictions.get_masked_modality_name(modality_name)
+            )
             if self.norm_lambda is not None:
-                total_loss += (
-                    self.norm_lambda
-                    * smooth_l1_regularization(
-                        preds, dim=-1, beta=self.norm_beta
-                    ).mean()
+                reg_loss = smooth_l1_regularization(
+                    preds[masks == MaskValue.DECODER.value], dim=-1, beta=self.norm_beta
                 )
+                total_loss += self.norm_lambda * reg_loss.sum()
+                count += reg_loss.numel()
             if self.target_norm is not None:
                 targs = self.target_norm * F.normalize(targs, p=2, dim=-1)
             if self.prediction_norm is not None:
                 preds = self.prediction_norm * F.normalize(preds, p=2, dim=-1)
 
-            masks = getattr(
-                predictions, predictions.get_masked_modality_name(modality_name)
-            )
             if self.modality_loss:
                 preds_flat = rearrange(preds, "b ... d -> b (...) d")
                 targs_flat = rearrange(targs, "b ... d -> b (...) d")
