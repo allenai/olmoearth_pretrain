@@ -144,6 +144,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         weight: float = 1.0,
         norm_lambda: float | None = None,
         norm_beta: float = 1,
+        mean_of_modalities: bool = False,
     ):
         """Initialize patch discrimination loss.
 
@@ -158,6 +159,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             weight: the weight to apply to this loss
             norm_lambda: weight for embedding regularization loss
             norm_beta: beta for embedding regularization loss
+            mean_of_modalities: mean of means instead of mean of all losses
         """
         self.tau = tau
         self.label_smoothing = label_smoothing
@@ -168,6 +170,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         self.batch_loss = batch_loss
         self.norm_lambda = norm_lambda
         self.norm_beta = norm_beta
+        self.mean_of_modalities = mean_of_modalities
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -182,9 +185,9 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         Returns:
             The computed loss value.
         """
-        total_loss = 0
         # sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
         count = 0.00001
+        losses = []
         for modality_name in predictions.modalities:
             preds = getattr(predictions, modality_name)
             targs = getattr(targets, modality_name)
@@ -195,11 +198,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                 reg_loss = smooth_l1_regularization(
                     preds[masks == MaskValue.DECODER.value], dim=-1, beta=self.norm_beta
                 )
-                total_loss += self.norm_lambda * reg_loss.sum()
-                count += reg_loss.numel()
-            # print(f'{modality_name} targ norm: {(targs[masks == MaskValue.DECODER.value]**2).sum(dim=-1).mean()}')
-            # print(f'{modality_name} pred norm: {(preds[masks == MaskValue.DECODER.value]**2).sum(dim=-1).mean()}')
-            # print(f'{modality_name} dot prod: {(preds[masks == MaskValue.DECODER.value]*targs[masks == MaskValue.DECODER.value]).sum(dim=-1).mean()}')
+                losses.append(self.norm_lambda * reg_loss)
             if self.target_norm is not None:
                 targs = self.target_norm * F.normalize(targs, p=2, dim=-1)
             if self.prediction_norm is not None:
@@ -217,11 +216,8 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                     label.repeat(score.shape[0]),
                     reduction="none",
                     label_smoothing=self.label_smoothing,
-                )
-                loss[masks.flatten() != MaskValue.DECODER.value] = 0
-
-                total_loss += loss.sum()
-                count += (masks.flatten() == MaskValue.DECODER.value).sum()
+                )[masks.flatten() == MaskValue.DECODER.value]
+                losses.append(loss)
 
             if self.batch_loss:
                 preds_flat = rearrange(preds, "b ... d -> (...) b d")
@@ -236,11 +232,13 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                     label.repeat(score.shape[0]),
                     reduction="none",
                     label_smoothing=self.label_smoothing,
-                )
-                loss[masks_flat != MaskValue.DECODER.value] = 0
+                )[masks_flat == MaskValue.DECODER.value]
+                losses.append(loss)
 
-                total_loss += loss.sum()
-                count += (masks_flat == MaskValue.DECODER.value).sum()
+        if self.mean_of_modalities:
+            total_loss = torch.cat([loss.mean() for loss in losses]).mean()
+        else:
+            total_loss = torch.cat([loss.flatten() for loss in losses]).mean()
 
         return self.weight * (total_loss / count)
 
