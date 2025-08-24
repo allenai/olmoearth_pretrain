@@ -7,12 +7,15 @@ import torch
 from einops import reduce
 from torch import nn
 
+from helios.data.constants import Modality
 from helios.evals.datasets.configs import TaskType
 from helios.evals.models import DINOv2, GalileoWrapper, Panopticon
 from helios.nn.flexihelios import FlexiHeliosBase, PoolingType, TokensAndMasks
 from helios.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from helios.nn.st_model import STBase
 from helios.train.masking import MaskedHeliosSample
+from einops import rearrange
+import numpy as np
 
 logger = getLogger(__name__)
 
@@ -86,14 +89,35 @@ class HeliosEvalWrapper(EvalWrapper):
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
             batch_embeddings: TokensAndMasks = self.model(
-                masked_helios_sample, patch_size=self.patch_size
+                masked_helios_sample, patch_size=self.patch_size, always_pass_none_mask_to_transformer=True
             )["tokens_and_masks"]  # (bsz, dim)
+            sentinel2_data = getattr(batch_embeddings, Modality.SENTINEL2_L2A.name, None)
+            sentinel1_data = getattr(batch_embeddings, Modality.SENTINEL1.name, None)
+            # get shapes of both data
+            print(f"sentinel2_data shape: {sentinel2_data.shape}")
+            print(f"sentinel1_data shape: {sentinel1_data.shape}")
+
+            flattened_s2 = rearrange(sentinel2_data, "b ... c d -> b (...) c d")
+            flattened_s1 = rearrange(sentinel1_data, "b ... c d -> b (...) c d")
+            # stack in the c dimension
+            # Combine flattened_s2 and flattened_s1 in the second to last dim (dim=-2)
+            # flattened_s2: [32, 3072, 3, 768], flattened_s1: [32, 3072, 1, 768]
+            # We want to concatenate at dim=-2 (the 3 and 1 dims)
+            combined_data = torch.cat([flattened_s2, flattened_s1], dim=-2)
+            print(f"combined_data shape: {combined_data.shape}")
+            # write the stack data to an npy file
+            np.save("./stacked_data.npy", combined_data.cpu().numpy())
+            # compute the cosine similarity of every vector from the stacked data num vectors equaled to the stacked dim
+            # adnd then log the distributions of the cosine similarities across al vectors
             # Concat features across modalities in space averaged across time
             batch_embeddings = batch_embeddings.pool_unmasked_tokens(
                 self.pooling_type,
                 spatial_pooling=self.spatial_pool,
                 concat_features=self.concat_features,
             )
+            # batch embedding shapes
+            print(f"batch_embeddings shape: {batch_embeddings.shape}")
+            raise ValueError("Stop here")
         else:
             pooled_tokens_dict = self.model(
                 masked_helios_sample, patch_size=self.patch_size

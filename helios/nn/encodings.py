@@ -75,6 +75,7 @@ def get_2d_sincos_pos_encoding_with_resolution(
         encoding: position encoding for the given grid: size (H*W, D)
     """
     # TODO: What happens when the res array is bigger than 1?
+    # what is grid_size?
     grid_h = torch.arange(grid_size, device=device)
     grid_w = torch.arange(grid_size, device=device)
     grid = torch.meshgrid(grid_w, grid_h, indexing="xy")  # (h_grid, w_grid)

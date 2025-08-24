@@ -110,6 +110,9 @@ def main():
     sub_command = SubCmd.launch if not args.dry_run else SubCmd.dry_run
     if project_name is None:
         project_name = "helios_in_loop_evals"
+    if cluster =="local":
+        sub_command = SubCmd.train
+        cmd = "torchrun"
 
     parent_dir = os.path.basename(os.path.dirname(checkpoint_path))[:100]
     # the step number is the last part of the checkpoint path
@@ -126,7 +129,7 @@ def main():
         run_name = base_run_name
 
         cmd = (
-            f"TRAIN_SCRIPT_PATH={module_path} python3 scripts/run_all_evals/all_evals.py "
+            f"TRAIN_SCRIPT_PATH={module_path} {cmd} scripts/run_all_evals/all_evals.py "
             f"{sub_command} {run_name} {cluster} --launch.priority=high "
             f"--launch.task_name=eval --trainer.load_path={checkpoint_path} --trainer.callbacks.wandb.project={project_name}{extra}"
         )

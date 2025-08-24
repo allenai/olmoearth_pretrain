@@ -45,6 +45,30 @@ def load_user_module(path):
 
 
 EVAL_TASKS = {
+    "pastis_sentinel1_sentinel2": DownstreamTaskConfig(
+        dataset="pastis",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MAX,
+        norm_stats_from_pretrained=False,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(20),
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        epochs=50,
+    ),
+    "pastis_sentinel1": DownstreamTaskConfig(
+        dataset="pastis",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MAX,
+        norm_stats_from_pretrained=False,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name],
+        epochs=50,
+    ),
     "m_forestnet": DownstreamTaskConfig(
         dataset="m-forestnet",
         embedding_batch_size=128,

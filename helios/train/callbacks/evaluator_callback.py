@@ -220,9 +220,9 @@ class DownstreamEvaluatorCallback(Callback):
                 for callback in self.trainer._iter_callbacks()
                 if isinstance(callback, HeliosWandBCallback)
             )
-            if wandb_callback.enabled:
-                for evaluator in self.evaluators:
-                    val_result, eval_time = self._perform_eval(evaluator)
+            for evaluator in self.evaluators:
+                val_result, eval_time = self._perform_eval(evaluator)
+                if wandb_callback.enabled:
                     wandb_callback.wandb.log(
                         {"eval/" + evaluator.evaluation_name: val_result}
                     )
