@@ -303,7 +303,9 @@ class HeliosDataLoader(DataLoaderBase):
             )
             output_dict["sentinel2_l2a"] = mock_sentinel2_l2a
         if Modality.NAIP_10.name in self.dataset.training_modalities:
-            mock_naip_10 = rng.random((1024, 1024, 1, 4), dtype=np.float32)
+            mock_naip_10 = rng.random(
+                (standard_hw * 4, standard_hw * 4, 1, 4), dtype=np.float32
+            )
             output_dict["naip_10"] = mock_naip_10
         if Modality.SENTINEL1.name in self.dataset.training_modalities:
             mock_sentinel1 = rng.random(
