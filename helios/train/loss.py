@@ -186,7 +186,6 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             The computed loss value.
         """
         # sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
-        count = 0.00001
         losses = []
         for modality_name in predictions.modalities:
             preds = getattr(predictions, modality_name)
@@ -240,7 +239,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         else:
             total_loss = torch.cat([loss.flatten() for loss in losses]).mean()
 
-        return self.weight * (total_loss / count)
+        return self.weight * total_loss
 
 
 @LOSS_REGISTRY.register("modality_all_discrimination")
