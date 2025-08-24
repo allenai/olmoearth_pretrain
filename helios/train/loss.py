@@ -235,7 +235,9 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                 losses.append(loss)
 
         if self.mean_of_modalities:
-            total_loss = torch.tensor([loss.mean() for loss in losses]).mean()
+            total_loss = torch.stack(
+                [loss.mean() for loss in losses if loss.numel() > 0]
+            ).mean()
         else:
             total_loss = torch.cat([loss.flatten() for loss in losses]).mean()
 
