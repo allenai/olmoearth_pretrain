@@ -215,7 +215,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                     label.repeat(score.shape[0]),
                     reduction="none",
                     label_smoothing=self.label_smoothing,
-                )[masks.flatten() == MaskValue.DECODER.value]
+                )[masks.flatten() == MaskValue.DECODER.value] * (self.tau * 2)
                 losses.append(loss)
 
             if self.batch_loss:
@@ -231,7 +231,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                     label.repeat(score.shape[0]),
                     reduction="none",
                     label_smoothing=self.label_smoothing,
-                )[masks_flat == MaskValue.DECODER.value]
+                )[masks_flat == MaskValue.DECODER.value] * (self.tau * 2)
                 losses.append(loss)
 
         if self.mean_of_modalities:
