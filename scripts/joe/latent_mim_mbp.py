@@ -203,7 +203,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                         num_workers=2,
                         pooling_type=PoolingType.MEAN,
                         norm_stats_from_pretrained=True,
-                        eval_interval=Duration.steps(10000),
+                        eval_interval=Duration.steps(5000),
                     ),
                     "pastis": DownstreamTaskConfig(
                         dataset="pastis",
@@ -213,7 +213,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                         pooling_type=PoolingType.MEAN,
                         norm_stats_from_pretrained=True,
                         probe_lr=0.1,
-                        eval_interval=Duration.steps(10000),
+                        eval_interval=Duration.steps(5000),
                         input_modalities=[Modality.SENTINEL2_L2A.name],
                         epochs=50,
                     ),
