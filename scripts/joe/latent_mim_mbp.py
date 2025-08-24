@@ -96,7 +96,7 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
-        rank_microbatch_size=32,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
+        rank_microbatch_size=16,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "modality_cross_random",
