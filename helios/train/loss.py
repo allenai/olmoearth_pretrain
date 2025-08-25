@@ -235,8 +235,15 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             if self.batch_loss:
                 preds_flat = rearrange(preds, "b ... d -> (...) b d")
                 targs_flat = rearrange(targs, "b ... d -> (...) b d")
-                masks_flat = rearrange(masks, "b ... -> (... b)")
+                masks_flat = rearrange(masks, "b ... -> (...) b")
                 score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
+                if self.decode_only:
+                    score_mask = (
+                        (masks_flat != MaskValue.DECODER.value)
+                        .unsqueeze(1)
+                        .expand_as(score)
+                    )
+                    score[score_mask] = float("-inf")
                 label = torch.arange(
                     score.shape[2], dtype=torch.long, device=score.device
                 )
@@ -245,7 +252,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                     label.repeat(score.shape[0]),
                     reduction="none",
                     label_smoothing=self.label_smoothing,
-                )[masks_flat == MaskValue.DECODER.value] * (self.tau * 2)
+                )[masks_flat.flatten() == MaskValue.DECODER.value] * (self.tau * 2)
                 losses.append(loss)
 
         if self.mean_of_modalities:
