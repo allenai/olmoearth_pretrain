@@ -146,6 +146,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         norm_beta: float = 1,
         mean_of_modalities: bool = False,
         sum_of_modalities: bool = False,
+        decode_only: bool = True,
     ):
         """Initialize patch discrimination loss.
 
@@ -162,6 +163,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             norm_beta: beta for embedding regularization loss
             mean_of_modalities: mean of means instead of mean of all losses
             sum_of_modalities: sum of means instead of mean of all losses
+            decode_only: only compare to targets masked as decode (prevents cheating maybe?)
         """
         self.tau = tau
         self.label_smoothing = label_smoothing
@@ -174,6 +176,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         self.norm_beta = norm_beta
         self.mean_of_modalities = mean_of_modalities
         self.sum_of_modalities = sum_of_modalities
+        self.decode_only = decode_only
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -210,6 +213,14 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                 preds_flat = rearrange(preds, "b ... d -> b (...) d")
                 targs_flat = rearrange(targs, "b ... d -> b (...) d")
                 score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
+                if self.decode_only:
+                    score_mask = (
+                        (masks != MaskValue.DECODER.value)
+                        .flatten(start_dim=1)
+                        .unsqueeze(1)
+                        .expand_as(score)
+                    )
+                    score[score_mask] = float("-inf")
                 label = torch.arange(
                     score.shape[1], dtype=torch.long, device=score.device
                 )
