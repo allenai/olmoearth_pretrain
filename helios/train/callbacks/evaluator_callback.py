@@ -44,6 +44,7 @@ class DownstreamTaskConfig:
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
     eval_mode: str | None = None
     probe_type: ProbeType = ProbeType.LINEAR
+    use_pooled_tokens: bool = False
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: str = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
     use_task_embeds: bool = False
@@ -92,6 +93,7 @@ class DownstreamEvaluator:
         self.use_task_embeds = task.use_task_embeds
         self.task_embed_path = task.task_embed_path
         self.name = task.name
+        self.use_pooled_tokens = task.use_pooled_tokens
         if self.eval_mode is None:
             self.eval_mode = get_eval_mode(self.config.task_type)
 
@@ -159,6 +161,7 @@ class DownstreamEvaluator:
             "use_task_embeds": self.use_task_embeds,
             "task_embed_path": self.task_embed_path,
             "dataset": self.name,
+            "use_pooled_tokens": self.use_pooled_tokens,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
@@ -226,14 +229,15 @@ class DownstreamEvaluatorCallback(Callback):
                 for callback in self.trainer._iter_callbacks()
                 if isinstance(callback, HeliosWandBCallback)
             )
-            for evaluator in self.evaluators:
-                val_result, eval_time = self._perform_eval(evaluator)
-                wandb_callback.wandb.log(
-                    {"eval/" + evaluator.evaluation_name: val_result}
-                )
-                wandb_callback.wandb.log(
-                    {"eval_time/" + evaluator.evaluation_name: eval_time}
-                )
+            if wandb_callback.enabled:
+                for evaluator in self.evaluators:
+                    val_result, eval_time = self._perform_eval(evaluator)
+                    wandb_callback.wandb.log(
+                        {"eval/" + evaluator.evaluation_name: val_result}
+                    )
+                    wandb_callback.wandb.log(
+                        {"eval_time/" + evaluator.evaluation_name: eval_time}
+                    )
 
         if self.cancel_after_first_eval:
             self.trainer.cancel_run(

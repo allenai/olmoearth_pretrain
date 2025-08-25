@@ -17,6 +17,7 @@ from helios.nn.flexihelios import (
     TokensAndMasks,
 )
 from helios.nn.lora import TaskLoRALinear
+from helios.nn.utils import unpack_encoder_output
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
@@ -302,7 +303,8 @@ class TestEncoder:
         input_res = 1
 
         # No early exit configuration is provided.
-        output, _ = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output_dict = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output, _, _ = unpack_encoder_output(output_dict)
 
         # After patchification the spatial dimensions reduce.
         expected_H = H // patch_size
@@ -403,13 +405,13 @@ class TestEncoder:
 
         token_exit_cfg = {"sentinel2_l2a": 2, "latlon": 0}
 
-        output, _ = encoder.forward(
+        output_dict = encoder.forward(
             x,
             patch_size,
             input_res,
             token_exit_cfg=token_exit_cfg,
         )
-
+        output, _, _ = unpack_encoder_output(output_dict)
         expected_H = H // patch_size
         expected_W = W // patch_size
         expected_embedding_size = encoder.embedding_size
@@ -502,7 +504,8 @@ class TestEncoder:
         patch_size = 4
         input_res = 1
 
-        output, _ = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output_dict = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output, _, _ = unpack_encoder_output(output_dict)
 
         # After patchification the spatial dimensions reduce.
         expected_H = H // patch_size
@@ -885,13 +888,16 @@ def test_end_to_end_with_exit_config(
         max_sequence_length=MAX_SEQ_LENGTH,
         drop_path=DROP_PATH,
     )
-    output, _ = encoder.forward(
+    output_dict = encoder.forward(
         x,
         patch_size,
         input_res,
         token_exit_cfg=token_exit_cfg,
     )
-    output = predictor.forward(output, x.timestamps, patch_size, input_res)
+    output, _, decoder_kwargs = unpack_encoder_output(output_dict)
+    output = predictor.forward(
+        output, x.timestamps, patch_size, input_res, **decoder_kwargs
+    )
     patched_H = H // patch_size
     patched_W = W // patch_size
     assert output.sentinel2_l2a is not None
