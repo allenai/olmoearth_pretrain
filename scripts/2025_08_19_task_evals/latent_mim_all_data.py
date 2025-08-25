@@ -56,7 +56,9 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
     #p = "/weka/dfive-default/ryanp/scratch/distributed_ckpts/classify_lora_v3/config.json"
-    p = os.path.join(os.environ["CKPT"], "config.json")
+    #ckpt_path = os.environ["CKPT"]
+    ckpt_path = "/weka/dfive-default/ryanp/scratch/distributed_ckpts/all_lora_large_cyclic"
+    p = os.path.join(ckpt_path, "config.json")
     with open(p) as cfg_f:
         cfg = json.load(cfg_f)
     encoder_args = cfg["model"]["encoder_config"]
