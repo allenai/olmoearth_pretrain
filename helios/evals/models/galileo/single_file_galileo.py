@@ -1601,6 +1601,12 @@ class Decoder(GalileoBase):
 
 class GalileoWrapper(nn.Module):
     """GalileoWrapper."""
+
+    supported_modalities: list[str] = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+    ]
+
     def __init__(
         self,
         pretrained_path: UPath,

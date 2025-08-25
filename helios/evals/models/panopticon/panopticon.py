@@ -23,6 +23,11 @@ class Panopticon(nn.Module):
     """Class containing the Panopticon model that can ingest MaskedHeliosSample objects."""
 
     patch_size: int = 14
+    supported_modalities: list[str] = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.LANDSAT.name,
+        Modality.SENTINEL1.name,
+    ]
 
     def __init__(
         self,
