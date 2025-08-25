@@ -69,7 +69,7 @@ Add additional overides as needed.
 
 ## Beaker Information
 
-budget: `ai2/d5` \
+budget: `ai2/es-platform` \
 workspace: `ai2/earth-systems` \
 weka: `weka://dfive-default`
 
@@ -96,3 +96,6 @@ We have 2 versions of each dataset 1 with 256 x 256 tiles and 1 with 4x as many 
 - **WorldCover Sampling Dataset**: ~1.6M samples with Landsat, OpenStreetMap raster, Sentinel-1, Sentinel-2 L2A, SRTM, and WorldCover modalities. WorldCover class based sampling and some additional random sampling over the rest of the world.
   - 256 Path: `/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1592645/`
   - 128 Path: `/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/6370580/`
+
+
+## Running Eval Suite
