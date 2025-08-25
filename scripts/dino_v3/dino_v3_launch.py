@@ -12,6 +12,7 @@ from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.evals.models import DINOv3Config
 from helios.evals.models.dinov3.dinov3 import DinoV3Models
+from helios.internal.common import build_common_components
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.loss import LossConfig
@@ -22,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
+
+# make sure build common components is imported so script pipeline works
+assert build_common_components is not None
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
