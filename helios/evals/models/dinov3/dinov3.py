@@ -25,7 +25,7 @@ IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
 
 
-def make_normalize_transform_web(resize_size: int = 224):
+def make_normalize_transform_web():
     normalize = transforms.Normalize(
         mean=(0.485, 0.456, 0.406),
         std=(0.229, 0.224, 0.225),
@@ -33,12 +33,12 @@ def make_normalize_transform_web(resize_size: int = 224):
     return normalize
 
 
-def make_resize_transform(resize_size: int = 224):
+def make_resize_transform(resize_size: int):
     resize = transforms.Resize((resize_size, resize_size), antialias=True)
     return resize
 
 
-def make_normalize_transform_sat(resize_size: int = 224):
+def make_normalize_transform_sat():
     normalize = transforms.Normalize(
         mean=(0.430, 0.411, 0.296),
         std=(0.213, 0.156, 0.143),
@@ -60,6 +60,7 @@ class DINOv3(nn.Module):
     """Wrapper for the dinov3 model that can ingest MaskedHeliosSample objects."""
 
     patch_size: int = 16
+    base_resize: int = 256
     # TODO: Should be the supported modality names
     supported_modalities: list[str] = [
         Modality.SENTINEL2_L2A.name,
@@ -137,11 +138,10 @@ class DINOv3(nn.Module):
                 data_i = data_i[:, HELIOS_LANDSAT_RGB_BANDS, :, :]
 
             # If it is greater than 224 Caleb R comment says don;t resize
-            base_resize = 224
-            if original_height > base_resize:
+            if original_height > self.base_resize:
                 new_height = original_height
-            elif original_height <= base_resize and original_height > 1:
-                new_height = base_resize
+            elif original_height <= self.base_resize and original_height > 1:
+                new_height = self.base_resize
             else:
                 new_height = self.patch_size
             resize_transform = make_resize_transform(new_height)
