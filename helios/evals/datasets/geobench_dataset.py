@@ -161,6 +161,8 @@ class GeobenchDataset(Dataset):
         if self.multiply_by_10_000:
             self.mean = self.mean * 10_000
             self.std = self.std * 10_000
+            self.min = self.min * 10_000
+            self.max = self.max * 10_000
 
     @staticmethod
     def _get_norm_stats(

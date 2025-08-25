@@ -93,6 +93,7 @@ def get_dino_v3_args():
     """Get the dino v3 arguments."""
     # DATASET ARGS + NORM METHOD ARGS
     # # std is instead of calculating min max per band per dataset which seems to be the reccomended way to do it
+    # # TODO: Add a way to do this
     dino_v3_args = dataset_args
     dino_v3_args += " " + " ".join(
         [
