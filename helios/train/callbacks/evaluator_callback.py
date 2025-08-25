@@ -12,7 +12,11 @@ from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader
 
-from helios.evals.datasets import EvalDatasetPartition, get_eval_dataset, EVAL_DATASET_TO_SUPPORTED_MODALITIES
+from helios.evals.datasets import (
+    EVAL_DATASET_TO_SUPPORTED_MODALITIES,
+    EvalDatasetPartition,
+    get_eval_dataset,
+)
 from helios.evals.datasets.configs import TaskType, dataset_to_config, get_eval_mode
 from helios.evals.datasets.normalize import NormMethod
 from helios.evals.datasets.utils import eval_collate_fn
@@ -224,15 +228,31 @@ class DownstreamEvaluatorCallback(Callback):
             for evaluator in self.evaluators:
                 # TODO: Store this info in the configs
                 if hasattr(self.trainer.train_module.model, "supported_modalities"):
-                    logger.info(f"Supported modalities: {self.trainer.train_module.model.supported_modalities}")
-                    supported_modalities = self.trainer.train_module.model.supported_modalities
-                    task_supported_modalities = EVAL_DATASET_TO_SUPPORTED_MODALITIES[evaluator.dataset]
-                    logger.info(f"Task supported modalities: {task_supported_modalities}")
-                    if not set(supported_modalities).intersection(set(task_supported_modalities)):
-                        logger.info(f"Skipping {evaluator.evaluation_name} because it has no modalities supported by the model")
+                    logger.info(
+                        f"Supported modalities: {self.trainer.train_module.model.supported_modalities}"
+                    )
+                    supported_modalities = (
+                        self.trainer.train_module.model.supported_modalities
+                    )
+                    task_supported_modalities = EVAL_DATASET_TO_SUPPORTED_MODALITIES[
+                        evaluator.dataset
+                    ]
+                    logger.info(
+                        f"Task supported modalities: {task_supported_modalities}"
+                    )
+                    if not set(supported_modalities).intersection(
+                        set(task_supported_modalities)
+                    ):
+                        logger.info(
+                            f"Skipping {evaluator.evaluation_name} because it has no modalities supported by the model"
+                        )
                         continue
-                    if not set(evaluator.input_modalities).issubset(set(supported_modalities)):
-                        logger.info(f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model")
+                    if not set(evaluator.input_modalities).issubset(
+                        set(supported_modalities)
+                    ):
+                        logger.info(
+                            f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model"
+                        )
                         continue
                 val_result, eval_time = self._perform_eval(evaluator)
                 if wandb_callback.enabled:

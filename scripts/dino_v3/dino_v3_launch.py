@@ -3,18 +3,7 @@
 import logging
 
 from olmo_core.optim import AdamWConfig
-from enum import StrEnum
 from olmo_core.optim.scheduler import WSD
-from olmo_core.train.callbacks import (
-    BeakerCallback,
-    CheckpointerCallback,
-    ConfigSaverCallback,
-    GarbageCollectorCallback,
-    GPUMemoryMonitorCallback,
-)
-from olmo_core.train.checkpoint import CheckpointerConfig
-from olmo_core.train.common import Duration, LoadStrategy
-from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
 from helios.data.concat import HeliosConcatDatasetConfig
@@ -23,16 +12,8 @@ from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.evals.models import DINOv3Config
 from helios.evals.models.dinov3.dinov3 import DinoV3Models
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
-from helios.nn.flexihelios import PoolingType
+from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig
 from helios.nn.latent_mim import LatentMIMConfig
-from helios.train.callbacks import (
-    DownstreamEvaluatorCallbackConfig,
-    HeliosSpeedMonitorCallback,
-    HeliosWandBCallback,
-)
-from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
@@ -45,7 +26,9 @@ MIN_PATCH_SIZE = 1
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_config = DINOv3Config(apply_normalization=True, model_name=DinoV3Models.LARGE_SATELLITE)
+    model_config = DINOv3Config(
+        apply_normalization=True, model_name=DinoV3Models.LARGE_SATELLITE
+    )
     return model_config
 
 
@@ -118,24 +101,10 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
 
-
-
 def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
     """Build the visualize config for an experiment."""
     return HeliosVisualizeConfig(
         num_samples=None,
         output_dir=str(UPath(common.save_folder) / "visualizations"),
         std_multiplier=2.0,
-    )
-
-
-if __name__ == "__main__":
-    main(
-        common_components_builder=build_common_components,
-        model_config_builder=build_model_config,
-        train_module_config_builder=build_train_module_config,
-        dataset_config_builder=build_dataset_config,
-        dataloader_config_builder=build_dataloader_config,
-        trainer_config_builder=build_trainer_config,
-        visualize_config_builder=build_visualize_config,
     )

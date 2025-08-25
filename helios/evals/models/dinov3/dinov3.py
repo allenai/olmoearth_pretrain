@@ -4,10 +4,8 @@ import logging
 import math
 import time
 from dataclasses import dataclass
-from enum import StrEnum
 
 import torch
-import torch.nn.functional as F
 from einops import rearrange
 from olmo_core.config import Config
 from torch import nn
@@ -17,7 +15,7 @@ from helios.data.constants import Modality
 from helios.nn.flexihelios import PoolingType
 from helios.train.masking import MaskedHeliosSample
 
-from .constants import DinoV3Models, MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL
+from .constants import MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL, REPO_DIR, DinoV3Models
 
 logger = logging.getLogger(__name__)
 # Use timm's names
@@ -25,7 +23,8 @@ IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
 
 
-def make_normalize_transform_web():
+def make_normalize_transform_web() -> transforms.Normalize:
+    """Make normalize transofrm for dinov3 trained on web dataset."""
     normalize = transforms.Normalize(
         mean=(0.485, 0.456, 0.406),
         std=(0.229, 0.224, 0.225),
@@ -33,12 +32,14 @@ def make_normalize_transform_web():
     return normalize
 
 
-def make_resize_transform(resize_size: int):
+def make_resize_transform(resize_size: int) -> transforms.Resize:
+    """Make resize transform for dinov3."""
     resize = transforms.Resize((resize_size, resize_size), antialias=True)
     return resize
 
 
-def make_normalize_transform_sat():
+def make_normalize_transform_sat() -> transforms.Normalize:
+    """Make normalize transform for dinov3 trained on satellite dataset."""
     normalize = transforms.Normalize(
         mean=(0.430, 0.411, 0.296),
         std=(0.213, 0.156, 0.143),
@@ -53,10 +54,6 @@ HELIOS_SENTINEL2_RGB_BANDS = [
 HELIOS_LANDSAT_RGB_BANDS = [
     Modality.LANDSAT.band_order.index(b) for b in ["B4", "B3", "B2"]
 ]
-
-
-# TODO: Make this an environment variable
-REPO_DIR = "/weka/dfive-default/helios/models/dinov3/repo/dinov3"
 
 
 class DINOv3(nn.Module):
@@ -79,7 +76,7 @@ class DINOv3(nn.Module):
         """Initialize the dinov3 wrapper.
 
         Args:
-            torchhub_id: The torch hub model ID for dinov3
+            model_name: The name that corresponds to the model on torch hub to help find the details for loading the model
             use_cls_token: Whether to use the cls token (default False)
             apply_normalization: Whether to apply imagenet normalization to the input data (default False)
         """

@@ -244,7 +244,11 @@ class GeobenchDataset(Dataset):
             # log the shape of x
             # logger.info(f"x shape: {x.shape}")
             # keep a running min and max per channel in self.min_val and self.max_val
-            x = torch.tensor(normalize_bands(x, self.mean, self.std, self.min, self.max, self.norm_method))
+            x = torch.tensor(
+                normalize_bands(
+                    x, self.mean, self.std, self.min, self.max, self.norm_method
+                )
+            )
         # check if label is an object or a number
         if not (isinstance(label, int) or isinstance(label, list)):
             label = label.data

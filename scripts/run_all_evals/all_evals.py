@@ -17,6 +17,7 @@ from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
 from helios.data.constants import Modality
+from helios.evals.datasets.normalize import NormMethod
 from helios.internal.experiment import (
     CommonComponents,
     main,
@@ -30,7 +31,6 @@ from helios.train.callbacks import (
     HeliosWandBCallback,
 )
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
-from helios.evals.datasets.normalize import NormMethod
 
 logger = getLogger(__name__)
 
@@ -62,7 +62,7 @@ EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
         eval_interval=Duration.epochs(5),
-        norm_method=NormMethod.NORM_YES_CLIP_3_STD_INT
+        norm_method=NormMethod.NORM_YES_CLIP_3_STD_INT,
     ),
     "m_bigearthnet": DownstreamTaskConfig(
         dataset="m-bigearthnet",
@@ -182,15 +182,15 @@ EVAL_TASKS = {
         epochs=50,
     ),
     "sen1floods11": DownstreamTaskConfig(
-            dataset="sen1floods11",
-            embedding_batch_size=128,
-            probe_batch_size=128,
-            num_workers=4,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(10),
-        ),
+        dataset="sen1floods11",
+        embedding_batch_size=128,
+        probe_batch_size=128,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+    ),
     # example of "in season" cropland mapping - 6 indicates only the
     # first 6 timesteps are passed to the model
     "cropharvest_Peoples_Republic_of_China_6": DownstreamTaskConfig(

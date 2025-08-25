@@ -8,7 +8,7 @@ from einops import reduce
 from torch import nn
 
 from helios.evals.datasets.configs import TaskType
-from helios.evals.models import DINOv2, GalileoWrapper, Panopticon, DINOv3
+from helios.evals.models import DINOv2, DINOv3, GalileoWrapper, Panopticon
 from helios.nn.flexihelios import FlexiHeliosBase, PoolingType, TokensAndMasks
 from helios.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from helios.nn.st_model import STBase
@@ -51,9 +51,9 @@ class EvalWrapper:
         self.spatial_pool = task_type == TaskType.SEGMENTATION
         self.use_pooled_tokens = use_pooled_tokens
         if self.use_pooled_tokens:
-            assert isinstance(
-                self.model, EncodeEarlyAttnPool
-            ), "Pooled tokens are only supported for EncodeEarlyAttnPool"
+            assert isinstance(self.model, EncodeEarlyAttnPool), (
+                "Pooled tokens are only supported for EncodeEarlyAttnPool"
+            )
 
     @property
     def device(self) -> torch.device:
@@ -87,9 +87,7 @@ class HeliosEvalWrapper(EvalWrapper):
         if not self.use_pooled_tokens:
             batch_embeddings: TokensAndMasks = self.model(
                 masked_helios_sample, patch_size=self.patch_size
-            )[
-                "tokens_and_masks"
-            ]  # (bsz, dim)
+            )["tokens_and_masks"]  # (bsz, dim)
             # Concat features across modalities in space averaged across time
             batch_embeddings = batch_embeddings.pool_unmasked_tokens(
                 self.pooling_type,
