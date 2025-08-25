@@ -1,6 +1,6 @@
 """Shared normalization functions for eval sets."""
 
-from enum import StrEnum
+from enum import Enum
 
 import numpy as np
 
@@ -39,7 +39,7 @@ def impute_normalization_stats(
     return new_band_info
 
 
-class NormMethod(StrEnum):
+class NormMethod(str, Enum):
     """Normalization methods."""
 
     NORM_NO_CLIP = "norm_no_clip"
