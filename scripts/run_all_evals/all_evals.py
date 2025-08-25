@@ -301,7 +301,11 @@ if __name__ == "__main__":
     user_mod = load_user_module(module_path)
 
     # 3) Inject all of the builder names into your namespace
-    build_common_components = user_mod.build_common_components
+    try:
+        build_common_components = user_mod.build_common_components
+    except AttributeError:
+        from helios.internal.experiment import build_common_components
+
     build_model_config = user_mod.build_model_config
     build_train_module_config = user_mod.build_train_module_config
     build_dataset_config = user_mod.build_dataset_config
