@@ -232,6 +232,7 @@ def main():
             )
             logger.info(cmd)
             subprocess.run(cmd, shell=True, check=True)  # nosec
+            break
 
 
 if __name__ == "__main__":
