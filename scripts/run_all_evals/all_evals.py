@@ -7,7 +7,6 @@ from logging import getLogger
 
 from olmo_core.train.callbacks import (
     BeakerCallback,
-    CheckpointerCallback,
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
@@ -27,7 +26,6 @@ from helios.nn.flexihelios import (
 )
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
-    HeliosSpeedMonitorCallback,
     HeliosWandBCallback,
 )
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
@@ -259,8 +257,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "helios_in_loop_evals"
-    PERMANENT_SAVE_INTERVAL = 5000
-    EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = HeliosWandBCallback(
         name=common.run_name,
@@ -279,9 +275,9 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
             checkpointer=checkpointer_config,
+            no_checkpoints=True,
         )
         .with_callback("wandb", wandb_callback)
-        .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
         .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback(
@@ -294,13 +290,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         )
         .with_callback("garbage_collector", garbage_collector_callback)
         .with_callback("beaker", BeakerCallback())
-        .with_callback(
-            "checkpointer",
-            CheckpointerCallback(
-                save_interval=PERMANENT_SAVE_INTERVAL,
-                ephemeral_save_interval=EPHERMERAL_SAVE_INTERVAL,
-            ),
-        )
     )
     return trainer_config
 
