@@ -33,7 +33,7 @@ class DownstreamTaskConfig:
     dataset: str
     embedding_batch_size: int = 128
     num_workers: int = 8
-    pooling_type: PoolingType = PoolingType.MEAN
+    pooling_type: str = PoolingType.MEAN
     norm_stats_from_pretrained: bool = True
     input_modalities: list[str] = field(default_factory=list)
     # Sweep across lrs for segmentation tasks
@@ -235,7 +235,7 @@ class DownstreamEvaluatorCallback(Callback):
                         logger.info(f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model")
                         continue
                 val_result, eval_time = self._perform_eval(evaluator)
-                if wandb_callback.is_enabled:
+                if wandb_callback.enabled:
                     wandb_callback.wandb.log(
                         {"eval/" + evaluator.evaluation_name: val_result}
                     )

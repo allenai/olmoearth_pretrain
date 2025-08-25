@@ -55,6 +55,9 @@ HELIOS_LANDSAT_RGB_BANDS = [
 ]
 
 
+# TODO: Make this an environment variable
+REPO_DIR = "/weka/dfive-default/helios/models/dinov3/repo/dinov3"
+
 
 class DINOv3(nn.Module):
     """Wrapper for the dinov3 model that can ingest MaskedHeliosSample objects."""
@@ -104,8 +107,9 @@ class DINOv3(nn.Module):
         for attempt in range(2):
             try:
                 self.model = torch.hub.load(
-                    repo_or_dir="facebookresearch/dinov3",
+                    repo_or_dir=REPO_DIR,  # "facebookresearch/dinov3",
                     model=torchhub_id,
+                    source="local",
                     weights=weights_url,
                 )
                 break
@@ -259,7 +263,7 @@ class DINOv3(nn.Module):
 class DINOv3Config(Config):
     """olmo_core style config for DINOv2Wrapper."""
 
-    model_name: DinoV3Models = DinoV3Models.BASE_WEB
+    model_name: DinoV3Models = DinoV3Models.LARGE_SATELLITE
     use_cls_token: bool = False
     apply_normalization: bool = False
 

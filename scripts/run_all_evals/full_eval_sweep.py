@@ -96,7 +96,7 @@ def get_dino_v3_args():
     dino_v3_args = dataset_args
     dino_v3_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method={NormMethod.NORM_YES_CLIP_MIN_MAX_INT}"
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=" + NormMethod.NORM_YES_CLIP_MIN_MAX_INT.value
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -216,7 +216,8 @@ def main():
             )
             run_name = f"{base_run_name}_{norm_mode}_lr{lr}_pooling{pooling_type}"
             cmd_args = lr_args.format(arg=lr)
-            cmd_args += pooling_args.format(arg=pooling_type)
+            if pooling_type != "default":
+                cmd_args += pooling_args.format(arg=pooling_type)
 
             if args.dino_v3:
                 cmd_args += get_dino_v3_args()

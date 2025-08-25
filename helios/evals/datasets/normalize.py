@@ -3,8 +3,11 @@
 from enum import Enum
 
 import numpy as np
+import logging
 
 from .constants import EVAL_S2_BAND_NAMES
+
+logger = logging.getLogger(__name__)
 
 
 def impute_normalization_stats(
@@ -64,6 +67,7 @@ def normalize_bands(
 ) -> np.ndarray:
     """Normalize an image with given mean and std arrays, and a normalization method."""
     if mins is None:
+        logger.info("No mins provided, falling back to 2 stds int")
         # Hack for now for dino for non geobench datasets
         method = NormMethod.NORM_YES_CLIP_2_STD_INT
     original_dtype = image.dtype
@@ -74,10 +78,16 @@ def normalize_bands(
     elif method == NormMethod.STANDARDIZE:
         image = (image - means) / stds
     else:
-        if method == NormMethod.NORM_YES_CLIP_3_STD or method == NormMethod.NORM_YES_CLIP_3_STD_INT:
+        if (
+            method == NormMethod.NORM_YES_CLIP_3_STD
+            or method == NormMethod.NORM_YES_CLIP_3_STD_INT
+        ):
             min_value = means - 3 * stds
             max_value = means + 3 * stds
-        elif method == NormMethod.NORM_YES_CLIP_2_STD or method == NormMethod.NORM_YES_CLIP_2_STD_INT:
+        elif (
+            method == NormMethod.NORM_YES_CLIP_2_STD
+            or method == NormMethod.NORM_YES_CLIP_2_STD_INT
+        ):
             # during pretraining we clip at 2 stds
             min_value = means - 2 * stds
             max_value = means + 2 * stds
@@ -88,12 +98,20 @@ def normalize_bands(
             min_value = means - stds
             max_value = means + stds
 
-
         image = (image - min_value) / (max_value - min_value)
 
-        if method == NormMethod.NORM_YES_CLIP or method == NormMethod.NORM_YES_CLIP_3_STD or method == NormMethod.NORM_YES_CLIP_2_STD:
+        if (
+            method == NormMethod.NORM_YES_CLIP
+            or method == NormMethod.NORM_YES_CLIP_3_STD
+            or method == NormMethod.NORM_YES_CLIP_2_STD
+        ):
             image = np.clip(image, 0, 1)
-        elif method == NormMethod.NORM_YES_CLIP_INT or method == NormMethod.NORM_YES_CLIP_3_STD_INT or method == NormMethod.NORM_YES_CLIP_2_STD_INT or method == NormMethod.NORM_YES_CLIP_MIN_MAX_INT:
+        elif (
+            method == NormMethod.NORM_YES_CLIP_INT
+            or method == NormMethod.NORM_YES_CLIP_3_STD_INT
+            or method == NormMethod.NORM_YES_CLIP_2_STD_INT
+            or method == NormMethod.NORM_YES_CLIP_MIN_MAX_INT
+        ):
             # same as clipping between 0 and 1 but rounds to the nearest 1/255
             image = image * 255  # scale
             image = np.clip(image, 0, 255).astype(np.uint8)  # convert to 8-bit integers
