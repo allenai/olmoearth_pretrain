@@ -1,5 +1,6 @@
 """Trying to prototype fitting everything into olmo core."""
 
+import os
 import json
 import logging
 
@@ -54,11 +55,13 @@ MIN_PATCH_SIZE = 1
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-    p = "/weka/dfive-default/ryanp/scratch/distributed_ckpts/classify_lora_v3/config.json"
+    #p = "/weka/dfive-default/ryanp/scratch/distributed_ckpts/classify_lora_v3/config.json"
+    p = os.path.join(os.environ["CKPT"], "config.json")
     with open(p) as cfg_f:
         cfg = json.load(cfg_f)
     encoder_args = cfg["model"]["encoder_config"]
     encoder_args.pop("_CLASS_")
+    encoder_args["supported_modality_names"] = common.training_modalities
     print(encoder_args)
 
     encoder_config = EncoderConfig(

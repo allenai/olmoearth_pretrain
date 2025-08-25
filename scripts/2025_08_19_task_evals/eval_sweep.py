@@ -1,5 +1,6 @@
 """Eval sweep."""
 
+import os
 import argparse
 import subprocess
 import sys
@@ -23,7 +24,8 @@ checkpoints = {
     # "base": "/weka/dfive-default/helios/checkpoints/favyen/v0.2_base_latent_mim_128_alldata_random_fixed_modality_0.5/step320000",
     # "detect": "/weka/dfive-default/ryanp/scratch/detect_all_v2_helios_encoder"
     #"classify_lora_v3": "/weka/dfive-default/ryanp/scratch/distributed_ckpts/classify_lora_v3"
-    "all_lora_large_cyclic": "/weka/dfive-default/ryanp/scratch/distributed_ckpts/all_lora_large_cyclic"
+    #"all_lora_large_cyclic": "/weka/dfive-default/ryanp/scratch/distributed_ckpts/all_lora_large_cyclic"
+    os.environ["CKPT"].split(os.path.sep)[-1]: os.environ["CKPT"]
 }
 
 parser = argparse.ArgumentParser()
@@ -32,6 +34,9 @@ parser.add_argument(
 )
 parser.add_argument("--local", action="store_true", help="Run locally with torchrun")
 args = parser.parse_args()
+print(checkpoints)
+print(args)
+print()
 
 run_cmd = "launch" if not args.local else "train"
 for ckpt_name, checkpoint in checkpoints.items():
