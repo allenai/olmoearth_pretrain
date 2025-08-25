@@ -232,12 +232,13 @@ class DownstreamEvaluatorCallback(Callback):
                         logger.info(f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model")
                         continue
                 val_result, eval_time = self._perform_eval(evaluator)
-                wandb_callback.wandb.log(
-                    {"eval/" + evaluator.evaluation_name: val_result}
-                )
-                wandb_callback.wandb.log(
-                    {"eval_time/" + evaluator.evaluation_name: eval_time}
-                )
+                if wandb_callback.is_enabled:
+                    wandb_callback.wandb.log(
+                        {"eval/" + evaluator.evaluation_name: val_result}
+                    )
+                    wandb_callback.wandb.log(
+                        {"eval_time/" + evaluator.evaluation_name: eval_time}
+                    )
 
         if self.cancel_after_first_eval:
             self.trainer.cancel_run(
