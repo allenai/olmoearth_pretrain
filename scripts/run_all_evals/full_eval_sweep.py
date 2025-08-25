@@ -97,7 +97,8 @@ def get_dino_v3_args():
     dino_v3_args = dataset_args
     dino_v3_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=" + NormMethod.NORM_YES_CLIP_MIN_MAX_INT.value
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method="
+            + NormMethod.NORM_YES_CLIP_MIN_MAX_INT.value
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -234,7 +235,6 @@ def main():
             )
             logger.info(cmd)
             subprocess.run(cmd, shell=True, check=True)  # nosec
-            break
 
 
 if __name__ == "__main__":
