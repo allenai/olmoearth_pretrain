@@ -1,7 +1,5 @@
 """Integration tests for the contrastive latent MIM Training Module."""
 
-"""Integration tests for the latent MIM Training Module."""
-
 import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -24,8 +22,6 @@ from helios.train.train_module.contrastive_latentmim import (
 
 torch.set_default_device("cpu")
 logger = logging.getLogger(__name__)
-
-
 
 
 @pytest.fixture
