@@ -1,4 +1,4 @@
-"""Integration tests for the latent MIM Training Module."""
+"""Integration tests for the contrastive latent MIM Training Module."""
 
 import logging
 from pathlib import Path
@@ -16,7 +16,9 @@ from helios.nn.flexihelios import EncoderConfig, PredictorConfig
 from helios.nn.latent_mim import LatentMIM, LatentMIMConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from helios.train.train_module.contrastive_latentmim import (
+    ContrastiveLatentMIMTrainModuleConfig,
+)
 
 torch.set_default_device("cpu")
 logger = logging.getLogger(__name__)
@@ -89,7 +91,7 @@ def optim_config() -> AdamWConfig:
 @pytest.fixture
 def train_module_config(
     optim_config: AdamWConfig,
-) -> LatentMIMTrainModuleConfig:
+) -> ContrastiveLatentMIMTrainModuleConfig:
     """Create a LatentMIMTrainModuleConfig for testing."""
     token_exit_cfg = {modality: 0 for modality in Modality.names()}
     loss_cfg = {"type": "patch_discrimination"}
@@ -97,12 +99,17 @@ def train_module_config(
     transform_cfg = TransformConfig(
         transform_type="no_transform",
     )
-
     # Create the config with all required parameters
-    config = LatentMIMTrainModuleConfig(
+    config = ContrastiveLatentMIMTrainModuleConfig(
         optim_config=optim_config,
         rank_microbatch_size=3,
         loss_config=LossConfig(loss_config=loss_cfg),
+        contrastive_config=LossConfig(
+            loss_config={
+                "type": "InfoNCE",
+                "weight": 0.1,
+            }
+        ),
         masking_config=MaskingConfig(strategy_config=masking_cfg),
         token_exit_cfg=token_exit_cfg,
         ema_decay=(0.996, 1.0),
@@ -151,7 +158,7 @@ class MockTrainer:
 def test_train_batch_without_missing_modalities(
     samples_without_missing_modalities: list[tuple[int, HeliosSample]],
     latent_mim_model: LatentMIM,
-    train_module_config: LatentMIMTrainModuleConfig,
+    train_module_config: ContrastiveLatentMIMTrainModuleConfig,
     set_random_seeds: None,
 ) -> None:
     """Test train batch without missing modalities."""
@@ -169,7 +176,12 @@ def test_train_batch_without_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(2.0),
+            torch.tensor(2.14),
+            atol=1e-1,
+        )
+        assert torch.allclose(
+            mock_trainer._metrics["train/InfoNCE"],
+            torch.tensor(0.196),
             atol=1e-1,
         )
 
@@ -177,7 +189,7 @@ def test_train_batch_without_missing_modalities(
 def test_train_batch_with_missing_modalities(
     samples_with_missing_modalities: list[tuple[int, HeliosSample]],
     latent_mim_model: LatentMIM,
-    train_module_config: LatentMIMTrainModuleConfig,
+    train_module_config: ContrastiveLatentMIMTrainModuleConfig,
     set_random_seeds: None,
 ) -> None:
     """Test train batch with missing modalities."""
@@ -196,6 +208,11 @@ def test_train_batch_with_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(2.0),
+            torch.tensor(2.2),
+            atol=1e-1,
+        )
+        assert torch.allclose(
+            mock_trainer._metrics["train/InfoNCE"],
+            torch.tensor(0.196),
             atol=1e-1,
         )
