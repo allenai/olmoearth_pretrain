@@ -50,7 +50,7 @@ class DownstreamTaskConfig:
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
-    norm_method: str = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
+    norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
 
 
 class DownstreamEvaluator:

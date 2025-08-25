@@ -56,7 +56,7 @@ class NormMethod(str, Enum):
     STANDARDIZE = "standardize"
     NO_NORM = "no_norm"
 
-
+# TODO: Add a unit test for this
 def normalize_bands(
     image: np.ndarray,
     means: np.ndarray,
@@ -66,6 +66,8 @@ def normalize_bands(
     method: str = NormMethod.NORM_NO_CLIP,
 ) -> np.ndarray:
     """Normalize an image with given mean and std arrays, and a normalization method."""
+    if isinstance(method, str):
+        method = NormMethod(method)
     if mins is None:
         logger.info("No mins provided, falling back to 2 stds int")
         # Hack for now for dino for non geobench datasets
@@ -99,7 +101,6 @@ def normalize_bands(
             max_value = means + stds
 
         image = (image - min_value) / (max_value - min_value)
-
         if (
             method == NormMethod.NORM_YES_CLIP
             or method == NormMethod.NORM_YES_CLIP_3_STD
@@ -121,6 +122,6 @@ def normalize_bands(
         elif method == NormMethod.NORM_NO_CLIP:
             pass
         else:
-            valid_methods = [m.value for m in NormMethod]
+            valid_methods = [m for m in NormMethod]
             raise ValueError(f"norm type must be one of {valid_methods}, not {method}")
     return image

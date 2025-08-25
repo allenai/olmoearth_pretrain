@@ -51,7 +51,6 @@ EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,  # True, #False,
         eval_interval=Duration.epochs(5),
-        norm_method=NormMethod.NORM_YES_CLIP_3_STD_INT,
     ),
     "m_forestnet": DownstreamTaskConfig(
         dataset="m-forestnet",
@@ -60,7 +59,6 @@ EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
         eval_interval=Duration.epochs(5),
-        norm_method=NormMethod.NORM_YES_CLIP_3_STD_INT,
     ),
     "m_bigearthnet": DownstreamTaskConfig(
         dataset="m-bigearthnet",
@@ -304,7 +302,7 @@ if __name__ == "__main__":
     try:
         build_common_components = user_mod.build_common_components
     except AttributeError:
-        from helios.internal.experiment import build_common_components
+        from helios.internal.common import build_common_components
 
     build_model_config = user_mod.build_model_config
     build_train_module_config = user_mod.build_train_module_config
