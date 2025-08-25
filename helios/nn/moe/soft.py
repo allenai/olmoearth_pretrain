@@ -757,9 +757,7 @@ class SoftMoE(Module):
         if torch.rand(1) < 0.01:
             print(
                 "combine weight distribution",
-                F.softmax(combine_logits.sum(dim=-1), dim=-1)
-                .mean(dim=(0, 1))
-                .detach()
+                F.softmax(combine_logits.sum(dim=-1), dim=-1).mean(dim=(0, 1)).detach(),
             )
 
         # noised dispatch and combine gate logits, with annealing if needed

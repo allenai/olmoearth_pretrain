@@ -116,27 +116,6 @@ class TaskLoRALinear(nn.Module):
         mlp = nn.Sequential(*modules)
         return mlp
 
-    @staticmethod
-    def _broadcast_task_emb(
-        task_emb: torch.Tensor, b_eff: int, task_dim: int
-    ) -> torch.Tensor:
-        """Broadcast or trim ``task_emb`` to match the effective batch size.
-
-        Args:
-            task_emb: Task embeddings of shape ``(B, task_dim)``.
-            b_eff: Effective batch size after flattening the leading dims of ``x``.
-            task_dim: Expected embedding dimension (for validation).
-
-        Returns:
-            A tensor of shape ``(b_eff, task_dim)`` suitable for per-sample generation.
-        """
-        if task_emb.dim() != 2 or task_emb.size(-1) != task_dim:
-            raise ValueError(
-                f"task_emb must be (B, {task_dim}), got {tuple(task_emb.shape)}"
-            )
-        reps = (b_eff + task_emb.size(0) - 1) // task_emb.size(0)  # ceil division
-        return task_emb.repeat(reps, 1)[:b_eff]
-
     def forward(
         self,
         x: torch.Tensor,
@@ -174,39 +153,20 @@ class TaskLoRALinear(nn.Module):
                 f"{self.out_features}; got x {tuple(x.shape)}, base_out {tuple(base_out.shape)}"
             )
 
-        # Flatten leading dims to an effective batch
-        x_shape = x.shape
-        x2d = x.reshape(-1, self.in_features)  # (B_eff, in)
-        b_eff = x2d.size(0)
+        if task_emb.ndim != 1:
+            task_emb = task_emb[0]  # (task_dim,)
 
-        # Broadcast task embedding across the effective batch
-        task_eff = self._broadcast_task_emb(
-            task_emb, b_eff, self.task_dim
-        )  # (B_eff, task_dim)
+        x_flat = x.reshape(-1, self.in_features)
+        x_flat = F.dropout(x_flat, p=self.dropout, training=self.training)
 
-        # Generate LoRA factors per sample
-        rnk = self.rank
-        vec_a = self.gen_a(task_eff)  # (B_eff, out*rnk)
-        vec_b = self.gen_b(task_eff)  # (B_eff, rnk*in)
-        a = vec_a.view(b_eff, self.out_features, rnk)  # (B_eff, out, rnk)
-        b = vec_b.view(b_eff, rnk, self.in_features)  # (B_eff, rnk, in)
+        a = self.gen_a(task_emb).view(self.out_features, self.rank)
+        b = self.gen_b(task_emb).view(self.rank, self.in_features)
 
-        # LoRA delta path: y_delta = x_drop @ ΔW^T per sample
-        # Don't materialize the full delta matrix since it's too large
-        x2d_drop = F.dropout(x2d, p=self.dropout, training=self.training)
-        tmp = torch.bmm(x2d_drop.unsqueeze(1), b.transpose(1, 2)).squeeze(
-            1
-        )  # (B_eff, rnk)
-        y_delta = torch.bmm(tmp.unsqueeze(1), a.transpose(1, 2)).squeeze(
-            1
-        )  # (B_eff, out)
+        xb = torch.einsum("bi,ri->br", x_flat, b)
+        y_delta = torch.einsum("br,or->bo", xb, a)
+
         if torch.rand(1) < 0.01:
-            print(
-                "DELTA NORM",
-                y_delta.norm(),
-                "BASE NORM",
-                base_out.norm(),
-            )
+            print("DELTA NORM", y_delta.norm(), "BASE NORM", base_out.norm())
 
         y = base_out.reshape(-1, self.out_features) + self.scaling * y_delta
-        return y.view(*x_shape[:-1], self.out_features)
+        return y.view(*x.shape[:-1], self.out_features)

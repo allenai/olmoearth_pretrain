@@ -302,12 +302,12 @@ class Attention(nn.Module):
             attn_mask=attn_mask,
         )
         x = x.transpose(1, 2).reshape(original_shape)
-        x_proj = self.proj_drop(self.proj(x))
+        x_proj = self.proj(x)
         if self.use_task_lora:
-            x = self.lora(x, x_proj, task_emb=task_emb)
+            x_out = self.lora(x, x_proj, task_emb=task_emb)
         else:
-            x = x_proj
-        return x
+            x_out = x_proj
+        return self.proj_drop(x_out)
 
 
 class Mlp(nn.Module):
@@ -535,8 +535,10 @@ class Block(nn.Module):
         self.ls2 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         )
-    
-    def mlp_fn(self, x: torch.Tensor, task_emb: torch.Tensor | None = None) -> torch.Tensor:
+
+    def mlp_fn(
+        self, x: torch.Tensor, task_emb: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """Return FFN output or MoE output depending on configuration.
 
         Args:
@@ -598,11 +600,11 @@ class Block(nn.Module):
             )
         )
 
-        x = self.norm2(x)
-        mlp_out = self.mlp_fn(x, task_emb=task_emb)
+        x_mlp = self.norm2(x)
+        mlp_out = self.mlp_fn(x_mlp, task_emb=task_emb)
 
         if self.use_task_moe and not self.replace_ffn:
-            moe_out = self.moe(x, task_emb=task_emb)["outputs"]
+            moe_out = self.moe(x_mlp, task_emb=task_emb)["outputs"]
             mlp_out = self.moe_proj(torch.concat([moe_out, mlp_out], dim=-1))
 
         x = x + self.drop_path(self.ls2(mlp_out))

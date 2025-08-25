@@ -100,8 +100,8 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
             num_experts=4,
             num_slots=4,
             expert_mult=4,
-            replace_ffn=True
-        )
+            replace_ffn=True,
+        ),
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
