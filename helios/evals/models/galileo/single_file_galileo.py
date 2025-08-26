@@ -180,10 +180,6 @@ class Normalizer:
         band_idxs = [i for i in range(x.shape[-1]) if i in self.shift_div_dict[x.shape[-1]]["div"]]
         div_values = torch.tensor([self.shift_div_dict[x.shape[-1]]["div"][band_idx] for band_idx in band_idxs] + [1.0], device=x.device) # extra number is for the NDVI band
         shift_values = torch.tensor([self.shift_div_dict[x.shape[-1]]["shift"][band_idx] for band_idx in band_idxs] + [0.0], device=x.device) # extra number is for the NDVI band
-        # shape of x
-        logger.info(f"Shape of x: {x.shape}")
-        logger.info(f"Shift values: {shift_values}")
-        logger.info(f"Div values: {div_values}")
         return self._normalize(x, shift_values, div_values)
 
 def get_2d_sincos_pos_embed_with_resolution(
@@ -1691,6 +1687,7 @@ class GalileoWrapper(nn.Module):
         patch_size: int = 8,
         month: int = 6,
         add_layernorm_on_exit: bool = True,
+        use_pretrained_normalizer: bool = True,
     ):
         """Init GalileoWrapper."""
         super().__init__()
@@ -1723,7 +1720,10 @@ class GalileoWrapper(nn.Module):
             idx for idx, key in enumerate(SPACE_TIME_BANDS_GROUPS_IDX) if "S1" in key
         ]
         self.add_layernorm_on_exit = add_layernorm_on_exit
-        self.normalizer = Normalizer(std=True, normalizing_dicts=load_normalization_values(Path("/weka/dfive-default/henryh/helios/helios/helios/evals/models/galileo/normalization_config.json")))
+        if use_pretrained_normalizer:
+            self.normalizer = Normalizer(std=True, normalizing_dicts=load_normalization_values(Path("/weka/dfive-default/henryh/helios/helios/helios/evals/models/galileo/normalization_config.json")))
+        else:
+            self.normalizer = None
 
     def preproccess(
         self,
@@ -1734,9 +1734,9 @@ class GalileoWrapper(nn.Module):
         """Preproccess."""
         # images should have shape (b h w c) or (b h w t c)
         # TODO: mask out imputed indices
+        s_t_x = None
         s_t_channels = []
         if s2 is not None:
-            logger.info(f"S2 is not None and has shape {s2.shape}")
             s_t_channels += self.s_t_channels_s2
             data_dtype = s2.dtype
             data_device = s2.device
@@ -1765,8 +1765,7 @@ class GalileoWrapper(nn.Module):
                     :, :, :, :, self.kept_s2_band_idx
                 ]
 
-        elif s1 is not None:
-            logger.info(f"S1 is not None and has shape {s1.shape}")
+        if s1 is not None:
             s_t_channels += self.s_t_channels_s1
             data_dtype = s1.dtype
             data_device = s1.device
@@ -1778,10 +1777,11 @@ class GalileoWrapper(nn.Module):
                 b, h, w, t, c_s1 = s1.shape
             assert c_s1 == len(self.s1_band_ordering)
 
-            # add a single timestep
-            s_t_x = torch.zeros(
-                (b, h, w, t, len(SPACE_TIME_BANDS)), dtype=s1.dtype, device=s1.device
-            )
+            if s_t_x is None:
+                s_t_x = torch.zeros(
+                    (b, h, w, t, len(SPACE_TIME_BANDS)), dtype=s1.dtype, device=s1.device
+                )
+
             if len(s1.shape) == 4:
                 s_t_x[:, :, :, 0, self.to_galileo_s1_map] = s1[
                     :, :, :, self.kept_s1_band_idx
@@ -1791,7 +1791,7 @@ class GalileoWrapper(nn.Module):
                     :, :, :, :, self.kept_s1_band_idx
                 ]
 
-        else:
+        if s_t_x is None:
             raise ValueError("no s1 or s2?")
 
         # Currently does not support doing S1 and S2 together
@@ -1812,7 +1812,8 @@ class GalileoWrapper(nn.Module):
         self.grid_size = int(s_t_x.shape[1] / self.patch_size)
 
         # apply normalization
-        s_t_x = self.normalizer(s_t_x)
+        if self.normalizer is not None:
+            s_t_x = self.normalizer(s_t_x)
         return (
             s_t_x,
             torch.empty(
@@ -1904,6 +1905,7 @@ class GalileoConfig(Config):
     patch_size: int = 8
     month: int = 6
     add_layernorm_on_exit: bool = True
+    use_pretrained_normalizer: bool = True
 
     def build(self) -> GalileoWrapper:
         """Build the Galileo model."""
@@ -1911,5 +1913,6 @@ class GalileoConfig(Config):
             pretrained_path=UPath(MODEL_SIZE_TO_WEKA_PATH[self.model_size]),
             patch_size=self.patch_size,
             month=self.month,
-            add_layernorm_on_exit=self.add_layernorm_on_exit
+            add_layernorm_on_exit=self.add_layernorm_on_exit,
+            use_pretrained_normalizer=self.use_pretrained_normalizer
         )

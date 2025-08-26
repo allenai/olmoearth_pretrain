@@ -16,7 +16,7 @@ from helios.internal.experiment import SubCmd
 from helios.nn.flexihelios import PoolingType
 
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
-Normalization_MODES = ["dataset", "helios"]
+Normalization_MODES = ["dataset", "pre_trained"]
 pooling_types = [PoolingType.MEAN, PoolingType.MAX]
 
 logger = getLogger(__name__)
@@ -114,6 +114,22 @@ def get_panopticon_args():
     )
     return panopticon_args
 
+def get_galileo_args(pretrained_normalizer: bool = True):
+    """Get the galileo arguments."""
+    if pretrained_normalizer:
+        # To use galileo pretrained normalizer we want to leave normalization to the galileo wrapper
+        galileo_args = dataset_args
+        galileo_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+        galileo_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        # IF we use dataset stats we want to turn off the pretrained normalizer
+        galileo_args += " " + "--model.use_pretrained_normalizer=False"
+    return galileo_args
 
 # HACK: Need to clean up interface for preferred norm strategy for different models
 def main():
@@ -158,6 +174,11 @@ def main():
         "--panopticon",
         action="store_true",
         help="If set, use the panopticon normalization settings",
+    )
+    parser.add_argument(
+        "--galileo",
+        action="store_true",
+        help="If set, use the galileo normalization settings",
     )
     args, extra_cli = parser.parse_known_args()
 
@@ -215,20 +236,22 @@ def main():
             cmd_args = get_dino_v3_args()
         elif args.panopticon:
             cmd_args = get_panopticon_args()
+        elif args.galileo:
+            cmd_args = get_galileo_args()
         else:
             cmd_args = ""
         cmd = (
             f"TRAIN_SCRIPT_PATH={module_path} {launch_command} scripts/run_all_evals/all_evals.py "
             f"{sub_command} {run_name} {cluster} --launch.priority=high "
             # TODO: Make a debugging mode
-            f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.enabled=False --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
+            f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
         )
         logger.info(cmd)
         subprocess.run(cmd, shell=True, check=True)  # nosec
     else:
         hp_params = (
             loop_through_params()
-            if not args.dino_v3 or not args.panopticon
+            if not args.dino_v3 or not args.panopticon # Only use the dataset normalization stats for these models
             else no_norm_sweep()
         )
         for params in hp_params:
@@ -248,9 +271,15 @@ def main():
             elif args.panopticon:
                 cmd_args += get_panopticon_args()
             elif norm_mode == "dataset":
-                cmd_args += dataset_args
-            elif norm_mode == "helios":
-                cmd_args += helios_args
+                if args.galileo:
+                    cmd_args += get_galileo_args(pretrained_normalizer=False)
+                else:
+                    cmd_args += dataset_args
+            elif norm_mode == "pre_trained":
+                if args.galileo:
+                    cmd_args += get_galileo_args(pretrained_normalizer=True)
+                else:
+                    cmd_args += helios_args
 
             cmd = (
                 f"TRAIN_SCRIPT_PATH={module_path} {launch_command} scripts/run_all_evals/all_evals.py "
