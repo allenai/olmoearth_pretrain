@@ -163,7 +163,7 @@ class DINOv3(nn.Module):
         for modality in masked_helios_sample.modalities:
             if num_modalities > 1:
                 raise ValueError(
-                    "DINOv2 does not yet support multiple modalities via multiple forward passes"
+                    f"DINOv3 does not yet support multiple modalities via multiple forward passes, got {num_modalities} modalities including {[modality for modality in masked_helios_sample.modalities]}"
                 )
             if modality not in self.supported_modalities:
                 logger.warning(

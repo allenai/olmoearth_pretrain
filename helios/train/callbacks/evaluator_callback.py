@@ -259,6 +259,8 @@ class DownstreamEvaluatorCallback(Callback):
                 logger.info(
                     f"Task supported modalities: {task_supported_modalities}"
                 )
+                task_instance_used_modalities = evaluator.input_modalities
+                logger.info(f"Task instance used modalities: {task_instance_used_modalities}")
                 if not set(supported_modalities).intersection(
                     set(task_supported_modalities)
                 ):
@@ -266,7 +268,7 @@ class DownstreamEvaluatorCallback(Callback):
                         f"Skipping {evaluator.evaluation_name} because it has no modalities supported by the model"
                     )
                     continue
-                if not set(evaluator.input_modalities).issubset(
+                if not set(task_instance_used_modalities).issubset(
                     set(supported_modalities)
                 ):
                     logger.info(
