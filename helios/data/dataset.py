@@ -487,28 +487,6 @@ class HeliosSample(NamedTuple):
 
         return HeliosSample(**new_data_dict)
 
-    def subset_time_batched(self, num_t: int) -> "HeliosSample":
-        """Subset a batched HeliosSample in time only.
-
-        Args:
-            num_t: desired number of timesteps to pick. Must be <= the number
-                of timesteps in the HeliosSample.
-        """  #
-        new_data_dict: dict[str, ArrayTensor] = {}
-        for attribute, modality in self.as_dict(ignore_nones=True).items():
-            assert modality is not None
-            if attribute == "timestamps":
-                new_data_dict[attribute] = modality[:, 0:num_t]
-                continue
-            modality_spec = Modality.get(attribute)
-            if modality_spec.is_spacetime_varying:
-                new_data_dict[attribute] = modality[:, :, :, 0:num_t]
-            elif modality_spec.is_time_only_varying:
-                new_data_dict[attribute] = modality[:, 0:num_t]
-            else:
-                new_data_dict[attribute] = modality
-        return HeliosSample(**new_data_dict)
-
     def scale(self, s: float) -> "HeliosSample":
         """Multiply a HeliosSample by a float."""
         return HeliosSample(
@@ -567,24 +545,7 @@ def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSa
 
     # Create a dictionary of stacked tensors for each field
     collated_dict = {field: stack_or_none(field) for field in sample_fields}
-    collated_sample = HeliosSample(**collated_dict)
-
-    # Decide whether to reduce num_t.
-    timestep_mode = np.random.choice(4)
-    if timestep_mode == 0:
-        # With 1/4 probability, we set num_t = 1 (one timestep).
-        # Since single-timestep performance is important.
-        num_t = 1
-    elif timestep_mode == 1:
-        # With 1/4 probability, we retain all the timesteps.
-        # Since we also care about high performance with many timesteps.
-        num_t = collated_sample.time
-    else:
-        # Otherwise (1/2 probability), we randomly pick a num_t.
-        num_t = 1 + np.random.choice(collated_sample.time)
-    collated_sample = collated_sample.subset_time_batched(num_t)
-
-    return patch_size, collated_sample
+    return patch_size, HeliosSample(**collated_dict)
 
 
 class GetItemArgs(NamedTuple):
