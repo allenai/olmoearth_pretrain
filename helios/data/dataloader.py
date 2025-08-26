@@ -134,15 +134,13 @@ class HeliosDataLoader(DataLoaderBase):
         assert len(self.dataset) < np.iinfo(np.uint32).max
 
         rng: np.random.Generator | None = None
-        data_percentage_rng: np.random.Generator | None = None
-        if self.dataset_percentage < 1.0:
-            # Dataset subset selected should be deterministic across random seeds and restarts
-            data_percentage_rng = get_rng(self.seed)
         if self.shuffle:
             # Deterministically shuffle based on epoch and seed
             rng = get_rng(self.seed + self.epoch)  # type: ignore
         indices = np.arange(len(self.dataset), dtype=np.uint32)
-        if data_percentage_rng is not None:
+        if self.dataset_percentage < 1.0:
+            # Dataset subset selected should be deterministic across random seeds and restarts
+            data_percentage_rng = get_rng(self.seed)
             indices = data_percentage_rng.choice(
                 indices,
                 size=int(len(indices) * self.dataset_percentage),
