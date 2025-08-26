@@ -232,6 +232,21 @@ def adjust_learning_rate(
     return lr
 
 
+def load_normalization_values(path: Path):
+    """Load the normalization values from a json file."""
+    if not path.exists():
+        raise ValueError(f"No file found at path {path}")
+    with path.open("r") as f:
+        norm_dict = json.load(f)
+    # we computed the normalizing dict using the same datset
+    output_dict = {}
+    for key, val in norm_dict.items():
+        if "n" not in key:
+            output_dict[int(key)] = val
+        else:
+            output_dict[key] = val
+    return output_dict
+
 # thanks to https://github.com/bwconrad/flexivit/ for this nice implementation
 # of the FlexiPatchEmbed module
 def to_2tuple(x: Any) -> tuple:
