@@ -349,6 +349,7 @@ class HeliosSample(NamedTuple):
         sampled_hw_p: int,
         current_length: int,
         missing_timesteps_masks: dict[str, Any] = {},
+        static_subsetting: bool = False,
     ) -> "HeliosSample":
         """Subset a HelioSample using default rectangular cropping.
 
@@ -360,6 +361,9 @@ class HeliosSample(NamedTuple):
             sampled_hw_p: The number of tokens in the height and width dimensions.
             current_length: The current maximum sequence length of the sample.
             missing_timesteps_masks: A dictionary of missing timesteps masks.
+            static_subsetting: always subset from the top-left (and start timestep from
+                the beginning) rather than randomly. This reduces the effective dataset
+                size, and is primarily for dataset size experiments.
 
         Returns:
             A subsetted HeliosSample with rectangular cropping applied.
@@ -372,12 +376,22 @@ class HeliosSample(NamedTuple):
         valid_start_ts = self._get_valid_start_ts(
             missing_timesteps_masks, max_t, current_length
         )
-        start_t = np.random.choice(valid_start_ts)
+
+        if static_subsetting:
+            start_t = 0
+        else:
+            start_t = np.random.choice(valid_start_ts)
+
         new_data_dict: dict[str, ArrayTensor] = {}
 
         sampled_hw = sampled_hw_p * patch_size
-        start_h = np.random.choice(self.height - sampled_hw + 1)
-        start_w = np.random.choice(self.width - sampled_hw + 1)
+
+        if static_subsetting:
+            start_h = 0
+            start_w = 0
+        else:
+            start_h = np.random.choice(self.height - sampled_hw + 1)
+            start_w = np.random.choice(self.width - sampled_hw + 1)
 
         for attribute, modality in self.as_dict(ignore_nones=True).items():
             assert modality is not None
@@ -571,6 +585,7 @@ class HeliosDataset(Dataset):
         cache_dir: UPath | None = None,
         samples_per_sec: float | None = None,
         apply_cutmix: bool = False,
+        static_subsetting: bool = False,
     ):
         """Initialize the dataset.
 
@@ -593,10 +608,17 @@ class HeliosDataset(Dataset):
                 throttling only applies when reading from the h5py_dir, not the
                 cache_dir (if set).
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
+            static_subsetting: whether to employ static subsetting, see HeliosSample.subset_default
+                for details. This has no effect if apply_cutmix is enabled.
 
         Returns:
             None
         """
+        if apply_cutmix and static_subsetting:
+            raise ValueError(
+                "static_subsetting has no effect when apply_cutmix and enabled, and thus should be set False"
+            )
+
         self.h5py_dir = h5py_dir
         if not self.h5py_dir.exists():
             raise FileNotFoundError(f"H5PY directory does not exist: {self.h5py_dir}")
@@ -622,6 +644,7 @@ class HeliosDataset(Dataset):
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
         self.apply_cutmix = apply_cutmix
+        self.static_subsetting = static_subsetting
 
     @property
     def fingerprint_version(self) -> str:
@@ -978,6 +1001,7 @@ class HeliosDataset(Dataset):
                 sampled_hw_p=args.sampled_hw_p,
                 current_length=current_length,
                 missing_timesteps_masks=missing_timesteps_masks,
+                static_subsetting=self.static_subsetting,
             )
 
         sample_dict = subset_sample.as_dict(ignore_nones=True)
@@ -1017,6 +1041,7 @@ class HeliosDatasetConfig(Config):
     cache_dir: str | None = None
     samples_per_sec: float | None = None
     apply_cutmix: bool = False
+    static_subsetting: bool = False
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
