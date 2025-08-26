@@ -24,6 +24,7 @@ from helios.evals.embeddings import get_embeddings
 from helios.evals.eval_wrapper import get_eval_wrapper
 from helios.evals.knn import run_knn
 from helios.evals.linear_probe import ProbeType, train_and_eval_probe
+from helios.data.constants import Modality
 from helios.nn.flexihelios import PoolingType
 from helios.train.callbacks.wandb import HeliosWandBCallback
 
@@ -113,13 +114,13 @@ class DownstreamEvaluator:
             run_knn
             if self.eval_mode == "knn"
             else partial(
+                # TODO: need to update this to use the patch size of the model if things are different
                 train_and_eval_probe,
                 batch_size=self.probe_batch_size,
                 epochs=self.epochs,
                 eval_interval=self.eval_interval.value,
                 probe_type=self.probe_type,
                 lr=self.probe_lr,
-                patch_size=self.patch_size,
             )
         )
 
@@ -150,6 +151,12 @@ class DownstreamEvaluator:
             model = self.trainer.train_module.model.encoder
         else:
             model = self.trainer.train_module.model
+
+        if hasattr(model, "patch_size"):
+            logger.info(
+                f"Using patch size {model.patch_size} for {self.dataset} with set patch size {self.patch_size}"
+            )
+            self.patch_size = model.patch_size
 
         # Superset of the kwargs the wrapper may need
         wrapper_kwargs = {
@@ -195,6 +202,8 @@ class DownstreamEvaluator:
             test_embeddings=test_embeddings,
             test_labels=test_labels,
             device=self.device,
+            # patch size may be set dynamically for non-helios models
+            patch_size=self.patch_size,
         )
         logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
         # free memory
@@ -225,35 +234,40 @@ class DownstreamEvaluatorCallback(Callback):
                 for callback in self.trainer._iter_callbacks()
                 if isinstance(callback, HeliosWandBCallback)
             )
+            if hasattr(self.trainer.train_module.model, "supported_modalities"):
+                logger.info(
+                    f"Supported modalities: {self.trainer.train_module.model.supported_modalities}"
+                )
+                supported_modalities = (
+                    self.trainer.train_module.model.supported_modalities
+                )
+            else:
+                # If the model doesn't have supported modalities attribute assume all modalities are supported
+                supported_modalities = Modality.names()
+
             for evaluator in self.evaluators:
                 # TODO: Store this info in the configs
-                if hasattr(self.trainer.train_module.model, "supported_modalities"):
+                logger.info(f"Model: {self.trainer.train_module.model}")
+                task_supported_modalities = EVAL_DATASET_TO_SUPPORTED_MODALITIES[
+                    evaluator.dataset
+                ]
+                logger.info(
+                    f"Task supported modalities: {task_supported_modalities}"
+                )
+                if not set(supported_modalities).intersection(
+                    set(task_supported_modalities)
+                ):
                     logger.info(
-                        f"Supported modalities: {self.trainer.train_module.model.supported_modalities}"
+                        f"Skipping {evaluator.evaluation_name} because it has no modalities supported by the model"
                     )
-                    supported_modalities = (
-                        self.trainer.train_module.model.supported_modalities
-                    )
-                    task_supported_modalities = EVAL_DATASET_TO_SUPPORTED_MODALITIES[
-                        evaluator.dataset
-                    ]
+                    continue
+                if not set(evaluator.input_modalities).issubset(
+                    set(supported_modalities)
+                ):
                     logger.info(
-                        f"Task supported modalities: {task_supported_modalities}"
+                        f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model"
                     )
-                    if not set(supported_modalities).intersection(
-                        set(task_supported_modalities)
-                    ):
-                        logger.info(
-                            f"Skipping {evaluator.evaluation_name} because it has no modalities supported by the model"
-                        )
-                        continue
-                    if not set(evaluator.input_modalities).issubset(
-                        set(supported_modalities)
-                    ):
-                        logger.info(
-                            f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model"
-                        )
-                        continue
+                    continue
                 val_result, eval_time = self._perform_eval(evaluator)
                 if wandb_callback.enabled:
                     wandb_callback.wandb.log(

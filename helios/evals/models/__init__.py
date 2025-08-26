@@ -5,6 +5,8 @@ from helios.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
 from helios.evals.models.galileo import GalileoConfig, GalileoWrapper
 from helios.evals.models.panopticon.panopticon import Panopticon, PanopticonConfig
 
+
+#TODO: assert that they all store a patch_size variable and supported modalities
 __all__ = [
     "DINOv2",
     "DINOv2Config",

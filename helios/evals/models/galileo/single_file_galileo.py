@@ -1806,6 +1806,7 @@ MODEL_SIZE_TO_WEKA_PATH = {
 }
 
 
+# TODO: patch size should be allowed to be done dynamically in forward pass
 @dataclass
 class GalileoConfig(Config):
     """olmo_core style config for GalileoWrapper."""
