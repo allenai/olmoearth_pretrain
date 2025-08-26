@@ -44,7 +44,7 @@ MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL = {
     ),
     DinoV3Models.FUll_7B_WEB: (
         DinoV3Models.FUll_7B_WEB,
-        f"{CHECKPOINT_DIR}/dinov3_vit7b16_pretrain_lvd1689m-a955f4ea.pth",
+        f"{CHECKPOINT_DIR}/dinov3_vit7b16_pretrain_lvd1689m-a955f4.pth",
     ),
     DinoV3Models.FULL_7B_SATELLITE: (
         DinoV3Models.FULL_7B_SATELLITE.replace("_sat", ""),
