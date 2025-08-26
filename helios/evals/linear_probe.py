@@ -236,6 +236,7 @@ def train_probe(
                 logits = outputs["logits"]
                 # logger.info(f"logits: {logits.shape}")
                 if task_type == TaskType.SEGMENTATION:
+                    # This is effectively nearest neighbor interpolation
                     logits = rearrange(
                         logits,
                         "b h w (c i j) -> b c (h i) (w j)",
@@ -246,6 +247,9 @@ def train_probe(
                         j=patch_size,
                     )
                     if logits.shape[-2] != batch_labels.shape[-2]:
+                        logger.warning(
+                            f"Logits shape {logits.shape} does not match batch_labels shape {batch_labels.shape} interpolating to labels shape"
+                        )
                         logits = F.interpolate(
                             logits,
                             size=(batch_labels.shape[-2], batch_labels.shape[-1]),

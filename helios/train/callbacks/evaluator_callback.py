@@ -114,7 +114,7 @@ class DownstreamEvaluator:
             run_knn
             if self.eval_mode == "knn"
             else partial(
-                # TODO: need to update this to use the patch size of the model if things are different
+                # TODO: THis is updated dynamically in the get_embeddings function
                 train_and_eval_probe,
                 batch_size=self.probe_batch_size,
                 epochs=self.epochs,
@@ -156,6 +156,8 @@ class DownstreamEvaluator:
             logger.info(
                 f"Using patch size {model.patch_size} for {self.dataset} with set patch size {self.patch_size}"
             )
+            # Models with bigger patch sizes will get a higher dim linear probe this may be problematic for models that are resizing the input data
+            # because there are more parameters to learn
             self.patch_size = model.patch_size
 
         # Superset of the kwargs the wrapper may need
@@ -195,16 +197,18 @@ class DownstreamEvaluator:
         logger.info(f"train labels shape for {self.dataset}: {train_labels.shape}")
         logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        val_result = self.eval_function(  # type: ignore
-            config=self.config,
-            train_embeddings=train_embeddings,
-            train_labels=train_labels,
-            test_embeddings=test_embeddings,
-            test_labels=test_labels,
-            device=self.device,
-            # patch size may be set dynamically for non-helios models
-            patch_size=self.patch_size,
-        )
+        # HACK Until I know what to do about the patch size for the segmentation head output
+        kwargs = {
+            "config": self.config,
+            "train_embeddings": train_embeddings,
+            "train_labels": train_labels,
+            "test_embeddings": test_embeddings,
+            "test_labels": test_labels,
+            "device": self.device,
+        }
+        if not self.eval_mode == "knn":
+            kwargs["patch_size"] = self.patch_size
+        val_result = self.eval_function(**kwargs)  # type: ignore
         logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
         # free memory
         del train_embeddings, train_labels, test_embeddings, test_labels

@@ -44,28 +44,6 @@ def load_user_module(path):
 
 
 EVAL_TASKS = {
-    "mados": DownstreamTaskConfig(
-        dataset="mados",
-        embedding_batch_size=128,
-        probe_batch_size=128,
-        num_workers=8,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=False,
-        probe_lr=0.01,
-        eval_interval=Duration.epochs(10),
-    ),
-    "pastis_sentinel2": DownstreamTaskConfig(
-        dataset="pastis",
-        embedding_batch_size=32,
-        probe_batch_size=8,
-        num_workers=2,
-        pooling_type=PoolingType.MAX,
-        norm_stats_from_pretrained=True,
-        probe_lr=0.1,
-        eval_interval=Duration.epochs(50),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=50,
-    ),
     "m_eurosat": DownstreamTaskConfig(
         dataset="m-eurosat",
         embedding_batch_size=128,
