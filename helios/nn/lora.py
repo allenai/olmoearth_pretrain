@@ -90,6 +90,9 @@ class TaskLoRALinear(nn.Module):
         self.gen_a = self._make_mlp(out_features * rank, gen_hidden, gen_layers)
         self.gen_b = self._make_mlp(rank * in_features, gen_hidden, gen_layers)
 
+        # Configurable option to turn off/on LoRA path, useful for callbacks
+        self.active = True
+
     def _make_mlp(self, out_size: int, hidden: int, layers: int) -> nn.Sequential:
         """Construct a small MLP to output a flattened matrix.
 
@@ -137,7 +140,7 @@ class TaskLoRALinear(nn.Module):
             ``base_out`` if ``task_emb is None``, else
             ``base_out + scaling * (x_drop @ (Delta W)^T)``.
         """
-        if task_emb is None:
+        if task_emb is None or not self.active:
             return base_out
 
         if x.shape[-1] != self.in_features:
