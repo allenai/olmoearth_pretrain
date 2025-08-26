@@ -126,6 +126,7 @@ class DownstreamEvaluator:
 
     def _get_data_loader(self, split: str) -> DataLoader:
         """Get the data loader for the given split."""
+        logger.info(f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}")
         return DataLoader(
             get_eval_dataset(
                 eval_dataset=self.dataset,
