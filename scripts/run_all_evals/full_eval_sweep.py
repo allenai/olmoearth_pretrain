@@ -103,7 +103,18 @@ def get_dino_v3_args():
     )
     return dino_v3_args
 
+def get_panopticon_args():
+    """Get the panopticon arguments."""
+    panopticon_args = dataset_args
+    panopticon_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return panopticon_args
 
+# HACK: Need to clean up interface for preferred norm strategy for different models
 def main():
     """Run the full evaluation sweep or just the defaults."""
     parser = argparse.ArgumentParser()
@@ -141,6 +152,11 @@ def main():
         type=str,
         required=False,
         help="If set, use this as the  base run name",
+    )
+    parser.add_argument(
+        "--panopticon",
+        action="store_true",
+        help="If set, use the panopticon normalization settings",
     )
     args, extra_cli = parser.parse_known_args()
 
@@ -196,6 +212,8 @@ def main():
 
         if args.dino_v3:
             cmd_args = get_dino_v3_args()
+        elif args.panopticon:
+            cmd_args = get_panopticon_args()
         else:
             cmd_args = ""
         cmd = (
@@ -222,6 +240,8 @@ def main():
 
             if args.dino_v3:
                 cmd_args += get_dino_v3_args()
+            elif args.panopticon:
+                cmd_args += get_panopticon_args()
             elif norm_mode == "dataset":
                 cmd_args += dataset_args
             elif norm_mode == "helios":
