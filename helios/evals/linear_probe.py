@@ -247,7 +247,7 @@ def train_probe(
                         j=patch_size,
                     )
                     if logits.shape[-2] != batch_labels.shape[-2]:
-                        logger.warning(
+                        logger.debug(
                             f"Logits shape {logits.shape} does not match batch_labels shape {batch_labels.shape} interpolating to labels shape"
                         )
                         logits = F.interpolate(
