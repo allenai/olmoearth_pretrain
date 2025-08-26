@@ -12,7 +12,6 @@ from logging import getLogger
 from all_evals import EVAL_TASKS
 
 from helios.evals.datasets.configs import dataset_to_config, get_eval_mode
-from helios.evals.datasets.normalize import NormMethod
 from helios.internal.experiment import SubCmd
 from helios.nn.flexihelios import PoolingType
 
@@ -103,6 +102,7 @@ def get_dino_v3_args():
     )
     return dino_v3_args
 
+
 def get_panopticon_args():
     """Get the panopticon arguments."""
     panopticon_args = dataset_args
@@ -113,6 +113,7 @@ def get_panopticon_args():
         ]
     )
     return panopticon_args
+
 
 # HACK: Need to clean up interface for preferred norm strategy for different models
 def main():
@@ -225,7 +226,11 @@ def main():
         logger.info(cmd)
         subprocess.run(cmd, shell=True, check=True)  # nosec
     else:
-        hp_params = loop_through_params() if not args.dino_v3 else no_norm_sweep()
+        hp_params = (
+            loop_through_params()
+            if not args.dino_v3 or not args.panopticon
+            else no_norm_sweep()
+        )
         for params in hp_params:
             lr = params.get("lr", None)
             norm_mode = params.get("norm_mode", "fixed")
