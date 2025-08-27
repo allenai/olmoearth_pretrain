@@ -67,7 +67,7 @@ SUPERVISORY_MODALITIES = {
     Modality.OPENSTREETMAP_RASTER.name: 0.1,
     Modality.WORLDCEREAL.name: 0.1,
     Modality.CDL.name: 0.1,
-    Modality.WRI_CANOPY_HEIGHT_MAP.name: 0.1,
+    # Modality.WRI_CANOPY_HEIGHT_MAP.name: 0.1,
 }
 
 
@@ -91,7 +91,7 @@ def my_build_common_components(
         Modality.GSE.name,
         Modality.WORLDCEREAL.name,
         Modality.CDL.name,
-        Modality.WRI_CANOPY_HEIGHT_MAP.name,
+        # Modality.WRI_CANOPY_HEIGHT_MAP.name,
     ]
     return config
 
@@ -114,7 +114,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
         probe_modalities=list(SUPERVISORY_MODALITIES.keys()),
-        use_spatial_attn=False,
+        use_spatial_attn=True,
         probe_dims=[
             # model_size["encoder_embedding_size"],
             # model_size["encoder_embedding_size"],
