@@ -321,7 +321,6 @@ class TokensAndMasks(NamedTuple):
                     continue
                 attr = getattr(self, attr_name)
                 # collapse the time and band set dimensions
-                print(attr_name, attr.shape, masked_attr.shape)
                 spatial_mask.append(
                     rearrange(masked_attr, "b h w t b_s -> b h w (t b_s)")
                 )  # b h w t b_s
