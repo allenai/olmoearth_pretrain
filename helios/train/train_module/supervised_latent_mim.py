@@ -288,7 +288,6 @@ class SupervisedLatentMIMTrainModule(HeliosTrainModule):
                     spatial_mask.flatten(),
                     (flat_modality_bandset[..., 0] != MISSING_VALUE),
                 )
-
                 filtered_modality_bandset = flat_modality_bandset[target_mask, :]
                 filtered_preds = probe_output.flatten(end_dim=-2)[target_mask, :]
 

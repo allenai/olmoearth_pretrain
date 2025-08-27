@@ -206,3 +206,4 @@ def test_train_batch_with_missing_modalities(
             torch.tensor(expected_output),
             atol=1e-1,
         )
+        assert False

@@ -1094,7 +1094,8 @@ class SpatialAttnProbe(nn.Module):
             return {}, None
 
         if self.attention is not None:
-            spatial_tokens, spatial_masks = x.concat_spatial_dims()
+            spatial_tokens, numerical_spatial_mask = x.concat_spatial_dims()
+            spatial_masks = numerical_spatial_mask == MaskValue.ONLINE_ENCODER.value
             # Here is where I pick which dimensions to collapse out of modality, time, and space
             B, H, W, T_M, D = spatial_tokens.shape
             spatial_tokens = rearrange(spatial_tokens, "b h w tm d -> (b h w) tm d")
@@ -1111,7 +1112,9 @@ class SpatialAttnProbe(nn.Module):
                 spatial_tokens, "(b h w) d -> b (h w) d", b=B, h=H, w=W
             )
             spatial_masks = rearrange(
-                torch.min(spatial_masks, dim=-1).values,
+                # max because if any is true, then we take
+                # the spatial patch as existing
+                torch.max(spatial_masks, dim=-1).values,
                 "(b h w) -> b h w",
                 b=B,
                 h=H,
