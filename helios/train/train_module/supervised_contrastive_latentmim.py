@@ -534,11 +534,11 @@ class SupervisedContrastiveLatentMIMTrainModule(HeliosTrainModule):
             output = self.model(batch, patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
-                target_output, _, _, _ = self.model.target_encoder.forward(
+                target_output = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
-                )
+                )["tokens_and_masks"]
             loss = self.loss_fn(output.decoded, target_output)
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(output.reconstructed, batch)

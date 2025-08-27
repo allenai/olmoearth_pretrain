@@ -20,7 +20,7 @@ from helios.data.constants import (
     ModalitySpec,
 )
 from helios.dataset.utils import get_modality_specs_from_names
-from helios.nn.attention import Attention, Block
+from helios.nn.attention import AttnPool, Block
 from helios.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -308,6 +308,22 @@ class TokensAndMasks(NamedTuple):
                 return spatial_average_t.mean(dim=-1)
             else:
                 return spatial_average_t.max(dim=-1).values
+
+    def concat_spatial_dims(self) -> tuple[Tensor, Tensor]:
+        """Concat spatial dims."""
+        spatial_tokens = []
+        spatial_mask = []
+        for attr_name in self.modalities:
+            if Modality.get(attr_name).is_spatial:
+                mask_attr_name = self.get_masked_modality_name(attr_name)
+                masked_attr = getattr(self, mask_attr_name)
+                if masked_attr is None:
+                    continue
+                attr = getattr(self, attr_name)
+                # collapse the time and band set dimensions
+                spatial_mask.append(masked_attr)  # b h w t b_s
+                spatial_tokens.append(attr)  # b h w t b_s d
+        return torch.concat(spatial_tokens, dim=-2), torch.concat(spatial_mask, dim=-1)
 
     def spatial_pool_with_mask(
         self, pooling_type: PoolingType = PoolingType.MAX
@@ -986,12 +1002,13 @@ class SpatialAttnProbe(nn.Module):
         self,
         embedding_size: int,
         max_patch_size: int,
-        num_heads: int,
+        mlp_ratio: float,
+        num_heads: int | None = None,
         use_spatial_attn: bool = False,
         probe_modalities: list[str] | None = None,
         probe_dims: list[int] = [],
-        qk_norm: bool = False,
-        use_flash_attn: bool = False,
+        num_queries: int = 1,
+        gate_temperature: int = 1,
     ) -> None:
         """Spatial Attn Probe."""
         super().__init__()
@@ -1001,12 +1018,12 @@ class SpatialAttnProbe(nn.Module):
         self.mask_token = nn.Parameter(torch.zeros(embedding_size))
         self.attention = None
         if use_spatial_attn:
-            self.attention = Attention(
-                dim=embedding_size,
-                cross_attn=True,
+            self.attention = AttnPool(
+                in_dim=embedding_size,
+                mlp_ratio=mlp_ratio,
+                num_queries=num_queries,
+                gate_temperature=gate_temperature,
                 num_heads=num_heads,
-                use_flash_attn=use_flash_attn,
-                qk_norm=qk_norm,
             )
 
         if probe_modalities is not None:
@@ -1073,41 +1090,38 @@ class SpatialAttnProbe(nn.Module):
             return {}, None
 
         if self.attention is not None:
-            gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
-            spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
-                # we assume x is square, h == w
-                grid_size=x.h_at_10,
-                res=torch.ones(x.b, device=x.device) * gsd_ratio,
-                encoding_dim=self.embedding_size,
-                device=x.device,
+            spatial_tokens, spatial_masks = x.concat_spatial_dims()
+            # Here is where I pick which dimensions to collapse out of modality, time, and space
+            B, H, W, T, M, D = spatial_tokens.shape
+            spatial_tokens = rearrange(spatial_tokens, "b h w t m d -> (b h w) (t m) d")
+            spatial_masks = rearrange(spatial_masks, "b h w t m -> (b h w) (t m)")
+            # print the unique values of the masks
+            logger.info(f"unique values of the masks: {torch.unique(spatial_masks)}")
+            pooled_attn_mask = spatial_masks == MaskValue.ONLINE_ENCODER.value
+            # Do I potentially need to filter out tokens that have no online marked modalities? Maybe not because we will just disgard those
+            logger.info(
+                f"shape of spatial tokens before pooling: {spatial_tokens.shape}"
             )
-            mask_expanded = repeat(
-                self.mask_token, "d -> b (h w) d", b=x.b, h=x.h_at_10, w=x.h_at_10
+            spatial_tokens = self.attention(spatial_tokens, pooled_attn_mask)
+            spatial_tokens = rearrange(
+                spatial_tokens, "(b h w) d -> b (h w) d", b=B, h=H, w=W
             )
-            q = mask_expanded + spatial_embed.to(dtype=mask_expanded.dtype)
-            feat_tokens, feat_masks = x.flatten_tokens_and_masks()
-            # feat_masks has shape[B, N_f], we want [B, N_q, N_f]
-            spatial_tokens = self.attention(
-                x=q,
-                y=feat_tokens,
-                attn_mask=repeat(
-                    feat_masks == MaskValue.ONLINE_ENCODER.value,
-                    "b f -> b q f",
-                    q=q.shape[1],
-                ),
+            spatial_masks = rearrange(
+                torch.min(spatial_masks, dim=-1).values,
+                "(b h w) -> b h w",
+                b=B,
+                h=H,
+                w=W,
             )
-            # everything is unmasked, so its ones
         else:
-            spatial_tokens, spatial_mask = x.spatial_pool_with_mask()
+            spatial_tokens, spatial_masks = x.spatial_pool_with_mask()
             spatial_tokens = rearrange(spatial_tokens, "b h w d -> b (h w) d")
         probe_outputs = self.apply_probes(spatial_tokens, h_w=x.h_at_10)
         spatial_tokens = rearrange(
             spatial_tokens, "b (h w) d -> b h w d", h=x.h_at_10, w=x.h_at_10
         )
-        if self.attention is not None:
-            spatial_mask = torch.ones_like(spatial_tokens)[:, :, :, 0]
         probe_outputs["mask"] = repeat(
-            spatial_mask, "b h w -> b (h p1) (w p2)", p1=patch_size, p2=patch_size
+            spatial_masks, "b h w -> b (h p1) (w p2)", p1=patch_size, p2=patch_size
         )
         return probe_outputs, spatial_tokens
 
@@ -1442,12 +1456,10 @@ class Encoder(FlexiHeliosBase):
         self.probe_with_attn = SpatialAttnProbe(
             embedding_size=embedding_size,
             max_patch_size=max_patch_size,
-            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
             probe_modalities=probe_modalities,
-            probe_dims=probe_dims,
-            qk_norm=qk_norm,
-            use_flash_attn=use_flash_attn,
             use_spatial_attn=use_spatial_attn,
+            num_heads=num_heads,
         )
 
     def create_token_exit_ids(
