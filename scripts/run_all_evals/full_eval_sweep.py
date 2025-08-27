@@ -140,6 +140,7 @@ def get_galileo_args(pretrained_normalizer: bool = True):
     )
     return galileo_args
 
+
 # HACK: Need to clean up interface for preferred norm strategy for different models
 def main():
     """Run the full evaluation sweep or just the defaults."""
@@ -261,7 +262,7 @@ def main():
         hp_params = (
             loop_through_params()
             if not args.dino_v3
-            or not args.panopticon  # Only use the dataset normalization stats for these models
+            and not args.panopticon  # Only use the dataset normalization stats for these models
             else no_norm_sweep()
         )
         for params in hp_params:
