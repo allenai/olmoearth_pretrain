@@ -241,6 +241,14 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=True,
             eval_interval=Duration.steps(5000),
         ),
+        "m_so2sat": DownstreamTaskConfig(
+            dataset="m-so2sat",
+            embedding_batch_size=128,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.steps(5000),
+        ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
             embedding_batch_size=32,
