@@ -1502,7 +1502,7 @@ class Predictor(FlexiHeliosBase):
         self.norm = nn.LayerNorm(decoder_embedding_size)
         self.apply(self._init_weights)
         if output_scale:
-            self.scale = nn.Parameter(torch.tensor(output_scale))
+            self.scale = nn.Parameter(torch.tensor([output_scale]))
         else:
             self.scale = 1
 
