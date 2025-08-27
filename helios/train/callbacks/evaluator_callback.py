@@ -330,6 +330,8 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     # This combined with ``eval_on_startup=True`` is useful if you just want to run in-loop evals
     # without training any longer.
     cancel_after_first_eval: bool = False
+    use_patch_size_from_model: bool = False
+    tasks_to_run:list[str] | None = None
 
     def build(self, trainer: Trainer) -> Callback | None:
         """Build the downstream evaluator callback."""
@@ -339,6 +341,9 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
         evaluators: list[DownstreamEvaluator] = []
         # Check that probe_lr is set for segmentation tasks
         for evaluation_name, task in self.tasks.items():
+            if self.tasks_to_run is not None and evaluation_name not in self.tasks_to_run:
+                logger.info(f"Skipping {evaluation_name} because it is not in the tasks_to_run list")
+                continue
             config = dataset_to_config(task.dataset)
             if config.task_type == TaskType.SEGMENTATION:
                 if task.probe_lr is None:

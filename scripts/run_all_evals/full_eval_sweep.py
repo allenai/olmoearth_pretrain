@@ -140,7 +140,6 @@ def get_galileo_args(pretrained_normalizer: bool = True):
     )
     return galileo_args
 
-
 # HACK: Need to clean up interface for preferred norm strategy for different models
 def main():
     """Run the full evaluation sweep or just the defaults."""
