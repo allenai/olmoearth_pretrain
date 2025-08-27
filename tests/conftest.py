@@ -235,6 +235,42 @@ def setup_h5py_dir(
     return convert_to_h5py.h5py_dir
 
 
+def prepare_h5py_dir_n_samples(
+    tmp_path: Path, prepare_samples_and_supported_modalities: tuple, n: int
+) -> UPath:
+    """Setup the h5py directory with n samples."""
+    prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
+    prepared_samples = prepare_samples(tmp_path)
+    convert_to_h5py = ConvertToH5py(
+        tile_path=tmp_path,
+        supported_modalities=[m for m in supported_modalities if m != Modality.LATLON],
+        multiprocessed_h5_creation=False,
+    )
+    convert_to_h5py.prepare_h5_dataset(prepared_samples * n)
+    assert convert_to_h5py is not None
+    return convert_to_h5py.h5py_dir
+
+
+@pytest.fixture
+def setup_h5py_dir_100_samples(
+    tmp_path: Path, prepare_samples_and_supported_modalities: tuple
+) -> UPath:
+    """Setup the h5py directory with 100 samples."""
+    return prepare_h5py_dir_n_samples(
+        tmp_path, prepare_samples_and_supported_modalities, 100
+    )
+
+
+@pytest.fixture
+def setup_h5py_dir_20_samples(
+    tmp_path: Path, prepare_samples_and_supported_modalities: tuple
+) -> UPath:
+    """Setup the h5py directory with 20 samples."""
+    return prepare_h5py_dir_n_samples(
+        tmp_path, prepare_samples_and_supported_modalities, 20
+    )
+
+
 @pytest.fixture
 def masked_sample_dict(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],

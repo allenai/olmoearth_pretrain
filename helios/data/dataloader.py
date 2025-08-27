@@ -97,7 +97,9 @@ class HeliosDataLoader(DataLoaderBase):
     @property
     def total_unique_batches(self) -> int:
         """The total number of unique batches in an epoch."""
-        return len(self.dataset) // (self.global_batch_size)
+        return int(len(self.dataset) * self.dataset_percentage) // (
+            self.global_batch_size
+        )
 
     @property
     def total_unique_size(self) -> int:
