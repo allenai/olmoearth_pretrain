@@ -321,6 +321,7 @@ class TokensAndMasks(NamedTuple):
                     continue
                 attr = getattr(self, attr_name)
                 # collapse the time and band set dimensions
+                print(attr_name, attr.shape, masked_attr.shape)
                 spatial_mask.append(masked_attr)  # b h w t b_s
                 spatial_tokens.append(attr)  # b h w t b_s d
         return torch.concat(spatial_tokens, dim=-2), torch.concat(spatial_mask, dim=-1)
