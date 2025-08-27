@@ -1,7 +1,27 @@
 """Utilities for the nn module."""
 
+from typing import Any
+
 import torch
 from torch.distributed import DeviceMesh
+
+
+def unpack_encoder_output(
+    output_dict: dict[str, Any],
+) -> tuple:
+    """Unpack the output of an encoder.
+
+    Args:
+        output_dict (dict[str, Any]): The output of an encoder.
+
+    Returns:
+        tuple[TokensAndMasks, TokensAndMasks, dict[str, Any]]: The unpacked output.
+    """
+    latent = output_dict.pop("tokens_and_masks", None)
+    latent_projected_and_pooled = output_dict.pop("project_aggregated", None)
+    # Pass through all other outputs that might be specific to an encoder decoder pair
+    decoder_kwargs = output_dict
+    return latent, latent_projected_and_pooled, decoder_kwargs
 
 
 def get_cumulative_sequence_lengths(seq_lengths: torch.Tensor) -> torch.Tensor:

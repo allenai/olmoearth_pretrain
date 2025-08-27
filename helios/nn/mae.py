@@ -11,7 +11,7 @@ from helios.nn.flexihelios import (
     ReconstructorConfig,
     TokensAndMasks,
 )
-from helios.nn.utils import DistributedMixins
+from helios.nn.utils import DistributedMixins, unpack_encoder_output
 from helios.train.masking import MaskedHeliosSample
 
 
@@ -40,9 +40,10 @@ class MAE(nn.Module, DistributedMixins):
         self, x: MaskedHeliosSample, patch_size: int
     ) -> tuple[TokensAndMasks, TokensAndMasks | None, TokensAndMasks | None]:
         """Forward pass for the MAE Module."""
-        latent, _, _, _ = self.encoder(x, patch_size=patch_size)
+        output_dict = self.encoder(x, patch_size=patch_size)
+        latent, _, decoder_kwargs = unpack_encoder_output(output_dict)
         decoded = self.decoder and self.decoder(
-            latent, timestamps=x.timestamps, patch_size=patch_size
+            latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
         )
         reconstructed = self.reconstructor and self.reconstructor(
             latent, timestamps=x.timestamps, patch_size=patch_size

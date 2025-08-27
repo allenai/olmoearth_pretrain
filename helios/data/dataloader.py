@@ -60,6 +60,7 @@ class HeliosDataLoader(DataLoaderBase):
         persistent_workers: bool = True,
         multiprocessing_context: str = "spawn",
         num_dataset_repeats_per_epoch: int = 1,
+        dataset_percentage: float = 1.0,
     ):
         """Initialize the HeliosDataLoader."""
         super().__init__(
@@ -88,6 +89,7 @@ class HeliosDataLoader(DataLoaderBase):
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = multiprocessing_context
         self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
+        self.dataset_percentage = dataset_percentage
         if self.num_workers > 0 and self.multiprocessing_context == "forkserver":
             # Overhead of loading modules on import by preloading them
             mp.set_forkserver_preload(["torch", "rasterio"])
@@ -135,9 +137,20 @@ class HeliosDataLoader(DataLoaderBase):
         if self.shuffle:
             # Deterministically shuffle based on epoch and seed
             rng = get_rng(self.seed + self.epoch)  # type: ignore
+        indices = np.arange(len(self.dataset), dtype=np.uint32)
+        if self.dataset_percentage < 1.0:
+            # Dataset subset selected should be deterministic across random seeds and restarts
+            data_percentage_rng = get_rng(self.seed)
+            indices = data_percentage_rng.choice(
+                indices,
+                size=int(len(indices) * self.dataset_percentage),
+                replace=False,
+            )
+            logger.info(
+                f"Picked {len(indices)} samples from {len(self.dataset)} samples"
+            )
         indices_list = []
         for _ in range(self.num_dataset_repeats_per_epoch):
-            indices = np.arange(len(self.dataset), dtype=np.uint32)
             if rng is not None:
                 rng.shuffle(indices)
             # Remove tail of data to make it evenly divisible
@@ -272,8 +285,8 @@ class HeliosDataLoader(DataLoaderBase):
                 "this could mean the data has changed"
             )
         elif state_dict["dataset_fingerprint"] != self.dataset.fingerprint:
-            raise RuntimeError(
-                "Restoring state from a different dataset is not supported! (fingerprint doesn't match)"
+            raise ValueError(
+                "Restoring data loading state from a different dataset is not supported! (fingerprint doesn't match)"
             )
 
         if state_dict["seed"] != self.seed:
@@ -552,6 +565,7 @@ class HeliosDataLoaderConfig(Config):
     target_device_type: str | None = None
     drop_last: bool = True
     num_dataset_repeats_per_epoch: int = 1
+    dataset_percentage: float = 1.0
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -594,4 +608,5 @@ class HeliosDataLoaderConfig(Config):
             sampled_hw_p_list=self.sampled_hw_p_list,
             token_budget=self.token_budget,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
+            dataset_percentage=self.dataset_percentage,
         )

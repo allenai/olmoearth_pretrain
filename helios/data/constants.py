@@ -28,6 +28,8 @@ NUM_WORLDCOVER_CLASSES = 12
 # there are less but this avoids us needing to remap
 NUM_CDL_CLASSES = 255
 
+# Resolution of the input data in meters
+BASE_GSD = 10
 # Default nodata value for Sentinel-1 data.
 SENTINEL1_NODATA = -32768
 

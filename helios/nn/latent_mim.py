@@ -3,7 +3,7 @@
 import logging
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import torch
 import torch.nn as nn
@@ -16,7 +16,7 @@ from torch.distributed.fsdp import (
 )
 
 from helios.nn.flexihelios import TokensAndMasks
-from helios.nn.utils import DistributedMixins
+from helios.nn.utils import DistributedMixins, unpack_encoder_output
 from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
@@ -66,19 +66,21 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent, latent_projected_and_pooled, probe_outputs, _ = self.encoder(
-            x, patch_size=patch_size
+        output_dict: dict[str, Any] = self.encoder(x, patch_size=patch_size)
+        latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
+            output_dict
         )
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
         decoded = self.decoder(latent, timestamps=x.timestamps, patch_size=patch_size)
+
         return ModelOutput(
             latent,
             decoded,
             latent_projected_and_pooled,
             reconstructed,
-            probe_outputs,
+            output_dict.get("probe_output", {}),
         )
 
     def apply_fsdp(

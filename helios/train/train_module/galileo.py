@@ -19,6 +19,7 @@ from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.galileo import Galileo
+from helios.nn.utils import unpack_encoder_output
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
 from helios.train.train_module.train_module import (
@@ -359,16 +360,18 @@ class GalileoTrainModule(HeliosTrainModule):
 
             with torch.no_grad():
                 logger.info("target encoder running here")
-                target_output_a, _, _, _ = self.model.target_encoder.forward(
+                output_dict = self.model.target_encoder.forward(
                     batch_a.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_a,
                 )
-                target_output_b, _, _, _ = self.model.target_encoder.forward(
+                target_output_a, _, _ = unpack_encoder_output(output_dict)
+                output_dict = self.model.target_encoder.forward(
                     batch_b.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_b,
                 )
+                target_output_b, _, _ = unpack_encoder_output(output_dict)
 
             loss_a = self.loss_fn_a(decoded_a, target_output_a)
             loss_b = self.loss_fn_b(decoded_b, target_output_b)

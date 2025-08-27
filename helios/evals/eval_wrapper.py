@@ -4,11 +4,13 @@ from logging import getLogger
 from typing import Any
 
 import torch
+from einops import reduce
 from torch import nn
 
 from helios.evals.datasets.configs import TaskType
 from helios.evals.models import DINOv2, GalileoWrapper, Panopticon
-from helios.nn.flexihelios import FlexiHeliosBase, PoolingType
+from helios.nn.flexihelios import FlexiHeliosBase, PoolingType, TokensAndMasks
+from helios.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from helios.nn.st_model import STBase
 from helios.train.masking import MaskedHeliosSample
 
@@ -28,6 +30,7 @@ class EvalWrapper:
         patch_size: int,
         pooling_type: PoolingType,
         concat_features: bool = False,
+        use_pooled_tokens: bool = False,
     ):
         """Initialize the eval wrapper.
 
@@ -37,6 +40,7 @@ class EvalWrapper:
             patch_size: The patch size to use for the model.
             pooling_type: The pooling type to use for the model.
             concat_features: Whether to concatenate features across modalities.
+            use_pooled_tokens: Whether to use pooled tokens.
         """
         super().__init__()
         self.model = model
@@ -45,6 +49,11 @@ class EvalWrapper:
         self.pooling_type = pooling_type
         self.concat_features = concat_features
         self.spatial_pool = task_type == TaskType.SEGMENTATION
+        self.use_pooled_tokens = use_pooled_tokens
+        if self.use_pooled_tokens:
+            assert isinstance(self.model, EncodeEarlyAttnPool), (
+                "Pooled tokens are only supported for EncodeEarlyAttnPool"
+            )
 
     @property
     def device(self) -> torch.device:
@@ -75,23 +84,50 @@ class HeliosEvalWrapper(EvalWrapper):
 
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         """Forward pass through the model produces the embedding specified by initialization."""
-        batch_embeddings, _, probe_outputs, spatial_attn_embeddings = self.model(
-            masked_helios_sample, patch_size=self.patch_size
-        )
-        if len(probe_outputs) == 0:
-            # not in supervised mode, so the spatial_attn_embeddings aren't learned
-            return batch_embeddings.pool_unmasked_tokens(
-                self.pooling_type,
-                spatial_pooling=self.spatial_pool,
-                concat_features=self.concat_features,
-            )
-        else:
-            if self.spatial_pool:
-                # spatial_attn_embeddings has shape [B, H, W, D]. This is what
-                # we return for the spatial pool
-                return spatial_attn_embeddings
+        outputs = self.model(masked_helios_sample, patch_size=self.patch_size)
+        if not self.use_pooled_tokens:
+            probe_outputs = outputs.get("probe_output", {})
+            if len(probe_outputs) == 0:
+                # not in supervised mode, so the spatial_attn_embeddings aren't learned
+                batch_embeddings: TokensAndMasks = outputs[
+                    "tokens_and_masks"
+                ]  # (bsz, dim)
+                # Concat features across modalities in space averaged across time
+                batch_embeddings = batch_embeddings.pool_unmasked_tokens(
+                    self.pooling_type,
+                    spatial_pooling=self.spatial_pool,
+                    concat_features=self.concat_features,
+                )
             else:
-                return torch.mean(spatial_attn_embeddings, dim=[1, 2])
+                spatial_attn_embeddings = outputs["spatial_queries"]
+                if self.spatial_pool:
+                    # spatial_attn_embeddings has shape [B, H, W, D]. This is what
+                    # we return for the spatial pool
+                    return spatial_attn_embeddings
+                else:
+                    return torch.mean(spatial_attn_embeddings, dim=[1, 2])
+        else:
+            pooled_tokens_dict = outputs["pooled_tokens_and_masks"]
+            pooled_tokens = pooled_tokens_dict["modality_pooled_tokens"]
+            # spatial pool is true means we want to keep the spatial dimensions
+            # so here we just need to pool across time
+            logger.info(f"pooled tokens shape in eval wrapper: {pooled_tokens.shape}")
+
+            if self.spatial_pool:
+                # B H W T C
+                if pooled_tokens.shape[1] == 1 and pooled_tokens.ndim == 3:
+                    # unsqueeze to get a W H C T
+                    pooled_tokens = pooled_tokens.unsqueeze(1)
+                pooled_tokens = reduce(
+                    pooled_tokens, "b h w ... d -> b h w d", self.pooling_type
+                )
+            else:
+                # Take the mean of all dims excetp the first and last
+                pooled_tokens = reduce(
+                    pooled_tokens, "b ... d -> b d", self.pooling_type
+                )
+            batch_embeddings = pooled_tokens
+        return batch_embeddings
 
 
 class PanopticonEvalWrapper(EvalWrapper):

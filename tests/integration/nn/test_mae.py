@@ -8,6 +8,7 @@ import torch
 from helios.data.constants import Modality, ModalitySpec
 from helios.nn.flexihelios import Encoder, Predictor, Reconstructor
 from helios.nn.mae import MAE
+from helios.nn.utils import unpack_encoder_output
 from helios.train.loss import MAELoss, PatchDiscriminationLossNew
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
@@ -161,13 +162,14 @@ def test_mae_with_loss(
     loss_mim = PatchDiscriminationLossNew()
     with torch.no_grad():
         logger.info("target encoder running here")
-        target_output, _, _, _ = mae.encoder.forward(
+        output_dict = mae.encoder.forward(
             x.unmask(),
             patch_size=patch_size,
             token_exit_cfg={
                 modality: 0 for modality in mae.encoder.supported_modality_names
             },
         )
+        target_output, _, _ = unpack_encoder_output(output_dict)
 
     loss += loss_mim.compute(decoded, target_output)
 

@@ -7,7 +7,7 @@ from typing import Any
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.distributed.parallel import DataParallelConfig
-from olmo_core.distributed.utils import get_local_tensor
+from olmo_core.distributed.utils import get_local_rank, get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
@@ -17,6 +17,7 @@ from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.latent_mim import LatentMIM
+from helios.nn.utils import unpack_encoder_output
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
 from helios.train.train_module.train_module import (
@@ -207,8 +208,8 @@ class LatentMIMTrainModule(HeliosTrainModule):
         num_microbatches = len(microbatches)
         for microbatch_idx, microbatch in enumerate(microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
-                logger.info(
-                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
+                print(
+                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size} on rank {get_local_rank()}\n"
                 )
                 microbatch = self.transform.apply(microbatch).to_device(self.device)
                 masked_batch = self.masking_strategy.apply_mask(
@@ -235,10 +236,8 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     logger.warning(
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
                     )
-                    del latent, decoded, target_output
-                    break
+                    print(f"rank {get_local_rank()} has nan or inf")
 
-                del latent, decoded, target_output
                 loss.backward()
 
         if dry_run:
@@ -253,6 +252,7 @@ class LatentMIMTrainModule(HeliosTrainModule):
 
         del batch, batch_data  # In case this helps with memory utilization.
         del masked_batch
+        del latent, decoded, target_output
 
     def model_forward(
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
@@ -262,11 +262,12 @@ class LatentMIMTrainModule(HeliosTrainModule):
             output = self.model(batch, patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
-                target_output, _, _, _ = self.model.target_encoder.forward(
+                output_dict = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
+                target_output, _, _ = unpack_encoder_output(output_dict)
             loss = self.loss_fn(output.decoded, target_output)
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(output.reconstructed, batch)
