@@ -1879,6 +1879,7 @@ class PredictorConfig(Config):
     output_embedding_size: int | None = None
     use_flash_attn: bool = False
     qk_norm: bool = False
+    output_scale: float | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
