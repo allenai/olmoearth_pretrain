@@ -117,6 +117,7 @@ def get_panopticon_args():
 
 def get_galileo_args(pretrained_normalizer: bool = True):
     """Get the galileo arguments."""
+    galileo_args = dataset_args
     if pretrained_normalizer:
         # To use galileo pretrained normalizer we want to leave normalization to the galileo wrapper
         galileo_args = dataset_args
