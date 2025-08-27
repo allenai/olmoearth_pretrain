@@ -45,14 +45,14 @@ def load_user_module(path):
 
 
 EVAL_TASKS = {
-    "m_forestnet": DownstreamTaskConfig(
-        dataset="m-forestnet",
-        embedding_batch_size=128,
-        num_workers=4,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=False,
-        eval_interval=Duration.epochs(5),
-    ),
+    # "m_forestnet": DownstreamTaskConfig(
+    #     dataset="m-forestnet",
+    #     embedding_batch_size=128,
+    #     num_workers=4,
+    #     pooling_type=PoolingType.MEAN,
+    #     norm_stats_from_pretrained=False,
+    #     eval_interval=Duration.epochs(5),
+    # ),
     "m_eurosat": DownstreamTaskConfig(
         dataset="m-eurosat",
         embedding_batch_size=128,
