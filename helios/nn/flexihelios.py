@@ -1450,7 +1450,6 @@ class Predictor(FlexiHeliosBase):
         output_embedding_size: int | None = None,
         use_flash_attn: bool = False,
         qk_norm: bool = False,
-        output_scale: float | None = None,
     ):
         """Initialize the predictor.
 
@@ -1468,7 +1467,6 @@ class Predictor(FlexiHeliosBase):
             output_embedding_size: Size of output embeddings
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
-            output_scale: initial scalar for output (learnable)
         """
         super().__init__(
             embedding_size=decoder_embedding_size,
@@ -1501,10 +1499,6 @@ class Predictor(FlexiHeliosBase):
         self.input_norm = nn.LayerNorm(encoder_embedding_size)
         self.norm = nn.LayerNorm(decoder_embedding_size)
         self.apply(self._init_weights)
-        if output_scale:
-            self.scale = nn.Parameter(torch.tensor([output_scale]))
-        else:
-            self.scale = 1
 
     def add_masks(self, x: dict[str, Tensor]) -> dict[str, Tensor]:
         """Replace tokens that should be decoded (MaskValue.DECODER_ONLY) with the learnable mask token.
@@ -1803,9 +1797,7 @@ class Predictor(FlexiHeliosBase):
                 per_channel_modality_data = modality_data[..., idx, :]
                 output_data = self.to_output_embed(self.norm(per_channel_modality_data))
                 per_modality_output_tokens.append(output_data)
-            output_dict[modality] = (
-                torch.stack(per_modality_output_tokens, dim=-2) * self.scale
-            )
+            output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
             output_dict[masked_modality_name] = modality_mask
         return TokensAndMasks(**output_dict)
 
@@ -1879,7 +1871,6 @@ class PredictorConfig(Config):
     output_embedding_size: int | None = None
     use_flash_attn: bool = False
     qk_norm: bool = False
-    output_scale: float | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
