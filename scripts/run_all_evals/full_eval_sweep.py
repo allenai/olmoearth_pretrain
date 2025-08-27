@@ -114,6 +114,7 @@ def get_panopticon_args():
     )
     return panopticon_args
 
+
 def get_galileo_args(pretrained_normalizer: bool = True):
     """Get the galileo arguments."""
     if pretrained_normalizer:
@@ -125,11 +126,19 @@ def get_galileo_args(pretrained_normalizer: bool = True):
                 for task_name in EVAL_TASKS.keys()
             ]
         )
+
         galileo_args += " " + "--model.use_pretrained_normalizer=True"
     else:
         # IF we use dataset stats we want to turn off the pretrained normalizer
         galileo_args += " " + "--model.use_pretrained_normalizer=False"
+    galileo_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=8"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
     return galileo_args
+
 
 # HACK: Need to clean up interface for preferred norm strategy for different models
 def main():
@@ -251,7 +260,8 @@ def main():
     else:
         hp_params = (
             loop_through_params()
-            if not args.dino_v3 or not args.panopticon # Only use the dataset normalization stats for these models
+            if not args.dino_v3
+            or not args.panopticon  # Only use the dataset normalization stats for these models
             else no_norm_sweep()
         )
         for params in hp_params:
