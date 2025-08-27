@@ -50,7 +50,9 @@ def test_modality_batch_patch_discrimination_loss() -> None:
         latlon=torch.ones((b, 1, d)),
         latlon_mask=torch.zeros((b, 1)),
     )
-    loss = ModalityBatchPatchDiscriminationLoss()
+    loss = ModalityBatchPatchDiscriminationLoss(
+        batch_loss=True, bandset_loss=True, modality_loss=True
+    )
     loss_value = loss.compute(preds, targets)
     # not very good! since they are all the same
     # predictions and values
