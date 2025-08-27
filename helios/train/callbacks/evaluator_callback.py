@@ -63,6 +63,7 @@ class DownstreamEvaluator:
         task: DownstreamTaskConfig,
         trainer: Trainer,
         device: torch.device | None = None,
+        use_patch_size_from_model: bool = False,
     ) -> None:
         """Initialize the downstream evaluator.
 
@@ -93,6 +94,7 @@ class DownstreamEvaluator:
         self.partition = task.partition
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
+        self.use_patch_size_from_model = use_patch_size_from_model
         if self.eval_mode is None:
             self.eval_mode = get_eval_mode(self.config.task_type)
 
@@ -159,7 +161,8 @@ class DownstreamEvaluator:
             )
             # Models with bigger patch sizes will get a higher dim linear probe this may be problematic for models that are resizing the input data
             # because there are more parameters to learn
-            self.patch_size = model.patch_size
+            if self.use_patch_size_from_model:
+                self.patch_size = model.patch_size
 
         # Superset of the kwargs the wrapper may need
         wrapper_kwargs = {
@@ -226,6 +229,7 @@ class DownstreamEvaluatorCallback(Callback):
     evaluators: list[DownstreamEvaluator] = field(default_factory=list)
     eval_on_startup: bool = False
     cancel_after_first_eval: bool = False
+    use_patch_size_from_model: bool = False
 
     def pre_train(self) -> None:
         """Run the evaluators on startup."""
@@ -365,6 +369,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     task=task,
                     trainer=trainer,
                     device=trainer.device,
+                    use_patch_size_from_model=self.use_patch_size_from_model,
                 )
             )
         return DownstreamEvaluatorCallback(
