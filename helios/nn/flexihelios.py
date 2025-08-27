@@ -322,8 +322,12 @@ class TokensAndMasks(NamedTuple):
                 attr = getattr(self, attr_name)
                 # collapse the time and band set dimensions
                 print(attr_name, attr.shape, masked_attr.shape)
-                spatial_mask.append(masked_attr)  # b h w t b_s
-                spatial_tokens.append(attr)  # b h w t b_s d
+                spatial_mask.append(
+                    rearrange(masked_attr, "b h w t b_s -> b h w (t b_s)")
+                )  # b h w t b_s
+                spatial_tokens.append(
+                    rearrange(attr, "b h w t b_s d -> b h w (t b_s) d")
+                )  # b h w t b_s d
         return torch.concat(spatial_tokens, dim=-2), torch.concat(spatial_mask, dim=-1)
 
     def spatial_pool_with_mask(
@@ -1093,9 +1097,9 @@ class SpatialAttnProbe(nn.Module):
         if self.attention is not None:
             spatial_tokens, spatial_masks = x.concat_spatial_dims()
             # Here is where I pick which dimensions to collapse out of modality, time, and space
-            B, H, W, T, M, D = spatial_tokens.shape
-            spatial_tokens = rearrange(spatial_tokens, "b h w t m d -> (b h w) (t m) d")
-            spatial_masks = rearrange(spatial_masks, "b h w t m -> (b h w) (t m)")
+            B, H, W, T_M, D = spatial_tokens.shape
+            spatial_tokens = rearrange(spatial_tokens, "b h w tm d -> (b h w) tm d")
+            spatial_masks = rearrange(spatial_masks, "b h w tm -> (b h w) tm")
             # print the unique values of the masks
             logger.info(f"unique values of the masks: {torch.unique(spatial_masks)}")
             pooled_attn_mask = spatial_masks == MaskValue.ONLINE_ENCODER.value
