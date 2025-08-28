@@ -265,7 +265,8 @@ class Modality:
             # 15 m/pixel bands that we store at 10 m/pixel.
             BandSet(["B8"], 16),
             # 30 m/pixel bands that we store at 20 m/pixel.
-            BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"], 32),
+            BandSet(["B1", "B2", "B3", "B4"], 32),
+            BandSet(["B5", "B6", "B7", "B9", "B10", "B11"], 32),
         ],
         is_multitemporal=True,
         ignore_when_parsing=False,
