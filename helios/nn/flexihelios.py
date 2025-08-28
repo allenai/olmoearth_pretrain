@@ -1114,7 +1114,7 @@ class SpatialAttnProbe(nn.Module):
             spatial_masks = rearrange(
                 # max because if any is true, then we take
                 # the spatial patch as existing
-                torch.max(spatial_masks, dim=-1).values,
+                torch.max(pooled_attn_mask, dim=-1).values,
                 "(b h w) -> b h w",
                 b=B,
                 h=H,
