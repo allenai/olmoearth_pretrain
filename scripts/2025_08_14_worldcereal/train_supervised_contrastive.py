@@ -98,7 +98,7 @@ def my_build_common_components(
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    model_size = MODEL_SIZE_ARGS["tiny_shallow_decoder"]
 
     encoder_decoder_modalities = [
         m for m in common.training_modalities if m not in SUPERVISORY_MODALITIES.keys()
@@ -114,7 +114,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
         probe_modalities=list(SUPERVISORY_MODALITIES.keys()),
-        use_spatial_attn=True,
+        use_spatial_attn=False,
         probe_dims=[
             # model_size["encoder_embedding_size"],
             # model_size["encoder_embedding_size"],
