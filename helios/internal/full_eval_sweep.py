@@ -10,6 +10,7 @@ import uuid
 from logging import getLogger
 
 from helios.evals.datasets.configs import dataset_to_config, get_eval_mode
+from helios.evals.models import get_launch_script_path
 from helios.internal.all_evals import EVAL_TASKS
 from helios.internal.experiment import SubCmd
 from helios.nn.flexihelios import PoolingType
@@ -86,9 +87,8 @@ def no_norm_sweep():
 
 def get_dino_v3_args():
     """Get the dino v3 arguments."""
-    # DATASET ARGS + NORM METHOD ARGS
-    # # std is instead of calculating min max per band per dataset which seems to be the reccomended way to do it
-    # # TODO: Add a way to do this
+    # Normalization strategy is to scale with min max to 0 - 256 and then scale back to 0 - 1
+    # Normalization is then applied by the eval wrapper by default
     dino_v3_args = dataset_args
     dino_v3_args += " " + " ".join(
         [
@@ -137,72 +137,172 @@ def get_galileo_args(pretrained_normalizer: bool = True):
     return galileo_args
 
 
-def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
-    """Build the commands for the sweep."""
-    cluster = args.cluster
-    checkpoint_path = args.checkpoint_path
-    module_path = args.module_path
-    project_name = args.project_name
-    extra = " " + " ".join(extra_cli) if extra_cli else ""
+def _get_sub_command(args: argparse.Namespace) -> str:
+    """Determine the sub command based on args and cluster."""
+    if args.dry_run:
+        return SubCmd.dry_run
+    elif args.cluster == "local":
+        return SubCmd.train
+    else:
+        return SubCmd.launch
 
-    # If we are using a torch hub model we should not specify a checkpoint path
-    if checkpoint_path is None:
-        logger.info(f"Running with module path {module_path} on cluster {cluster}")
+
+def _get_base_run_name(args: argparse.Namespace) -> str:
+    """Generate the base run name from checkpoint path or model name."""
+    # Log configuration
+    if args.checkpoint_path is None:
+        logger.info(f"Running with module path {args.module_path} on cluster {args.cluster}")
     else:
         logger.info(
-            f"Running with checkpoint path {checkpoint_path} and module path {module_path} on cluster {cluster}"
+            f"Running with checkpoint path {args.checkpoint_path} and module path {args.module_path} on cluster {args.cluster}"
         )
-    if args.dry_run:
-        sub_command = SubCmd.dry_run
-    elif cluster == "local":
-        sub_command = SubCmd.train
-    else:
-        sub_command = SubCmd.launch
 
-    if project_name is None:
-        project_name = "helios_in_loop_evals"
-
-    if checkpoint_path is not None:
-        parent_dir = os.path.basename(os.path.dirname(checkpoint_path))[:100]
-        # the step number is the last part of the checkpoint path
-        step_num = os.path.basename(checkpoint_path)
-        base_run_name = f"{parent_dir}_{step_num}"
+    if args.checkpoint_path is not None:
+        parent_dir = os.path.basename(os.path.dirname(args.checkpoint_path))[:100]
+        step_num = os.path.basename(args.checkpoint_path)
+        return f"{parent_dir}_{step_num}"
     else:
         if args.model_name is not None:
-            base_run_name = args.model_name
+            return args.model_name
         else:
             logger.warning("No model name provided, using random run name")
-            base_run_name = str(uuid.uuid4())[:8]
+            return str(uuid.uuid4())[:8]
 
-    launch_command = "python3" if not sub_command == SubCmd.train else "torchrun"
+
+def _get_checkpoint_args(checkpoint_path: str) -> str:
+    """Generate checkpoint arguments string."""
     if checkpoint_path is not None:
-        checkpoint_args = f"--trainer.load_path={checkpoint_path}"
+        return f"--trainer.load_path={checkpoint_path}"
+    return ""
+
+
+def _get_model_specific_args(args: argparse.Namespace) -> str:
+    """Get model-specific command arguments."""
+    if args.dino_v3:
+        return get_dino_v3_args()
+    elif args.panopticon:
+        return get_panopticon_args()
+    elif args.galileo:
+        return get_galileo_args()
+    return ""
+
+
+def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
+    """Get normalization-specific command arguments."""
+    if args.galileo:
+        if norm_mode == "dataset":
+            return get_galileo_args(pretrained_normalizer=False)
+        elif norm_mode == "pre_trained":
+            return get_galileo_args(pretrained_normalizer=True)
     else:
-        checkpoint_args = ""
+        if norm_mode == "dataset":
+            return dataset_args
+        elif norm_mode == "pre_trained":
+            return helios_args
+    return ""
+
+
+def _build_default_command(
+    args: argparse.Namespace,
+    base_run_name: str,
+    sub_command: str,
+    launch_command: str,
+    checkpoint_args: str,
+    project_name: str,
+    extra: str,
+) -> str:
+    """Build command for running with default hyperparameters."""
+    lr = LP_LRs[0]
+    norm_mode = Normalization_MODES[0]
+    pooling_type = pooling_types[0]
+    logger.info(
+        f"Running defaults: {norm_mode} normalization, lr={lr}, pooling={pooling_type}"
+    )
+    run_name = f"{base_run_name}_defaults"
+
+    cmd_args = _get_model_specific_args(args)
+    module_path = (
+        args.module_path if args.module_path is not None else _get_module_path(args)
+    )
+    logger.info(f"Using module path {module_path}")
+
+    return (
+        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} helios/internal/all_evals.py "
+        f"{sub_command} {run_name} {args.cluster} --launch.priority=high "
+        f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
+    )
+
+
+def _build_hyperparameter_command(
+    args: argparse.Namespace,
+    params: dict,
+    base_run_name: str,
+    sub_command: str,
+    launch_command: str,
+    checkpoint_args: str,
+    project_name: str,
+    extra: str,
+) -> str:
+    """Build command for running with specific hyperparameters."""
+    lr = params.get("lr", None)
+    norm_mode = params.get("norm_mode", "fixed")
+    pooling_type = params.get("pooling_type", "default")
+
+    logger.info(f"Running with {norm_mode} normalization and {lr} learning rate")
+
+    run_name = f"{base_run_name}_{norm_mode}_lr{lr}_pooling{pooling_type}"
+    cmd_args = lr_args.format(arg=lr)
+
+    if pooling_type != "default":
+        cmd_args += pooling_args.format(arg=pooling_type)
+
+    # Add model-specific args
+    cmd_args += _get_model_specific_args(args)
+
+    # Add normalization-specific args
+    cmd_args += _get_normalization_args(args, norm_mode)
+
+    return (
+        f"TRAIN_SCRIPT_PATH={args.module_path} {launch_command} helios/internal/all_evals.py "
+        f"{sub_command} {run_name} {args.cluster} --launch.priority=high {cmd_args} "
+        f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
+    )
+
+
+def _get_module_path(args: argparse.Namespace) -> str:
+    """Get the module path for the launch script."""
+    if args.dino_v3:
+        return get_launch_script_path("dino_v3")
+    elif args.panopticon:
+        return get_launch_script_path("panopticon")
+    elif args.galileo:
+        return get_launch_script_path("galileo")
+    else:
+        raise ValueError(f"Invalid model name: {args.model_name}")
+
+
+def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
+    """Build the commands for the sweep."""
+    project_name = args.project_name or "helios_in_loop_evals"
+    extra = " " + " ".join(extra_cli) if extra_cli else ""
+
+    sub_command = _get_sub_command(args)
+    base_run_name = _get_base_run_name(args)
+    launch_command = "python3" if not sub_command == SubCmd.train else "torchrun"
+    checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
 
     commands_to_run = []
+
     if args.defaults_only:
         # Just run with the first/default values
-        lr = LP_LRs[0]
-        norm_mode = Normalization_MODES[0]
-        pooling_type = pooling_types[0]
-        logger.info(
-            f"Running defaults: {norm_mode} normalization, lr={lr}, pooling={pooling_type}"
-        )
-        run_name = f"{base_run_name}_defaults"
-
-        if args.dino_v3:
-            cmd_args = get_dino_v3_args()
-        elif args.panopticon:
-            cmd_args = get_panopticon_args()
-        elif args.galileo:
-            cmd_args = get_galileo_args()
-        else:
-            cmd_args = ""
-        cmd = (
-            f"TRAIN_SCRIPT_PATH={module_path} {launch_command} helios/internal/all_evals.py "
-            f"{sub_command} {run_name} {cluster} --launch.priority=high "
-            f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
+        cmd = _build_default_command(
+            args,
+            base_run_name,
+            sub_command,
+            launch_command,
+            checkpoint_args,
+            project_name,
+            extra,
         )
         commands_to_run.append(cmd)
     else:
@@ -212,45 +312,23 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             and not args.panopticon  # Only use the dataset normalization stats for these models
             else no_norm_sweep()
         )
+
         for params in hp_params:
-            lr = params.get("lr", None)
-            norm_mode = params.get("norm_mode", "fixed")
-            pooling_type = params.get("pooling_type", "default")
-            logger.info(
-                f"Running with {norm_mode} normalization and {lr} learning rate"
-            )
-            run_name = f"{base_run_name}_{norm_mode}_lr{lr}_pooling{pooling_type}"
-            cmd_args = lr_args.format(arg=lr)
-            if pooling_type != "default":
-                cmd_args += pooling_args.format(arg=pooling_type)
-
-            if args.dino_v3:
-                cmd_args += get_dino_v3_args()
-            elif args.panopticon:
-                cmd_args += get_panopticon_args()
-            elif norm_mode == "dataset":
-                if args.galileo:
-                    cmd_args += get_galileo_args(pretrained_normalizer=False)
-                else:
-                    cmd_args += dataset_args
-            elif norm_mode == "pre_trained":
-                if args.galileo:
-                    cmd_args += get_galileo_args(pretrained_normalizer=True)
-                else:
-                    cmd_args += helios_args
-
-            cmd = (
-                f"TRAIN_SCRIPT_PATH={module_path} {launch_command} helios/internal/all_evals.py "
-                f"{sub_command} {run_name} {cluster} --launch.priority=high {cmd_args} "
-                f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
+            cmd = _build_hyperparameter_command(
+                args,
+                params,
+                base_run_name,
+                sub_command,
+                launch_command,
+                checkpoint_args,
+                project_name,
+                extra,
             )
             commands_to_run.append(cmd)
+
     return commands_to_run
 
 
-# Cleanups that need to be done
-# instead of doing a different flag to go with the different models we should jsut be able to say which one we want and then it will use the correct args
-# we need to add unit tests so that this will stay unbroken
 def main():
     """Run the full evaluation sweep or just the defaults."""
     parser = argparse.ArgumentParser()
@@ -263,7 +341,7 @@ def main():
         help="Checkpoint path",
     )
     parser.add_argument(
-        "--module_path", type=str, required=True, help="Path to module .py"
+        "--module_path", type=str, required=False, default=None, help="Path to module .py"
     )
     parser.add_argument(
         "--project_name", type=str, required=False, help="Wandb project name"
@@ -279,15 +357,15 @@ def main():
         help="If set, only print the commands that would be run",
     )
     parser.add_argument(
-        "--dino_v3",
-        action="store_true",
-        help="If set, use the dino v3 normalization settings",
-    )
-    parser.add_argument(
         "--model_name",
         type=str,
         required=False,
         help="If set, use this as the  base run name",
+    )
+    parser.add_argument(
+        "--dino_v3",
+        action="store_true",
+        help="If set, use the dino v3 normalization settings",
     )
     parser.add_argument(
         "--panopticon",
