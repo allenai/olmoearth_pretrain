@@ -82,7 +82,7 @@ def my_build_common_components(
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    model_size = MODEL_SIZE_ARGS["tiny_shallow_decoder"]
 
     encoder_config = EncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
@@ -115,7 +115,7 @@ def build_train_module_config(
 ) -> ContrastiveLatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
+        optim_config=AdamWConfig(lr=0.002, weight_decay=0.02, fused=True),
         rank_microbatch_size=64,
         masking_config=MaskingConfig(
             strategy_config={
@@ -123,11 +123,11 @@ def build_train_module_config(
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
-                "only_decode_modalities": [
-                    "worldcover",
-                    "srtm",
-                    "openstreetmap_raster",
-                ],
+                # "only_decode_modalities": [
+                #     "worldcover",
+                #     "srtm",
+                #     "openstreetmap_raster",
+                # ],
             }
         ),
         loss_config=LossConfig(
@@ -144,7 +144,7 @@ def build_train_module_config(
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        scheduler=CosWithWarmup(warmup_steps=8000),
+        scheduler=CosWithWarmup(warmup_steps=20000),
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
