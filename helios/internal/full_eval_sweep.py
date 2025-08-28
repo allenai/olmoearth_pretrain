@@ -151,26 +151,19 @@ def _get_sub_command(args: argparse.Namespace) -> str:
 
 def _get_base_run_name(args: argparse.Namespace) -> str:
     """Generate the base run name from checkpoint path or model name."""
-    # Log configuration
-    if args.checkpoint_path is None:
-        logger.info(
-            f"Running with module path {args.module_path} on cluster {args.cluster}"
-        )
-    else:
-        logger.info(
-            f"Running with checkpoint path {args.checkpoint_path} and module path {args.module_path} on cluster {args.cluster}"
-        )
-
-    if args.checkpoint_path is not None:
+    if args.model_name is not None:
+        logger.info(f"Overiding checkpoint name with {args.model_name}")
+        run_name = args.model_name
+    elif args.checkpoint_path is not None:
         parent_dir = os.path.basename(os.path.dirname(args.checkpoint_path))[:100]
         step_num = os.path.basename(args.checkpoint_path)
-        return f"{parent_dir}_{step_num}"
+        run_name = f"{parent_dir}_{step_num}"
     else:
-        if args.model_name is not None:
-            return args.model_name
-        else:
-            logger.warning("No model name provided, using random run name")
-            return str(uuid.uuid4())[:8]
+        logger.warning(
+            "No model name provided or checkpoint path, using random run name"
+        )
+        run_name = str(uuid.uuid4())[:8]
+    return run_name
 
 
 def _get_checkpoint_args(checkpoint_path: str) -> str:
@@ -253,6 +246,9 @@ def _build_hyperparameter_command(
     pooling_type = params.get("pooling_type", "default")
 
     logger.info(f"Running with {norm_mode} normalization and {lr} learning rate")
+    logger.info(
+        f"Running with module path {args.module_path} on cluster {args.cluster}"
+    )
 
     run_name = f"{base_run_name}_{norm_mode}_lr{lr}_pooling{pooling_type}"
     cmd_args = lr_args.format(arg=lr)

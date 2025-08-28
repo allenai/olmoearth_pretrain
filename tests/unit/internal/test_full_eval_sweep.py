@@ -226,6 +226,20 @@ class TestBuildCommandsBasic:
         command: str = commands[0]
         assert "my_custom_model_defaults" in command
 
+    def test_model_name_and_checkpoint_path(
+        self, base_args: argparse.Namespace
+    ) -> None:
+        """Test build_commands with specified model name and checkpoint path."""
+        base_args.checkpoint_path = "/path/to/checkpoint"
+        base_args.model_name = "my_custom_model"
+        base_args.defaults_only = True
+
+        commands: list[str] = build_commands(base_args, [])
+
+        assert len(commands) == 1
+        command: str = commands[0]
+        assert "my_custom_model" in command
+
 
 class TestBuildCommandsModelTypes:
     """Test build_commands with different model types."""
