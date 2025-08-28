@@ -19,7 +19,8 @@ def get_launch_script_path(model_name: str) -> str:
     else:
         raise ValueError(f"Invalid model name: {model_name}")
 
-#TODO: assert that they all store a patch_size variable and supported modalities
+
+# TODO: assert that they all store a patch_size variable and supported modalities
 __all__ = [
     "DINOv2",
     "DINOv2Config",

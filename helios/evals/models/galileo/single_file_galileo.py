@@ -124,6 +124,7 @@ STATIC_BAND_GROUPS_IDX: OrderedDictType[str, list[int]] = OrderedDict(
 
 
 class Normalizer:
+    """Galileo Normalizer."""
     # these are the bands we will replace with the 2*std computation
     # if std = True
     std_bands: dict[int, list] = {
@@ -176,6 +177,7 @@ class Normalizer:
         return x
 
     def __call__(self, x: np.ndarray):
+        """Call the normalizer."""
         # get the band idxs from the x shape
         band_idxs = [i for i in range(x.shape[-1]) if i in self.shift_div_dict[x.shape[-1]]["div"]]
         div_values = torch.tensor([self.shift_div_dict[x.shape[-1]]["div"][band_idx] for band_idx in band_idxs] + [1.0], device=x.device) # extra number is for the NDVI band

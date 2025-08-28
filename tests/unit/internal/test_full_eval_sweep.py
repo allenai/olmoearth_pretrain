@@ -1,7 +1,7 @@
 """Comprehensive test suite for the full eval sweep command builder."""
 
 import argparse
-from typing import Any, Dict, List, Union
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -86,15 +86,17 @@ class TestLoopThroughParams:
 
     def test_generates_all_combinations(self) -> None:
         """Test that all parameter combinations are generated."""
-        params_list: List[Dict[str, Union[float, str]]] = list(loop_through_params())
+        params_list: list[dict[str, float | str]] = list(loop_through_params())
 
         # Should generate len(LP_LRs) * len(Normalization_MODES) * len(pooling_types) combinations
-        expected_count: int = len(LP_LRs) * len(Normalization_MODES) * len(pooling_types)
+        expected_count: int = (
+            len(LP_LRs) * len(Normalization_MODES) * len(pooling_types)
+        )
         assert len(params_list) == expected_count
 
     def test_parameter_structure(self) -> None:
         """Test that each parameter dict has the correct structure."""
-        params_list: List[Dict[str, Union[float, str]]] = list(loop_through_params())
+        params_list: list[dict[str, float | str]] = list(loop_through_params())
 
         for params in params_list:
             assert "lr" in params
@@ -106,8 +108,8 @@ class TestLoopThroughParams:
 
     def test_all_learning_rates_included(self) -> None:
         """Test that all learning rates are included in the sweep."""
-        params_list: List[Dict[str, Union[float, str]]] = list(loop_through_params())
-        lrs_found: set[float] = {params["lr"] for params in params_list}
+        params_list: list[dict[str, float | str]] = list(loop_through_params())
+        lrs_found = {params["lr"] for params in params_list}
         assert lrs_found == set(LP_LRs)
 
 
@@ -116,7 +118,7 @@ class TestNoNormSweep:
 
     def test_generates_correct_combinations(self) -> None:
         """Test that no_norm_sweep generates the right combinations."""
-        params_list: List[Dict[str, Union[float, str]]] = list(no_norm_sweep())
+        params_list: list[dict[str, float | str]] = list(no_norm_sweep())
 
         # Should generate len(pooling_types) * len(LP_LRs) combinations
         expected_count: int = len(pooling_types) * len(LP_LRs)
@@ -124,7 +126,7 @@ class TestNoNormSweep:
 
     def test_parameter_structure(self) -> None:
         """Test parameter structure for no_norm_sweep."""
-        params_list: List[Dict[str, Union[float, str]]] = list(no_norm_sweep())
+        params_list: list[dict[str, float | str]] = list(no_norm_sweep())
 
         for params in params_list:
             assert "lr" in params
@@ -184,7 +186,7 @@ class TestBuildCommandsBasic:
         """Test build_commands with defaults_only=True."""
         base_args.defaults_only = True
 
-        commands: List[str] = build_commands(base_args, [])
+        commands: list[str] = build_commands(base_args, [])
 
         assert len(commands) == 1
         command: str = commands[0]
@@ -194,27 +196,31 @@ class TestBuildCommandsBasic:
         assert "/path/to/checkpoint" in command
         assert "_defaults" in command
 
-    def test_build_commands_no_checkpoint_path(self, base_args: argparse.Namespace) -> None:
+    def test_build_commands_no_checkpoint_path(
+        self, base_args: argparse.Namespace
+    ) -> None:
         """Test build_commands without checkpoint path."""
         base_args.checkpoint_path = None
         base_args.defaults_only = True
 
         with patch("uuid.uuid4") as mock_uuid:
             mock_uuid.return_value.hex = "test1234"
-            commands: List[str] = build_commands(base_args, [])
+            commands: list[str] = build_commands(base_args, [])
 
         assert len(commands) == 1
         command: str = commands[0]
         assert "--trainer.load_path=" not in command
         assert "TRAIN_SCRIPT_PATH=test_module.py" in command
 
-    def test_build_commands_with_model_name(self, base_args: argparse.Namespace) -> None:
+    def test_build_commands_with_model_name(
+        self, base_args: argparse.Namespace
+    ) -> None:
         """Test build_commands with specified model name."""
         base_args.checkpoint_path = None
         base_args.model_name = "my_custom_model"
         base_args.defaults_only = True
 
-        commands: List[str] = build_commands(base_args, [])
+        commands: list[str] = build_commands(base_args, [])
 
         assert len(commands) == 1
         command: str = commands[0]
@@ -229,7 +235,7 @@ class TestBuildCommandsModelTypes:
         base_args.dino_v3 = True
         base_args.defaults_only = True
 
-        commands: List[str] = build_commands(base_args, [])
+        commands: list[str] = build_commands(base_args, [])
 
         assert len(commands) == 1
         command: str = commands[0]
@@ -240,7 +246,7 @@ class TestBuildCommandsModelTypes:
         base_args.panopticon = True
         base_args.defaults_only = True
 
-        commands: List[str] = build_commands(base_args, [])
+        commands: list[str] = build_commands(base_args, [])
 
         assert len(commands) == 1
         command: str = commands[0]
@@ -251,7 +257,7 @@ class TestBuildCommandsModelTypes:
         base_args.galileo = True
         base_args.defaults_only = True
 
-        commands: List[str] = build_commands(base_args, [])
+        commands: list[str] = build_commands(base_args, [])
 
         assert len(commands) == 1
         command: str = commands[0]
@@ -262,7 +268,9 @@ class TestBuildCommandsModelTypes:
 class TestBuildCommandsSweep:
     """Test build_commands with full parameter sweep."""
 
-    def test_build_commands_full_sweep_default_model(self, base_args: argparse.Namespace) -> None:
+    def test_build_commands_full_sweep_default_model(
+        self, base_args: argparse.Namespace
+    ) -> None:
         """Test build_commands with full sweep for default model."""
         base_args.defaults_only = False
 
@@ -275,10 +283,12 @@ class TestBuildCommandsSweep:
                 mock_config.task_type = "classification"
                 mock_dataset_to_config.return_value = mock_config
 
-                commands: List[str] = build_commands(base_args, [])
+                commands: list[str] = build_commands(base_args, [])
 
         # Should generate multiple commands for parameter sweep
-        expected_count: int = len(LP_LRs) * len(Normalization_MODES) * len(pooling_types)
+        expected_count: int = (
+            len(LP_LRs) * len(Normalization_MODES) * len(pooling_types)
+        )
         assert len(commands) == expected_count
 
         # Check that different parameters are included
@@ -291,7 +301,7 @@ class TestBuildCommandsSweep:
         base_args.dino_v3 = True
         base_args.defaults_only = False
 
-        commands: List[str] = build_commands(base_args, [])
+        commands: list[str] = build_commands(base_args, [])
 
         # Should use no_norm_sweep, so fewer combinations
         expected_count: int = len(pooling_types) * len(LP_LRs)
@@ -310,7 +320,7 @@ class TestBuildCommandsExecution:
         base_args.dry_run = True
         base_args.defaults_only = True
 
-        commands: List[str] = build_commands(base_args, [])
+        commands: list[str] = build_commands(base_args, [])
 
         assert len(commands) == 1
         assert "dry_run" in commands[0]
@@ -321,7 +331,7 @@ class TestBuildCommandsExecution:
         base_args.dry_run = False
         base_args.defaults_only = True
 
-        commands: List[str] = build_commands(base_args, [])
+        commands: list[str] = build_commands(base_args, [])
 
         assert len(commands) == 1
         # Local should use torchrun instead of python3
@@ -333,7 +343,7 @@ class TestBuildCommandsExecution:
         base_args.dry_run = False
         base_args.defaults_only = True
 
-        commands: List[str] = build_commands(base_args, [])
+        commands: list[str] = build_commands(base_args, [])
 
         assert len(commands) == 1
         # Remote should use python3 and launch
@@ -343,21 +353,23 @@ class TestBuildCommandsExecution:
     def test_build_commands_with_extra_cli(self, base_args: argparse.Namespace) -> None:
         """Test build_commands with extra CLI arguments."""
         base_args.defaults_only = True
-        extra_cli: List[str] = ["--custom_arg=value", "--another_flag"]
+        extra_cli: list[str] = ["--custom_arg=value", "--another_flag"]
 
-        commands: List[str] = build_commands(base_args, extra_cli)
+        commands: list[str] = build_commands(base_args, extra_cli)
 
         assert len(commands) == 1
         command: str = commands[0]
         assert "--custom_arg=value" in command
         assert "--another_flag" in command
 
-    def test_build_commands_no_project_name(self, base_args: argparse.Namespace) -> None:
+    def test_build_commands_no_project_name(
+        self, base_args: argparse.Namespace
+    ) -> None:
         """Test build_commands without project name (uses default)."""
         base_args.project_name = None
         base_args.defaults_only = True
 
-        commands: List[str] = build_commands(base_args, [])
+        commands: list[str] = build_commands(base_args, [])
 
         assert len(commands) == 1
         assert "helios_in_loop_evals" in commands[0]
@@ -383,7 +395,7 @@ class TestParametrizedTests:
         # Set the appropriate model flag
         setattr(base_args, model_type, True)
 
-        commands: List[str] = build_commands(base_args, [])
+        commands: list[str] = build_commands(base_args, [])
 
         assert len(commands) == 1
         assert expected_args in commands[0]
@@ -391,12 +403,14 @@ class TestParametrizedTests:
     @pytest.mark.parametrize("lr", LP_LRs)
     @pytest.mark.parametrize("norm_mode", Normalization_MODES)
     @pytest.mark.parametrize("pooling_type", pooling_types)
-    def test_parameter_combinations(self, lr: float, norm_mode: str, pooling_type: Any) -> None:
+    def test_parameter_combinations(
+        self, lr: float, norm_mode: str, pooling_type: Any
+    ) -> None:
         """Test that all parameter combinations are valid."""
-        params_list: List[Dict[str, Union[float, str]]] = list(loop_through_params())
+        params_list: list[dict[str, float | str]] = list(loop_through_params())
 
         # Check that this specific combination exists
-        target_combo: Dict[str, Union[float, str]] = {
+        target_combo: dict[str, float | str] = {
             "lr": lr,
             "norm_mode": norm_mode,
             "pooling_type": pooling_type,
@@ -409,7 +423,7 @@ class TestIntegration:
 
     def test_full_workflow_minimal_args(self, minimal_args: argparse.Namespace) -> None:
         """Test the complete workflow with minimal arguments."""
-        commands: List[str] = build_commands(minimal_args, [])
+        commands: list[str] = build_commands(minimal_args, [])
 
         assert len(commands) == 1
         command: str = commands[0]
@@ -420,7 +434,9 @@ class TestIntegration:
         assert "local" in command
         assert "helios_in_loop_evals" in command  # default project name
 
-    def test_complex_workflow_with_all_options(self, base_args: argparse.Namespace) -> None:
+    def test_complex_workflow_with_all_options(
+        self, base_args: argparse.Namespace
+    ) -> None:
         """Test complex workflow with multiple options enabled."""
         base_args.defaults_only = False
         base_args.galileo = True
@@ -435,10 +451,18 @@ class TestIntegration:
                 mock_config.task_type = "classification"
                 mock_dataset_to_config.return_value = mock_config
 
-                commands: List[str] = build_commands(base_args, ["--extra", "--trainer.callbacks.downstream_evaluator.tasks_to_run=\[m_eurosat,sickle_landsat\]"])
+                commands: list[str] = build_commands(
+                    base_args,
+                    [
+                        "--extra",
+                        "--trainer.callbacks.downstream_evaluator.tasks_to_run=[m_eurosat,sickle_landsat]",
+                    ],
+                )
 
         # Should generate full sweep for Galileo model
-        expected_count: int = len(LP_LRs) * len(Normalization_MODES) * len(pooling_types)
+        expected_count: int = (
+            len(LP_LRs) * len(Normalization_MODES) * len(pooling_types)
+        )
         assert len(commands) == expected_count
 
         # All commands should have Galileo-specific args
@@ -447,4 +471,7 @@ class TestIntegration:
             assert "complex_test" in command
             assert "--extra" in command
             assert "pre_trained" in command or "dataset" in command
-            assert "--trainer.callbacks.downstream_evaluator.tasks_to_run=\[m_eurosat,sickle_landsat\]" in command
+            assert (
+                "--trainer.callbacks.downstream_evaluator.tasks_to_run=[m_eurosat,sickle_landsat]"
+                in command
+            )

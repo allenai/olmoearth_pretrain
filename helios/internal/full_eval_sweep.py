@@ -7,7 +7,9 @@ import argparse
 import os
 import subprocess  # nosec
 import uuid
+from collections.abc import Generator
 from logging import getLogger
+from typing import Any
 
 from helios.evals.datasets.configs import dataset_to_config, get_eval_mode
 from helios.evals.models import get_launch_script_path
@@ -63,7 +65,7 @@ helios_args = " ".join(
 )
 
 
-def loop_through_params():
+def loop_through_params() -> Generator[dict[str, Any], None, None]:
     """Yield a dict of the hps we are sweeping over."""
     for lr in LP_LRs:
         for norm_mode in Normalization_MODES:
@@ -75,7 +77,7 @@ def loop_through_params():
                 }
 
 
-def no_norm_sweep():
+def no_norm_sweep() -> Generator[dict[str, Any], None, None]:
     """Yield a dict of the hps we are sweeping over."""
     for pooling_type in pooling_types:
         for lr in LP_LRs:
@@ -85,7 +87,7 @@ def no_norm_sweep():
             }
 
 
-def get_dino_v3_args():
+def get_dino_v3_args() -> str:
     """Get the dino v3 arguments."""
     # Normalization strategy is to scale with min max to 0 - 256 and then scale back to 0 - 1
     # Normalization is then applied by the eval wrapper by default
@@ -99,7 +101,7 @@ def get_dino_v3_args():
     return dino_v3_args
 
 
-def get_panopticon_args():
+def get_panopticon_args() -> str:
     """Get the panopticon arguments."""
     panopticon_args = dataset_args
     panopticon_args += " " + " ".join(
@@ -111,7 +113,7 @@ def get_panopticon_args():
     return panopticon_args
 
 
-def get_galileo_args(pretrained_normalizer: bool = True):
+def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     """Get the galileo arguments."""
     galileo_args = dataset_args
     if pretrained_normalizer:
@@ -151,7 +153,9 @@ def _get_base_run_name(args: argparse.Namespace) -> str:
     """Generate the base run name from checkpoint path or model name."""
     # Log configuration
     if args.checkpoint_path is None:
-        logger.info(f"Running with module path {args.module_path} on cluster {args.cluster}")
+        logger.info(
+            f"Running with module path {args.module_path} on cluster {args.cluster}"
+        )
     else:
         logger.info(
             f"Running with checkpoint path {args.checkpoint_path} and module path {args.module_path} on cluster {args.cluster}"
@@ -329,7 +333,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     return commands_to_run
 
 
-def main():
+def main() -> None:
     """Run the full evaluation sweep or just the defaults."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--cluster", type=str, required=True, help="Cluster name")
@@ -341,7 +345,11 @@ def main():
         help="Checkpoint path",
     )
     parser.add_argument(
-        "--module_path", type=str, required=False, default=None, help="Path to module .py"
+        "--module_path",
+        type=str,
+        required=False,
+        default=None,
+        help="Path to module .py",
     )
     parser.add_argument(
         "--project_name", type=str, required=False, help="Wandb project name"
