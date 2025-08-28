@@ -12,19 +12,23 @@ from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader
 
+from helios.data.constants import Modality
 from helios.evals.datasets import (
-    EVAL_DATASET_TO_SUPPORTED_MODALITIES,
     EvalDatasetPartition,
     get_eval_dataset,
 )
-from helios.evals.datasets.configs import TaskType, dataset_to_config, get_eval_mode
+from helios.evals.datasets.configs import (
+    EvalDatasetConfig,
+    TaskType,
+    dataset_to_config,
+    get_eval_mode,
+)
 from helios.evals.datasets.normalize import NormMethod
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
 from helios.evals.eval_wrapper import get_eval_wrapper
 from helios.evals.knn import run_knn
 from helios.evals.linear_probe import ProbeType, train_and_eval_probe
-from helios.data.constants import Modality
 from helios.nn.flexihelios import PoolingType
 from helios.train.callbacks.wandb import HeliosWandBCallback
 
@@ -128,7 +132,9 @@ class DownstreamEvaluator:
 
     def _get_data_loader(self, split: str) -> DataLoader:
         """Get the data loader for the given split."""
-        logger.info(f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}")
+        logger.info(
+            f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}"
+        )
         return DataLoader(
             get_eval_dataset(
                 eval_dataset=self.dataset,
@@ -231,6 +237,24 @@ class DownstreamEvaluatorCallback(Callback):
     cancel_after_first_eval: bool = False
     use_patch_size_from_model: bool = False
 
+    def _check_supported_modalities(self, evaluator: DownstreamEvaluator) -> bool:
+        """Check if the evaluator is supported by the model."""
+        task_supported_modalities = evaluator.config.supported_modalities
+        logger.info(f"Task supported modalities: {task_supported_modalities}")
+        task_instance_used_modalities = evaluator.input_modalities
+        logger.info(f"Task instance used modalities: {task_instance_used_modalities}")
+        does_model_support_all_task_instance_used_modalities = set(
+            task_instance_used_modalities
+        ).issubset(set(self.model_supported_modalities))
+        return does_model_support_all_task_instance_used_modalities
+
+    @property
+    def model_supported_modalities(self) -> list[str]:
+        """Get the supported modalities for the model."""
+        if hasattr(self.trainer.train_module.model, "supported_modalities"):
+            return self.trainer.train_module.model.supported_modalities
+        return Modality.names()
+
     def pre_train(self) -> None:
         """Run the evaluators on startup."""
         if self.eval_on_startup:
@@ -243,38 +267,9 @@ class DownstreamEvaluatorCallback(Callback):
                 for callback in self.trainer._iter_callbacks()
                 if isinstance(callback, HeliosWandBCallback)
             )
-            if hasattr(self.trainer.train_module.model, "supported_modalities"):
-                logger.info(
-                    f"Supported modalities: {self.trainer.train_module.model.supported_modalities}"
-                )
-                supported_modalities = (
-                    self.trainer.train_module.model.supported_modalities
-                )
-            else:
-                # If the model doesn't have supported modalities attribute assume all modalities are supported
-                supported_modalities = Modality.names()
 
             for evaluator in self.evaluators:
-                # TODO: Store this info in the configs
-                logger.info(f"Model: {self.trainer.train_module.model}")
-                task_supported_modalities = EVAL_DATASET_TO_SUPPORTED_MODALITIES[
-                    evaluator.dataset
-                ]
-                logger.info(
-                    f"Task supported modalities: {task_supported_modalities}"
-                )
-                task_instance_used_modalities = evaluator.input_modalities
-                logger.info(f"Task instance used modalities: {task_instance_used_modalities}")
-                if not set(supported_modalities).intersection(
-                    set(task_supported_modalities)
-                ):
-                    logger.info(
-                        f"Skipping {evaluator.evaluation_name} because it has no modalities supported by the model"
-                    )
-                    continue
-                if not set(task_instance_used_modalities).issubset(
-                    set(supported_modalities)
-                ):
+                if not self._check_supported_modalities(evaluator):
                     logger.info(
                         f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model"
                     )
@@ -331,7 +326,32 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     # without training any longer.
     cancel_after_first_eval: bool = False
     use_patch_size_from_model: bool = False
-    tasks_to_run:list[str] | None = None
+    tasks_to_run: list[str] | None = None
+
+    def verify_input_modalities(
+        self, task: DownstreamTaskConfig, config: EvalDatasetConfig
+    ) -> None:
+        """Verify the input modality configuration for a task."""
+        # Check that input_modalities is only set for multimodal tasks
+        if (
+            not (
+                (task.dataset in ["pastis", "sickle"])
+                or task.dataset.startswith("cropharvest")
+            )
+            and len(task.input_modalities) > 0
+        ):
+            raise ValueError(
+                f"input_modalities must be set for multimodal tasks, got {task.dataset}"
+            )
+        # Make sure input_modalities contains only unique modalities
+        if len(task.input_modalities) != len(set(task.input_modalities)):
+            raise ValueError(
+                f"input_modalities must contain unique modalities, got {task.input_modalities}"
+            )
+        if not set(task.input_modalities).issubset(set(config.supported_modalities)):
+            raise ValueError(
+                f"input_modalities must be a subset of supported_modalities, got {task.input_modalities} and {config.supported_modalities}"
+            )
 
     def build(self, trainer: Trainer) -> Callback | None:
         """Build the downstream evaluator callback."""
@@ -341,30 +361,20 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
         evaluators: list[DownstreamEvaluator] = []
         # Check that probe_lr is set for segmentation tasks
         for evaluation_name, task in self.tasks.items():
-            if self.tasks_to_run is not None and evaluation_name not in self.tasks_to_run:
-                logger.info(f"Skipping {evaluation_name} because it is not in the tasks_to_run list")
+            if (
+                self.tasks_to_run is not None
+                and evaluation_name not in self.tasks_to_run
+            ):
+                logger.info(
+                    f"Skipping {evaluation_name} because it is not in the tasks_to_run list"
+                )
                 continue
             config = dataset_to_config(task.dataset)
             if config.task_type == TaskType.SEGMENTATION:
                 if task.probe_lr is None:
                     raise ValueError(f"probe_lr cannot be None for {task.dataset}")
 
-            # Check that input_modalities is only set for multimodal tasks
-            if (
-                not (
-                    (task.dataset in ["pastis", "sickle"])
-                    or task.dataset.startswith("cropharvest")
-                )
-                and len(task.input_modalities) > 0
-            ):
-                raise ValueError(
-                    f"input_modalities must be set for multimodal tasks, got {task.dataset}"
-                )
-            # Make sure input_modalities contains only unique modalities
-            if len(task.input_modalities) != len(set(task.input_modalities)):
-                raise ValueError(
-                    f"input_modalities must contain unique modalities, got {task.input_modalities}"
-                )
+            self.verify_input_modalities(task, config)
             # Sort to ensure consistent order
             task.input_modalities.sort()
 
