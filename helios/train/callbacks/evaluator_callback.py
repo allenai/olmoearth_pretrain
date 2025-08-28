@@ -67,7 +67,6 @@ class DownstreamEvaluator:
         task: DownstreamTaskConfig,
         trainer: Trainer,
         device: torch.device | None = None,
-        use_patch_size_from_model: bool = False,
     ) -> None:
         """Initialize the downstream evaluator.
 
@@ -98,7 +97,6 @@ class DownstreamEvaluator:
         self.partition = task.partition
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
-        self.use_patch_size_from_model = use_patch_size_from_model
         if self.eval_mode is None:
             self.eval_mode = get_eval_mode(self.config.task_type)
 
@@ -165,10 +163,12 @@ class DownstreamEvaluator:
             logger.info(
                 f"Using patch size {model.patch_size} for {self.dataset} with set patch size {self.patch_size}"
             )
-            # Models with bigger patch sizes will get a higher dim linear probe this may be problematic for models that are resizing the input data
-            # because there are more parameters to learn
-            if self.use_patch_size_from_model:
-                self.patch_size = model.patch_size
+            # For non-helios models we override the task patch size with the model patch size
+            self.patch_size = model.patch_size
+        else:
+            logger.info(
+                f"No patch size found for {self.dataset}, using patch size {self.patch_size}"
+            )
 
         # Superset of the kwargs the wrapper may need
         wrapper_kwargs = {
@@ -235,7 +235,6 @@ class DownstreamEvaluatorCallback(Callback):
     evaluators: list[DownstreamEvaluator] = field(default_factory=list)
     eval_on_startup: bool = False
     cancel_after_first_eval: bool = False
-    use_patch_size_from_model: bool = False
 
     def _check_supported_modalities(self, evaluator: DownstreamEvaluator) -> bool:
         """Check if the evaluator is supported by the model."""
@@ -325,7 +324,6 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     # This combined with ``eval_on_startup=True`` is useful if you just want to run in-loop evals
     # without training any longer.
     cancel_after_first_eval: bool = False
-    use_patch_size_from_model: bool = False
     tasks_to_run: list[str] | None = None
 
     def verify_input_modalities(
@@ -384,7 +382,6 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     task=task,
                     trainer=trainer,
                     device=trainer.device,
-                    use_patch_size_from_model=self.use_patch_size_from_model,
                 )
             )
         return DownstreamEvaluatorCallback(

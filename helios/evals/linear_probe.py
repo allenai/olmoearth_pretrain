@@ -129,7 +129,14 @@ def train_and_eval_probe(
     in_features = train_embeddings.shape[-1]
 
     if config.task_type == TaskType.SEGMENTATION:
-        logits_per_patch = int(config.num_classes * patch_size * patch_size)
+        assert config.height_width is not None, (
+            "Height width is required for segmentation"
+        )
+        # if the image is resized the patch size will correspond to a different number of pixels in the labels
+        # This normalizes the number of logits per patch to the number of pixels unresized each patch corresponds to
+        num_patches = train_embeddings.shape[1] * train_embeddings.shape[2]
+        output_pixels_per_patch = config.height_width**2 / num_patches
+        logits_per_patch = int(config.num_classes * output_pixels_per_patch)
         if probe_type == ProbeType.ATTNPOOL:
             probe = AttnPoolLinearProbe(
                 in_dim=in_features, out_dim=logits_per_patch
