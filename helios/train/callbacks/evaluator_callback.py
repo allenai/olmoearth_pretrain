@@ -207,7 +207,6 @@ class DownstreamEvaluator:
         logger.info(f"train labels shape for {self.dataset}: {train_labels.shape}")
         logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        # HACK Until I know what to do about the patch size for the segmentation head output
         kwargs = {
             "config": self.config,
             "train_embeddings": train_embeddings,
@@ -216,12 +215,12 @@ class DownstreamEvaluator:
             "test_labels": test_labels,
             "device": self.device,
         }
-        if not self.eval_mode == "knn":
-            kwargs["patch_size"] = self.patch_size
         val_result = self.eval_function(**kwargs)  # type: ignore
         logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
         # free memory
         del train_embeddings, train_labels, test_embeddings, test_labels
+        # garbage collector is usually run after the end of the step during normal training
+        # but we run it here to ensure fresh start for each eval
         torch.cuda.empty_cache()
         gc.collect()
 
