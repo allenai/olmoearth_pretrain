@@ -1148,6 +1148,7 @@ class Encoder(FlexiHeliosBase):
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
+        effective_output_embedding_size: int | None = None,
     ):
         """Initialize the encoder.
 
@@ -1171,6 +1172,10 @@ class Encoder(FlexiHeliosBase):
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
+            effective_output_embedding_size: output embeddings of this size, which must be
+                <= embedding_size. It is "effective" because we maintain the embedding_size
+                dimension for consistency with the decoder, but the last
+                (effective_output_embedding_size - embedding_size) values will be zero.
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1199,6 +1204,13 @@ class Encoder(FlexiHeliosBase):
             aggregate_then_project=aggregate_then_project,
         )
         self.norm = nn.LayerNorm(self.embedding_size)
+
+        self.effective_output_layer: torch.nn.Module | None = None
+        if effective_output_embedding_size is not None:
+            self.effective_output_layer = nn.Linear(
+                embedding_size, effective_output_embedding_size
+            )
+
         self.apply(self._init_weights)
 
         if frozen_patch_embeddings:
@@ -1431,6 +1443,26 @@ class Encoder(FlexiHeliosBase):
         # we apply the norm before we add the removed tokens,
         # so that the norm is only computed against "real" tokens
         tokens = self.norm(tokens)
+
+        if self.effective_output_layer is not None:
+            expected_dim = tokens.shape[-1]
+            tokens = self.effective_output_layer(tokens)
+            tokens = torch.cat(
+                [
+                    tokens,
+                    torch.zeros(
+                        (
+                            tokens.shape[0],
+                            tokens.shape[1],
+                            expected_dim - tokens.shape[2],
+                        ),
+                        device=tokens.device,
+                        dtype=tokens.dtype,
+                    ),
+                ],
+                dim=-1,
+            )
+
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
         tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
@@ -1897,6 +1929,7 @@ class EncoderConfig(Config):
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
+    effective_output_embedding_size: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
