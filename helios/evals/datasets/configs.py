@@ -160,10 +160,8 @@ DATASET_TO_CONFIG = {
 
 def dataset_to_config(dataset: str) -> EvalDatasetConfig:
     """Retrieve the correct config for a given dataset."""
-    if dataset in DATASET_TO_CONFIG:
-        if dataset.startswith("cropharvest"):
-            # All crop harvest datasets use the same config
-            dataset = "cropharvest"
-        return DATASET_TO_CONFIG[dataset]
-    else:
+    key = "cropharvest" if dataset.startswith("cropharvest") else dataset
+    try:
+        return DATASET_TO_CONFIG[key]
+    except KeyError:
         raise ValueError(f"Unrecognized dataset: {dataset}")
