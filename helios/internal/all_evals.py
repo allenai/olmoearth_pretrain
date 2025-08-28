@@ -324,7 +324,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             metrics_collect_interval=METRICS_COLLECT_INTERVAL,
             max_duration=MAX_DURATION,
             checkpointer=checkpointer_config,
-            no_checkpoints=True,
         )
         .with_callback("wandb", wandb_callback)
         .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
