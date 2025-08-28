@@ -132,7 +132,7 @@ def train_and_eval_probe(
             "Height width is required for segmentation"
         )
         # if the image is resized the patch size will correspond to a different number of pixels in the labels
-        # This normalizes the number of logits per patch to the number of pixels unresized each patch corresponds to
+        # This normalizes the number of logits per patch to the number of label pixels each patch corresponds to
         num_patches = train_embeddings.shape[1] * train_embeddings.shape[2]
         output_pixels_per_side_of_patch = int(
             (config.height_width**2 / num_patches) ** 0.5
