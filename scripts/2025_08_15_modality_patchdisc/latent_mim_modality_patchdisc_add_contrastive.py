@@ -143,8 +143,8 @@ def build_train_module_config(
             }
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
-        max_grad_norm=0.1,
-        scheduler=CosWithWarmup(warmup_steps=8000),
+        max_grad_norm=0.5,
+        scheduler=CosWithWarmup(warmup_steps=20000),
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
