@@ -126,7 +126,7 @@ def train_and_eval_probe(
     if train_embeddings.shape[-1] != test_embeddings.shape[-1]:
         raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
-
+    output_pixels_per_side_of_patch = None
     if config.task_type == TaskType.SEGMENTATION:
         assert config.height_width is not None, (
             "Height width is required for segmentation"
@@ -222,9 +222,9 @@ def train_probe(
     epochs: int,
     total_epochs: int,
     num_classes: int,
-    num_output_pixels_per_side_of_patch: int,
     device: torch.device,
     task_type: TaskType,
+    num_output_pixels_per_side_of_patch: int | None = None,
 ) -> nn.Module:
     """Train a linear probe on a segmentation task."""
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
@@ -245,6 +245,9 @@ def train_probe(
                 logits = outputs["logits"]
                 # logger.info(f"logits: {logits.shape}")
                 if task_type == TaskType.SEGMENTATION:
+                    assert num_output_pixels_per_side_of_patch is not None, (
+                        "num_output_pixels_per_side_of_patch is required for segmentation"
+                    )
                     # This is effectively nearest neighbor interpolation
                     logits = rearrange(
                         logits,
@@ -287,10 +290,10 @@ def evaluate_probe(
     data_loader: DataLoader,
     probe: nn.Module,
     num_classes: int,
-    num_output_pixels_per_side_of_patch: int,
     device: torch.device,
     task_type: TaskType,
     probe_type: ProbeType,
+    num_output_pixels_per_side_of_patch: int | None = None,
 ) -> float:
     """Evaluate a trained linear probe on a segmentation or classification task."""
     probe = probe.eval()
@@ -307,6 +310,9 @@ def evaluate_probe(
                 outputs = probe(batch_emb)  # (bsz, num_patches, logits_per_patch)
                 logits = outputs["logits"]
                 if task_type == TaskType.SEGMENTATION:
+                    assert num_output_pixels_per_side_of_patch is not None, (
+                        "num_output_pixels_per_side_of_patch is required for segmentation"
+                    )
                     spatial_patches_per_dim = batch_emb.shape[1]
                     logits = rearrange(
                         logits,

@@ -2,6 +2,7 @@
 
 import torch
 
+from helios.data.constants import Modality
 from helios.evals.datasets.configs import EvalDatasetConfig, TaskType
 from helios.evals.linear_probe import train_and_eval_probe
 
@@ -21,6 +22,7 @@ def test_probe_cls() -> None:
         imputes=[],
         num_classes=2,
         is_multilabel=False,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
     )
 
     # just testing it runs - since the data is random,
@@ -34,7 +36,6 @@ def test_probe_cls() -> None:
         device=train_embeddings.device,
         batch_size=batch_size,
         lr=0.1,
-        patch_size=1,
     )
 
 
@@ -46,7 +47,13 @@ def test_probe_seg() -> None:
         w,
         embedding_dim,
         patch_size,
-    ) = 64, 8, 8, 16, 4
+    ) = (
+        64,
+        8,
+        8,
+        16,
+        4,
+    )
     train_embeddings = torch.rand(64, h // patch_size, w // patch_size, embedding_dim)
     test_embeddings = torch.rand(64, h // patch_size, w // patch_size, embedding_dim)
     train_labels = torch.ones(64, h, w).long()
@@ -59,6 +66,8 @@ def test_probe_seg() -> None:
         imputes=[],
         num_classes=2,
         is_multilabel=False,
+        height_width=h,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
     )
 
     # just testing it runs - since the data is random,
@@ -72,5 +81,4 @@ def test_probe_seg() -> None:
         device=train_embeddings.device,
         batch_size=batch_size,
         lr=0.1,
-        patch_size=patch_size,
     )
