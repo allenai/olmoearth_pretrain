@@ -48,13 +48,13 @@ repos:
           - "types-protobuf"
         exclude: (\./.*_pb2_.*\.py|^scripts/)
   - repo: https://github.com/PyCQA/bandit
-    rev: "1.7.5"
+    rev: "1.8.6" # 1.7.5 required pbr at run time this uses importlib.metadata instead
     hooks:
       - id: bandit
         exclude: ^tests/
         args:
           - -s
-          - B101,B311 # B101 is assert ban, B311 hates rngs
+          - B101,B311,B614 # B101 is assert ban, B311 hates rngs, B614 is torch unsafe load
   - repo: local
     hooks:
       - id: interrogate
