@@ -51,6 +51,8 @@ repos:
     rev: "1.8.6" # 1.7.5 required pbr at run time this uses importlib.metadata instead
     hooks:
       - id: bandit
+        additional_dependencies:
+        - pbr>=6.0.0
         exclude: ^tests/
         args:
           - -s
