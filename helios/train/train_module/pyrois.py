@@ -203,25 +203,18 @@ class PyroisTrainModule(HeliosTrainModule):
                     patch_size=patch_size,
                 )
 
-                # Get targets
-                target_proj, target_emb = self.model_target_output(
-                    masked_batch_a, patch_size, self.token_exit_cfg
-                )
-
                 # Run Encoder and decoder on the augmented input
                 out_a = self.model_forward(
                     masked_batch_a,
                     patch_size,
                     self.token_exit_cfg,
-                    target_proj,
-                    target_emb,
                 )
                 out_b = self.model_forward(
                     masked_batch_b,
                     patch_size,
                     self.token_exit_cfg,
-                    target_proj,
-                    target_emb,
+                    target_proj=out_a["target_proj"],
+                    target_emb=out_a["target_emb"],
                 )
                 loss = (out_a["loss"] + out_b["loss"]) / 2
 
@@ -261,34 +254,30 @@ class PyroisTrainModule(HeliosTrainModule):
         del batch, batch_data  # In case this helps with memory utilization.
         del masked_batch_a, masked_batch_b
 
-    def model_target_output(
-        self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
-    ) -> tuple[TokensAndMasks, TokensAndMasks]:
-        """Run a forward pass."""
-        with self._model_forward_context():
-            with torch.no_grad():
-                logger.info("Target Encoder forward pass...")
-                target_emb, _ = self.model.encoder.forward(
-                    batch.unmask(),
-                    patch_size=patch_size,
-                )
-                target_proj = self.model.projector.forward(
-                    batch.unmask(),
-                    patch_size=patch_size,
-                )
-                return target_proj, target_emb
-
     def model_forward(
         self,
         batch: MaskedHeliosSample,
         patch_size: int,
         token_exit_cfg: dict[str, int],
-        target_proj: TokensAndMasks,
-        target_emb: TokensAndMasks,
+        target_proj: TokensAndMasks | None = None,
+        target_emb: TokensAndMasks | None = None,
     ) -> dict[str, Any]:
         """Run a forward pass."""
         with self._model_forward_context():
             out = self.model(batch, patch_size)
+            if target_proj is None:
+                with torch.no_grad():
+                    logger.info("Target Encoder forward pass...")
+                    target_emb, _ = self.model.encoder.forward(
+                        batch.unmask(),
+                        patch_size=patch_size,
+                    )
+                    target_proj = self.model.projector.forward(
+                        batch.unmask(),
+                        patch_size=patch_size,
+                    )
+                    out["target_proj"] = target_proj
+                    out["target_emb"] = target_emb
             loss = self.loss_fn(out["decoded"], target_emb)
             loss += self.loss_fn(out["decoded_proj"], target_proj)
             if self.mae_loss is not None:
