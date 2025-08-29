@@ -1,10 +1,13 @@
 """Shared normalization functions for eval sets."""
 
+import logging
 from enum import Enum
 
 import numpy as np
 
 from .constants import EVAL_S2_BAND_NAMES
+
+logger = logging.getLogger(__name__)
 
 
 def impute_normalization_stats(
@@ -21,6 +24,9 @@ def impute_normalization_stats(
         return band_info
 
     names_list = list(band_info.keys())
+    if any(impute[1] in names_list for impute in imputes):
+        raise ValueError("Cannot impute: band already present in band_info.")
+
     new_band_info: dict = {}
     for band_name in all_bands:
         new_band_info[band_name] = {}
@@ -44,42 +50,102 @@ class NormMethod(str, Enum):
 
     NORM_NO_CLIP = "norm_no_clip"
     NORM_YES_CLIP = "norm_yes_clip"
+    NORM_YES_CLIP_3_STD = "norm_yes_clip_3_std"
+    NORM_YES_CLIP_2_STD = "norm_yes_clip_2_std"
+    NORM_YES_CLIP_3_STD_INT = "norm_yes_clip_3_std_int"
+    NORM_YES_CLIP_2_STD_INT = "norm_yes_clip_2_std_int"
     NORM_YES_CLIP_INT = "norm_yes_clip_int"
+    NORM_YES_CLIP_MIN_MAX_INT = "norm_yes_clip_min_max_int"
     STANDARDIZE = "standardize"
     NO_NORM = "no_norm"
 
 
+def _get_normalization_bounds(
+    method: NormMethod,
+    means: np.ndarray,
+    stds: np.ndarray,
+    mins: np.ndarray | None,
+    maxs: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Calculate normalization bounds based on method."""
+    bounds_config = {
+        NormMethod.NORM_YES_CLIP: 1.0,
+        NormMethod.NORM_YES_CLIP_INT: 1.0,
+        NormMethod.NORM_YES_CLIP_3_STD: 3.0,
+        NormMethod.NORM_YES_CLIP_3_STD_INT: 3.0,
+        NormMethod.NORM_YES_CLIP_2_STD: 2.0,
+        NormMethod.NORM_YES_CLIP_2_STD_INT: 2.0,
+        NormMethod.NORM_NO_CLIP: 1.0,
+    }
+
+    if method == NormMethod.NORM_YES_CLIP_MIN_MAX_INT:
+        if mins is None or maxs is None:
+            logger.info("No mins/maxs provided, falling back to 2 std bounds")
+            std_mult = bounds_config[NormMethod.NORM_YES_CLIP_2_STD_INT]
+        else:
+            return mins, maxs
+    else:
+        std_mult = bounds_config[method]
+
+    min_value = means - std_mult * stds
+    max_value = means + std_mult * stds
+    return min_value, max_value
+
+
+def _apply_clip_and_quantize(
+    image: np.ndarray, method: NormMethod, original_dtype: np.dtype
+) -> np.ndarray:
+    """Apply post-processing based on normalization method."""
+    # Methods that need clipping
+    clip_methods = {
+        NormMethod.NORM_YES_CLIP,
+        NormMethod.NORM_YES_CLIP_3_STD,
+        NormMethod.NORM_YES_CLIP_2_STD,
+    }
+
+    # Methods that need integer quantization
+    int_methods = {
+        NormMethod.NORM_YES_CLIP_INT,
+        NormMethod.NORM_YES_CLIP_3_STD_INT,
+        NormMethod.NORM_YES_CLIP_2_STD_INT,
+        NormMethod.NORM_YES_CLIP_MIN_MAX_INT,
+    }
+
+    if method in clip_methods:
+        image = np.clip(image, 0, 1)
+    elif method in int_methods:
+        # Scale, quantize to 8-bit, then scale back
+        image = image * 255
+        image = np.clip(image, 0, 255).astype(np.uint8)
+        image = image.astype(original_dtype) / 255
+
+    return image
+
+
 def normalize_bands(
     image: np.ndarray,
-    means: np.array,
-    stds: np.array,
+    means: np.ndarray,
+    stds: np.ndarray,
+    mins: np.ndarray | None = None,
+    maxs: np.ndarray | None = None,
     method: str = NormMethod.NORM_NO_CLIP,
 ) -> np.ndarray:
-    """Normalize an image with given mean and std arrays, and a normalization method."""
-    original_dtype = image.dtype
-    if method == NormMethod.NO_NORM:
-        print("No normalization")
-        # If the normalization method is model specific we may want to defer normalization to the model e.g dinoV2
-        return image
-    elif method == NormMethod.STANDARDIZE:
-        image = (image - means) / stds
-    else:
-        min_value = means - stds
-        max_value = means + stds
-        image = (image - min_value) / (max_value - min_value)
+    """Normalize an image with given statistics using the specified method."""
+    if isinstance(method, str):
+        method = NormMethod(method)
 
-        if method == NormMethod.NORM_YES_CLIP:
-            image = np.clip(image, 0, 1)
-        elif method == NormMethod.NORM_YES_CLIP_INT:
-            # same as clipping between 0 and 1 but rounds to the nearest 1/255
-            image = image * 255  # scale
-            image = np.clip(image, 0, 255).astype(np.uint8)  # convert to 8-bit integers
-            image = (
-                image.astype(original_dtype) / 255
-            )  # back to original_dtype between 0 and 1
-        elif method == NormMethod.NORM_NO_CLIP:
-            pass
-        else:
-            valid_methods = [m.value for m in NormMethod]
-            raise ValueError(f"norm type must be one of {valid_methods}, not {method}")
-    return image
+    logger.debug(f"Normalizing image with method {method}")
+    original_dtype = image.dtype
+
+    # Handle simple cases first
+    if method == NormMethod.NO_NORM:
+        return image
+
+    if method == NormMethod.STANDARDIZE:
+        return (image - means) / stds
+
+    # Range-based normalization
+    min_value, max_value = _get_normalization_bounds(method, means, stds, mins, maxs)
+    normalized = (image - min_value) / (max_value - min_value)
+
+    return _apply_clip_and_quantize(normalized, method, original_dtype)

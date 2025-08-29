@@ -123,6 +123,67 @@ STATIC_BAND_GROUPS_IDX: OrderedDictType[str, list[int]] = OrderedDict(
 )
 
 
+class Normalizer:
+    """Galileo Normalizer."""
+    # these are the bands we will replace with the 2*std computation
+    # if std = True
+    std_bands: dict[int, list] = {
+        len(SPACE_TIME_BANDS): [b for b in SPACE_TIME_BANDS if b != "NDVI"],
+        len(SPACE_BANDS): SRTM_BANDS,
+        len(TIME_BANDS): TIME_BANDS,
+        len(STATIC_BANDS): LANDSCAN_BANDS,
+    }
+
+    def __init__(
+        self, std: bool = True, normalizing_dicts: dict | None = None, std_multiplier: float = 2
+    ):
+        """Initialize the Normalizer."""
+        self.normalizing_dicts = normalizing_dicts
+        self.shift_div_dict = {}
+        if std:
+            name_to_bands = {
+                len(SPACE_TIME_BANDS): SPACE_TIME_BANDS,
+                len(SPACE_BANDS): SPACE_BANDS,
+                len(TIME_BANDS): TIME_BANDS,
+                len(STATIC_BANDS): STATIC_BANDS,
+            }
+            #log names to bands
+            logger.info(f"Names to bands: {name_to_bands}")
+            assert normalizing_dicts is not None
+            for key, val in normalizing_dicts.items():
+                if isinstance(key, str):
+                    continue
+                bands_to_replace = self.std_bands[key]
+                for band in bands_to_replace:
+                    band_idx = name_to_bands[key].index(band)
+                    mean = val["mean"][band_idx]
+                    std = val["std"][band_idx]
+                    min_value = mean - (std_multiplier * std)
+                    max_value = mean + (std_multiplier * std)
+                    div = max_value - min_value
+                    if div == 0:
+                        raise ValueError(f"{band} has div value of 0")
+                    # if key not in shift_div_dict, add it
+                    if key not in self.shift_div_dict:
+                        self.shift_div_dict[key] = {"shift": {}, "div": {}}
+                    self.shift_div_dict[key]["shift"][band_idx] = min_value
+                    self.shift_div_dict[key]["div"][band_idx] = div
+        else:
+            raise ValueError("std must be True, default eo shift and div values are not supported")
+
+    @staticmethod
+    def _normalize(x: np.ndarray, shift_values: np.ndarray, div_values: np.ndarray) -> np.ndarray:
+        x = (x - shift_values) / div_values
+        return x
+
+    def __call__(self, x: np.ndarray):
+        """Call the normalizer."""
+        # get the band idxs from the x shape
+        band_idxs = [i for i in range(x.shape[-1]) if i in self.shift_div_dict[x.shape[-1]]["div"]]
+        div_values = torch.tensor([self.shift_div_dict[x.shape[-1]]["div"][band_idx] for band_idx in band_idxs] + [1.0], device=x.device) # extra number is for the NDVI band
+        shift_values = torch.tensor([self.shift_div_dict[x.shape[-1]]["shift"][band_idx] for band_idx in band_idxs] + [0.0], device=x.device) # extra number is for the NDVI band
+        return self._normalize(x, shift_values, div_values)
+
 def get_2d_sincos_pos_embed_with_resolution(
     embed_dim, grid_size, res, cls_token=False, device="cpu"
 ):
@@ -231,6 +292,21 @@ def adjust_learning_rate(
         group["lr"] = lr
     return lr
 
+
+def load_normalization_values(path: Path):
+    """Load the normalization values from a json file."""
+    if not path.exists():
+        raise ValueError(f"No file found at path {path}")
+    with path.open("r") as f:
+        norm_dict = json.load(f)
+    # we computed the normalizing dict using the same datset
+    output_dict = {}
+    for key, val in norm_dict.items():
+        if "n" not in key:
+            output_dict[int(key)] = val
+        else:
+            output_dict[key] = val
+    return output_dict
 
 # thanks to https://github.com/bwconrad/flexivit/ for this nice implementation
 # of the FlexiPatchEmbed module
@@ -1601,12 +1677,19 @@ class Decoder(GalileoBase):
 
 class GalileoWrapper(nn.Module):
     """GalileoWrapper."""
+
+    supported_modalities: list[str] = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+    ]
+
     def __init__(
         self,
         pretrained_path: UPath,
         patch_size: int = 8,
         month: int = 6,
         add_layernorm_on_exit: bool = True,
+        use_pretrained_normalizer: bool = True,
     ):
         """Init GalileoWrapper."""
         super().__init__()
@@ -1639,6 +1722,10 @@ class GalileoWrapper(nn.Module):
             idx for idx, key in enumerate(SPACE_TIME_BANDS_GROUPS_IDX) if "S1" in key
         ]
         self.add_layernorm_on_exit = add_layernorm_on_exit
+        if use_pretrained_normalizer:
+            self.normalizer = Normalizer(std=True, normalizing_dicts=load_normalization_values(Path("/weka/dfive-default/henryh/helios/helios/helios/evals/models/galileo/normalization_config.json")))
+        else:
+            self.normalizer = None
 
     def preproccess(
         self,
@@ -1649,6 +1736,7 @@ class GalileoWrapper(nn.Module):
         """Preproccess."""
         # images should have shape (b h w c) or (b h w t c)
         # TODO: mask out imputed indices
+        s_t_x = None
         s_t_channels = []
         if s2 is not None:
             s_t_channels += self.s_t_channels_s2
@@ -1666,6 +1754,10 @@ class GalileoWrapper(nn.Module):
             s_t_x = torch.zeros(
                 (b, h, w, t, len(SPACE_TIME_BANDS)), dtype=s2.dtype, device=s2.device
             )
+            # always creating the s_t_x tensor with all the bands
+            # find out hwat the galileo map is and the kept s2 band idx is
+            logger.info(f"Galileo map: {self.to_galileo_s2_map}")
+            logger.info(f"Kept s2 band idx: {self.kept_s2_band_idx}")
             if len(s2.shape) == 4:
                 s_t_x[:, :, :, 0, self.to_galileo_s2_map] = s2[
                     :, :, :, self.kept_s2_band_idx
@@ -1675,7 +1767,7 @@ class GalileoWrapper(nn.Module):
                     :, :, :, :, self.kept_s2_band_idx
                 ]
 
-        elif s1 is not None:
+        if s1 is not None:
             s_t_channels += self.s_t_channels_s1
             data_dtype = s1.dtype
             data_device = s1.device
@@ -1687,10 +1779,11 @@ class GalileoWrapper(nn.Module):
                 b, h, w, t, c_s1 = s1.shape
             assert c_s1 == len(self.s1_band_ordering)
 
-            # add a single timestep
-            s_t_x = torch.zeros(
-                (b, h, w, t, len(SPACE_TIME_BANDS)), dtype=s1.dtype, device=s1.device
-            )
+            if s_t_x is None:
+                s_t_x = torch.zeros(
+                    (b, h, w, t, len(SPACE_TIME_BANDS)), dtype=s1.dtype, device=s1.device
+                )
+
             if len(s1.shape) == 4:
                 s_t_x[:, :, :, 0, self.to_galileo_s1_map] = s1[
                     :, :, :, self.kept_s1_band_idx
@@ -1700,9 +1793,10 @@ class GalileoWrapper(nn.Module):
                     :, :, :, :, self.kept_s1_band_idx
                 ]
 
-        else:
+        if s_t_x is None:
             raise ValueError("no s1 or s2?")
 
+        # Currently does not support doing S1 and S2 together
         s_t_m = torch.ones(
             (b, h, w, t, len(SPACE_TIME_BANDS_GROUPS_IDX)),
             dtype=data_dtype,
@@ -1719,6 +1813,9 @@ class GalileoWrapper(nn.Module):
 
         self.grid_size = int(s_t_x.shape[1] / self.patch_size)
 
+        # apply normalization
+        if self.normalizer is not None:
+            s_t_x = self.normalizer(s_t_x)
         return (
             s_t_x,
             torch.empty(
@@ -1740,6 +1837,7 @@ class GalileoWrapper(nn.Module):
             ),
             months.long(),
         )
+
 
     def forward(
         self,
@@ -1800,14 +1898,16 @@ MODEL_SIZE_TO_WEKA_PATH = {
 }
 
 
+# TODO: patch size should be allowed to be done dynamically in forward pass
 @dataclass
 class GalileoConfig(Config):
     """olmo_core style config for GalileoWrapper."""
 
     model_size: str = "base"
-    patch_size: int = 8
+    patch_size: int = 4
     month: int = 6
     add_layernorm_on_exit: bool = True
+    use_pretrained_normalizer: bool = True
 
     def build(self) -> GalileoWrapper:
         """Build the Galileo model."""
@@ -1815,5 +1915,6 @@ class GalileoConfig(Config):
             pretrained_path=UPath(MODEL_SIZE_TO_WEKA_PATH[self.model_size]),
             patch_size=self.patch_size,
             month=self.month,
-            add_layernorm_on_exit=self.add_layernorm_on_exit
+            add_layernorm_on_exit=self.add_layernorm_on_exit,
+            use_pretrained_normalizer=self.use_pretrained_normalizer
         )

@@ -1,4 +1,4 @@
-"""DINOv2 model https://github.com/facebookresearch/dinov2 ."""
+"""DINOv3 model https://github.com/facebookresearch/dinov3 ."""
 
 import logging
 import math
@@ -6,7 +6,6 @@ import time
 from dataclasses import dataclass
 
 import torch
-import torch.nn.functional as F
 from einops import rearrange
 from olmo_core.config import Config
 from torch import nn
@@ -16,21 +15,39 @@ from helios.data.constants import Modality
 from helios.nn.flexihelios import PoolingType
 from helios.train.masking import MaskedHeliosSample
 
+from .constants import MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL, REPO_DIR, DinoV3Models
+
 logger = logging.getLogger(__name__)
 # Use timm's names
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
 
 
-def make_normalize_transform(
-    mean: tuple[float, float, float] = IMAGENET_DEFAULT_MEAN,
-    std: tuple[float, float, float] = IMAGENET_DEFAULT_STD,
-) -> transforms.Normalize:
-    """Make a normalize transform."""
-    return transforms.Normalize(mean=mean, std=std)
+def make_normalize_transform_web() -> transforms.Normalize:
+    """Make normalize transofrm for dinov3 trained on web dataset."""
+    normalize = transforms.Normalize(
+        mean=(0.485, 0.456, 0.406),
+        std=(0.229, 0.224, 0.225),
+    )
+    return normalize
 
 
-# DinoV2 Expects bands ordered as R, G, B
+def make_resize_transform(resize_size: int) -> transforms.Resize:
+    """Make resize transform for dinov3."""
+    resize = transforms.Resize((resize_size, resize_size), antialias=True)
+    return resize
+
+
+def make_normalize_transform_sat() -> transforms.Normalize:
+    """Make normalize transform for dinov3 trained on satellite dataset."""
+    normalize = transforms.Normalize(
+        mean=(0.430, 0.411, 0.296),
+        std=(0.213, 0.156, 0.143),
+    )
+    return normalize
+
+
+# DinoV3 Expects bands ordered as R, G, B
 HELIOS_SENTINEL2_RGB_BANDS = [
     Modality.SENTINEL2_L2A.band_order.index(b) for b in ["B04", "B03", "B02"]
 ]
@@ -39,10 +56,12 @@ HELIOS_LANDSAT_RGB_BANDS = [
 ]
 
 
-class DINOv2(nn.Module):
-    """Wrapper for the dinov2 model that can ingest MaskedHeliosSample objects."""
+class DINOv3(nn.Module):
+    """Wrapper for the dinov3 model that can ingest MaskedHeliosSample objects."""
 
-    patch_size: int = 14
+    patch_size: int = 16
+    base_resize: int = 256
+    # TODO: Should be the supported modality names
     supported_modalities: list[str] = [
         Modality.SENTINEL2_L2A.name,
         Modality.LANDSAT.name,
@@ -50,36 +69,45 @@ class DINOv2(nn.Module):
 
     def __init__(
         self,
-        torchhub_id: str = "dinov2_vitb14",
+        model_name: str = DinoV3Models.LARGE_SATELLITE,
         use_cls_token: bool = False,
-        apply_imagenet_normalization: bool = False,
+        apply_normalization: bool = False,
     ):
-        """Initialize the dinov2 wrapper.
+        """Initialize the dinov3 wrapper.
 
         Args:
-            torchhub_id: The torch hub model ID for dinov2
+            model_name: The name that corresponds to the model on torch hub to help find the details for loading the model
             use_cls_token: Whether to use the cls token (default False)
-            apply_imagenet_normalization: Whether to apply imagenet normalization to the input data (default False)
+            apply_normalization: Whether to apply imagenet normalization to the input data (default False)
         """
         super().__init__()
         self.use_cls_token = use_cls_token
-        self.apply_imagenet_normalization = apply_imagenet_normalization
-        if self.apply_imagenet_normalization:
+        self.apply_normalization = apply_normalization
+        if self.apply_normalization:
             logger.warning(
                 "Applying imagenet normalization to the input data. Make sure other normalization is not applied."
             )
+        torchhub_id, weights_url = MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL[model_name]
         # Load the model
-        self._load_model(torchhub_id)
+        self._load_model(torchhub_id, weights_url)
+        if "sat" in model_name:
+            logger.info("Using satellite normalization")
+            self.normalize_transform = make_normalize_transform_sat()
+        else:
+            logger.info("Using web normalization")
+            self.normalize_transform = make_normalize_transform_web()
 
-    def _load_model(self, torchhub_id: str) -> None:
-        """Load the dinov2 model from torch hub."""
+    def _load_model(self, torchhub_id: str, weights_url: str) -> None:
+        """Load the dinov3 model from torch hub."""
         # Hack to get around https://discuss.pytorch.org/t/torch-hub-load-gives-httperror-rate-limit-exceeded/124769
         torch.hub._validate_not_a_forked_repo = lambda a, b, c: True
         for attempt in range(2):
             try:
                 self.model = torch.hub.load(
-                    "facebookresearch/dinov2",
-                    torchhub_id,
+                    repo_or_dir=REPO_DIR,  # "facebookresearch/dinov3",
+                    model=torchhub_id,
+                    source="local",
+                    weights=weights_url,
                 )
                 break
             except Exception as e:
@@ -87,7 +115,7 @@ class DINOv2(nn.Module):
                 time.sleep(5)
         else:
             raise RuntimeError(
-                f"Failed to load dinov2 model {torchhub_id} after retrying."
+                f"Failed to load dinov3 model {torchhub_id} after retrying."
             )
 
     def _process_modality_data(
@@ -96,7 +124,7 @@ class DINOv2(nn.Module):
         modality: str,
     ) -> list[torch.Tensor]:
         """Process individual modality data."""
-        # Rearrange from "b h w t c -> b (c t) h w" for DinoV2/dinov2 format
+        # Rearrange from "b h w t c -> b (c t) h w" for DinoV2/dinov3 format
         t_dim = data.shape[3]
 
         # Get original dimensions
@@ -110,19 +138,18 @@ class DINOv2(nn.Module):
             elif modality == "landsat":
                 data_i = data_i[:, HELIOS_LANDSAT_RGB_BANDS, :, :]
 
-            new_height = self.patch_size if original_height == 1 else 224
-
-            data_i = F.interpolate(
-                data_i,
-                size=(new_height, new_height),
-                # maybe i should use the reccomended transform here
-                mode="bilinear",
-                align_corners=False,
-            )
-            if self.apply_imagenet_normalization:
+            # If it is greater than 224 Caleb R comment says don;t resize
+            if original_height > self.base_resize:
+                new_height = original_height
+            elif original_height <= self.base_resize and original_height > 1:
+                new_height = self.base_resize
+            else:
+                new_height = self.patch_size
+            resize_transform = make_resize_transform(new_height)
+            data_i = resize_transform(data_i)
+            if self.apply_normalization:
                 # normalize the data
-                normalize_transform = make_normalize_transform()
-                data_i = normalize_transform(data_i)
+                data_i = self.normalize_transform(data_i)
             data_list.append(data_i)
         return data_list
 
@@ -130,13 +157,13 @@ class DINOv2(nn.Module):
         self,
         masked_helios_sample: MaskedHeliosSample,
     ) -> list[torch.Tensor]:
-        """Prepare input for the dinov2 model from MaskedHeliosSample."""
+        """Prepare input for the dinov3 model from MaskedHeliosSample."""
         input_data_timesteps: dict[int, list[torch.Tensor]] = {}
         num_modalities = len(masked_helios_sample.modalities)
         for modality in masked_helios_sample.modalities:
             if num_modalities > 1:
                 raise ValueError(
-                    "DINOv2 does not yet support multiple modalities via multiple forward passes"
+                    f"DINOv3 does not yet support multiple modalities via multiple forward passes, got {num_modalities} modalities including {[modality for modality in masked_helios_sample.modalities]}"
                 )
             if modality not in self.supported_modalities:
                 logger.warning(
@@ -174,7 +201,7 @@ class DINOv2(nn.Module):
         masked_helios_sample: MaskedHeliosSample,
         pooling: PoolingType = PoolingType.MEAN,
     ) -> torch.Tensor:
-        """Forward pass through dinov2 model for classification."""
+        """Forward pass through dinov3 model for classification."""
         # Prepare input
         per_timestep_inputs = self.prepare_input(masked_helios_sample)
         # potentially will need to add a flag for segmentation
@@ -199,12 +226,12 @@ class DINOv2(nn.Module):
         masked_helios_sample: MaskedHeliosSample,
         pooling: PoolingType = PoolingType.MEAN,
     ) -> torch.Tensor:
-        """Forward pass through dinov2 model for segmentation."""
+        """Forward pass through dinov3 model for segmentation."""
         # supports multi-timestep input single timestep output
-        per_timestep_dinov2_inputs = self.prepare_input(masked_helios_sample)
+        per_timestep_dinov3_inputs = self.prepare_input(masked_helios_sample)
         output_features = []
-        for dinov2_input in per_timestep_dinov2_inputs:
-            timestep_output = self.model.forward_features(dinov2_input)[
+        for dinov3_input in per_timestep_dinov3_inputs:
+            timestep_output = self.model.forward_features(dinov3_input)[
                 "x_norm_patchtokens"
             ]
             num_tokens = timestep_output.shape[1]
@@ -230,17 +257,17 @@ class DINOv2(nn.Module):
 
 
 @dataclass
-class DINOv2Config(Config):
+class DINOv3Config(Config):
     """olmo_core style config for DINOv2Wrapper."""
 
-    torchhub_id: str = "dinov2_vitb14"
+    model_name: DinoV3Models = DinoV3Models.LARGE_SATELLITE
     use_cls_token: bool = False
-    apply_imagenet_normalization: bool = False
+    apply_normalization: bool = False
 
-    def build(self) -> DINOv2:
-        """Build the DINOv2 from this config."""
-        return DINOv2(
-            torchhub_id=self.torchhub_id,
+    def build(self) -> "DINOv3":
+        """Build the DINOv3 from this config."""
+        return DINOv3(
+            model_name=self.model_name,
             use_cls_token=self.use_cls_token,
-            apply_imagenet_normalization=self.apply_imagenet_normalization,
+            apply_normalization=self.apply_normalization,
         )
