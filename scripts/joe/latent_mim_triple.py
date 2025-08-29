@@ -41,7 +41,6 @@ from helios.nn.flexihelios import (
     EncoderConfig,
     PoolingType,
     PredictorConfig,
-    ReconstructorConfig,
 )
 from helios.nn.pyrois import PyroisConfig
 from helios.train.callbacks import (
@@ -87,21 +86,6 @@ def build_model_config(common: CommonComponents) -> PyroisConfig:
             supported_modality_names=common.training_modalities,
             max_sequence_length=12,
         ),
-        reconstructor_config=ReconstructorConfig(
-            supported_modality_names=[
-                m for m in common.training_modalities if m != Modality.LATLON.name
-            ],
-            max_patch_size=MAX_PATCH_SIZE,
-            decoder_config=PredictorConfig(
-                encoder_embedding_size=model_size["encoder_embedding_size"],
-                decoder_embedding_size=model_size["decoder_embedding_size"],
-                depth=model_size["decoder_depth"],
-                mlp_ratio=model_size["mlp_ratio"],
-                num_heads=model_size["decoder_num_heads"],
-                supported_modality_names=common.training_modalities,
-                max_sequence_length=12,
-            ),
-        ),
     )
     return model_config
 
@@ -112,7 +96,7 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return PyroisTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02),
-        rank_microbatch_size=32,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
+        rank_microbatch_size=16,  # Can be 256 on titan, needs to be <= 64 (i think) on jupiter
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "modality_cross_random",
@@ -124,8 +108,8 @@ def build_train_module_config(
         loss_config=LossConfig(
             loss_config={
                 "type": "modality_batch_patch_discrimination",
-                "target_norm": 10,
-                "prediction_norm": 10,
+                "target_norm": 1,
+                "mean_of_modalities": True,
             }
         ),
         contrastive_config=LossConfig(
@@ -134,24 +118,6 @@ def build_train_module_config(
                 "weight": 0.1,
             }
         ),
-        mae_loss_config=LossConfig(
-            loss_config={
-                "type": "mae",
-                "loss_function": "SmoothL1Loss",
-                "beta": 0.01,
-            }
-        ),
-        # exit cfg is ignored
-        # token_exit_cfg={modality: 0 for modality in common.training_modalities},
-        # token_exit_cfg={
-        #     Modality.SENTINEL2_L2A.name: model_size["encoder_depth"],
-        #     Modality.LATLON.name: model_size["encoder_depth"],
-        #     Modality.SENTINEL1.name: model_size["encoder_depth"],
-        #     Modality.WORLDCOVER.name: 0,
-        #     Modality.SRTM.name: model_size["encoder_depth"] // 2,
-        #     Modality.OPENSTREETMAP_RASTER.name: 0,
-        #     Modality.LANDSAT.name: model_size["encoder_depth"],
-        # },
         max_grad_norm=1.0,
         scheduler=ConstantWithWarmup(warmup=8000),
         ema_decay=(1.0, 1.0),
@@ -169,7 +135,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
     return HeliosDataLoaderConfig(
         num_workers=4,
-        global_batch_size=128,
+        global_batch_size=512,
         token_budget=1500,
         prefetch_factor=2,
         sampled_hw_p_list=list(range(5, 13)),

@@ -34,6 +34,11 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         train_module = self.trainer.train_module
 
         self._token_budget = self.trainer.data_loader.token_budget
+        try:
+            self._encoder_ratio = train_module.masking_strategy.encode_ratio
+            self._decoder_ratio = train_module.masking_strategy.decode_ratio
+        except:
+            pass
         if isinstance(
             train_module,
             MAETrainModule

@@ -28,7 +28,7 @@ class Pyrois(nn.Module, DistributedMixins):
         self,
         encoder: nn.Module,
         decoder: nn.Module,
-        reconstructor: torch.nn.Module,
+        reconstructor: torch.nn.Module | None,
     ):
         """Initialize the Latent MIM Style.
 
@@ -60,9 +60,10 @@ class Pyrois(nn.Module, DistributedMixins):
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         out = {}
         out["latent"], out["pooled"] = self.encoder(x, patch_size=patch_size)
-        out["reconstructed"] = self.reconstructor(
-            out["latent"], x.timestamps, patch_size
-        )
+        if self.reconstructor is not None:
+            out["reconstructed"] = self.reconstructor(
+                out["latent"], x.timestamps, patch_size
+            )
         out["decoded"] = self.decoder(
             out["latent"], timestamps=x.timestamps, patch_size=patch_size
         )
@@ -87,7 +88,8 @@ class Pyrois(nn.Module, DistributedMixins):
         self.encoder.apply_fsdp(**fsdp_config)
         self.decoder.apply_fsdp(**fsdp_config)
         self.proj_decoder.apply_fsdp(**fsdp_config)
-        self.reconstructor.apply_fsdp(**fsdp_config)
+        if self.reconstructor is not None:
+            self.reconstructor.apply_fsdp(**fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self.projector, **fsdp_config)
         fully_shard(self, **fsdp_config)

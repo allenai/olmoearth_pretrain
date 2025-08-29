@@ -272,9 +272,11 @@ class PyroisTrainModule(HeliosTrainModule):
                         batch.unmask(),
                         patch_size=patch_size,
                     )
-                    target_proj = self.model.projector.forward(
-                        batch.unmask(),
-                        patch_size=patch_size,
+                    target_proj = TokensAndMasks(
+                        **self.model.projector.forward(
+                            batch.unmask(),
+                            patch_size=patch_size,
+                        )
                     )
                     out["target_proj"] = target_proj
                     out["target_emb"] = target_emb
