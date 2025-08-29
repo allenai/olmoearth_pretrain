@@ -25,5 +25,5 @@ jobs:
 
       - name: Linting
         run: |
-          pip install pre-commit interrogate
+          pip install -r requirements-dev.txt
           pre-commit run --all-files

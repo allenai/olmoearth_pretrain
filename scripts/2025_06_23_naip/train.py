@@ -228,7 +228,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
-            epochs=50,
+            epochs=200,
         ),
     }
     trainer_config = (

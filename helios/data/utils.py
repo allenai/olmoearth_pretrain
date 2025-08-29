@@ -26,12 +26,12 @@ def to_cartesian(lat: float, lon: float) -> np.ndarray:
             lat: Latitude in degrees as a float.
             lon: Longitude in degrees as a float.
         """
-        assert (
-            -90 <= lat <= 90
-        ), f"lat out of range ({lat}). Make sure you are in EPSG:4326"
-        assert (
-            -180 <= lon <= 180
-        ), f"lon out of range ({lon}). Make sure you are in EPSG:4326"
+        assert -90 <= lat <= 90, (
+            f"lat out of range ({lat}). Make sure you are in EPSG:4326"
+        )
+        assert -180 <= lon <= 180, (
+            f"lon out of range ({lon}). Make sure you are in EPSG:4326"
+        )
 
     def convert_to_radians(lat: float, lon: float) -> tuple:
         """Convert the latitude and longitude to radians.
@@ -102,11 +102,7 @@ def update_streaming_stats(
     Returns:
         Updated count, mean, and variance for the modality band.
     """
-    band_data_count = (
-        modality_band_data.shape[-3]
-        * modality_band_data.shape[-2]
-        * modality_band_data.shape[-1]
-    )  # modality shape: (H, W, T)
+    band_data_count = np.prod(modality_band_data.shape)
 
     # Compute updated mean and variance with the new batch of data
     # Reference: https://www.geeksforgeeks.org/expression-for-mean-and-variance-in-a-running-stream/

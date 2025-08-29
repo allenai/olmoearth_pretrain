@@ -10,6 +10,7 @@ from .cropharvest import CROPHARVEST_DIR, CropHarvestDataset
 from .floods_dataset import FLOODS_DIR, Sen1Floods11Dataset
 from .geobench_dataset import GEOBENCH_DIR, GeobenchDataset
 from .mados_dataset import MADOS_DIR, MADOSDataset
+from .normalize import NormMethod
 from .pastis_dataset import PASTIS_DIR, PASTISRDataset
 from .sickle_dataset import SICKLE_DIR, SICKLEDataset
 
@@ -34,6 +35,7 @@ def get_eval_dataset(
     norm_stats_from_pretrained: bool = False,
     input_modalities: list[str] = [],
     partition: str = EvalDatasetPartition.TRAIN1X,
+    norm_method: str = NormMethod.NORM_NO_CLIP,
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
     if input_modalities:
@@ -53,6 +55,7 @@ def get_eval_dataset(
             split=split,
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
         )
     elif eval_dataset == "mados":
         if norm_stats_from_pretrained:
@@ -64,6 +67,7 @@ def get_eval_dataset(
             split=split,
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
         )
     elif eval_dataset == "sen1floods11":
         return Sen1Floods11Dataset(
@@ -71,6 +75,7 @@ def get_eval_dataset(
             split=split,
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
         )
     elif eval_dataset == "pastis":
         return PASTISRDataset(
@@ -79,6 +84,7 @@ def get_eval_dataset(
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             input_modalities=input_modalities,
+            norm_method=norm_method,
         )
     elif eval_dataset == "breizhcrops":
         return BreizhCropsDataset(
@@ -86,6 +92,7 @@ def get_eval_dataset(
             split=split,
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
         )
     elif eval_dataset == "sickle":
         return SICKLEDataset(
@@ -94,6 +101,7 @@ def get_eval_dataset(
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             input_modalities=input_modalities,
+            norm_method=norm_method,
         )
     elif eval_dataset.startswith("cropharvest"):
         # e.g. "cropharvest_Togo_12"
@@ -111,6 +119,7 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             timesteps=int(timesteps),
             input_modalities=input_modalities,
+            norm_method=norm_method,
         )
     else:
         raise ValueError(f"Unrecognized eval_dataset {eval_dataset}")

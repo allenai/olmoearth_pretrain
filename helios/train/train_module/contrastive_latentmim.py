@@ -17,6 +17,7 @@ from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.latent_mim import LatentMIM
+from helios.nn.utils import unpack_encoder_output
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
 from helios.train.train_module.train_module import (
@@ -180,7 +181,8 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
 
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
-        self.update_target_encoder()
+        if not dry_run:
+            self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
@@ -247,15 +249,21 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                 del latent_a, latent_b
                 loss.backward()
 
+        if dry_run:
+            return
+
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
             total_batch_loss,
             ReduceType.mean,
         )
+        if self.contrastive_loss is not None:
+            self.trainer.record_metric(
+                f"train/{self.contrastive_loss.name}",
+                total_batch_con,
+                ReduceType.mean,
+            )
         self.log_regularization(total_batch_reg)
-
-        if dry_run:
-            return
 
         del batch, batch_data  # In case this helps with memory utilization.
         del masked_batch_a, masked_batch_b
@@ -272,11 +280,12 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
             )
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
-                target_output, _ = self.model.target_encoder.forward(
+                output_dict = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
+                target_output, _, _ = unpack_encoder_output(output_dict)
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)

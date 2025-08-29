@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 import torch
 from olmo_core.config import Config
+from olmo_core.data.utils import get_rng
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
 from torch.utils.data import Dataset
@@ -56,6 +57,12 @@ class HeliosSample(NamedTuple):
     # naip_10 is currently 4x the height/width of sentinel2_l2a.
     naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
     gse: ArrayTensor | None = None  # [B, H, W, 1, len(GSE_bands)]
+    cdl: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
+    worldpop: ArrayTensor | None = None  # [B, H, W, 1, len(WORLDPOP_bands)]
+    worldcereal: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
+    wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    # era5_10 is not spatially varying, so it has no height/width dimensions.
+    era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
@@ -257,9 +264,9 @@ class HeliosSample(NamedTuple):
                 num_bands,
             )
         elif modality_spec.is_time_only_varying:
-            return (1, 1, self.time, num_bands)
+            return (self.time, num_bands)
         else:
-            return (1, 1, 1, num_bands)
+            return (num_bands,)
 
     def _get_max_t_within_token_budget(
         self, h_w_p: int, max_tokens_per_instance: int
@@ -296,7 +303,9 @@ class HeliosSample(NamedTuple):
         remaining_tokens = max_tokens_per_instance - used_tokens
         max_t_within_budget = remaining_tokens / time_multiply_tokens
         if max_t_within_budget < 1:
-            raise ValueError("patch_size too small for this sample and budget")
+            raise ValueError(
+                f"patch_size too small for this sample and budget, h_w_p: {h_w_p}, max_tokens: {max_tokens_per_instance}"
+            )
 
         return min(floor(max_t_within_budget), self.time)
 
@@ -334,7 +343,7 @@ class HeliosSample(NamedTuple):
             )
         return sorted(valid_start_ts)
 
-    def subset(
+    def subset_default(
         self,
         patch_size: int,
         max_tokens_per_instance: int | None,
@@ -342,7 +351,7 @@ class HeliosSample(NamedTuple):
         current_length: int,
         missing_timesteps_masks: dict[str, Any] = {},
     ) -> "HeliosSample":
-        """Subset a HelioSample that is unbatched ie no batch dimension.
+        """Subset a HelioSample using default rectangular cropping.
 
         Args:
             patch_size: The patch size being applied to this sample.
@@ -353,32 +362,24 @@ class HeliosSample(NamedTuple):
             current_length: The current maximum sequence length of the sample.
             missing_timesteps_masks: A dictionary of missing timesteps masks.
 
-        We apply current_length here to ensure that the subset focuses on the valid timesteps
-        instead of the padded timesteps.
-
-        The returned sample will have shape:
-            height = hw_t * patch_size
-            width = hw_t * patch_size
-            time = max_t
-        where hw_t is sampled from hw_to_sample and max_t is the maximum number
-        of timesteps allowable so that the total tokens (per instance) is >=
-        max_tokens_per_instance
+        Returns:
+            A subsetted HeliosSample with rectangular cropping applied.
         """
         if max_tokens_per_instance is None:
             return self
         max_t = self._get_max_t_within_token_budget(
             sampled_hw_p, max_tokens_per_instance
         )
-        sampled_hw = sampled_hw_p * patch_size
-        start_h = np.random.choice(self.height - sampled_hw + 1)
-        start_w = np.random.choice(self.width - sampled_hw + 1)
-
         valid_start_ts = self._get_valid_start_ts(
             missing_timesteps_masks, max_t, current_length
         )
         start_t = np.random.choice(valid_start_ts)
-
         new_data_dict: dict[str, ArrayTensor] = {}
+
+        sampled_hw = sampled_hw_p * patch_size
+        start_h = np.random.choice(self.height - sampled_hw + 1)
+        start_w = np.random.choice(self.width - sampled_hw + 1)
+
         for attribute, modality in self.as_dict(ignore_nones=True).items():
             assert modality is not None
             if attribute == "timestamps":
@@ -412,6 +413,79 @@ class HeliosSample(NamedTuple):
                 new_data_dict[attribute] = modality[start_t : start_t + max_t]
             elif modality_spec.is_static_in_space_and_time:
                 new_data_dict[attribute] = modality
+
+        return HeliosSample(**new_data_dict)
+
+    def subset_cutmix(
+        self,
+        patch_size: int,
+        max_tokens_per_instance: int | None,
+        sampled_hw_p: int,
+        current_length: int,
+        missing_timesteps_masks: dict[str, Any] = {},
+    ) -> "HeliosSample":
+        """Subset a HelioSample using CutMix patch sampling.
+
+        Args:
+            patch_size: The patch size being applied to this sample.
+            max_tokens_per_instance: The token budget when subsetting. This is used
+                to determine the maximum number of timesteps possible for a given
+                height and width. If None, this operation is a no-op.
+            sampled_hw_p: The number of tokens in the height and width dimensions.
+            current_length: The current maximum sequence length of the sample.
+            missing_timesteps_masks: A dictionary of missing timesteps masks.
+
+        Returns:
+            A subsetted HeliosSample with CutMix patch sampling applied.
+        """
+        if max_tokens_per_instance is None:
+            return self
+        max_t = self._get_max_t_within_token_budget(
+            sampled_hw_p, max_tokens_per_instance
+        )
+        valid_start_ts = self._get_valid_start_ts(
+            missing_timesteps_masks, max_t, current_length
+        )
+        start_t = np.random.choice(valid_start_ts)
+        new_data_dict: dict[str, ArrayTensor] = {}
+
+        height_p, width_p = self.height // patch_size, self.width // patch_size
+        h_p_indices = np.random.choice(height_p, size=sampled_hw_p, replace=False)
+        w_p_indices = np.random.choice(width_p, size=sampled_hw_p, replace=False)
+        h_indices = [
+            i
+            for h_p in h_p_indices
+            for i in range(h_p * patch_size, (h_p + 1) * patch_size)
+        ]
+        w_indices = [
+            i
+            for w_p in w_p_indices
+            for i in range(w_p * patch_size, (w_p + 1) * patch_size)
+        ]
+        hh, ww = np.meshgrid(h_indices, w_indices, indexing="ij")
+
+        for attribute, modality in self.as_dict(ignore_nones=True).items():
+            assert modality is not None
+            if attribute == "timestamps":
+                new_data_dict[attribute] = modality[start_t : start_t + max_t]
+                continue
+            modality_spec = Modality.get(attribute)
+            if modality_spec.is_spacetime_varying:
+                new_data_dict[attribute] = modality[
+                    hh * modality_spec.image_tile_size_factor,
+                    ww * modality_spec.image_tile_size_factor,
+                    start_t : start_t + max_t,
+                ]
+            elif modality_spec.is_space_only_varying:
+                new_data_dict[attribute] = modality[
+                    hh * modality_spec.image_tile_size_factor,
+                    ww * modality_spec.image_tile_size_factor,
+                ]
+            elif modality_spec.is_time_only_varying:
+                new_data_dict[attribute] = modality[start_t : start_t + max_t]
+            elif modality_spec.is_static_in_space_and_time:
+                new_data_dict[attribute] = modality
+
         return HeliosSample(**new_data_dict)
 
     def scale(self, s: float) -> "HeliosSample":
@@ -498,6 +572,8 @@ class HeliosDataset(Dataset):
         cache_dir: UPath | None = None,
         samples_per_sec: float | None = None,
         dataset_percentage: float = 1.0,
+        seed: int = 0,
+        apply_cutmix: bool = False,
     ):
         """Initialize the dataset.
 
@@ -520,6 +596,8 @@ class HeliosDataset(Dataset):
                 throttling only applies when reading from the h5py_dir, not the
                 cache_dir (if set).
             dataset_percentage: The percentage of the dataset to use.
+            seed: For selecting the dataset percentage.
+            apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
 
         Returns:
             None
@@ -536,6 +614,7 @@ class HeliosDataset(Dataset):
         self.dtype = dtype
         self.normalize = normalize
         self.dataset_percentage = dataset_percentage
+        self.seed = seed
         if self.normalize:
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
@@ -549,6 +628,7 @@ class HeliosDataset(Dataset):
 
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
+        self.apply_cutmix = apply_cutmix
 
     @property
     def fingerprint_version(self) -> str:
@@ -619,28 +699,47 @@ class HeliosDataset(Dataset):
         logger.info(f"columns: {metadata_df.columns}")
 
         # Get the indices of samples that don't have any training modalities that are
-        # multi-temporal. We want to remove these samples.
-        multitemporal_training_modalities = [
+        # spacetime varying. We want to remove these samples.
+        spacetime_varying_training_modalities = [
             modality
             for modality in self.training_modalities
-            if Modality.get(modality).is_multitemporal
+            if Modality.get(modality).is_spacetime_varying
         ]
-        if len(multitemporal_training_modalities) == 0:
-            raise ValueError("no multi-temporal modalities are specified for training")
-        no_multitemporal_indices = metadata_df[
-            metadata_df[multitemporal_training_modalities].sum(axis=1) == 0
+        if len(spacetime_varying_training_modalities) == 0:
+            raise ValueError(
+                "no spacetime varying modalities are specified for training"
+            )
+        no_spacetime_varying_indices = metadata_df[
+            metadata_df[spacetime_varying_training_modalities].sum(axis=1) == 0
         ].index
 
         # Filter these indices out
         logger.info(
-            f"Filtering out {len(no_multitemporal_indices)} samples without any training modalities"
+            f"Filtering out {len(no_spacetime_varying_indices)} samples without any training modalities"
         )
         self.sample_indices = np.setdiff1d(
-            self.sample_indices, no_multitemporal_indices
+            self.sample_indices, no_spacetime_varying_indices
         )
         logger.info(
-            f"Filtered {len(no_multitemporal_indices)} samples to {self.sample_indices.shape} samples"
+            f"Filtered {len(no_spacetime_varying_indices)} samples to {self.sample_indices.shape} samples"
         )
+
+    def _filter_sample_indices_by_dataset_percentage(self) -> None:
+        """Filter the sample indices for dataset percentage."""
+        assert self.sample_indices is not None, (
+            "Sample indices must be set before filtering by dataset percentage"
+        )
+        if self.dataset_percentage < 1.0:
+            rng = get_rng(self.seed)
+            num_samples = len(self.sample_indices)
+            self.sample_indices = rng.choice(
+                self.sample_indices,
+                size=int(len(self.sample_indices) * self.dataset_percentage),
+                replace=False,
+            )
+            logger.info(
+                f"Picked {len(self.sample_indices)} samples from {num_samples} samples"
+            )
 
     def prepare(self) -> None:
         """Prepare the dataset.
@@ -657,16 +756,7 @@ class HeliosDataset(Dataset):
         self.latlon_distribution = self.get_geographic_distribution()
         self.sample_indices = np.arange(num_samples)
         self._filter_sample_indices_for_training()
-        # randomly pick dataset percentage fraction of the sample indices
-        if self.dataset_percentage < 1.0:
-            self.sample_indices = np.random.choice(
-                self.sample_indices,
-                size=int(len(self.sample_indices) * self.dataset_percentage),
-                replace=False,
-            )
-            logger.info(
-                f"Picked {len(self.sample_indices)} samples from {num_samples} samples"
-            )
+        self._filter_sample_indices_by_dataset_percentage()
         self.latlon_distribution = self.latlon_distribution[self.sample_indices]
 
     def get_geographic_distribution(self) -> np.ndarray:
@@ -736,9 +826,9 @@ class HeliosDataset(Dataset):
         self, sample_dict: dict[str, Any], missing_timesteps_masks: dict[str, Any]
     ) -> tuple[HeliosSample, list[str]]:
         """Fill the sample with missing values."""
-        assert (
-            sample_dict["timestamps"].shape[0] == self.max_sequence_length
-        ), f"Timestamps shape {sample_dict['timestamps'].shape[0]} does not match max_sequence_length {self.max_sequence_length}"
+        assert sample_dict["timestamps"].shape[0] == self.max_sequence_length, (
+            f"Timestamps shape {sample_dict['timestamps'].shape[0]} does not match max_sequence_length {self.max_sequence_length}"
+        )
         missing_modalities = []
         sample = HeliosSample(**sample_dict)
         for modality in self.training_modalities:
@@ -898,13 +988,22 @@ class HeliosDataset(Dataset):
             sample_dict, missing_timesteps_masks
         )
 
-        subset_sample = sample.subset(
-            patch_size=args.patch_size,
-            max_tokens_per_instance=args.token_budget,
-            sampled_hw_p=args.sampled_hw_p,
-            current_length=current_length,
-            missing_timesteps_masks=missing_timesteps_masks,
-        )
+        if self.apply_cutmix:
+            subset_sample = sample.subset_cutmix(
+                patch_size=args.patch_size,
+                max_tokens_per_instance=args.token_budget,
+                sampled_hw_p=args.sampled_hw_p,
+                current_length=current_length,
+                missing_timesteps_masks=missing_timesteps_masks,
+            )
+        else:
+            subset_sample = sample.subset_default(
+                patch_size=args.patch_size,
+                max_tokens_per_instance=args.token_budget,
+                sampled_hw_p=args.sampled_hw_p,
+                current_length=current_length,
+                missing_timesteps_masks=missing_timesteps_masks,
+            )
 
         sample_dict = subset_sample.as_dict(ignore_nones=True)
 
@@ -943,6 +1042,8 @@ class HeliosDatasetConfig(Config):
     cache_dir: str | None = None
     samples_per_sec: float | None = None
     dataset_percentage: float = 1.0
+    seed: int = 0
+    apply_cutmix: bool = False
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

@@ -16,6 +16,7 @@ from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
 from helios.nn.mae import MAE
+from helios.nn.utils import unpack_encoder_output
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
 from helios.train.train_module.train_module import (
@@ -188,11 +189,12 @@ class MAETrainModule(HeliosTrainModule):
             if self.latent_mim_loss and decoded is not None:
                 with torch.no_grad():
                     logger.info("Target Encoder forward pass...")
-                    target_output = self.model.encoder.forward(
+                    output_dict = self.model.encoder.forward(
                         x.unmask(),
                         patch_size=patch_size,
                         token_exit_cfg=self.token_exit_cfg,
                     )
+                    target_output, _, _ = unpack_encoder_output(output_dict)
                 loss += self.latent_mim_loss.compute(decoded, target_output)
             return loss, latent, decoded
 
@@ -252,15 +254,15 @@ class MAETrainModule(HeliosTrainModule):
 
                 loss.backward()
 
+        if dry_run:
+            return
+
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
             total_batch_loss,
             ReduceType.mean,
         )
         self.log_regularization(total_batch_reg)
-
-        if dry_run:
-            return
 
         del batch  # In case this helps with memory utilization.
         del masked_batch

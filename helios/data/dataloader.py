@@ -30,8 +30,6 @@ from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
 
 logger = logging.getLogger(__name__)
 
-BASE_TOKEN_BUDGET = 1500
-
 
 class HeliosDataLoader(DataLoaderBase):
     """Helios dataloader.
@@ -341,6 +339,28 @@ class HeliosDataLoader(DataLoaderBase):
                 (standard_hw, standard_hw, 1, Modality.GSE.num_bands), dtype=np.float32
             )
             output_dict["gse"] = mock_gse
+        if Modality.CDL.name in self.dataset.training_modalities:
+            mock_cdl = rng.random(
+                (standard_hw, standard_hw, 1, Modality.CDL.num_bands), dtype=np.float32
+            )
+            output_dict["cdl"] = mock_cdl
+        if Modality.WORLDPOP.name in self.dataset.training_modalities:
+            mock_worldpop = rng.random(
+                (standard_hw, standard_hw, 1, Modality.WORLDPOP.num_bands),
+                dtype=np.float32,
+            )
+            output_dict["worldpop"] = mock_worldpop
+        if Modality.WRI_CANOPY_HEIGHT_MAP.name in self.dataset.training_modalities:
+            mock_wri_canopy_height_map = rng.random(
+                (standard_hw, standard_hw, 1, Modality.WRI_CANOPY_HEIGHT_MAP.num_bands),
+                dtype=np.float32,
+            )
+            output_dict["wri_canopy_height_map"] = mock_wri_canopy_height_map
+        if Modality.ERA5_10.name in self.dataset.training_modalities:
+            mock_era5_10 = rng.random(
+                (12, Modality.ERA5_10.num_bands), dtype=np.float32
+            )
+            output_dict["era5_10"] = mock_era5_10
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
@@ -361,7 +381,7 @@ class HeliosDataLoader(DataLoaderBase):
             [
                 (
                     patch_size,
-                    self._get_mock_sample(rng).subset(
+                    self._get_mock_sample(rng).subset_default(
                         patch_size,
                         max_tokens_per_instance=1500,
                         sampled_hw_p=6,
@@ -424,36 +444,6 @@ def iter_batched(
         yield tuple(batch)
 
 
-def _get_batch_item_params_iterator(
-    indices: np.ndarray,
-    patch_size_list: list[int],
-    hw_p_to_sample: list[int],
-    rank_batch_size: int,
-) -> Iterator[tuple[int, int, int]]:
-    """Get a generator that yields a tuple of (idx, patch_size, sampled_hw_p).
-
-    Changes patch_size and sampled_hw_p every rank_batch_size.
-    """
-    patch_size_array = np.array(patch_size_list)
-    hw_p_to_sample_array = np.array(hw_p_to_sample)
-    instances_processed = 0
-    # TODO: We need to maintain state and reproducibility here
-    # DO we want this to differ by rank?
-    for idx in indices:
-        if instances_processed % rank_batch_size == 0:
-            patch_size = np.random.choice(patch_size_array)
-            max_height_width_tokens = int(IMAGE_TILE_SIZE / patch_size)
-            filtered_hw_p_to_sample_array = hw_p_to_sample_array[
-                hw_p_to_sample_array <= max_height_width_tokens
-            ]
-            filtered_hw_p_to_sample_array = filtered_hw_p_to_sample_array[
-                filtered_hw_p_to_sample_array > 0
-            ]
-            sampled_hw_p = np.random.choice(filtered_hw_p_to_sample_array)
-        yield idx, int(patch_size), int(sampled_hw_p)
-        instances_processed += 1
-
-
 class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
     """Iterable dataset wrapper.
 
@@ -463,6 +453,46 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
     def __init__(self, data_loader: HeliosDataLoader):
         """Initialize the IterableDatasetWrapper."""
         self.data_loader = data_loader
+        workers = data_loader.num_workers or 1
+        self.rngs = [
+            get_rng(
+                data_loader.seed + data_loader.epoch + data_loader.dp_rank * workers + i
+            )
+            for i in range(workers)
+        ]
+
+    def _get_batch_item_params_iterator(
+        self,
+        indices: np.ndarray,
+        patch_size_list: list[int],
+        hw_p_to_sample: list[int],
+        rank_batch_size: int,
+    ) -> Iterator[tuple[int, int, int]]:
+        """Get a generator that yields a tuple of (idx, patch_size, sampled_hw_p).
+
+        Changes patch_size and sampled_hw_p every rank_batch_size.
+        """
+        patch_size_array = np.array(patch_size_list)
+        hw_p_to_sample_array = np.array(hw_p_to_sample)
+        instances_processed = 0
+
+        # TODO: We need to maintain state and reproducibility here
+        worker_id = self.worker_info.id if self.worker_info is not None else 0
+        rng = self.rngs[worker_id]
+
+        for idx in indices:
+            if instances_processed % rank_batch_size == 0:
+                patch_size = rng.choice(patch_size_array)
+                max_height_width_tokens = int(IMAGE_TILE_SIZE / patch_size)
+                filtered_hw_p_to_sample_array = hw_p_to_sample_array[
+                    hw_p_to_sample_array <= max_height_width_tokens
+                ]
+                filtered_hw_p_to_sample_array = filtered_hw_p_to_sample_array[
+                    filtered_hw_p_to_sample_array > 0
+                ]
+                sampled_hw_p = rng.choice(filtered_hw_p_to_sample_array)
+            yield idx, int(patch_size), int(sampled_hw_p)
+            instances_processed += 1
 
     @property
     def dataset(self) -> HeliosDataset:
@@ -480,7 +510,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
         indices = self.data_loader._get_local_instance_indices(global_indices)
         instance_iterator = (
             self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
-            for idx, patch_size, sampled_hw_p in _get_batch_item_params_iterator(
+            for idx, patch_size, sampled_hw_p in self._get_batch_item_params_iterator(
                 indices,
                 self.data_loader.patch_sizes,
                 self.data_loader.sampled_hw_p_list,

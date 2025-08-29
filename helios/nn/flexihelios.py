@@ -3,7 +3,7 @@
 import logging
 import math
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any, NamedTuple
 
 import torch
@@ -12,7 +12,7 @@ from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
 
-from helios.data.constants import Modality, ModalitySpec
+from helios.data.constants import BASE_GSD, Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.nn.attention import Block
 from helios.nn.encodings import (
@@ -46,11 +46,7 @@ def return_modalities_from_dict(
     ]
 
 
-# Resolution of the input data in meters
-BASE_GSD = 10
-
-
-class PoolingType(str, Enum):
+class PoolingType(StrEnum):
     """Strategy for pooling the tokens."""
 
     MAX = "max"
@@ -93,6 +89,16 @@ class TokensAndMasks(NamedTuple):
     naip_10_mask: Tensor | None = None
     gse: Tensor | None = None
     gse_mask: Tensor | None = None
+    cdl: Tensor | None = None
+    cdl_mask: Tensor | None = None
+    worldpop: Tensor | None = None
+    worldpop_mask: Tensor | None = None
+    worldcereal: Tensor | None = None
+    worldcereal_mask: Tensor | None = None
+    wri_canopy_height_map: Tensor | None = None
+    wri_canopy_height_map_mask: Tensor | None = None
+    era5_10: Tensor | None = None
+    era5_10_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
@@ -145,8 +151,14 @@ class TokensAndMasks(NamedTuple):
     def _flatten(x: Tensor) -> Tensor:
         return rearrange(x, "b ... d -> b (...) d")
 
-    def flatten_tokens_and_masks(self) -> tuple[Tensor, Tensor]:
+    def flatten_tokens_and_masks(
+        self, return_lists: bool = False
+    ) -> tuple[Tensor, Tensor]:
         """Return the flattened tokens and masks.
+
+        Args:
+            return_lists: If True, return the original lists before concatenation.
+                          If False, return concatenated tensors.
 
         Tokens will have shape [B, T, D] and masks will have shape [B, T]
         """
@@ -163,6 +175,11 @@ class TokensAndMasks(NamedTuple):
                 masked_attr = masked_attr.unsqueeze(dim=-1)
                 flattened_x.append(self._flatten(attr))
                 flattened_masks.append(self._flatten(masked_attr))
+
+        if return_lists:
+            # Remove the extra dimension from the masks
+            flattened_masks = [mask[:, :, 0] for mask in flattened_masks]
+            return flattened_x, flattened_masks
 
         x = torch.cat(flattened_x, dim=1)
         masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
@@ -350,7 +367,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
 
         # I likely will need to know about what the embedding strategy is in the forward as well
         # Static modality
-        if modality_spec.get_tile_resolution() == 0:
+        if not modality_spec.is_spatial:
             # static in space
             return nn.ModuleDict(
                 {
@@ -682,22 +699,32 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             ),
             requires_grad=False,
         )
-        # M
+        # Month encodings
         month_tab = get_month_encoding_table(self.embedding_dim_per_embedding_type)
         self.month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
-        if learnable_channel_embeddings:
-            args = {"requires_grad": True}
+        if not learnable_channel_embeddings and not random_channel_embeddings:
+            self.per_modality_channel_embeddings = nn.ParameterDict()
+            for modality in self.supported_modalities:
+                shape = (len(modality.band_sets), self.embedding_dim_per_embedding_type)
+                channel_embeddings = nn.Parameter(
+                    torch.zeros(shape), requires_grad=False
+                )
+                self.per_modality_channel_embeddings[modality.name] = channel_embeddings
         else:
-            args = {"requires_grad": False}
-
-        self.per_modality_channel_embeddings = nn.ParameterDict()
-        for modality in self.supported_modalities:
-            shape = (len(modality.band_sets), self.embedding_dim_per_embedding_type)
-            if random_channel_embeddings:
-                channel_embeddings = nn.Parameter(torch.rand(shape), **args)
+            # Channel embeddings
+            if learnable_channel_embeddings:
+                args = {"requires_grad": True}
             else:
-                channel_embeddings = nn.Parameter(torch.zeros(shape), **args)
-            self.per_modality_channel_embeddings[modality.name] = channel_embeddings
+                args = {"requires_grad": False}
+
+            self.per_modality_channel_embeddings = nn.ParameterDict()
+            for modality in self.supported_modalities:
+                shape = (len(modality.band_sets), self.embedding_dim_per_embedding_type)
+                if random_channel_embeddings:
+                    channel_embeddings = nn.Parameter(torch.rand(shape), **args)
+                else:
+                    channel_embeddings = nn.Parameter(torch.zeros(shape), **args)
+                self.per_modality_channel_embeddings[modality.name] = channel_embeddings
 
         self.apply(self._init_weights)
 
@@ -721,6 +748,8 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         timestamps: Tensor | None = None,
         patch_size: int | None = None,
         input_res: int | None = None,
+        use_modality_encodings: bool = True,
+        use_temporal_encodings: bool = True,
     ) -> Tensor:
         """Apply the encodings to the patchified data based on modality type.
 
@@ -730,46 +759,69 @@ class FlexiHeliosCompositeEncodings(nn.Module):
             timestamps: Optional timestamps for temporal encodings
             patch_size: Optional patch size for spatial encodings
             input_res: Optional input resolution for spatial encodings
+            use_modality_encodings: Whether to use modality encodings
+            use_temporal_encodings: Whether to use temporal encodings
 
         Returns:
             Tensor with encodings applied based on modality type
         """
+        logger.info(
+            f"use_modality_encodings: {use_modality_encodings}, use_temporal_encodings: {use_temporal_encodings}"
+        )
         # TODO: Improve this implementation it is quite bad
 
         modality = Modality.get(modality_name)
         logger.debug(f"Applying encodings to modality {modality}")
-
-        if modality_tokens.ndim == 3:
-            # modality_tokens = [B, Band_Sets, D]; static in space, static in time
-            b, b_s, _ = modality_tokens.shape
-            ein_string, ein_dict = "b b_s d", {"b": b, "b_s": b_s}
-        elif modality_tokens.ndim == 4:
-            b, t, b_s, _ = modality_tokens.shape
-            ein_string, ein_dict = "b t b_s d", {"b": b, "t": t, "b_s": b_s}
-        elif modality_tokens.ndim == 5:
-            b, h, w, b_s, _ = modality_tokens.shape
-            ein_string, ein_dict = "b h w b_s d", {"b": b, "h": h, "w": w, "b_s": b_s}
-        elif modality_tokens.ndim == 6:
-            b, h, w, t, b_s, _ = modality_tokens.shape
+        if not use_modality_encodings and use_temporal_encodings:
+            b, h, w, t, _ = modality_tokens.shape
             ein_string, ein_dict = (
-                "b h w t b_s d",
-                {"b": b, "h": h, "w": w, "t": t, "b_s": b_s},
+                "b h w t d",
+                {"b": b, "h": h, "w": w, "t": t},
             )
+        elif not use_temporal_encodings and not use_modality_encodings:
+            b, h, w, _ = modality_tokens.shape
+            ein_string, ein_dict = (
+                "b h w d",
+                {"b": b, "h": h, "w": w},
+            )
+        elif not use_temporal_encodings and use_modality_encodings:
+            raise NotImplementedError("Not implemented")
         else:
-            raise ValueError(f"Unsupported tokens shape: {modality_tokens.shape}")
+            if modality_tokens.ndim == 3:
+                # modality_tokens = [B, Band_Sets, D]; static in space, static in time
+                b, b_s, _ = modality_tokens.shape
+                ein_string, ein_dict = "b b_s d", {"b": b, "b_s": b_s}
+            elif modality_tokens.ndim == 4:
+                b, t, b_s, _ = modality_tokens.shape
+                ein_string, ein_dict = "b t b_s d", {"b": b, "t": t, "b_s": b_s}
+            elif modality_tokens.ndim == 5:
+                b, h, w, b_s, _ = modality_tokens.shape
+                ein_string, ein_dict = (
+                    "b h w b_s d",
+                    {"b": b, "h": h, "w": w, "b_s": b_s},
+                )
+            elif modality_tokens.ndim == 6:
+                b, h, w, t, b_s, _ = modality_tokens.shape
+                ein_string, ein_dict = (
+                    "b h w t b_s d",
+                    {"b": b, "h": h, "w": w, "t": t, "b_s": b_s},
+                )
+            else:
+                raise ValueError(f"Unsupported tokens shape: {modality_tokens.shape}")
 
         device = modality_tokens.device
         modality_embed = torch.zeros(modality_tokens.shape, device=device)
         n = self.embedding_dim_per_embedding_type
 
         # Channel embeddings
-        channel_embed = self.per_modality_channel_embeddings[modality.name]
-        channel_embed = repeat(channel_embed, f"b_s d -> {ein_string}", **ein_dict).to(
-            device
-        )
-        modality_embed[..., :n] += channel_embed
+        if use_modality_encodings:
+            channel_embed = self.per_modality_channel_embeddings[modality.name]
+            channel_embed = repeat(
+                channel_embed, f"b_s d -> {ein_string}", **ein_dict
+            ).to(device)
+            modality_embed[..., :n] += channel_embed
 
-        if modality.is_multitemporal:
+        if modality.is_multitemporal and use_temporal_encodings:
             # Time position encodings
             time_embed = repeat(self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict)
             modality_embed[..., n : n * 2] += time_embed.to(device)
@@ -932,6 +984,31 @@ class FlexiHeliosBase(nn.Module):
 
         return tokens, masks
 
+    def stack_spatial_modalities_and_masks(
+        self, tokens_dict: dict[str, Tensor]
+    ) -> Tensor:
+        """Stack the spatial modalities together."""
+        available_modalities = return_modalities_from_dict(tokens_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        mask_list = []
+        data_list = []
+        for modality in modalities_to_process:
+            if Modality.get(modality).is_spatial:
+                masked_modality_name = MaskedHeliosSample.get_masked_modality_name(
+                    modality
+                )
+                logger.info(
+                    f"modality: {modality}, masked_modality_name: {masked_modality_name}"
+                )
+                data = tokens_dict[modality]
+                mask = tokens_dict[masked_modality_name]
+                data_list.append(data)
+                mask_list.append(mask)
+        # stack in the modality dimension
+        return torch.cat(data_list, dim=4), torch.cat(mask_list, dim=4)
+
     @staticmethod
     def _construct_einops_pattern(
         spatial_dims: tuple[int, ...],
@@ -974,7 +1051,7 @@ class FlexiHeliosBase(nn.Module):
 
     @staticmethod
     def split_and_expand_per_modality(
-        x: Tensor, modalities_to_dims_dict: dict[str, tuple]
+        x: Tensor, modalities_to_dims_dict: dict
     ) -> dict[str, Tensor]:
         """Split and expand the tokens per modality.
 
@@ -1201,9 +1278,9 @@ class Encoder(FlexiHeliosBase):
             tokens: Tokens with removed tokens added
             mask: Mask with removed tokens added
         """
-        assert (
-            x.shape[1] > 0
-        ), "x must have at least one token we should not mask all tokens"
+        assert x.shape[1] > 0, (
+            "x must have at least one token we should not mask all tokens"
+        )
         masked_tokens = repeat(
             torch.zeros_like(x[0, 0, :]), "d -> b t d", b=x.shape[0], t=indices.shape[1]
         )
@@ -1236,9 +1313,9 @@ class Encoder(FlexiHeliosBase):
     ) -> tuple[Tensor | None]:
         """Create the exit sequences and tokens."""
         # Check that tokens_only_dict doesn't contain any mask keys
-        assert all(
-            not key.endswith("_mask") for key in tokens_only_dict
-        ), "tokens_only_dict should not contain mask keys"
+        assert all(not key.endswith("_mask") for key in tokens_only_dict), (
+            "tokens_only_dict should not contain mask keys"
+        )
         if token_exit_cfg:
             exit_ids_per_modality = self.create_token_exit_ids(
                 tokens_only_dict, token_exit_cfg
@@ -1363,7 +1440,6 @@ class Encoder(FlexiHeliosBase):
         tokens_per_modality_dict.update(original_masks_dict)
         return tokens_per_modality_dict
 
-    # TODO: we want to have a single API for the encoder and decoder
     def forward(
         self,
         x: MaskedHeliosSample,
@@ -1371,7 +1447,7 @@ class Encoder(FlexiHeliosBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         always_pass_none_mask_to_transformer: bool = False,
-    ) -> tuple[TokensAndMasks, torch.Tensor]:
+    ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
         Args:
@@ -1398,7 +1474,12 @@ class Encoder(FlexiHeliosBase):
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        return output, self.project_and_aggregate(output)
+        # TODO: we should probably switch this to a dict
+        output_dict = {
+            "tokens_and_masks": output,
+            "project_aggregated": self.project_and_aggregate(output),
+        }
+        return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
@@ -1411,7 +1492,7 @@ class Encoder(FlexiHeliosBase):
         fully_shard(self, **fsdp_kwargs)
 
 
-class Predictor(FlexiHeliosBase):
+class PredictorBase(FlexiHeliosBase):
     """Predictor module that generates predictions from encoded tokens."""
 
     cross_attn = True
@@ -1630,6 +1711,21 @@ class Predictor(FlexiHeliosBase):
         tokens = tokens.scatter(1, indices[:, :, None].expand_as(tokens), tokens)
         return tokens
 
+    def is_any_data_to_be_decoded(self, modality_mask: Tensor) -> bool:
+        """Check if any data is to be decoded for a given modality."""
+        return (MaskValue.DECODER.value == modality_mask).any()
+
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        super().apply_fsdp(**fsdp_kwargs)
+        fully_shard(self, **fsdp_kwargs)
+
+
+class Predictor(PredictorBase):
+    """Predictor module that generates predictions from encoded tokens."""
+
+    cross_attn = True
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -1716,10 +1812,6 @@ class Predictor(FlexiHeliosBase):
         tokens_per_modality_dict.update(original_masks_dict)
         return tokens_per_modality_dict
 
-    def is_any_data_to_be_decoded(self, modality_mask: Tensor) -> bool:
-        """Check if any data is to be decoded for a given modality."""
-        return (MaskValue.DECODER.value == modality_mask).any()
-
     def forward(
         self,
         x: TokensAndMasks,
@@ -1746,7 +1838,7 @@ class Predictor(FlexiHeliosBase):
         )
         for modality in modalities_to_process:
             x_modality = getattr(x, modality)
-            # Are these normalizations masked correctly?
+            # Although, we do not account for missing tokens both proj and normalize are on token dimension so there is no mixing with real tokens
             x_modality = self.input_norm(x_modality)
             x_modality = self.encoder_to_decoder_embed(x_modality)
             masked_modality_name = x.get_masked_modality_name(modality)
@@ -1781,11 +1873,6 @@ class Predictor(FlexiHeliosBase):
             output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
             output_dict[masked_modality_name] = modality_mask
         return TokensAndMasks(**output_dict)
-
-    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
-        """Apply FSDP to the model."""
-        super().apply_fsdp(**fsdp_kwargs)
-        fully_shard(self, **fsdp_kwargs)
 
 
 @dataclass
@@ -1867,7 +1954,7 @@ class PredictorConfig(Config):
         """Get the supported modalities."""
         return get_modality_specs_from_names(self.supported_modality_names)
 
-    def build(self) -> "Predictor":
+    def build(self) -> "PredictorBase":
         """Build the predictor."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
