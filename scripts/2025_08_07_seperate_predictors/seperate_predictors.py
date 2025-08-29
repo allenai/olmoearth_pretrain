@@ -122,6 +122,24 @@ def build_train_module_config(
             Modality.LANDSAT.name,
         ],
     }
+    loss_config_a = LossConfig(
+        loss_config={
+            "type": "modality_patch_discrimination_new",
+            "tau": 0.1,
+        }
+    )
+    loss_config_b = LossConfig(
+        loss_config={
+            "type": "modality_patch_discrimination_new",
+            "tau": 0.1,
+        }
+    )
+    contrastive_config = LossConfig(
+        loss_config={
+            "type": "InfoNCE",
+            "weight": 0.1,
+        }
+    )
 
     scheduler = ConstantWithWarmup(warmup_steps=8000)
     return GalileoTrainModuleConfig(
@@ -130,8 +148,9 @@ def build_train_module_config(
         token_exit_cfg_a={modality: 0 for modality in common.training_modalities},
         token_exit_cfg_b={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        loss_config_a=LossConfig(loss_config={"type": "patch_discrimination_new"}),
-        loss_config_b=LossConfig(loss_config={"type": "patch_discrimination_new"}),
+        loss_config_a=loss_config_a,
+        loss_config_b=loss_config_b,
+        contrastive_config=contrastive_config,
         masking_config_a=MaskingConfig(strategy_config=masking_strategy_no_maps),
         masking_config_b=MaskingConfig(strategy_config=masking_strategy_maps),
         scheduler=scheduler,
@@ -259,7 +278,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             embedding_batch_size=128,
             num_workers=4,
             pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
+            norm_stats_from_pretrained=True,
             eval_interval=Duration.steps(10000),
         ),
         "cropharvest_Togo_12_sentinel2": DownstreamTaskConfig(
