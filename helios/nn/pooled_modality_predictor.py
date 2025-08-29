@@ -52,30 +52,38 @@ class AttnPool(nn.Module):
     def __init__(
         self,
         in_dim: int,
+        attn_dim: int | None = None,
         hidden_dim: int | None = None,
         mlp_ratio: float | None = None,
         num_queries: int = 1,
+        num_heads: int | None = None,
         gate_temperature: float = 1.0,
+        use_mlp: bool = False,
     ) -> None:
         """Initialize the Attn pooling layer."""
         super().__init__()
         assert in_dim % 64 == 0, "in_dim must be divisible by 64"
-        self.num_heads: int = in_dim // 64
+        self.num_heads: int = num_heads or attn_dim // 64
         self.num_queries: int = num_queries
         self.gate_temperature: float = gate_temperature
+        self.attn_dim = attn_dim
+        self.use_mlp = use_mlp
 
         # k learned queries (k, D)
-        self.query_tokens: nn.Parameter = nn.Parameter(torch.empty(num_queries, in_dim))
+        if attn_dim is None:
+            attn_dim = in_dim
+        self.query_tokens: nn.Parameter = nn.Parameter(torch.empty(num_queries, attn_dim))
 
         # shared KV projection
-        self.kv: nn.Linear = nn.Linear(in_dim, in_dim * 2)
+        self.kv: nn.Linear = nn.Linear(in_dim, attn_dim * 2)
 
         # output MLP (+ optional expansion via mlp_ratio)
         if mlp_ratio is not None:
             hidden_dim = int(in_dim * mlp_ratio)
         hidden_dim = hidden_dim or in_dim
-        self.out_layer: Mlp = Mlp(in_dim, hidden_dim)
-        self.out_norm = nn.LayerNorm(in_dim)
+        self.out_layer: Mlp = Mlp(attn_dim, hidden_dim)
+        self.out_norm = nn.LayerNorm(attn_dim)
+        self.out_proj = nn.Linear(attn_dim, in_dim)
 
         # gating over k query outputs (maps D -> 1 per query)
         self.gate: nn.Linear | None = (
@@ -98,8 +106,9 @@ class AttnPool(nn.Module):
         self, feat_tokens: torch.Tensor, mask: torch.Tensor | None
     ) -> torch.Tensor:
         """Apply attention pooling to the tokens."""
-        Bc, N, D = feat_tokens.shape
+        Bc, N, _ = feat_tokens.shape
         H = self.num_heads
+        D = self.attn_dim
         Dh = D // H
 
         # queries: [B*, k, D] -> [B*, H, k, Dh]
@@ -115,6 +124,9 @@ class AttnPool(nn.Module):
         kv = self.kv(feat_tokens).reshape(Bc, N, 2, H, Dh)
         kv = rearrange(kv, "b n two h d -> two b h n d")
         k, v = torch.unbind(kv, dim=0)  # [B*, H, N, Dh] each
+        logger.info(f"shape of k: {k.shape}")
+        logger.info(f"shape of v: {v.shape}")
+        logger.info(f"shape of q: {q.shape}")
 
         # mask -> [B*, H, k, N] (broadcastable is fine, but expand for clarity)
         attn_mask = None
@@ -152,8 +164,9 @@ class AttnPool(nn.Module):
             z = o.squeeze(1)
 
         # MLP + LN head
-        z = self.out_norm(self.out_layer(z))
-        return z
+        if self.use_mlp:
+            z = self.out_norm(self.out_layer(z))
+        return self.out_proj(z)
 
 
 class EncodeEarlyAttnPool(Encoder):
@@ -162,19 +175,24 @@ class EncodeEarlyAttnPool(Encoder):
     def __init__(
         self,
         dims_to_pool: str,
+        pooling_attn_dim: int | None = None,
         attn_pool_mlp_ratio: float | None = None,
         num_queries: int = 1,
+        use_mlp: bool = False,
         num_pre_modality_pooling_layers: int = 0,
+        num_attn_pool_heads: int | None = None,
         *args: Any,
         **kwargs: Any,
     ) -> None:
         """Initialize the EncodeEarlyAttnPool."""
         super().__init__(*args, **kwargs)
         self.attn_pool = AttnPool(
-            self.embedding_size,
-            self.embedding_size,
+            in_dim=self.embedding_size,
+            attn_dim=pooling_attn_dim,
             mlp_ratio=attn_pool_mlp_ratio,
             num_queries=num_queries,
+            use_mlp=use_mlp,
+            num_heads=num_attn_pool_heads,
         )
         self.num_pre_modality_pooling_layers = num_pre_modality_pooling_layers
 
@@ -259,10 +277,7 @@ class EncodeEarlyAttnPool(Encoder):
 
         spatial_masks = rearrange(spatial_masks, f"b h w t m -> {reduction_mask_args}")
         # print the unique values of the masks
-        logger.info(f"unique values of the masks: {torch.unique(spatial_masks)}")
         pooled_attn_mask = spatial_masks == MaskValue.ONLINE_ENCODER.value
-        # Do I potentially need to filter out tokens that have no online marked modalities? Maybe not because we will just disgard those
-        logger.info(f"shape of spatial tokens before pooling: {spatial_tokens.shape}")
         pooled_tokens = self.attn_pool(spatial_tokens, pooled_attn_mask)
         logger.info(f"shape of pooled tokens: {pooled_tokens.shape}")
         pooled_tokens = rearrange(
@@ -612,6 +627,9 @@ class EncoderEarlyAttnPoolConfig(EncoderConfig):
     num_queries: int = 1
     attn_pool_mlp_ratio: float | None = None
     num_pre_modality_pooling_layers: int = 0
+    use_mlp: bool = False
+    num_attn_pool_heads: int | None = None
+    pooling_attn_dim: int | None = None
 
     def build(self) -> "EncodeEarlyAttnPool":
         """Build the encoder."""

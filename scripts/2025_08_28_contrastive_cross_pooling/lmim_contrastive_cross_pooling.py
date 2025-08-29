@@ -90,11 +90,12 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         depth=model_size["encoder_depth"],
         mlp_ratio=model_size["mlp_ratio"],
         supported_modality_names=common.training_modalities,
-        attn_pool_mlp_ratio=4.0,
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,
         num_pre_modality_pooling_layers=2,
+        use_mlp=False,
+        pooling_attn_dim=1536,
     )
     decoder_config = PooledModalityPredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
