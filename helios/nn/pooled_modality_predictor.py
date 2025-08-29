@@ -594,10 +594,12 @@ class EncodeEarlyAttnPool(Encoder):
 
         output_dict: dict[str, Any] = {
             "tokens_and_masks": tokenized_output,
-            "project_aggregated": self.project_and_aggregate(tokenized_output),
         }
         if pooled_tokens_and_masks:
+            output_dict["project_aggregated"] = self.project_and_aggregate(pooled_tokens_and_masks)
             output_dict["pooled_tokens_and_masks"] = pooled_tokens_and_masks
+        else:
+            output_dict["project_aggregated"] = self.project_and_aggregate(tokenized_output)
 
         return output_dict
 

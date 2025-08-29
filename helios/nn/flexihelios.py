@@ -15,6 +15,7 @@ from torch.distributed.fsdp import fully_shard
 from helios.data.constants import BASE_GSD, Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.nn.attention import Block
+from einops import reduce
 from helios.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -303,9 +304,15 @@ class ProjectAndAggregate(nn.Module):
         This can be applied either before or after pooling the tokens.
         """
         if self.aggregate_then_project:
-            pooled_for_contrastive = x.pool_unmasked_tokens(
-                PoolingType.MEAN, spatial_pooling=False
-            )
+            # HACK: This is a hack to get the pooled tokens for contrastive learning
+            if isinstance(x, dict):
+                tokens = x["modality_pooled_tokens"]
+                # Take mean in every dim except first and last to get a B, D tensor use einops reduce
+                pooled_for_contrastive = reduce(tokens, "b ... d -> b d", "mean")
+            else:
+                pooled_for_contrastive = x.pool_unmasked_tokens(
+                    PoolingType.MEAN, spatial_pooling=False
+                )
             return self.projection(pooled_for_contrastive)
         else:
             decoder_emedded_dict = x._asdict()
