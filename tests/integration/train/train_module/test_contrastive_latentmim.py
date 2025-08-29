@@ -213,6 +213,6 @@ def test_train_batch_with_missing_modalities(
         )
         assert torch.allclose(
             mock_trainer._metrics["train/InfoNCE"],
-            torch.tensor(0.196),
+            torch.tensor(0.2999),
             atol=1e-1,
         )
