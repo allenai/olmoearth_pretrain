@@ -156,4 +156,13 @@ MODEL_SIZE_ARGS = {
         "decoder_num_heads": 12,
         "mlp_ratio": 4.0,
     },
+    "base_many_heads_shallower_decoder": {
+        "decoder_depth": 2,
+        "encoder_embedding_size": 768,
+        "decoder_embedding_size": 768,
+        "encoder_depth": 8,
+        "encoder_num_heads": 16,
+        "decoder_num_heads": 12,
+        "mlp_ratio": 4.0,
+    },
 }
