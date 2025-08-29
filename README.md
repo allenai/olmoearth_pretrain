@@ -101,7 +101,7 @@ OUT OF DATE!
 
 ## Running Eval Suite
 
-The `helios/internal/full_eval_sweep.py` script runs comprehensive evaluation sweeps across multiple downstream tasks for any Helios checkpoint. It automatically sweeps over learning rates, pooling types, and normalization strategies.
+[`helios/internal/full_eval_sweep.py`](helios/internal/full_eval_sweep.py) runs comprehensive evaluation sweeps across multiple downstream tasks for any Helios checkpoint. It automatically sweeps over learning rates, pooling types, and normalization strategies.
 
 ### 1. How to run eval for a given checkpoint
 
@@ -168,7 +168,11 @@ python3 helios/internal/full_eval_sweep.py \
 ```
 
 **Key Notes:**
-- The script automatically determines appropriate normalization strategies for each model type
+- The script automatically determines appropriate normalization strategies for each model type (see [`helios/evals/datasets/normalize.py`](helios/evals/datasets/normalize.py))
+  - Helios: Use pretrained normalizer or NORM_METHOD.NORM_NO_CLIP with dataset stats
+  - Galileo: Use galileo pretrained normalizer or  NORM_METHOD.NORM_NO_CLIP with dataset stats
+  - Panopticon: Uses NORM_METHOD.STANDARDIZE with the dataset statistics
+  - DinoV3: Uses NORM_METHOD.NORM_YES_CLIP_MIN_MAX_INT to get to 0-1 and then applies either the web or sat normalization values
 - Supports both full hyperparameter sweeps and default-only runs
 - Use `--dry_run` to preview commands without execution
 - For local testing, use `--cluster=local`
