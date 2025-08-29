@@ -1102,19 +1102,18 @@ class SpatialAttnProbe(nn.Module):
             spatial_masks = rearrange(spatial_masks, "b h w tm -> (b h w) tm")
             # print the unique values of the masks
             logger.info(f"unique values of the masks: {torch.unique(spatial_masks)}")
-            pooled_attn_mask = spatial_masks == MaskValue.ONLINE_ENCODER.value
             # Do I potentially need to filter out tokens that have no online marked modalities? Maybe not because we will just disgard those
             logger.info(
                 f"shape of spatial tokens before pooling: {spatial_tokens.shape}"
             )
-            spatial_tokens = self.attention(spatial_tokens, pooled_attn_mask)
+            spatial_tokens = self.attention(spatial_tokens, spatial_masks)
             spatial_tokens = rearrange(
                 spatial_tokens, "(b h w) d -> b (h w) d", b=B, h=H, w=W
             )
             spatial_masks = rearrange(
                 # max because if any is true, then we take
                 # the spatial patch as existing
-                torch.max(pooled_attn_mask, dim=-1).values,
+                torch.max(spatial_masks, dim=-1).values,
                 "(b h w) -> b h w",
                 b=B,
                 h=H,
