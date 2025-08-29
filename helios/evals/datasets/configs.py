@@ -153,7 +153,11 @@ DATASET_TO_CONFIG = {
         ],
         num_classes=2,
         is_multilabel=False,
-        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.SRTM.name,
+        ],
     ),
 }
 
