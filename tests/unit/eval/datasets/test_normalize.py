@@ -19,20 +19,16 @@ class TestImputeNormalizationStats:
         result = impute_normalization_stats(band_info, [])
         assert result == band_info
 
-    def test_no_missing_bands_returns_original(self) -> None:
-        """Test when all bands are present, no imputation needed."""
+    def test_impute_band_already_present(self) -> None:
+        """Test that imputing a band that is already present in the band info raises an error."""
         band_info = {
             "01 - Coastal aerosol": {"mean": 0.1, "std": 0.02},
             "02 - Blue": {"mean": 0.2, "std": 0.03},
         }
+        imputes = [("02 - Blue", "01 - Coastal aerosol")]
         all_bands = ["01 - Coastal aerosol", "02 - Blue"]
-        imputes = [("01 - Coastal aerosol", "02 - Blue")]
-
-        result = impute_normalization_stats(band_info, imputes, all_bands)
-
-        assert len(result) == 2
-        assert result["01 - Coastal aerosol"] == {"mean": 0.1, "std": 0.02}
-        assert result["02 - Blue"] == {"mean": 0.2, "std": 0.03}
+        with pytest.raises(ValueError):
+            impute_normalization_stats(band_info, imputes, all_bands)
 
     def test_impute_missing_band(self) -> None:
         """Test imputing a missing band from another band."""

@@ -24,6 +24,9 @@ def impute_normalization_stats(
         return band_info
 
     names_list = list(band_info.keys())
+    if any(impute[1] in names_list for impute in imputes):
+        raise ValueError("Cannot impute: band already present in band_info.")
+
     new_band_info: dict = {}
     for band_name in all_bands:
         new_band_info[band_name] = {}
