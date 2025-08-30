@@ -35,6 +35,7 @@ def create_latent_mim_model(
     encoder_decoder_modalities = [
         m for m in supported_modality_names if m not in supervisory_modalities
     ]
+    embedding_size = 16
     # Create encoder config
     encoder_config = EncoderConfig(
         supported_modality_names=encoder_decoder_modalities,
@@ -47,6 +48,7 @@ def create_latent_mim_model(
         max_sequence_length=12,
         probe_modalities=[Modality.WORLDCOVER.name, Modality.GSE.name],
         use_spatial_attn=spatial_attn,
+        shared_linear_layer_dims=[embedding_size],
     )
 
     # Create predictor config
@@ -151,7 +153,7 @@ class MockTrainer:
         self._metrics[name] = value
 
 
-@pytest.mark.parametrize("spatial_attn,expected_output", [(True, 2.0), (False, 1.9)])
+@pytest.mark.parametrize("spatial_attn,expected_output", [(True, 2.0), (False, 2.0)])
 def test_train_batch_without_missing_modalities(
     spatial_attn: bool,
     expected_output: float,
@@ -206,4 +208,3 @@ def test_train_batch_with_missing_modalities(
             torch.tensor(expected_output),
             atol=1e-1,
         )
-        assert False

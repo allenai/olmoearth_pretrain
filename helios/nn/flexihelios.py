@@ -1011,13 +1011,14 @@ class SpatialAttnProbe(nn.Module):
         use_spatial_attn: bool = False,
         probe_modalities: list[str] | None = None,
         probe_dims: list[int] = [],
+        shared_linear_layer_dims: list[int] = [],
         num_queries: int = 1,
         gate_temperature: int = 1,
         norm_layer: nn.Module = nn.LayerNorm,
     ) -> None:
         """Spatial Attn Probe."""
         super().__init__()
-        self.norm_layer = norm_layer
+        self.norm_layer = norm_layer(embedding_size)
         self.embedding_size = embedding_size
         self.max_patch_size = max_patch_size
         self.mask_token = nn.Parameter(torch.zeros(embedding_size))
@@ -1030,6 +1031,21 @@ class SpatialAttnProbe(nn.Module):
                 gate_temperature=gate_temperature,
                 num_heads=num_heads,
             )
+
+        self.shared_linear_layers: nn.Module | None = None
+        if len(shared_linear_layer_dims) > 0:
+            shared_linear_layer_dims.append(self.embedding_size)
+            shared_layers: list[nn.Module] = []
+            for i in range(len(shared_linear_layer_dims) - 1):
+                shared_layers.extend(
+                    [
+                        nn.Linear(
+                            shared_linear_layer_dims[i], shared_linear_layer_dims[i + 1]
+                        ),
+                        nn.GELU(),
+                    ]
+                )
+            self.shared_linear_layers = nn.Sequential(*shared_layers)
 
         if probe_modalities is not None:
             probes: dict[str, nn.Module] = {}
@@ -1125,6 +1141,8 @@ class SpatialAttnProbe(nn.Module):
         else:
             spatial_tokens, spatial_masks = x.spatial_pool_with_mask()
             spatial_tokens = rearrange(spatial_tokens, "b h w d -> b (h w) d")
+        if self.shared_linear_layers is not None:
+            spatial_tokens = self.shared_linear_layers(spatial_tokens)
         probe_outputs = self.apply_probes(spatial_tokens, h_w=x.h_at_10)
         spatial_tokens = rearrange(
             spatial_tokens, "b (h w) d -> b h w d", h=x.h_at_10, w=x.h_at_10
@@ -1399,6 +1417,7 @@ class Encoder(FlexiHeliosBase):
         frozen_patch_embeddings: bool = False,
         probe_modalities: list[str] | None = None,
         probe_dims: list[int] = [],
+        shared_linear_layer_dims: list[int] = [],
         qk_norm: bool = False,
         use_spatial_attn: bool = False,
     ):
@@ -1427,6 +1446,8 @@ class Encoder(FlexiHeliosBase):
                 per spatial patch.
             probe_dims: the hidden dimensions to use for the probe. If an empty list is passed,
                 only a linear layer is applied
+            shared_linear_layer_dims: hidden dimensions to use for the shared MLPs before the linear
+                probe. If an empy list is passed, no MLP is applied.
             qk_norm: Whether to apply normalization to Q and K in attention
             use_spatial_attn: whether to use spatial attn or just take spatial means
         """
@@ -1469,6 +1490,8 @@ class Encoder(FlexiHeliosBase):
             probe_modalities=probe_modalities,
             use_spatial_attn=use_spatial_attn,
             num_heads=num_heads,
+            probe_dims=probe_dims,
+            shared_linear_layer_dims=shared_linear_layer_dims,
         )
 
     def create_token_exit_ids(
@@ -2167,6 +2190,7 @@ class EncoderConfig(Config):
     frozen_patch_embeddings: bool = False
     probe_modalities: list[str] | None = None
     probe_dims: list[int] = field(default_factory=lambda: [])
+    shared_linear_layer_dims: list[int] = field(default_factory=lambda: [])
     qk_norm: bool = False
     use_spatial_attn: bool = False
 
