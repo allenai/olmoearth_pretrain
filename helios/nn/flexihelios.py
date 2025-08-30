@@ -1013,10 +1013,11 @@ class SpatialAttnProbe(nn.Module):
         probe_dims: list[int] = [],
         num_queries: int = 1,
         gate_temperature: int = 1,
+        norm_layer: nn.Module = nn.LayerNorm,
     ) -> None:
         """Spatial Attn Probe."""
         super().__init__()
-
+        self.norm_layer = norm_layer
         self.embedding_size = embedding_size
         self.max_patch_size = max_patch_size
         self.mask_token = nn.Parameter(torch.zeros(embedding_size))
@@ -1106,7 +1107,9 @@ class SpatialAttnProbe(nn.Module):
             logger.info(
                 f"shape of spatial tokens before pooling: {spatial_tokens.shape}"
             )
-            spatial_tokens = self.attention(spatial_tokens, spatial_masks)
+            spatial_tokens = self.attention(
+                self.norm_layer(spatial_tokens), spatial_masks
+            )
             spatial_tokens = rearrange(
                 spatial_tokens, "(b h w) d -> b (h w) d", b=B, h=H, w=W
             )
