@@ -1015,7 +1015,6 @@ class SpatialAttnProbe(nn.Module):
         num_queries: int = 1,
         gate_temperature: int = 1,
         norm_layer: nn.Module = nn.LayerNorm,
-        trainable_probes: bool = True,
     ) -> None:
         """Spatial Attn Probe."""
         super().__init__()
@@ -1077,8 +1076,6 @@ class SpatialAttnProbe(nn.Module):
             self.probes = nn.ModuleDict(probes)
         else:
             self.probes = {}
-        if not trainable_probes:
-            self.probes.requires_grad_ = False
 
     def apply_probes(self, x: torch.Tensor, h_w: int) -> dict[str, torch.Tensor]:
         """Apply linear probes for supervised learning."""
@@ -1425,7 +1422,6 @@ class Encoder(FlexiHeliosBase):
         gate_temperature: int = 1,
         qk_norm: bool = False,
         use_spatial_attn: bool = False,
-        trainable_probes: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1458,7 +1454,6 @@ class Encoder(FlexiHeliosBase):
             use_spatial_attn: whether to use spatial attn or just take spatial means
             num_queries: number of queries in spatial attention
             gate_temperature: gate temperature when combining queries in spatial attention
-            trainable_probes: whether or not the probes are trainable
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1503,7 +1498,6 @@ class Encoder(FlexiHeliosBase):
             shared_linear_layer_dims=shared_linear_layer_dims,
             num_queries=num_queries,
             gate_temperature=gate_temperature,
-            trainable_probes=trainable_probes,
         )
 
     def create_token_exit_ids(
@@ -2207,7 +2201,6 @@ class EncoderConfig(Config):
     use_spatial_attn: bool = False
     gate_temperature: float = 1.0
     num_queries: int = 1
-    trainable_probes: bool = True
 
     def validate(self) -> None:
         """Validate the configuration."""

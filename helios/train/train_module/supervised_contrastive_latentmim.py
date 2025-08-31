@@ -65,6 +65,7 @@ class SupervisedContrastiveLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
         }
     )
     compute_accuracies: bool = False
+    freeze_probes_after: int | None = 1000
 
     def build(
         self,
@@ -151,6 +152,7 @@ class SupervisedContrastiveLatentMIMTrainModule(HeliosTrainModule):
         compute_accuracies: bool = False,
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
+        freeze_probes_after: int | None = 1000,
     ):
         """Initialize the training module.
 
@@ -180,6 +182,7 @@ class SupervisedContrastiveLatentMIMTrainModule(HeliosTrainModule):
             compute_accuracies: Whether to compute accuracies too
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
+            freeze_probes_after: freeze the probes after this many steps
         """
         super().__init__(
             model=model,
@@ -222,6 +225,7 @@ class SupervisedContrastiveLatentMIMTrainModule(HeliosTrainModule):
         self.contrastive_loss = (
             contrastive_config.build() if contrastive_config is not None else None
         )
+        self.freeze_probes_after = freeze_probes_after
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -351,6 +355,10 @@ class SupervisedContrastiveLatentMIMTrainModule(HeliosTrainModule):
 
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
+        if self.freeze_probes_after is not None:
+            if self.trainer.global_step >= self.freeze_probes_after:
+                self.model.encoder.probe_with_attn.probes.requires_grad = False
+
         self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
