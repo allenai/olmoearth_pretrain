@@ -1418,6 +1418,8 @@ class Encoder(FlexiHeliosBase):
         probe_modalities: list[str] | None = None,
         probe_dims: list[int] = [],
         shared_linear_layer_dims: list[int] = [],
+        num_queries: int = 1,
+        gate_temperature: int = 1,
         qk_norm: bool = False,
         use_spatial_attn: bool = False,
     ):
@@ -1450,6 +1452,8 @@ class Encoder(FlexiHeliosBase):
                 probe. If an empy list is passed, no MLP is applied.
             qk_norm: Whether to apply normalization to Q and K in attention
             use_spatial_attn: whether to use spatial attn or just take spatial means
+            num_queries: number of queries in spatial attention
+            gate_temperature: gate temperature when combining queries in spatial attention
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1492,6 +1496,8 @@ class Encoder(FlexiHeliosBase):
             num_heads=num_heads,
             probe_dims=probe_dims,
             shared_linear_layer_dims=shared_linear_layer_dims,
+            num_queries=num_queries,
+            gate_temperature=gate_temperature,
         )
 
     def create_token_exit_ids(
@@ -2193,6 +2199,8 @@ class EncoderConfig(Config):
     shared_linear_layer_dims: list[int] = field(default_factory=lambda: [])
     qk_norm: bool = False
     use_spatial_attn: bool = False
+    gate_temperature: float = 1.0
+    num_queries: int = 1
 
     def validate(self) -> None:
         """Validate the configuration."""
