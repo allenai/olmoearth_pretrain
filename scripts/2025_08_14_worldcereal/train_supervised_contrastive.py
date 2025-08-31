@@ -114,15 +114,13 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
         probe_modalities=list(SUPERVISORY_MODALITIES.keys()),
-        shared_linear_layer_dims=[
-            # model_size["encoder_embedding_size"]
-        ],
+        shared_linear_layer_dims=[model_size["encoder_embedding_size"]],
         use_spatial_attn=True,
         probe_dims=[
             # model_size["encoder_embedding_size"],
             # model_size["encoder_embedding_size"],
         ],
-        num_queries=5,
+        trainable_probes=False,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
