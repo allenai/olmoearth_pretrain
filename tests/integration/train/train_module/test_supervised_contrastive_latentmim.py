@@ -49,7 +49,7 @@ def create_latent_mim_model(
         probe_modalities=[Modality.WORLDCOVER.name, Modality.GSE.name],
         use_spatial_attn=spatial_attn,
         shared_linear_layer_dims=[embedding_size],
-        num_queries=5,
+        trainable_probes=False,
     )
 
     # Create predictor config
