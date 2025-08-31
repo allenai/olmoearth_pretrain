@@ -120,6 +120,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
             # model_size["encoder_embedding_size"],
             # model_size["encoder_embedding_size"],
         ],
+        num_queries=5,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -174,7 +175,7 @@ def build_train_module_config(
             param_dtype=DType.bfloat16,
             reduce_dtype=DType.float32,
         ),
-        freeze_probes_after=1000,
+        # freeze_probes_after=1000,
     )
 
 
