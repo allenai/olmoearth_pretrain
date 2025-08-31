@@ -115,7 +115,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_sequence_length=12,
         probe_modalities=list(SUPERVISORY_MODALITIES.keys()),
         shared_linear_layer_dims=[model_size["encoder_embedding_size"]],
-        use_spatial_attn=False,
+        use_spatial_attn=True,
         probe_dims=[
             # model_size["encoder_embedding_size"],
             # model_size["encoder_embedding_size"],
