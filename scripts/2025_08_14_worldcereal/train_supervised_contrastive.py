@@ -67,6 +67,7 @@ SUPERVISORY_MODALITIES = {
     Modality.OPENSTREETMAP_RASTER.name: 0.1,
     Modality.WORLDCEREAL.name: 0.1,
     Modality.CDL.name: 0.1,
+    Modality.LATLON.name: 0.1,
     # Modality.WRI_CANOPY_HEIGHT_MAP.name: 0.1,
 }
 

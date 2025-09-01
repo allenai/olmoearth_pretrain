@@ -31,7 +31,11 @@ def create_latent_mim_model(
     supported_modality_names: list[str], spatial_attn: bool
 ) -> LatentMIM:
     """Create a real LatentMIM model for testing."""
-    supervisory_modalities = [Modality.WORLDCOVER.name, Modality.GSE.name]
+    supervisory_modalities = [
+        Modality.WORLDCOVER.name,
+        Modality.GSE.name,
+        Modality.LATLON.name,
+    ]
     encoder_decoder_modalities = [
         m for m in supported_modality_names if m not in supervisory_modalities
     ]
