@@ -177,7 +177,7 @@ def build_train_module_config(
             param_dtype=DType.bfloat16,
             reduce_dtype=DType.float32,
         ),
-        # freeze_probes_after=1000,
+        freeze_probes_after=1000,
     )
 
 
