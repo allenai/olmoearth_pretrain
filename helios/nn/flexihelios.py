@@ -1053,6 +1053,8 @@ class SpatialAttnProbe(nn.Module):
                     multiplier = NUM_CDL_CLASSES
                 else:
                     multiplier = 1
+                if modality.is_spatial:
+                    multiplier *= output_hw
                 for idx, band_set in enumerate(modality.band_sets):
                     probe_dims = [self.embedding_size] + probe_dims
                     layers: list[nn.Module] = []
@@ -1063,7 +1065,7 @@ class SpatialAttnProbe(nn.Module):
                     layers.append(
                         nn.Linear(
                             probe_dims[-1],
-                            output_hw * len(band_set.bands) * multiplier,
+                            len(band_set.bands) * multiplier,
                         )
                     )
                     probes[f"{modality_name}_{idx}"] = nn.Sequential(*layers)
@@ -1071,24 +1073,30 @@ class SpatialAttnProbe(nn.Module):
         else:
             self.probes = {}
 
-    def apply_probes(self, x: torch.Tensor, h_w: int) -> dict[str, torch.Tensor]:
+    def apply_probes(
+        self, x: torch.Tensor, x_pooled: torch.Tensor, h_w: int
+    ) -> dict[str, torch.Tensor]:
         """Apply linear probes for supervised learning."""
         if len(self.probes) == 0:
             return {}
         else:
             output_dict = {}
             for probe_name, probe in self.probes.items():
-                probe_output = probe(x)  # B, Ph, PW, T, H * W * len(bandsets)
-                num_classes = probe_output.shape[-1] // (self.max_patch_size**2)
-                probe_output = rearrange(
-                    probe_output,
-                    "b (h w) (c i j) -> b (h i) (w j) c",
-                    h=h_w,
-                    w=h_w,
-                    i=self.max_patch_size,
-                    j=self.max_patch_size,
-                    c=num_classes,
-                )
+                modality = Modality.get(probe_name.split("_")[0])
+                if modality.is_spatial:
+                    probe_output = probe(x)  # B, Ph, PW, T, H * W * len(bandsets)
+                    num_classes = probe_output.shape[-1] // (self.max_patch_size**2)
+                    probe_output = rearrange(
+                        probe_output,
+                        "b (h w) (c i j) -> b (h i) (w j) c",
+                        h=h_w,
+                        w=h_w,
+                        i=self.max_patch_size,
+                        j=self.max_patch_size,
+                        c=num_classes,
+                    )
+                else:
+                    probe_output = probe(x_pooled)
                 output_dict[probe_name] = probe_output
             return output_dict
 
@@ -1099,10 +1107,10 @@ class SpatialAttnProbe(nn.Module):
 
     def forward(
         self, x: TokensAndMasks, patch_size: int, input_res: int
-    ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None]:
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None, torch.Tensor | None]:
         """Forward."""
         if len(self.probes) == 0:
-            return {}, None
+            return {}, None, None
 
         if self.gates is not None:
             spatial_tokens, numerical_spatial_mask = x.concat_spatial_dims()
@@ -1137,19 +1145,35 @@ class SpatialAttnProbe(nn.Module):
                 h=H,
                 w=W,
             )
+            tokens_to_pool = spatial_tokens.masked_fill(
+                repeat(
+                    rearrange(spatial_masks, "b h w -> b (h w)"), "b t -> b t d", d=D
+                ),
+                0,
+            )
+            num_encoded_tokens = spatial_masks.sum(-1).sum(-1)
+            if (num_encoded_tokens == 0).any():
+                raise ValueError(
+                    f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
+                )
+            tokens_pooled = tokens_to_pool.sum(dim=1) / repeat(
+                num_encoded_tokens, "b -> b d", d=D
+            )
         else:
             spatial_tokens, spatial_masks = x.spatial_pool_with_mask()
             spatial_tokens = rearrange(spatial_tokens, "b h w d -> b (h w) d")
+            tokens_pooled = x.pool_unmasked_tokens()
         if self.shared_linear_layers is not None:
             spatial_tokens = self.shared_linear_layers(spatial_tokens)
-        probe_outputs = self.apply_probes(spatial_tokens, h_w=x.h_at_10)
+
+        probe_outputs = self.apply_probes(spatial_tokens, tokens_pooled, h_w=x.h_at_10)
         spatial_tokens = rearrange(
             spatial_tokens, "b (h w) d -> b h w d", h=x.h_at_10, w=x.h_at_10
         )
         probe_outputs["mask"] = repeat(
             spatial_masks, "b h w -> b (h p1) (w p2)", p1=patch_size, p2=patch_size
         )
-        return probe_outputs, spatial_tokens
+        return probe_outputs, spatial_tokens, tokens_pooled
 
 
 class FlexiHeliosBase(nn.Module):
@@ -1480,6 +1504,7 @@ class Encoder(FlexiHeliosBase):
             num_layers=num_projection_layers,
             aggregate_then_project=aggregate_then_project,
         )
+        self.projection_layer = nn.Linear(embedding_size, embedding_size)
         self.norm = nn.LayerNorm(self.embedding_size)
         self.apply(self._init_weights)
 
@@ -1769,12 +1794,16 @@ class Encoder(FlexiHeliosBase):
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        probe_output, spatial_queries = self.probe_with_attn(
+        probe_output, spatial_queries, meaned_tokens = self.probe_with_attn(
             output, patch_size, input_res
         )
+        if meaned_tokens is None:
+            meaned_tokens = self.project_and_aggregate(output)
+        else:
+            meaned_tokens = self.projection_layer(meaned_tokens)
         return {
             "tokens_and_masks": output,
-            "project_aggregated": self.project_and_aggregate(output),
+            "project_aggregated": meaned_tokens,
             "probe_output": probe_output,
             "spatial_queries": spatial_queries,
         }
