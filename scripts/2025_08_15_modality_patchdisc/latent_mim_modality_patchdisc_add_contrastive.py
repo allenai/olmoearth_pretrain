@@ -115,7 +115,7 @@ def build_train_module_config(
 ) -> ContrastiveLatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.002, weight_decay=0.02, fused=True),
+        optim_config=AdamWConfig(lr=0.001, weight_decay=0.02, fused=True),
         rank_microbatch_size=64,
         masking_config=MaskingConfig(
             strategy_config={
@@ -132,7 +132,7 @@ def build_train_module_config(
         ),
         loss_config=LossConfig(
             loss_config={
-                "type": "patch_discrimination_new",
+                "type": "modality_patch_discrimination_new",
                 "tau": 0.1,
             }
         ),
