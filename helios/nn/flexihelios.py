@@ -20,7 +20,7 @@ from helios.data.constants import (
     ModalitySpec,
 )
 from helios.dataset.utils import get_modality_specs_from_names
-from helios.nn.attention import AttnPool, Block
+from helios.nn.attention import Block
 from helios.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -1022,15 +1022,9 @@ class SpatialAttnProbe(nn.Module):
         self.embedding_size = embedding_size
         self.max_patch_size = max_patch_size
         self.mask_token = nn.Parameter(torch.zeros(embedding_size))
-        self.attention = None
+        self.gates = None
         if use_spatial_attn:
-            self.attention = AttnPool(
-                in_dim=embedding_size,
-                mlp_ratio=mlp_ratio,
-                num_queries=num_queries,
-                gate_temperature=gate_temperature,
-                num_heads=num_heads,
-            )
+            self.gates = nn.Linear(in_features=embedding_size, out_features=1)
 
         self.shared_linear_layers: nn.Module | None = None
         if len(shared_linear_layer_dims) > 0:
@@ -1110,7 +1104,7 @@ class SpatialAttnProbe(nn.Module):
         if len(self.probes) == 0:
             return {}, None
 
-        if self.attention is not None:
+        if self.gates is not None:
             spatial_tokens, numerical_spatial_mask = x.concat_spatial_dims()
             spatial_masks = numerical_spatial_mask == MaskValue.ONLINE_ENCODER.value
             # Here is where I pick which dimensions to collapse out of modality, time, and space
@@ -1123,9 +1117,14 @@ class SpatialAttnProbe(nn.Module):
             logger.info(
                 f"shape of spatial tokens before pooling: {spatial_tokens.shape}"
             )
-            spatial_tokens = self.attention(
-                self.norm_layer(spatial_tokens), spatial_masks
+            weights = torch.tanh(self.gates(spatial_tokens))
+            # this ensures the missing tokens are ignored in the softmax
+            weights = weights.masked_fill(
+                ~repeat(spatial_masks, "b tm -> b tm d", d=D),
+                torch.finfo(weights.dtype).min,
             )
+            weights = torch.softmax(weights, dim=-1)
+            spatial_tokens = (weights * spatial_tokens).sum(1)
             spatial_tokens = rearrange(
                 spatial_tokens, "(b h w) d -> b (h w) d", b=B, h=H, w=W
             )
