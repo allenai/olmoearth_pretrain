@@ -1117,7 +1117,7 @@ class SpatialAttnProbe(nn.Module):
             logger.info(
                 f"shape of spatial tokens before pooling: {spatial_tokens.shape}"
             )
-            weights = torch.tanh(self.gates(spatial_tokens))
+            weights = self.gates(spatial_tokens)
             # this ensures the missing tokens are ignored in the softmax
             weights = weights.masked_fill(
                 ~repeat(spatial_masks, "b tm -> b tm d", d=D),
