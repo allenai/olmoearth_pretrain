@@ -50,7 +50,7 @@ def create_latent_mim_model(
         depth=2,
         drop_path=0.1,
         max_sequence_length=12,
-        probe_modalities=[Modality.WORLDCOVER.name, Modality.GSE.name],
+        probe_modalities=supervisory_modalities,
         use_spatial_attn=spatial_attn,
         shared_linear_layer_dims=[embedding_size],
     )
@@ -116,6 +116,7 @@ def train_module_config(
         supervisory_modalities_weights={
             Modality.WORLDCOVER.name: 0.1,
             Modality.GSE.name: 1,
+            Modality.LATLON.name: 1,
         },
         freeze_probes_after=0,
     )

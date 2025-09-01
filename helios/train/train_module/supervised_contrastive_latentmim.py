@@ -269,22 +269,28 @@ class SupervisedContrastiveLatentMIMTrainModule(HeliosTrainModule):
                 probe_output = probe_outputs[
                     f"{modality}_{idx}"
                 ]  # B, H, W, T, Bandsets or 11 if its worldcover
-                modality_bandset = modality_tensor[:, :, :, 0, bands].to(
-                    device=probe_output.device
-                )
-                if probe_output.shape[-3] != modality_bandset.shape[-2]:
-                    # this is in case patch_size < max_patch_size
-                    probe_output = rearrange(
-                        F.interpolate(
-                            rearrange(probe_output, "b h w c -> b c h w"),
-                            size=(
-                                modality_bandset.shape[-3],
-                                modality_bandset.shape[-2],
+                if modality_spec.is_spatial:
+                    modality_bandset = modality_tensor[:, :, :, 0, bands].to(
+                        device=probe_output.device
+                    )
+                    if probe_output.shape[-3] != modality_bandset.shape[-2]:
+                        # this is in case patch_size < max_patch_size
+                        probe_output = rearrange(
+                            F.interpolate(
+                                rearrange(probe_output, "b h w c -> b c h w"),
+                                size=(
+                                    modality_bandset.shape[-3],
+                                    modality_bandset.shape[-2],
+                                ),
+                                mode="bilinear",
+                                align_corners=True,
                             ),
-                            mode="bilinear",
-                            align_corners=True,
-                        ),
-                        "b c h w -> b h w c",
+                            "b c h w -> b h w c",
+                        )
+                else:
+                    # we will assume no temporal dimension for now, latlons
+                    modality_bandset = modality_tensor[:, bands].to(
+                        device=probe_output.device
                     )
 
                 if modality in cls.CLASSIFICATION_MODALITIES:
@@ -300,10 +306,13 @@ class SupervisedContrastiveLatentMIMTrainModule(HeliosTrainModule):
                 # filter out missing values from the targets
                 # keep the final dimension, which will be 1 for categorical inputs
                 flat_modality_bandset = modality_bandset.flatten(end_dim=-2)
-                target_mask = torch.logical_and(
-                    spatial_mask.flatten(),
-                    (flat_modality_bandset[..., 0] != MISSING_VALUE),
-                )
+                if modality_spec.is_spatial:
+                    target_mask = torch.logical_and(
+                        spatial_mask.flatten(),
+                        (flat_modality_bandset[..., 0] != MISSING_VALUE),
+                    )
+                else:
+                    target_mask = flat_modality_bandset[..., 0] != MISSING_VALUE
 
                 filtered_modality_bandset = flat_modality_bandset[target_mask, :]
                 filtered_preds = probe_output.flatten(end_dim=-2)[target_mask, :]
