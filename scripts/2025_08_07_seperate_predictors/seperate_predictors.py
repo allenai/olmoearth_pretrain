@@ -151,7 +151,7 @@ def build_train_module_config(
         loss_config_a=loss_config_a,
         loss_config_b=loss_config_b,
         contrastive_config=contrastive_config,
-        masking_config_a=MaskingConfig(strategy_config=masking_strategy_maps),
+        masking_config_a=MaskingConfig(strategy_config=masking_strategy_no_maps),
         masking_config_b=MaskingConfig(strategy_config=masking_strategy_maps),
         scheduler=scheduler,
         ema_decay=(1.0, 1.0),
@@ -307,29 +307,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             epochs=50,
             eval_interval=Duration.steps(20000),
         ),
-        # "mados_attnpool": DownstreamTaskConfig(
-        #     dataset="mados",
-        #     embedding_batch_size=128,
-        #     probe_batch_size=128,
-        #     num_workers=8,
-        #     pooling_type=PoolingType.MEAN,
-        #     norm_stats_from_pretrained=False,
-        #     probe_lr=0.01,
-        #     epochs=50,
-        #     eval_interval=Duration.steps(10000),
-        #     probe_type=ProbeType.ATTNPOOL,
-        # ),
-        # "m_cashew_plant_attnpool": DownstreamTaskConfig(
-        #     dataset="m-cashew-plant",
-        #     embedding_batch_size=32,
-        #     probe_batch_size=8,
-        #     num_workers=2,
-        #     pooling_type=PoolingType.MEAN,
-        #     norm_stats_from_pretrained=True,
-        #     probe_lr=0.1,
-        #     eval_interval=Duration.steps(10000),
-        #     probe_type=ProbeType.ATTNPOOL,
-        # ),
     }
     trainer_config = (
         TrainerConfig(
