@@ -1116,7 +1116,7 @@ class SpatialAttnProbe(nn.Module):
             spatial_tokens, numerical_spatial_mask = x.concat_spatial_dims()
             spatial_masks = numerical_spatial_mask == MaskValue.ONLINE_ENCODER.value
             # Here is where I pick which dimensions to collapse out of modality, time, and space
-            B, H, W, T_M, D = spatial_tokens.shape
+            B, H, W, _, D = spatial_tokens.shape
             spatial_tokens = rearrange(spatial_tokens, "b h w tm d -> (b h w) tm d")
             spatial_masks = rearrange(spatial_masks, "b h w tm -> (b h w) tm")
             # print the unique values of the masks
@@ -1145,26 +1145,25 @@ class SpatialAttnProbe(nn.Module):
                 h=H,
                 w=W,
             )
-            tokens_to_pool = spatial_tokens.masked_fill(
-                repeat(
-                    rearrange(spatial_masks, "b h w -> b (h w)"), "b t -> b t d", d=D
-                ),
-                0,
-            )
-            num_encoded_tokens = spatial_masks.sum(-1).sum(-1)
-            if (num_encoded_tokens == 0).any():
-                raise ValueError(
-                    f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
-                )
-            tokens_pooled = tokens_to_pool.sum(dim=1) / repeat(
-                num_encoded_tokens, "b -> b d", d=D
-            )
         else:
             spatial_tokens, spatial_masks = x.spatial_pool_with_mask()
+            B, H, W, D = spatial_tokens.shape
             spatial_tokens = rearrange(spatial_tokens, "b h w d -> b (h w) d")
-            tokens_pooled = x.pool_unmasked_tokens()
         if self.shared_linear_layers is not None:
             spatial_tokens = self.shared_linear_layers(spatial_tokens)
+
+        tokens_to_pool = spatial_tokens.masked_fill(
+            repeat(rearrange(spatial_masks, "b h w -> b (h w)"), "b t -> b t d", d=D),
+            0,
+        )
+        num_encoded_tokens = spatial_masks.sum(-1).sum(-1)
+        if (num_encoded_tokens == 0).any():
+            raise ValueError(
+                f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
+            )
+        tokens_pooled = tokens_to_pool.sum(dim=1) / repeat(
+            num_encoded_tokens, "b -> b d", d=D
+        )
 
         probe_outputs = self.apply_probes(spatial_tokens, tokens_pooled, h_w=x.h_at_10)
         spatial_tokens = rearrange(
