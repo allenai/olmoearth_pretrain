@@ -58,7 +58,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     # p = "/weka/dfive-default/ryanp/scratch/distributed_ckpts/classify_lora_v3/config.json"
     # ckpt_path = os.environ["CKPT"]
     ckpt_path = (
-        "/weka/dfive-default/ryanp/scratch/distributed_ckpts/all_lora"
+        "/weka/dfive-default/ryanp/scratch/distributed_ckpts/all_joint"
     )
     p = os.path.join(ckpt_path, "config.json")
     with open(p) as cfg_f:

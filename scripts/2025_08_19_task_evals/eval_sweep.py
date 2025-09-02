@@ -24,8 +24,8 @@ checkpoints = {
     # "detect": "/weka/dfive-default/ryanp/scratch/detect_all_v2_helios_encoder"
     # "classify_lora_v3": "/weka/dfive-default/ryanp/scratch/distributed_ckpts/classify_lora_v3"
     #"all_lora_large_cyclic": "/weka/dfive-default/ryanp/scratch/distributed_ckpts/all_lora_large_cyclic"
-    #"all_joint": "/weka/dfive-default/ryanp/scratch/distributed_ckpts/all_joint",
-    "all_lora": "/weka/dfive-default/ryanp/scratch/distributed_ckpts/all_lora",
+    "all_joint": "/weka/dfive-default/ryanp/scratch/distributed_ckpts/all_joint",
+    #"all_lora": "/weka/dfive-default/ryanp/scratch/distributed_ckpts/all_lora",
     # os.environ["CKPT"].split(os.path.sep)[-1]: os.environ["CKPT"]
 }
 
