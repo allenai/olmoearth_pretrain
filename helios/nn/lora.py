@@ -1,5 +1,7 @@
 """Task-conditioned LoRA layer."""
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -52,6 +54,7 @@ class TaskLoRALinear(nn.Module):
         gen_hidden: int = 64,
         gen_layers: int = 2,
         gen_activation: str | None = "gelu",
+        no_task_conditioning: bool = False,
     ) -> None:
         """Initialize the TaskLoRALinear module.
 
@@ -65,6 +68,8 @@ class TaskLoRALinear(nn.Module):
             gen_hidden: The hidden width for the generator MLPs.
             gen_layers: The number of layers in the generator MLPs.
             gen_activation: The activation function for the generator MLPs.
+            no_task_conditioning: Whether to disable task conditioning. If so,
+                this is just regular LoRA.
         """
         super().__init__()
         if rank <= 0:
@@ -77,6 +82,7 @@ class TaskLoRALinear(nn.Module):
         self.alpha = alpha
         self.dropout = dropout
         self.scaling = alpha / rank
+        self.no_task_conditioning = no_task_conditioning
 
         # Resolve activation (fallback to Identity)
         acts = {"gelu": nn.GELU, "relu": nn.ReLU, "silu": nn.SiLU}
@@ -86,9 +92,16 @@ class TaskLoRALinear(nn.Module):
             else acts.get(gen_activation.lower(), nn.Identity)
         )
 
-        # Generators that output vec(A) and vec(B)
-        self.gen_a = self._make_mlp(out_features * rank, gen_hidden, gen_layers)
-        self.gen_b = self._make_mlp(rank * in_features, gen_hidden, gen_layers)
+        if self.no_task_conditioning:
+            # Initialize A, B directly (not conditioned on task)
+            self.a = nn.Parameter(torch.empty(out_features, rank))
+            nn.init.kaiming_uniform_(self.a, a=math.sqrt(5))
+            self.b = nn.Parameter(torch.empty(rank, in_features))
+            nn.init.zeros_(self.b)
+        else:
+            # Generators that output vec(A) and vec(B)
+            self.gen_a = self._make_mlp(out_features * rank, gen_hidden, gen_layers)
+            self.gen_b = self._make_mlp(rank * in_features, gen_hidden, gen_layers)
 
         # Configurable option to turn off/on LoRA path, useful for callbacks
         self.active = True
@@ -140,7 +153,7 @@ class TaskLoRALinear(nn.Module):
             ``base_out`` if ``task_emb is None``, else
             ``base_out + scaling * (x_drop @ (Delta W)^T)``.
         """
-        if task_emb is None or not self.active:
+        if (task_emb is None and not self.no_task_conditioning) or not self.active:
             return base_out
 
         if x.shape[-1] != self.in_features:
@@ -156,14 +169,18 @@ class TaskLoRALinear(nn.Module):
                 f"{self.out_features}; got x {tuple(x.shape)}, base_out {tuple(base_out.shape)}"
             )
 
-        if task_emb.ndim != 1:
+        if task_emb is not None and task_emb.ndim != 1:
             task_emb = task_emb[0]  # (task_dim,)
 
         x_flat = x.reshape(-1, self.in_features)
         x_flat = F.dropout(x_flat, p=self.dropout, training=self.training)
 
-        a = self.gen_a(task_emb).view(self.out_features, self.rank)
-        b = self.gen_b(task_emb).view(self.rank, self.in_features)
+        if self.no_task_conditioning:
+            a = self.a
+            b = self.b
+        else:
+            a = self.gen_a(task_emb).view(self.out_features, self.rank)
+            b = self.gen_b(task_emb).view(self.rank, self.in_features)
 
         xb = torch.einsum("bi,ri->br", x_flat, b)
         y_delta = torch.einsum("br,or->bo", xb, a)
