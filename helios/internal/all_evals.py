@@ -4,10 +4,10 @@ import importlib.util
 import os
 import sys
 from logging import getLogger
+from typing import Any
 
 from olmo_core.train.callbacks import (
     BeakerCallback,
-    CheckpointerCallback,
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
@@ -26,7 +26,6 @@ from helios.nn.flexihelios import (
 )
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
-    HeliosSpeedMonitorCallback,
     HeliosWandBCallback,
 )
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
@@ -34,31 +33,34 @@ from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 logger = getLogger(__name__)
 
 
-def load_user_module(path):
+def load_user_module(path: str) -> Any:
     """Load the user module from the given path."""
     logger.info(f"Loading user module from {path}")
     spec = importlib.util.spec_from_file_location("user_module", path)
+    assert spec is not None
     user_mod = importlib.util.module_from_spec(spec)
     sys.modules["user_module"] = user_mod
-    spec.loader.exec_module(user_mod)
+    loader = spec.loader
+    assert loader is not None
+    loader.exec_module(user_mod)
     return user_mod
 
 
 EVAL_TASKS = {
+    "m_eurosat": DownstreamTaskConfig(
+        dataset="m-eurosat",
+        embedding_batch_size=128,
+        num_workers=0,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        eval_interval=Duration.epochs(5),
+    ),
     "m_forestnet": DownstreamTaskConfig(
         dataset="m-forestnet",
         embedding_batch_size=128,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
-        eval_interval=Duration.epochs(5),
-    ),
-    "m_eurosat": DownstreamTaskConfig(
-        dataset="m-eurosat",
-        embedding_batch_size=128,
-        num_workers=0,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,  # True, #False,
         eval_interval=Duration.epochs(5),
     ),
     "m_bigearthnet": DownstreamTaskConfig(
@@ -92,7 +94,7 @@ EVAL_TASKS = {
         num_workers=8,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
-        probe_lr=0.1,
+        probe_lr=0.01,
         eval_interval=Duration.epochs(10),
     ),
     "pastis_sentinel2": DownstreamTaskConfig(
@@ -130,6 +132,54 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
         input_modalities=[Modality.LANDSAT.name],
+        epochs=50,
+    ),
+    "sickle_sentinel1": DownstreamTaskConfig(
+        dataset="sickle",
+        embedding_batch_size=32,
+        probe_batch_size=16,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL1.name],
+        epochs=50,
+    ),
+    "sickle_sentinel1_landsat": DownstreamTaskConfig(
+        dataset="sickle",
+        embedding_batch_size=32,
+        probe_batch_size=16,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        probe_lr=0.002,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL1.name, Modality.LANDSAT.name],
+        epochs=50,
+    ),
+    "pastis_sentinel1": DownstreamTaskConfig(
+        dataset="pastis",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name],
+        epochs=50,
+    ),
+    "pastis_sentinel1_sentinel2": DownstreamTaskConfig(
+        dataset="pastis",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(20),
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         epochs=50,
     ),
     "m_sa_crop_type": DownstreamTaskConfig(
@@ -178,6 +228,16 @@ EVAL_TASKS = {
         probe_lr=0.1,
         epochs=50,
     ),
+    "sen1floods11": DownstreamTaskConfig(
+        dataset="sen1floods11",
+        embedding_batch_size=128,
+        probe_batch_size=128,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+    ),
     # example of "in season" cropland mapping - 6 indicates only the
     # first 6 timesteps are passed to the model
     "cropharvest_Peoples_Republic_of_China_6": DownstreamTaskConfig(
@@ -219,7 +279,7 @@ EVAL_TASKS = {
         probe_lr=0.1,
         epochs=50,
     ),
-    "cropharvest_Peoples_Republic_of_China_6_sentinel2_sentinel1_sentinel2": DownstreamTaskConfig(
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": DownstreamTaskConfig(
         dataset="cropharvest_People's Republic of China_6",
         embedding_batch_size=128,
         num_workers=2,
@@ -246,8 +306,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "helios_in_loop_evals"
-    PERMANENT_SAVE_INTERVAL = 5000
-    EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = HeliosWandBCallback(
         name=common.run_name,
@@ -268,7 +326,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             checkpointer=checkpointer_config,
         )
         .with_callback("wandb", wandb_callback)
-        .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
         .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback(
@@ -281,13 +338,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         )
         .with_callback("garbage_collector", garbage_collector_callback)
         .with_callback("beaker", BeakerCallback())
-        .with_callback(
-            "checkpointer",
-            CheckpointerCallback(
-                save_interval=PERMANENT_SAVE_INTERVAL,
-                ephemeral_save_interval=EPHERMERAL_SAVE_INTERVAL,
-            ),
-        )
     )
     return trainer_config
 
@@ -299,7 +349,11 @@ if __name__ == "__main__":
     user_mod = load_user_module(module_path)
 
     # 3) Inject all of the builder names into your namespace
-    build_common_components = user_mod.build_common_components
+    try:
+        build_common_components = user_mod.build_common_components
+    except AttributeError:
+        from helios.internal.common import build_common_components
+
     build_model_config = user_mod.build_model_config
     build_train_module_config = user_mod.build_train_module_config
     build_dataset_config = user_mod.build_dataset_config

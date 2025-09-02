@@ -23,6 +23,8 @@ MISSING_VALUE = -99999
 # Default maximum sequence length.
 MAX_SEQUENCE_LENGTH = 12
 
+# Resolution of the input data in meters
+BASE_GSD = 10
 # Default nodata value for Sentinel-1 data.
 SENTINEL1_NODATA = -32768
 
@@ -469,6 +471,14 @@ class Modality:
 
     WORLDPOP = ModalitySpec(
         name="worldpop",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["B1"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    WRI_CANOPY_HEIGHT_MAP = ModalitySpec(
+        name="wri_canopy_height_map",
         tile_resolution_factor=16,
         band_sets=[BandSet(["B1"], 16)],
         is_multitemporal=False,

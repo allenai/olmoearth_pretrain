@@ -1,0 +1,31 @@
+{
+  "layers": {
+    "wri_canopy_height_map": {
+      "band_sets": [
+        {
+          "bands": [
+            "B1"
+          ],
+          "dtype": "uint8",
+          "nodata_vals": [
+            255
+          ]
+        }
+      ],
+      "data_source": {
+        "name": "rslearn.data_sources.local_files.LocalFiles",
+        "query_config": {
+          "max_matches": 16
+        },
+        "src_dir": "source_data/meta_chm/"
+      },
+      "type": "raster"
+    }
+  },
+  "tile_store": {
+    "class_path": "rslearn.tile_stores.default.DefaultTileStore",
+    "init_args": {
+      "convert_rasters_to_cogs": false
+    }
+  }
+}

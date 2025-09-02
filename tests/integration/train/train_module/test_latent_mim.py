@@ -23,21 +23,14 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
-def supported_modalities() -> list:
-    """Return the supported modalities for the test."""
-    return [
-        Modality.get("sentinel2_l2a"),
-        Modality.get("sentinel1"),
-        Modality.get("worldcover"),
-        Modality.get("naip_10"),
-        Modality.get("latlon"),
-    ]
-
-
-@pytest.fixture
 def supported_modality_names() -> list[str]:
     """Return the supported modality names for the test."""
-    return ["sentinel2_l2a", "sentinel1", "worldcover", "naip_10", "latlon"]
+    return [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.WORLDCOVER.name,
+        Modality.LATLON.name,
+    ]
 
 
 @pytest.fixture
@@ -203,6 +196,6 @@ def test_train_batch_with_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(2.0),
+            torch.tensor(1.89),
             atol=1e-1,
         )

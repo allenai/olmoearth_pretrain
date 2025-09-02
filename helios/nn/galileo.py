@@ -15,7 +15,7 @@ from torch.distributed.fsdp import (
 )
 
 from helios.nn.flexihelios import TokensAndMasks
-from helios.nn.utils import DistributedMixins
+from helios.nn.utils import DistributedMixins, unpack_encoder_output
 from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
@@ -58,11 +58,15 @@ class Galileo(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
-        reconstructed = None
+        output_dict = self.encoder(x, patch_size=patch_size)
+        latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
+            output_dict
+        )
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
-        decoded = self.decoder_a(latent, timestamps=x.timestamps, patch_size=patch_size)
+        decoded = self.decoder_a(
+            latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
+        )
         return latent, decoded, latent_projected_and_pooled, reconstructed
 
     def forward_b(
@@ -77,11 +81,16 @@ class Galileo(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        latent, latent_projected_and_pooled = self.encoder(x, patch_size=patch_size)
+        output_dict = self.encoder(x, patch_size=patch_size)
+        latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
+            output_dict
+        )
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
-        decoded = self.decoder_b(latent, timestamps=x.timestamps, patch_size=patch_size)
+        decoded = self.decoder_b(
+            latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
+        )
         return latent, decoded, latent_projected_and_pooled, reconstructed
 
     def forward(

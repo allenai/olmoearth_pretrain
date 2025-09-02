@@ -116,7 +116,6 @@ def train_and_eval_probe(
     test_embeddings: torch.Tensor,
     test_labels: torch.Tensor,
     device: torch.device,
-    patch_size: int,
     batch_size: int,
     epochs: int = 50,
     eval_interval: int = 1,
@@ -127,9 +126,19 @@ def train_and_eval_probe(
     if train_embeddings.shape[-1] != test_embeddings.shape[-1]:
         raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
-
+    output_pixels_per_side_of_patch = None
     if config.task_type == TaskType.SEGMENTATION:
-        logits_per_patch = int(config.num_classes * patch_size * patch_size)
+        assert config.height_width is not None, (
+            "Height width is required for segmentation"
+        )
+        # if the image is resized the patch size will correspond to a different number of pixels in the labels
+        # This normalizes the number of logits per patch to the number of label pixels each patch corresponds to
+        num_patches = train_embeddings.shape[1] * train_embeddings.shape[2]
+        output_pixels_per_side_of_patch = int(
+            (config.height_width**2 / num_patches) ** 0.5
+        )
+        num_output_pixels = config.num_classes * output_pixels_per_side_of_patch**2
+        logits_per_patch = num_output_pixels
         if probe_type == ProbeType.ATTNPOOL:
             probe = AttnPoolLinearProbe(
                 in_dim=in_features, out_dim=logits_per_patch
@@ -174,7 +183,7 @@ def train_and_eval_probe(
             total_epochs=epochs,
             current_epoch=start_epoch,
             num_classes=config.num_classes,
-            patch_size=patch_size,
+            num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
             device=device,
         )
         eval_miou = evaluate_probe(
@@ -185,7 +194,7 @@ def train_and_eval_probe(
             ),
             probe=probe,
             num_classes=config.num_classes,
-            patch_size=patch_size,
+            num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
             device=device,
             task_type=config.task_type,
             probe_type=probe_type,
@@ -213,9 +222,9 @@ def train_probe(
     epochs: int,
     total_epochs: int,
     num_classes: int,
-    patch_size: int,
     device: torch.device,
     task_type: TaskType,
+    num_output_pixels_per_side_of_patch: int | None = None,
 ) -> nn.Module:
     """Train a linear probe on a segmentation task."""
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
@@ -236,16 +245,23 @@ def train_probe(
                 logits = outputs["logits"]
                 # logger.info(f"logits: {logits.shape}")
                 if task_type == TaskType.SEGMENTATION:
+                    assert num_output_pixels_per_side_of_patch is not None, (
+                        "num_output_pixels_per_side_of_patch is required for segmentation"
+                    )
+                    # This is effectively nearest neighbor interpolation
                     logits = rearrange(
                         logits,
                         "b h w (c i j) -> b c (h i) (w j)",
                         h=spatial_patches_per_dim,
                         w=spatial_patches_per_dim,
                         c=num_classes,
-                        i=patch_size,
-                        j=patch_size,
+                        i=num_output_pixels_per_side_of_patch,
+                        j=num_output_pixels_per_side_of_patch,
                     )
                     if logits.shape[-2] != batch_labels.shape[-2]:
+                        logger.debug(
+                            f"Logits shape {logits.shape} does not match batch_labels shape {batch_labels.shape} interpolating to labels shape"
+                        )
                         logits = F.interpolate(
                             logits,
                             size=(batch_labels.shape[-2], batch_labels.shape[-1]),
@@ -274,10 +290,10 @@ def evaluate_probe(
     data_loader: DataLoader,
     probe: nn.Module,
     num_classes: int,
-    patch_size: int,
     device: torch.device,
     task_type: TaskType,
     probe_type: ProbeType,
+    num_output_pixels_per_side_of_patch: int | None = None,
 ) -> float:
     """Evaluate a trained linear probe on a segmentation or classification task."""
     probe = probe.eval()
@@ -294,6 +310,9 @@ def evaluate_probe(
                 outputs = probe(batch_emb)  # (bsz, num_patches, logits_per_patch)
                 logits = outputs["logits"]
                 if task_type == TaskType.SEGMENTATION:
+                    assert num_output_pixels_per_side_of_patch is not None, (
+                        "num_output_pixels_per_side_of_patch is required for segmentation"
+                    )
                     spatial_patches_per_dim = batch_emb.shape[1]
                     logits = rearrange(
                         logits,
@@ -301,8 +320,8 @@ def evaluate_probe(
                         h=spatial_patches_per_dim,
                         w=spatial_patches_per_dim,
                         c=num_classes,
-                        i=patch_size,
-                        j=patch_size,
+                        i=num_output_pixels_per_side_of_patch,
+                        j=num_output_pixels_per_side_of_patch,
                     )
                     if logits.shape[-2] != batch_labels.shape[-2]:
                         logits = F.interpolate(

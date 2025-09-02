@@ -13,7 +13,7 @@ from beaker import (
     Priority,
 )
 
-BEAKER_BUDGET = "ai2/d5"
+BEAKER_BUDGET = "ai2/es-platform"
 BEAKER_WORKSPACE = "ai2/earth-systems"
 
 

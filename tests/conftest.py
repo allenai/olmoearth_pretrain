@@ -7,6 +7,7 @@ import types
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -74,7 +75,7 @@ def create_geotiff(
             dst.write(data[band - 1], band)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def prepare_samples_and_supported_modalities() -> tuple[
     Callable[[Path], list[SampleInformation]], list[ModalitySpec]
 ]:
@@ -215,15 +216,21 @@ def prepare_samples_and_supported_modalities() -> tuple[
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
+def session_tmp_path(tmp_path_factory: Any) -> Path:
+    """Session-scoped temporary directory."""
+    return tmp_path_factory.mktemp("session")
+
+
+@pytest.fixture(scope="session")
 def setup_h5py_dir(
-    tmp_path: Path, prepare_samples_and_supported_modalities: tuple
+    session_tmp_path: Path, prepare_samples_and_supported_modalities: tuple
 ) -> UPath:
     """Setup the h5py directory."""
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
-    prepared_samples = prepare_samples(tmp_path)
+    prepared_samples = prepare_samples(session_tmp_path)
     convert_to_h5py = ConvertToH5py(
-        tile_path=tmp_path,
+        tile_path=session_tmp_path,
         supported_modalities=[m for m in supported_modalities if m != Modality.LATLON],
         multiprocessed_h5_creation=False,
     )
@@ -233,6 +240,42 @@ def setup_h5py_dir(
     ]
     assert convert_to_h5py is not None
     return convert_to_h5py.h5py_dir
+
+
+def prepare_h5py_dir_n_samples(
+    tmp_path: Path, prepare_samples_and_supported_modalities: tuple, n: int
+) -> UPath:
+    """Setup the h5py directory with n samples."""
+    prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
+    prepared_samples = prepare_samples(tmp_path)
+    convert_to_h5py = ConvertToH5py(
+        tile_path=tmp_path,
+        supported_modalities=[m for m in supported_modalities if m != Modality.LATLON],
+        multiprocessed_h5_creation=False,
+    )
+    convert_to_h5py.prepare_h5_dataset(prepared_samples * n)
+    assert convert_to_h5py is not None
+    return convert_to_h5py.h5py_dir
+
+
+@pytest.fixture(scope="session")
+def setup_h5py_dir_100_samples(
+    session_tmp_path: Path, prepare_samples_and_supported_modalities: tuple
+) -> UPath:
+    """Setup the h5py directory with 100 samples."""
+    return prepare_h5py_dir_n_samples(
+        session_tmp_path, prepare_samples_and_supported_modalities, 100
+    )
+
+
+@pytest.fixture(scope="session")
+def setup_h5py_dir_20_samples(
+    session_tmp_path: Path, prepare_samples_and_supported_modalities: tuple
+) -> UPath:
+    """Setup the h5py directory with 20 samples."""
+    return prepare_h5py_dir_n_samples(
+        session_tmp_path, prepare_samples_and_supported_modalities, 20
+    )
 
 
 @pytest.fixture
