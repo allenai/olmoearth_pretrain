@@ -20,6 +20,8 @@ def unpack_encoder_output(
     latent = output_dict.pop("tokens_and_masks", None)
     latent_projected_and_pooled = output_dict.pop("project_aggregated", None)
     # Pass through all other outputs that might be specific to an encoder decoder pair
+    # remove token_norm_stats
+    output_dict.pop("token_norm_stats", None)
     decoder_kwargs = output_dict
     return latent, latent_projected_and_pooled, decoder_kwargs
 
