@@ -308,10 +308,11 @@ class ModalityPatchDiscriminationLossNew(Loss):
         modality_targets = targets.flatten_tokens_and_masks(return_lists=True)[0]
 
         # Accumulate to the total loss
-        total_loss = 0
+        total_loss = torch.tensor(0.0, device=predictions.device)
         for all_preds, all_masks, all_targets in zip(
             modality_preds, modality_masks, modality_targets
         ):
+            logger.info(f"Entering modality patch discrimination lossr")
             # Samples may have different number of tokens
             # TODO: Skip unqueeze and the for loop when mask_other_samples is True
             pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)

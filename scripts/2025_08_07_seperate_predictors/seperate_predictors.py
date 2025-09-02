@@ -151,7 +151,7 @@ def build_train_module_config(
         loss_config_a=loss_config_a,
         loss_config_b=loss_config_b,
         contrastive_config=contrastive_config,
-        masking_config_a=MaskingConfig(strategy_config=masking_strategy_no_maps),
+        masking_config_a=MaskingConfig(strategy_config=masking_strategy_maps),
         masking_config_b=MaskingConfig(strategy_config=masking_strategy_maps),
         scheduler=scheduler,
         ema_decay=(1.0, 1.0),
