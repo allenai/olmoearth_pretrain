@@ -71,10 +71,12 @@ def my_build_common_components(
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
         # Modality.NAIP_10.name,
-        # Modality.WORLDCOVER.name,
+        Modality.WORLDCOVER.name,
         # Modality.LATLON.name,
-        # Modality.SRTM.name,
-        # Modality.OPENSTREETMAP_RASTER.name,
+        Modality.SRTM.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+        Modality.WRI_CANOPY_HEIGHT_MAP.name,
+        Modality.CDL.name,
         # Modality.ERA5_10.name,
     ]
     return config
@@ -82,7 +84,7 @@ def my_build_common_components(
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["tiny_shallow_decoder"]
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
     encoder_config = EncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
@@ -115,7 +117,7 @@ def build_train_module_config(
 ) -> ContrastiveLatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0005, weight_decay=0.02, fused=True),
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         rank_microbatch_size=64,
         masking_config=MaskingConfig(
             strategy_config={
@@ -123,11 +125,13 @@ def build_train_module_config(
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
-                # "only_decode_modalities": [
-                #     "worldcover",
-                #     "srtm",
-                #     "openstreetmap_raster",
-                # ],
+                "only_decode_modalities": [
+                    "worldcover",
+                    "srtm",
+                    "openstreetmap_raster",
+                    "cdl",
+                    "wri_canopy_height_map",
+                ],
             }
         ),
         loss_config=LossConfig(
@@ -180,8 +184,12 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         #     training_modalities=common.training_modalities,
         # ),
         # osm_sampling
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1138828",
+        #     training_modalities=common.training_modalities,
+        # ),
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1138828",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover_worldpop_wri_canopy_height_map/1141152",
             training_modalities=common.training_modalities,
         ),
         # # osmbig
