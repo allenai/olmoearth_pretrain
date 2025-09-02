@@ -1147,6 +1147,7 @@ class Encoder(FlexiHeliosBase):
         drop_path: float,
         supported_modalities: list[ModalitySpec],
         max_sequence_length: int,
+        num_register_tokens: int = 0,
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         num_projection_layers: int = 1,
@@ -1167,6 +1168,7 @@ class Encoder(FlexiHeliosBase):
             drop_path: Drop path rate
             supported_modalities: list documenting modalities used in a given model instantiation
             max_sequence_length: Maximum sequence length
+            num_register_tokens: Number of register tokens to use
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             num_projection_layers: The number of layers to use in the projection. If >1, then
@@ -1191,6 +1193,10 @@ class Encoder(FlexiHeliosBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
         )
+        self.num_register_tokens = num_register_tokens
+        self.has_register_tokens = num_register_tokens > 0
+        if self.has_register_tokens:
+            self.register_tokens = nn.Parameter(torch.zeros(num_register_tokens, embedding_size))
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
@@ -1210,6 +1216,12 @@ class Encoder(FlexiHeliosBase):
         if frozen_patch_embeddings:
             for p in self.patch_embeddings.parameters():
                 p.requires_grad = False
+        if self.has_register_tokens:
+            self._init_register_tokens()
+
+    def _init_register_tokens(self) -> None:
+        """Initialize the register tokens."""
+        nn.init.xavier_uniform_(self.register_tokens)
 
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
@@ -1395,6 +1407,20 @@ class Encoder(FlexiHeliosBase):
         attn_mask = self.get_attn_or_none_mask(
             new_mask, always_pass_none_mask_to_transformer
         )
+
+        # Add register tokens before attention layers
+        if self.has_register_tokens:
+            batch_size = tokens.shape[0]
+            # Expand register tokens to match batch size: [num_register_tokens, embedding_size] -> [batch_size, num_register_tokens, embedding_size]
+            reg_tokens = self.register_tokens.unsqueeze(0).expand(batch_size, -1, -1)
+            # Concatenate register tokens at the beginning: [batch_size, seq_len, embedding_size] -> [batch_size, num_register_tokens + seq_len, embedding_size]
+            tokens = torch.cat([reg_tokens, tokens], dim=1)
+            # Update attention mask to include register tokens (they should participate in attention)
+            if attn_mask is not None:
+                # Create mask for register tokens (all True - they should participate in attention)
+                reg_mask = torch.ones(batch_size, self.num_register_tokens, dtype=attn_mask.dtype, device=attn_mask.device)
+                attn_mask = torch.cat([reg_mask, attn_mask], dim=1)
+
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -1419,6 +1445,41 @@ class Encoder(FlexiHeliosBase):
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
             )
+
+        # Remove register tokens after attention layers
+        if self.has_register_tokens:
+            # Separate register tokens and non-register tokens
+            register_tokens = tokens[:, :self.num_register_tokens, :]
+            tokens = tokens[:, self.num_register_tokens:, :]
+
+            # Compute norms for register tokens: [batch_size, num_register_tokens]
+            register_tokens_norms = torch.norm(register_tokens, dim=2)
+            reg_norms_flat = register_tokens_norms.flatten()
+            reg_stats = {
+                "register_mean": reg_norms_flat.mean().item(),
+                "register_min": reg_norms_flat.min().item(),
+                "register_max": reg_norms_flat.max().item(),
+            }
+
+            # Compute norms for non-register tokens: [batch_size, seq_len]
+            nonreg_tokens_norms = torch.norm(tokens, dim=2)
+            nonreg_norms_flat = nonreg_tokens_norms.flatten()
+            percentiles = [25.0, 75.0, 90.0, 95.0, 99.0]
+            nonreg_percentiles = torch.quantile(nonreg_norms_flat.float(), torch.tensor([p / 100.0 for p in percentiles], device=nonreg_norms_flat.device)).tolist()
+            nonreg_stats = {
+                "nonregister_mean": nonreg_norms_flat.mean().item(),
+                "nonregister_min": nonreg_norms_flat.min().item(),
+                "nonregister_max": nonreg_norms_flat.max().item(),
+                "nonregister_std": nonreg_norms_flat.std().item(),
+                "nonregister_25th": nonreg_percentiles[0],
+                "nonregister_75th": nonreg_percentiles[1],
+                "nonregister_90th": nonreg_percentiles[2],
+                "nonregister_95th": nonreg_percentiles[3],
+                "nonregister_99th": nonreg_percentiles[4],
+            }
+
+            token_norm_stats = {**reg_stats, **nonreg_stats}
+            # You can log or hook token_norm_stats as needed
 
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
@@ -1445,7 +1506,7 @@ class Encoder(FlexiHeliosBase):
         )
         # merge original masks and the processed tokens
         tokens_per_modality_dict.update(original_masks_dict)
-        return tokens_per_modality_dict
+        return tokens_per_modality_dict, token_norm_stats
 
     def forward(
         self,
@@ -1472,7 +1533,7 @@ class Encoder(FlexiHeliosBase):
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
-            patchified_tokens_and_masks = self.apply_attn(
+            patchified_tokens_and_masks, token_norm_stats = self.apply_attn(
                 x=patchified_tokens_and_masks,
                 timestamps=x.timestamps,
                 patch_size=patch_size,
@@ -1480,12 +1541,16 @@ class Encoder(FlexiHeliosBase):
                 token_exit_cfg=token_exit_cfg,
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
+        else:
+            token_norm_stats = {}
         output = TokensAndMasks(**patchified_tokens_and_masks)
         # TODO: we should probably switch this to a dict
         output_dict = {
             "tokens_and_masks": output,
             "project_aggregated": self.project_and_aggregate(output),
         }
+        if token_norm_stats:
+            output_dict["token_norm_stats"] = token_norm_stats
         return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
@@ -1887,6 +1952,7 @@ class EncoderConfig(Config):
     """Configuration for the Encoder."""
 
     supported_modality_names: list[str]
+
     embedding_size: int = 16
     # This is the base patch size for the patch embedder
     max_patch_size: int = 8
@@ -1896,6 +1962,7 @@ class EncoderConfig(Config):
     depth: int = 2
     drop_path: float = 0.1
     max_sequence_length: int = 12
+    num_register_tokens: int = 0,
     learnable_channel_embeddings: bool = True
     random_channel_embeddings: bool = False
     num_projection_layers: int = 1

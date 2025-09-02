@@ -58,6 +58,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         output_dict = self.encoder(x, patch_size=patch_size)
+        token_norm_stats = output_dict.pop("token_norm_stats", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
         )
@@ -67,7 +68,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         decoded = self.decoder(
             latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
         )
-        return latent, decoded, latent_projected_and_pooled, reconstructed
+        return latent, decoded, latent_projected_and_pooled, reconstructed, token_norm_stats
 
     def apply_fsdp(
         self,

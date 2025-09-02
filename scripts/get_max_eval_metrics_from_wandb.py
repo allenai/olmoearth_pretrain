@@ -7,6 +7,7 @@ import wandb
 WANDB_ENTITY = "eai-ai2"
 METRICS = [
     "m-eurosat",
+    "m-forestnet",
     "m-so2sat",
     "m-brick-kiln",
     "m-bigearthnet",

@@ -12,8 +12,17 @@ from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader
 
-from helios.evals.datasets import EvalDatasetPartition, get_eval_dataset
-from helios.evals.datasets.configs import TaskType, dataset_to_config, get_eval_mode
+from helios.data.constants import Modality
+from helios.evals.datasets import (
+    EvalDatasetPartition,
+    get_eval_dataset,
+)
+from helios.evals.datasets.configs import (
+    EvalDatasetConfig,
+    TaskType,
+    dataset_to_config,
+    get_eval_mode,
+)
 from helios.evals.datasets.normalize import NormMethod
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
@@ -33,7 +42,7 @@ class DownstreamTaskConfig:
     dataset: str
     embedding_batch_size: int = 128
     num_workers: int = 8
-    pooling_type: PoolingType = PoolingType.MEAN
+    pooling_type: str = PoolingType.MEAN
     norm_stats_from_pretrained: bool = True
     input_modalities: list[str] = field(default_factory=list)
     # Sweep across lrs for segmentation tasks
@@ -46,7 +55,7 @@ class DownstreamTaskConfig:
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
-    norm_method: str = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
+    norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
 
 
 class DownstreamEvaluator:
@@ -109,18 +118,21 @@ class DownstreamEvaluator:
             run_knn
             if self.eval_mode == "knn"
             else partial(
+                # TODO: THis is updated dynamically in the get_embeddings function
                 train_and_eval_probe,
                 batch_size=self.probe_batch_size,
                 epochs=self.epochs,
                 eval_interval=self.eval_interval.value,
                 probe_type=self.probe_type,
                 lr=self.probe_lr,
-                patch_size=self.patch_size,
             )
         )
 
     def _get_data_loader(self, split: str) -> DataLoader:
         """Get the data loader for the given split."""
+        logger.info(
+            f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}"
+        )
         return DataLoader(
             get_eval_dataset(
                 eval_dataset=self.dataset,
@@ -128,6 +140,7 @@ class DownstreamEvaluator:
                 partition=self.partition,
                 norm_stats_from_pretrained=self.norm_stats_from_pretrained,
                 input_modalities=self.input_modalities,
+                norm_method=self.norm_method,
             ),
             collate_fn=eval_collate_fn,
             batch_size=self.embedding_batch_size,
@@ -145,6 +158,17 @@ class DownstreamEvaluator:
             model = self.trainer.train_module.model.encoder
         else:
             model = self.trainer.train_module.model
+
+        if hasattr(model, "patch_size"):
+            logger.info(
+                f"Using patch size {model.patch_size} for {self.dataset} with set patch size {self.patch_size}"
+            )
+            # For non-helios models we override the task patch size with the model patch size
+            self.patch_size = model.patch_size
+        else:
+            logger.info(
+                f"No patch size found for {self.dataset}, using patch size {self.patch_size}"
+            )
 
         # Superset of the kwargs the wrapper may need
         wrapper_kwargs = {
@@ -183,17 +207,20 @@ class DownstreamEvaluator:
         logger.info(f"train labels shape for {self.dataset}: {train_labels.shape}")
         logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        val_result = self.eval_function(  # type: ignore
-            config=self.config,
-            train_embeddings=train_embeddings,
-            train_labels=train_labels,
-            test_embeddings=test_embeddings,
-            test_labels=test_labels,
-            device=self.device,
-        )
+        kwargs = {
+            "config": self.config,
+            "train_embeddings": train_embeddings,
+            "train_labels": train_labels,
+            "test_embeddings": test_embeddings,
+            "test_labels": test_labels,
+            "device": self.device,
+        }
+        val_result = self.eval_function(**kwargs)  # type: ignore
         logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
         # free memory
         del train_embeddings, train_labels, test_embeddings, test_labels
+        # garbage collector is usually run after the end of the step during normal training
+        # but we run it here to ensure fresh start for each eval
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -208,6 +235,24 @@ class DownstreamEvaluatorCallback(Callback):
     eval_on_startup: bool = False
     cancel_after_first_eval: bool = False
 
+    def _check_supported_modalities(self, evaluator: DownstreamEvaluator) -> bool:
+        """Check if the evaluator is supported by the model."""
+        task_supported_modalities = evaluator.config.supported_modalities
+        logger.info(f"Task supported modalities: {task_supported_modalities}")
+        task_instance_used_modalities = evaluator.input_modalities
+        logger.info(f"Task instance used modalities: {task_instance_used_modalities}")
+        does_model_support_all_task_instance_used_modalities = set(
+            task_instance_used_modalities
+        ).issubset(set(self.model_supported_modalities))
+        return does_model_support_all_task_instance_used_modalities
+
+    @property
+    def model_supported_modalities(self) -> list[str]:
+        """Get the supported modalities for the model."""
+        if hasattr(self.trainer.train_module.model, "supported_modalities"):
+            return self.trainer.train_module.model.supported_modalities
+        return Modality.names()
+
     def pre_train(self) -> None:
         """Run the evaluators on startup."""
         if self.eval_on_startup:
@@ -220,9 +265,15 @@ class DownstreamEvaluatorCallback(Callback):
                 for callback in self.trainer._iter_callbacks()
                 if isinstance(callback, HeliosWandBCallback)
             )
-            if wandb_callback.enabled:
-                for evaluator in self.evaluators:
-                    val_result, eval_time = self._perform_eval(evaluator)
+
+            for evaluator in self.evaluators:
+                if not self._check_supported_modalities(evaluator):
+                    logger.info(
+                        f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model"
+                    )
+                    continue
+                val_result, eval_time = self._perform_eval(evaluator)
+                if wandb_callback.enabled:
                     wandb_callback.wandb.log(
                         {"eval/" + evaluator.evaluation_name: val_result}
                     )
@@ -272,6 +323,32 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     # This combined with ``eval_on_startup=True`` is useful if you just want to run in-loop evals
     # without training any longer.
     cancel_after_first_eval: bool = False
+    tasks_to_run: list[str] | None = None
+
+    def verify_input_modalities(
+        self, task: DownstreamTaskConfig, config: EvalDatasetConfig
+    ) -> None:
+        """Verify the input modality configuration for a task."""
+        # Check that input_modalities is only set for multimodal tasks
+        if (
+            not (
+                (task.dataset in ["pastis", "sickle"])
+                or task.dataset.startswith("cropharvest")
+            )
+            and len(task.input_modalities) > 0
+        ):
+            raise ValueError(
+                f"input_modalities must be set for multimodal tasks, got {task.dataset}"
+            )
+        # Make sure input_modalities contains only unique modalities
+        if len(task.input_modalities) != len(set(task.input_modalities)):
+            raise ValueError(
+                f"input_modalities must contain unique modalities, got {task.input_modalities}"
+            )
+        if not set(task.input_modalities).issubset(set(config.supported_modalities)):
+            raise ValueError(
+                f"input_modalities must be a subset of supported_modalities, got {task.input_modalities} and {config.supported_modalities}"
+            )
 
     def build(self, trainer: Trainer) -> Callback | None:
         """Build the downstream evaluator callback."""
@@ -281,27 +358,20 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
         evaluators: list[DownstreamEvaluator] = []
         # Check that probe_lr is set for segmentation tasks
         for evaluation_name, task in self.tasks.items():
+            if (
+                self.tasks_to_run is not None
+                and evaluation_name not in self.tasks_to_run
+            ):
+                logger.info(
+                    f"Skipping {evaluation_name} because it is not in the tasks_to_run list"
+                )
+                continue
             config = dataset_to_config(task.dataset)
             if config.task_type == TaskType.SEGMENTATION:
                 if task.probe_lr is None:
                     raise ValueError(f"probe_lr cannot be None for {task.dataset}")
 
-            # Check that input_modalities is only set for multimodal tasks
-            if (
-                not (
-                    (task.dataset in ["pastis", "sickle"])
-                    or task.dataset.startswith("cropharvest")
-                )
-                and len(task.input_modalities) > 0
-            ):
-                raise ValueError(
-                    f"input_modalities must be set for multimodal tasks, got {task.dataset}"
-                )
-            # Make sure input_modalities contains only unique modalities
-            if len(task.input_modalities) != len(set(task.input_modalities)):
-                raise ValueError(
-                    f"input_modalities must contain unique modalities, got {task.input_modalities}"
-                )
+            self.verify_input_modalities(task, config)
             # Sort to ensure consistent order
             task.input_modalities.sort()
 
