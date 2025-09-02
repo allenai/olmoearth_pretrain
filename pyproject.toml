@@ -11,7 +11,7 @@ authors = [
 ]
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.11"
 
 dynamic = ["dependencies", "optional-dependencies"]
 
@@ -31,6 +31,9 @@ dev = { file = ["requirements-dev.txt"] }
 eval = { file = ["requirements-eval.txt"] }
 beaker = { file = ["requirements-beaker.txt"] }
 all = { file = ["requirements.txt", "requirements-dev.txt", "requirements-eval.txt"] }
+
+[tool.setuptools.package-data]
+"helios.data.norm_configs" = ["*.json"]
 
 [tool.ruff]
 fix = true
