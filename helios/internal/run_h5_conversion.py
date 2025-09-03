@@ -5,7 +5,7 @@ This script is used to convert a dataset to h5py files.
 The modalities support can be changed in the script or by overriding the supported_modality_names argument with an escaped list
 
 Usage:
-    python run_h5_conversion.py --tile-path=TILE_PATH --supported-modality-names="\[sentinel2_l2a,sentinel1,worldcover\]"
+    python run_h5_conversion.py --tile-path=TILE_PATH --supported-modality-names="\[sentinel2_l2a,sentinel1,worldcover\]" --compression=zstd --compression_opts=3 --tile_size=128
 """
 
 import logging
@@ -28,11 +28,13 @@ def build_default_config() -> ConvertToH5pyConfig:
         supported_modality_names=[
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
-            Modality.WORLDCOVER.name,
-            Modality.SRTM.name,
-            Modality.NAIP.name,
             Modality.LANDSAT.name,
+            Modality.WORLDCOVER.name,
             Modality.OPENSTREETMAP_RASTER.name,
+            Modality.WORLDCEREAL.name,
+            Modality.SRTM.name,
+            Modality.ERA5_10.name,
+            Modality.NAIP_10.name,
         ],
         multiprocessed_h5_creation=True,
     )

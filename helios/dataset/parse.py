@@ -67,6 +67,8 @@ class ModalityTile:
     # The band sets along with the file containing them.
     band_sets: dict[BandSet, UPath]
 
+    modality: ModalitySpec
+
     def get_flat_bands(self) -> list[str]:
         """Get the names of the bands as a flat list.
 
@@ -116,6 +118,7 @@ def parse_modality_csv(
                     images=[],
                     center_time=datetime.fromisoformat(csv_row["tile_time"]),
                     band_sets={},
+                    modality=modality,
                 )
 
             # This image should appear at the index above. But the indexes should be in
@@ -177,7 +180,7 @@ def parse_helios_dataset(
 
         if modality.is_multitemporal:
             # We need to load the one-year and two-week data separately.
-            time_spans = [TimeSpan.YEAR, TimeSpan.TWO_WEEK]
+            time_spans = [TimeSpan.YEAR]  # [TimeSpan.YEAR, TimeSpan.TWO_WEEK]
         else:
             # Just need to load the static data.
             time_spans = [TimeSpan.STATIC]
@@ -192,7 +195,7 @@ def parse_helios_dataset(
                 helios_path
                 / f"{tile_resolution}_{modality.name}{time_span.get_suffix()}.csv"  # type: ignore
             )
-            logger.info(f"Parsing {modality.name} {time_span} {csv_fname}")
+            logger.debug(f"Parsing {modality.name} {time_span} {csv_fname}")
             tiles[modality][time_span] = parse_modality_csv(  # type: ignore
                 helios_path,
                 modality,

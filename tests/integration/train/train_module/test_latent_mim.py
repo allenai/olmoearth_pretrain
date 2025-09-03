@@ -23,20 +23,14 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
-def supported_modalities() -> list:
-    """Return the supported modalities for the test."""
-    return [
-        Modality.get("sentinel2_l2a"),
-        Modality.get("sentinel1"),
-        Modality.get("worldcover"),
-        Modality.get("latlon"),
-    ]
-
-
-@pytest.fixture
 def supported_modality_names() -> list[str]:
     """Return the supported modality names for the test."""
-    return ["sentinel2_l2a", "sentinel1", "worldcover", "latlon"]
+    return [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.WORLDCOVER.name,
+        Modality.LATLON.name,
+    ]
 
 
 @pytest.fixture
@@ -54,8 +48,6 @@ def latent_mim_model(
         depth=2,
         drop_path=0.1,
         max_sequence_length=12,
-        use_channel_embs=True,
-        random_channel_embs=False,
     )
 
     # Create predictor config
@@ -68,8 +60,6 @@ def latent_mim_model(
         num_heads=2,
         max_sequence_length=12,
         drop_path=0.0,
-        learnable_channel_embeddings=True,
-        random_channel_embeddings=False,
         output_embedding_size=None,
     )
 
@@ -179,7 +169,7 @@ def test_train_batch_without_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(2.2),
+            torch.tensor(2.0),
             atol=1e-1,
         )
 
@@ -206,6 +196,6 @@ def test_train_batch_with_missing_modalities(
         logger.info(mock_trainer._metrics)
         assert torch.allclose(
             mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(2.22),
+            torch.tensor(1.89),
             atol=1e-1,
         )

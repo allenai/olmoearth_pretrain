@@ -11,6 +11,7 @@ from olmo_core.distributed.parallel.data_parallel import (
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
+    BeakerCallback,
     ConfigSaverCallback,
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
@@ -42,8 +43,14 @@ from helios.train.masking import MaskingConfig
 from helios.train.train_module.mae import MAETrainModuleConfig
 
 logger = logging.getLogger(__name__)
-MAX_PATCH_SIZE = 16  # NOTE: actual patch_size <= max_patch_size
+MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 MIN_PATCH_SIZE = 4
+USE_4_X_128_DATASET = False
+
+# Training duration constants
+TOTAL_EPOCHS = 300
+if USE_4_X_128_DATASET:
+    TOTAL_EPOCHS = TOTAL_EPOCHS // 4
 
 MAE_MODALITIES = [
     Modality.SENTINEL2_L2A.name,
@@ -71,7 +78,6 @@ def build_model_config(common: CommonComponents) -> MAEConfig:
         mlp_ratio=MLP_RATIO,
         drop_path=0.1,
         max_sequence_length=12,
-        use_channel_embs=True,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=ENCODER_EMBEDDING_SIZE,
@@ -81,12 +87,11 @@ def build_model_config(common: CommonComponents) -> MAEConfig:
         num_heads=DECODER_NUM_HEADS,
         max_sequence_length=12,
         supported_modality_names=common.training_modalities,
-        learnable_channel_embeddings=True,
     )
     reconstructor_config = ReconstructorConfig(
         supported_modality_names=common.training_modalities,
-        embedding_size=ENCODER_EMBEDDING_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
+        decoder_config=decoder_config,
     )
     model_config = MAEConfig(
         encoder_config=encoder_config,
@@ -113,23 +118,21 @@ def build_train_module_config(
             "decode_ratio": DECODE_RATIO,
         }
     )
-    loss_config = LossConfig(
+    mae_loss_config = LossConfig(
         loss_config={
             "type": "mae",
         }
     )
     token_exit_cfg = {modality: 4 for modality in common.training_modalities}
-    WARMUP_EPOCHS = 2
     dp_config = DataParallelConfig(name=DataParallelType.ddp)
 
     # TODO: would need a scheduler config and registry to be able to change this with overrides
-    scheduler = CosWithWarmup()
+    scheduler = CosWithWarmup(warmup=8000)
     train_module_config = MAETrainModuleConfig(
         # TODO: change name to optim config
         optim_config=optim_config,
         masking_config=masking_config,
-        warmup_duration=Duration.epochs(WARMUP_EPOCHS),
-        loss_config=loss_config,
+        mae_loss_config=mae_loss_config,
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         token_exit_cfg=token_exit_cfg,
         autocast_precision=DType.bfloat16,
@@ -167,18 +170,22 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
 def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     """Build the dataset config for an experiment."""
-    h5py_dir = "/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861"
+    if USE_4_X_128_DATASET:
+        dataset_path = "/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892"
+    else:
+        dataset_path = "/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/"
     return HeliosDatasetConfig(
-        h5py_dir=h5py_dir,
+        h5py_dir=dataset_path,
         training_modalities=common.training_modalities,
-        use_samples_with_missing_supported_modalities=True,
-        dtype=DType.float32,
+        dtype="float32",
+        # cache_dir="/helios_cache/osm_sampling",
+        # samples_per_sec=4 / NUM_WORKERS,  # 2/ GBS
     )
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
-    MAX_DURATION = Duration.epochs(300)
+    MAX_DURATION = Duration.epochs(TOTAL_EPOCHS)
     METRICS_COLLECT_INTERVAL = 1
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
@@ -195,46 +202,123 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
-            batch_size=128,
+            embedding_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(5),
         ),
+        "breizhcrops": DownstreamTaskConfig(
+            dataset="breizhcrops",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(50),
+            patch_size=1,
+        ),
+        "pastis": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            probe_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+        ),
+        "pastis_sentinel1": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            probe_batch_size=16,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=[Modality.SENTINEL1.name],
+            epochs=50,
+        ),
+        "sickle_sentinel1": DownstreamTaskConfig(
+            dataset="sickle",
+            embedding_batch_size=32,
+            probe_batch_size=16,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.0004,
+            eval_interval=Duration.epochs(10),
+            input_modalities=[Modality.SENTINEL1.name],
+            epochs=50,
+        ),
+        "sickle_landsat": DownstreamTaskConfig(
+            dataset="sickle",
+            embedding_batch_size=32,
+            probe_batch_size=16,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.01,
+            eval_interval=Duration.epochs(10),
+            input_modalities=[Modality.LANDSAT.name],
+            epochs=50,
+        ),
+        "pastis_r": DownstreamTaskConfig(
+            dataset="pastis",
+            embedding_batch_size=32,
+            probe_batch_size=128,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(20),
+            input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+            epochs=50,
+        ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
-            batch_size=128,
+            embedding_batch_size=128,
+            probe_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=False,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
+            eval_interval=Duration.epochs(10),
         ),
         "sen1floods11": DownstreamTaskConfig(
             dataset="sen1floods11",
-            batch_size=128,
+            embedding_batch_size=128,
+            probe_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             probe_lr=0.1,
-            eval_interval=Duration.epochs(20),
+            eval_interval=Duration.epochs(10),
         ),
-        "pastis": DownstreamTaskConfig(
-            dataset="pastis",
-            batch_size=8,
-            num_workers=2,
+        "m-bigearthnet": DownstreamTaskConfig(
+            dataset="m-bigearthnet",
+            embedding_batch_size=64,
+            num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            probe_lr=0.1,
             eval_interval=Duration.epochs(20),
         ),
-        "pastis-r": DownstreamTaskConfig(
-            dataset="pastis-r",
-            batch_size=8,
-            num_workers=2,
+        "m-brick-kiln": DownstreamTaskConfig(
+            dataset="m-brick-kiln",
+            embedding_batch_size=128,
+            num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            probe_lr=0.1,
+            eval_interval=Duration.epochs(20),
+        ),
+        "m-so2sat": DownstreamTaskConfig(
+            dataset="m-so2sat",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(20),
         ),
     }
@@ -259,6 +343,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
+        .with_callback("beaker", BeakerCallback())
     )
     return trainer_config
 

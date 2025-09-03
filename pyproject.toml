@@ -11,7 +11,7 @@ authors = [
 ]
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 dynamic = ["dependencies", "optional-dependencies"]
 
@@ -24,7 +24,16 @@ include = ["helios*"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
-optional-dependencies = {extra = { file = ["extra_requirements.txt"] }}
+
+[tool.setuptools.dynamic.optional-dependencies]
+dataset_creation = { file = ["requirements_dataset_creation.txt"] }
+dev = { file = ["requirements-dev.txt"] }
+eval = { file = ["requirements-eval.txt"] }
+beaker = { file = ["requirements-beaker.txt"] }
+all = { file = ["requirements.txt", "requirements-dev.txt", "requirements-eval.txt"] }
+
+[tool.setuptools.package-data]
+"helios.data.norm_configs" = ["*.json"]
 
 [tool.ruff]
 fix = true
@@ -42,3 +51,6 @@ testpaths = [
 addopts = [
     "--import-mode=importlib",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"helios/evals/datasets/cropharvest_package/*" = ["D"]

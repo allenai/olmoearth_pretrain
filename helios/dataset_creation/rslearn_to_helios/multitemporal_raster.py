@@ -47,18 +47,32 @@ def get_adjusted_projection_and_bounds(
     Returns:
         updated bounds at the resolution of the BandSet.
     """
-    factor = band_set.resolution_factor // modality.tile_resolution_factor
-    adjusted_projection = Projection(
-        projection.crs,
-        projection.x_resolution * factor,
-        projection.y_resolution * factor,
-    )
-    adjusted_bounds = (
-        window_bounds[0] // factor,
-        window_bounds[1] // factor,
-        window_bounds[2] // factor,
-        window_bounds[3] // factor,
-    )
+    if band_set.resolution_factor >= modality.tile_resolution_factor:
+        factor = band_set.resolution_factor // modality.tile_resolution_factor
+        adjusted_projection = Projection(
+            projection.crs,
+            projection.x_resolution * factor,
+            projection.y_resolution * factor,
+        )
+        adjusted_bounds = (
+            window_bounds[0] // factor,
+            window_bounds[1] // factor,
+            window_bounds[2] // factor,
+            window_bounds[3] // factor,
+        )
+    else:
+        factor = modality.tile_resolution_factor // band_set.resolution_factor
+        adjusted_projection = Projection(
+            projection.crs,
+            projection.x_resolution / factor,
+            projection.y_resolution / factor,
+        )
+        adjusted_bounds = (
+            window_bounds[0] * factor,
+            window_bounds[1] * factor,
+            window_bounds[2] * factor,
+            window_bounds[3] * factor,
+        )
     return adjusted_projection, adjusted_bounds
 
 
@@ -293,9 +307,17 @@ def convert_monthly(
         if len(cur_images) < len(modality.band_sets):
             continue
 
+        # Sometimes the images are blank because the window actually does not intersect
+        # the raster. This is due to raster geometry information being too coarse in
+        # some data sources. Here we skip those rasters so they don't get included with
+        # this example in the Helios dataset.
+        all_images_blank = all(image.max() == 0 for image in cur_images.values())
+        if all_images_blank:
+            continue
+
+        time_ranges.append((start_time.isoformat(), end_time.isoformat()))
         for band_set, image in cur_images.items():
             images[band_set].append(image)
-        time_ranges.append((start_time.isoformat(), end_time.isoformat()))
 
     if len(images[modality.band_sets[0]]) > 0:
         for band_set, band_set_images in images.items():

@@ -1,8 +1,10 @@
 """Downstream evaluator callback."""
 
+import gc
 import logging
 import time
 from dataclasses import dataclass, field
+from functools import partial
 
 import torch
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
@@ -10,15 +12,50 @@ from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader
 
-from helios.evals.datasets import get_eval_dataset
-from helios.evals.datasets.configs import DATASET_TO_CONFIG, TaskType
+from helios.data.constants import Modality
+from helios.evals.datasets import (
+    EvalDatasetPartition,
+    get_eval_dataset,
+)
+from helios.evals.datasets.configs import (
+    EvalDatasetConfig,
+    TaskType,
+    dataset_to_config,
+    get_eval_mode,
+)
+from helios.evals.datasets.normalize import NormMethod
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
+from helios.evals.eval_wrapper import get_eval_wrapper
 from helios.evals.knn import run_knn
-from helios.evals.linear_probe import train_and_eval_probe
+from helios.evals.linear_probe import ProbeType, train_and_eval_probe
 from helios.nn.flexihelios import PoolingType
+from helios.train.callbacks.wandb import HeliosWandBCallback
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DownstreamTaskConfig:
+    """Config for a downstream task."""
+
+    dataset: str
+    embedding_batch_size: int = 128
+    num_workers: int = 8
+    pooling_type: str = PoolingType.MEAN
+    norm_stats_from_pretrained: bool = True
+    input_modalities: list[str] = field(default_factory=list)
+    # Sweep across lrs for segmentation tasks
+    probe_lr: float | None = None
+    patch_size: int = 4
+    probe_batch_size: int = 32
+    epochs: int = 50  # Number of training epochs for linear probing task
+    eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
+    eval_mode: str | None = None
+    probe_type: ProbeType = ProbeType.LINEAR
+    use_pooled_tokens: bool = False
+    partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
+    norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
 
 
 class DownstreamEvaluator:
@@ -26,41 +63,87 @@ class DownstreamEvaluator:
 
     def __init__(
         self,
-        dataset: str,
+        evaluation_name: str,
+        task: DownstreamTaskConfig,
         trainer: Trainer,
-        eval_interval: Duration,
-        batch_size: int = 128,
-        num_workers: int = 8,
-        patch_size: int = 4,
-        pooling_type: PoolingType = PoolingType.MEAN,
-        norm_stats_from_pretrained: bool = True,
         device: torch.device | None = None,
-        probe_lr: float | None = None,
     ) -> None:
-        """Initialize the downstream evaluator."""
-        self.dataset = dataset
-        self.config = DATASET_TO_CONFIG[dataset]
-        self.eval_interval = eval_interval
+        """Initialize the downstream evaluator.
+
+        Args:
+            evaluation_name: Name of the evaluation.
+            task: Task configuration.
+            trainer: Trainer object.
+            device: Device to evaluate on.
+        """
+        self.evaluation_name = evaluation_name
+        self.config = dataset_to_config(task.dataset)
         self.trainer = trainer
         self.device = device
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.pooling_type = pooling_type
-        self.norm_stats_from_pretrained = norm_stats_from_pretrained
-        self.probe_lr = probe_lr
-        self.patch_size = patch_size
+        # Add all task attributes to self
+        self.dataset = task.dataset
+        self.embedding_batch_size = task.embedding_batch_size
+        self.num_workers = task.num_workers
+        self.pooling_type = task.pooling_type
+        self.norm_stats_from_pretrained = task.norm_stats_from_pretrained
+        self.input_modalities = task.input_modalities
+        self.probe_lr = task.probe_lr
+        self.patch_size = task.patch_size
+        self.probe_batch_size = task.probe_batch_size
+        self.epochs = task.epochs
+        self.eval_interval = task.eval_interval
+        self.eval_mode = task.eval_mode
+        self.probe_type = task.probe_type
+        self.partition = task.partition
+        self.norm_method = task.norm_method
+        self.use_pooled_tokens = task.use_pooled_tokens
+        if self.eval_mode is None:
+            self.eval_mode = get_eval_mode(self.config.task_type)
+
+        assert self.eval_mode in [
+            "knn",
+            "linear_probe",
+        ], f"Unexpected eval mode {self.eval_mode}"
+        if self.eval_mode == "linear_probe":
+            if self.probe_lr is None:
+                raise ValueError("probe_lr cannot be none for segmentation tasks.")
+            if self.config.task_type == TaskType.SEGMENTATION:
+                if self.config.height_width is None:
+                    raise ValueError(
+                        "config.height_width cannot be none for segmentation tasks."
+                    )
+                if self.config.height_width % self.patch_size != 0:
+                    raise ValueError("Image height / width indivisable by patch size.")
+        self.eval_function = (
+            run_knn
+            if self.eval_mode == "knn"
+            else partial(
+                # TODO: THis is updated dynamically in the get_embeddings function
+                train_and_eval_probe,
+                batch_size=self.probe_batch_size,
+                epochs=self.epochs,
+                eval_interval=self.eval_interval.value,
+                probe_type=self.probe_type,
+                lr=self.probe_lr,
+            )
+        )
 
     def _get_data_loader(self, split: str) -> DataLoader:
         """Get the data loader for the given split."""
+        logger.info(
+            f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}"
+        )
         return DataLoader(
             get_eval_dataset(
                 eval_dataset=self.dataset,
                 split=split,
-                partition="default",
+                partition=self.partition,
                 norm_stats_from_pretrained=self.norm_stats_from_pretrained,
+                input_modalities=self.input_modalities,
+                norm_method=self.norm_method,
             ),
             collate_fn=eval_collate_fn,
-            batch_size=self.batch_size,
+            batch_size=self.embedding_batch_size,
             num_workers=self.num_workers,
         )
 
@@ -68,12 +151,37 @@ class DownstreamEvaluator:
         self, data_loader: DataLoader
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Get the embeddings for the given data loader."""
+        print(
+            f"Getting embeddings for {self.dataset} with norm method {self.norm_method}"
+        )
+        if hasattr(self.trainer.train_module.model, "encoder"):
+            model = self.trainer.train_module.model.encoder
+        else:
+            model = self.trainer.train_module.model
+
+        if hasattr(model, "patch_size"):
+            logger.info(
+                f"Using patch size {model.patch_size} for {self.dataset} with set patch size {self.patch_size}"
+            )
+            # For non-helios models we override the task patch size with the model patch size
+            self.patch_size = model.patch_size
+        else:
+            logger.info(
+                f"No patch size found for {self.dataset}, using patch size {self.patch_size}"
+            )
+
+        # Superset of the kwargs the wrapper may need
+        wrapper_kwargs = {
+            "task_type": self.config.task_type,
+            "patch_size": self.patch_size,
+            "pooling_type": self.pooling_type,
+            "concat_features": (self.probe_type == "attn_pool"),
+            "use_pooled_tokens": self.use_pooled_tokens,
+        }
+        model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
             data_loader=data_loader,
-            task_type=self.config.task_type,
-            model=self.trainer.train_module.model.encoder,
-            patch_size=self.patch_size,
-            pooling_type=self.pooling_type,
+            model=model,
         )
 
     def val(self) -> float:
@@ -81,8 +189,14 @@ class DownstreamEvaluator:
         train_loader = self._get_data_loader("train")
         val_loader = self._get_data_loader("valid")
 
+        start_time = time.time()
+        logger.info(f"Getting train embeddings for {self.dataset}...")
         train_embeddings, train_labels = self._get_embeddings(train_loader)
+        logger.info(f"Getting test embeddings for {self.dataset}...")
         test_embeddings, test_labels = self._get_embeddings(val_loader)
+        logger.info(
+            f"Time to get embeddings for {self.dataset}: {time.time() - start_time:.2f}s"
+        )
 
         logger.info(
             f"train embeddings shape for {self.dataset}: {train_embeddings.shape}"
@@ -93,38 +207,23 @@ class DownstreamEvaluator:
         logger.info(f"train labels shape for {self.dataset}: {train_labels.shape}")
         logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        if self.config.task_type == TaskType.CLASSIFICATION:
-            val_result = run_knn(
-                config=self.config,
-                train_embeddings=train_embeddings,
-                train_labels=train_labels,
-                test_embeddings=test_embeddings,
-                test_labels=test_labels,
-                device=self.device,
-            )
-        elif self.config.task_type == TaskType.SEGMENTATION:
-            if self.probe_lr is None:
-                raise ValueError("probe_lr cannot be none for segmentation tasks.")
-            if self.config.height_width is None:
-                raise ValueError(
-                    "config.height_width cannot be none for segmentation tasks."
-                )
-            if self.config.height_width % self.patch_size != 0:
-                raise ValueError("Image height / width indivisable by patch size.")
-            val_result = train_and_eval_probe(
-                config=self.config,
-                train_embeddings=train_embeddings,
-                train_labels=train_labels,
-                test_embeddings=test_embeddings,
-                test_labels=test_labels,
-                device=self.device,
-                batch_size=self.batch_size,
-                lr=self.probe_lr,
-                grid_size=int(self.config.height_width / self.patch_size),
-            )
-        else:
-            raise ValueError(f"Unrecognized task type: {self.config.task_type}")
-        logger.info(f"Downstream evaluator {self.dataset} score: {val_result}")
+        kwargs = {
+            "config": self.config,
+            "train_embeddings": train_embeddings,
+            "train_labels": train_labels,
+            "test_embeddings": test_embeddings,
+            "test_labels": test_labels,
+            "device": self.device,
+        }
+        val_result = self.eval_function(**kwargs)  # type: ignore
+        logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
+        # free memory
+        del train_embeddings, train_labels, test_embeddings, test_labels
+        # garbage collector is usually run after the end of the step during normal training
+        # but we run it here to ensure fresh start for each eval
+        torch.cuda.empty_cache()
+        gc.collect()
+
         return val_result
 
 
@@ -133,41 +232,83 @@ class DownstreamEvaluatorCallback(Callback):
     """Runs in-loop evaluations periodically during training."""
 
     evaluators: list[DownstreamEvaluator] = field(default_factory=list)
+    eval_on_startup: bool = False
+    cancel_after_first_eval: bool = False
+
+    def _check_supported_modalities(self, evaluator: DownstreamEvaluator) -> bool:
+        """Check if the evaluator is supported by the model."""
+        task_supported_modalities = evaluator.config.supported_modalities
+        logger.info(f"Task supported modalities: {task_supported_modalities}")
+        task_instance_used_modalities = evaluator.input_modalities
+        logger.info(f"Task instance used modalities: {task_instance_used_modalities}")
+        does_model_support_all_task_instance_used_modalities = set(
+            task_instance_used_modalities
+        ).issubset(set(self.model_supported_modalities))
+        return does_model_support_all_task_instance_used_modalities
+
+    @property
+    def model_supported_modalities(self) -> list[str]:
+        """Get the supported modalities for the model."""
+        if hasattr(self.trainer.train_module.model, "supported_modalities"):
+            return self.trainer.train_module.model.supported_modalities
+        return Modality.names()
+
+    def pre_train(self) -> None:
+        """Run the evaluators on startup."""
+        if self.eval_on_startup:
+            logger.info(f"Running {len(self.evaluators)} evaluators on startup.")
+
+            # self.trainer.record_metric() is not logging to wandb at this point
+            # therefore we log to wandb manually
+            wandb_callback = next(
+                callback
+                for callback in self.trainer._iter_callbacks()
+                if isinstance(callback, HeliosWandBCallback)
+            )
+
+            for evaluator in self.evaluators:
+                if not self._check_supported_modalities(evaluator):
+                    logger.info(
+                        f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model"
+                    )
+                    continue
+                val_result, eval_time = self._perform_eval(evaluator)
+                if wandb_callback.enabled:
+                    wandb_callback.wandb.log(
+                        {"eval/" + evaluator.evaluation_name: val_result}
+                    )
+                    wandb_callback.wandb.log(
+                        {"eval_time/" + evaluator.evaluation_name: eval_time}
+                    )
+
+        if self.cancel_after_first_eval:
+            self.trainer.cancel_run(
+                "Cancelled from evaluator callback since 'cancel_after_first_eval' is set",
+                no_sync=True,  # 'no_sync' because we're calling this from all ranks at the same time.
+            )
 
     def post_step(self) -> None:
-        """Run the evaluators."""
+        """Run the evaluators in-loop."""
         for evaluator in self.evaluators:
             eval_interval_steps = self.trainer.convert_duration_to_steps(
                 evaluator.eval_interval
             )
             if self.step <= 1 or self.step % eval_interval_steps != 0:
                 continue
-            logger.info(f"Running {evaluator.dataset} evaluations...")
-            start_time = time.monotonic()
-            val_result = evaluator.val()
-            self.trainer.record_metric(f"eval/{evaluator.dataset}", val_result)
-            logger.info(
-                f"Finished {evaluator.dataset} evaluations in {time.monotonic() - start_time:.1f} seconds."
-            )
+            self._perform_eval(evaluator)
 
-
-@dataclass
-class DownstreamTaskConfig:
-    """Config for a downstream task."""
-
-    dataset: str
-    batch_size: int = 128
-    num_workers: int = 8
-    pooling_type: PoolingType = PoolingType.MEAN
-    norm_stats_from_pretrained: bool = True
-    # for MADOS and a default partition, the following lrs
-    # did best for Galileo:
-    # ViT-nano = 0.8 or 0.5
-    # ViT-tiny = 0.1
-    # ViT-base = 0.01
-    probe_lr: float | None = None
-    patch_size: int = 4
-    eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
+    def _perform_eval(self, evaluator: DownstreamEvaluator) -> tuple[float, float]:
+        """Run the evaluator."""
+        logger.info(f"Running {evaluator.evaluation_name} evaluations...")
+        start_time = time.monotonic()
+        val_result = evaluator.val()
+        self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
+        eval_time = time.monotonic() - start_time
+        self.trainer.record_metric(f"eval_time/{evaluator.evaluation_name}", eval_time)
+        logger.info(
+            f"Finished {evaluator.evaluation_name} evaluations in {eval_time:.1f} seconds."
+        )
+        return val_result, eval_time
 
 
 @dataclass
@@ -175,8 +316,39 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     """Config for the downstream evaluator callback."""
 
     tasks: dict[str, DownstreamTaskConfig]
-
     enabled: bool = True
+    # Whether to run the evaluators on startup
+    eval_on_startup: bool = False
+    # Whether to cancel the training after the first evaluation
+    # This combined with ``eval_on_startup=True`` is useful if you just want to run in-loop evals
+    # without training any longer.
+    cancel_after_first_eval: bool = False
+    tasks_to_run: list[str] | None = None
+
+    def verify_input_modalities(
+        self, task: DownstreamTaskConfig, config: EvalDatasetConfig
+    ) -> None:
+        """Verify the input modality configuration for a task."""
+        # Check that input_modalities is only set for multimodal tasks
+        if (
+            not (
+                (task.dataset in ["pastis", "sickle"])
+                or task.dataset.startswith("cropharvest")
+            )
+            and len(task.input_modalities) > 0
+        ):
+            raise ValueError(
+                f"input_modalities must be set for multimodal tasks, got {task.dataset}"
+            )
+        # Make sure input_modalities contains only unique modalities
+        if len(task.input_modalities) != len(set(task.input_modalities)):
+            raise ValueError(
+                f"input_modalities must contain unique modalities, got {task.input_modalities}"
+            )
+        if not set(task.input_modalities).issubset(set(config.supported_modalities)):
+            raise ValueError(
+                f"input_modalities must be a subset of supported_modalities, got {task.input_modalities} and {config.supported_modalities}"
+            )
 
     def build(self, trainer: Trainer) -> Callback | None:
         """Build the downstream evaluator callback."""
@@ -184,26 +356,35 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             return None
 
         evaluators: list[DownstreamEvaluator] = []
-        # check that probe_lr is set for segmentation tasks
+        # Check that probe_lr is set for segmentation tasks
         for evaluation_name, task in self.tasks.items():
-            config = DATASET_TO_CONFIG[task.dataset]
+            if (
+                self.tasks_to_run is not None
+                and evaluation_name not in self.tasks_to_run
+            ):
+                logger.info(
+                    f"Skipping {evaluation_name} because it is not in the tasks_to_run list"
+                )
+                continue
+            config = dataset_to_config(task.dataset)
             if config.task_type == TaskType.SEGMENTATION:
                 if task.probe_lr is None:
                     raise ValueError(f"probe_lr cannot be None for {task.dataset}")
+
+            self.verify_input_modalities(task, config)
+            # Sort to ensure consistent order
+            task.input_modalities.sort()
+
             evaluators.append(
                 DownstreamEvaluator(
-                    dataset=task.dataset,
+                    evaluation_name=evaluation_name,
+                    task=task,
                     trainer=trainer,
-                    batch_size=task.batch_size,
-                    num_workers=task.num_workers,
-                    pooling_type=task.pooling_type,
-                    norm_stats_from_pretrained=task.norm_stats_from_pretrained,
                     device=trainer.device,
-                    probe_lr=task.probe_lr,
-                    patch_size=task.patch_size,
-                    eval_interval=task.eval_interval,
                 )
             )
         return DownstreamEvaluatorCallback(
             evaluators=evaluators,
+            eval_on_startup=self.eval_on_startup,
+            cancel_after_first_eval=self.cancel_after_first_eval,
         )

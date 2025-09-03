@@ -12,7 +12,7 @@ the data for training even at coarser resolution.
 import argparse
 import csv
 import multiprocessing
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import tqdm
 from rslearn.dataset import Window
@@ -27,8 +27,8 @@ from ..constants import METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
 
 # Placeholder time range for OpenStreetMap.
-START_TIME = datetime(2020, 1, 1, tzinfo=timezone.utc)
-END_TIME = datetime(2025, 1, 1, tzinfo=timezone.utc)
+START_TIME = datetime(2020, 1, 1, tzinfo=UTC)
+END_TIME = datetime(2025, 1, 1, tzinfo=UTC)
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "openstreetmap"

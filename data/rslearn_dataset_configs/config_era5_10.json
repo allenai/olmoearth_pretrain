@@ -1,0 +1,29 @@
+{
+  "layers": {
+    "era5_10": {
+      "band_sets": [
+        {
+          "bands": [
+            "2m-temperature",
+            "2m-dewpoint-temperature",
+            "surface-pressure",
+            "10m-u-component-of-wind",
+            "10m-v-component-of-wind",
+            "total-precipitation"
+          ],
+          "dtype": "float32",
+          "zoom_offset": -8
+        }
+      ],
+      "data_source": {
+        "duration": "365d",
+        "name": "rslearn.data_sources.climate_data_store.ERA5LandMonthlyMeans",
+        "query_config": {
+          "max_matches": 12
+        },
+        "time_offset": "-180d"
+      },
+      "type": "raster"
+    }
+  }
+}

@@ -49,9 +49,17 @@ Add additional overides as needed.
 
 ### Sessions
 
+[VSCODE/Cursor workflow setup](https://docs.google.com/document/d/1ydiCqIn45xlbrIcfPi8bILn_y00adTAHhIY1MPh9szE/edit?tab=t.0#heading=h.wua78h35aq1n) \
 Be sure your session creation has included the following args
  - `  --secret-env WANDB_API_KEY=<your_beaker_username>_WANDB_API_KEY
     --secret-env BEAKER_TOKEN=<your_beaker_username>__BEAKER_TOKEN `
+
+Note: In order to use flash attention in a session, use `"beaker://petew/olmo-core-tch270cu128"` as your base beaker image.
+Then, set up a conda environment so you can use the flash attention code saved in the base image.
+1. `conda init`
+2. `exec bash`
+3. `conda shell.bash activate base`
+4. `pip install -e '.[all]'`
 
 When launching runs in Sessions for debugging, use the following command,
 
@@ -61,7 +69,7 @@ Add additional overides as needed.
 
 ## Beaker Information
 
-budget: `ai2/d5` \
+budget: `ai2/es-platform` \
 workspace: `ai2/earth-systems` \
 weka: `weka://dfive-default`
 
@@ -69,7 +77,104 @@ weka: `weka://dfive-default`
 
 The dataset for training is stored in h5 datasets. A trainining datset can be created from tiles via `python3 internal/run_h5_conversion.py` script.
 
-- 80K dataset with S1, S2, Landsat, NAIP, WORLDCOVER, and OSM `/weka/dfive-default/helios/dataset/20250223/`
-- ~100k dataset with S1, S2, Landsat, NAIP, WORLDCOVER, Landsat, SRTM, and  OSM sampled based on Galileo locations `/weka/dfive-default/helios/dataset/presto/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/118861`
 
-- ~300k dataset with S1, S2, Landsat, NAIP, WORLDCOVER, Landsat, SRTM, and  OSM sampled base on open street map classes `/weka/dfive-default/helios/dataset/osm_sampling/h5py_data/landsat_naip_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324192`
+We have 2 versions of each dataset 1 with 256 x 256 tiles and 1 with 4x as many 128 by 128 tiles. The 128 by 128 tiles may be faster for data loading due to GB/s bottlenecks on weka.
+
+OUT OF DATE!
+- **Presto Dataset**: ~120k samples with Landsat, OpenStreetMap raster, Sentinel-1, Sentinel-2 L2A, SRTM, and WorldCover modalities sampled via locations used in Galileo paper
+  - 256 Path: `/weka/dfive-default/helios/dataset/presto/rerun_1_h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/`
+  - 128 Path: `/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892`
+
+- **OSM Sampling Dataset**: ~285k samples with Landsat, OpenStreetMap raster, Sentinel-1, Sentinel-2 L2A, SRTM, and WorldCover modalities sampled across OpenStreetmap classes
+  - 256 Path: `/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/285288/`
+  - 128 Path: `/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152`
+- **OSM Big Dataset**: ~324k samples with Landsat, OpenStreetMap raster, Sentinel-1, Sentinel-2 L2A, SRTM, and WorldCover modalities  sampled across a wider set of opens treetmap classes
+  - 256 Path: `/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/`
+  - 128 Path: `/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928`
+- **Presto Neighbor Dataset**: ~877k samples with Landsat, OpenStreetMap raster, Sentinel-1, Sentinel-2 L2A, SRTM, and WorldCover modalities presto + the neighboring tiles
+  - 256 Path: `/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/876937/`
+  - 128 Path: `/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/3507748`
+- **WorldCover Sampling Dataset**: ~1.6M samples with Landsat, OpenStreetMap raster, Sentinel-1, Sentinel-2 L2A, SRTM, and WorldCover modalities. WorldCover class based sampling and some additional random sampling over the rest of the world.
+  - 256 Path: `/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1592645/`
+  - 128 Path: `/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/6370580/`
+
+
+## Running Eval Suite
+
+[`helios/internal/full_eval_sweep.py`](helios/internal/full_eval_sweep.py) runs comprehensive evaluation sweeps across multiple downstream tasks for any Helios checkpoint. It automatically sweeps over learning rates, pooling types, and normalization strategies.
+
+### 1. How to run eval for a given checkpoint
+
+Basic command to run evaluation sweep for a checkpoint:
+
+```
+python3 helios/internal/full_eval_sweep.py \
+  --cluster=ai2/saturn-cirrascale \
+  --checkpoint_path=/path/to/your/checkpoint/step450000 \
+  --module_path=scripts/your_training_script.py \
+```
+
+For just default hyperparameters (faster, single run):
+```bash
+python3 helios/internal/full_eval_sweep.py \
+  --cluster=ai2/saturn-cirrascale \
+  --checkpoint_path=/path/to/your/checkpoint/step450000 \
+  --module_path=scripts/your_training_script.py \
+  --defaults_only
+```
+
+### 2. Example of how to add additional overrides
+
+Pass additional training arguments after the main arguments:
+```bash
+python3 helios/internal/full_eval_sweep.py \
+  --cluster=ai2/saturn-cirrascale \
+  --checkpoint_path=/path/to/checkpoint \
+  --module_path=scripts/your_script.py \
+  --model.decoder_config.depth=1 \
+  --trainer.callbacks.downstream_evaluator.tasks_to_run=\[mados,pastis_sentinel2,breizhcrops,sen1floods11,pastis_sentinel1_sentinel2\]  \
+```
+
+### 3. How to run panopticon
+
+Use the `--panopticon` flag for Panopticon model evaluation:
+```bash
+python3 helios/internal/full_eval_sweep.py \
+  --cluster=ai2/saturn-cirrascale \
+  --panopticon \
+  --model_name=panopticon
+```
+
+### 4. How to run different dino models
+
+For DINO v3 evaluation:
+```bash
+python3 helios/internal/full_eval_sweep.py \
+  --cluster=ai2/saturn-cirrascale \
+  --dino_v3 \
+  --model_name=dino_v3_large_sat \
+  --model.model_name=DinoV3Models.LARGE_SATELLITE  \
+```
+
+### 5. How to run galileo
+
+Use the `--galileo` flag for Galileo model evaluation:
+```bash
+python3 helios/internal/full_eval_sweep.py \
+  --cluster=ai2/saturn-cirrascale \
+  --galileo \
+  --model_name=galileo_vit_base
+  --model.patch_size=4
+```
+
+**Key Notes:**
+- The script automatically determines appropriate normalization strategies for each model type (see [`helios/evals/datasets/normalize.py`](helios/evals/datasets/normalize.py))
+  - Helios: Use pretrained normalizer or NORM_METHOD.NORM_NO_CLIP with dataset stats
+  - Galileo: Use galileo pretrained normalizer or  NORM_METHOD.NORM_NO_CLIP with dataset stats
+  - Panopticon: Uses NORM_METHOD.STANDARDIZE with the dataset statistics
+  - DinoV3: Uses NORM_METHOD.NORM_YES_CLIP_MIN_MAX_INT to get to 0-1 and then applies either the web or sat normalization values
+- Supports both full hyperparameter sweeps and default-only runs
+- Use `--dry_run` to preview commands without execution
+- For local testing, use `--cluster=local`
+
+See `helios/internal/full_eval_sweep.py` for complete argument list and implementation details.

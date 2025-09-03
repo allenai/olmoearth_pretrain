@@ -180,3 +180,4 @@ cython_debug/
 # local files
 local_output/
 test_vis/
+wandb/

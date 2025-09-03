@@ -1,29 +1,52 @@
 """Common utiities for laucnhing experiments on beaker."""
 
 import logging
+import os
 
 from olmo_core.internal.common import get_beaker_username
 from olmo_core.launch.beaker import (
     BeakerEnvSecret,
     BeakerEnvVar,
-    BeakerLaunchConfig,
     BeakerPriority,
     BeakerWekaBucket,
     OLMoCoreBeakerImage,
 )
 from olmo_core.utils import generate_uuid
+from upath import UPath
 
 from helios.data.constants import Modality
-from helios.internal.experiment import CommonComponents, SubCmd
+from helios.internal.experiment import (
+    CommonComponents,
+    HeliosBeakerLaunchConfig,
+    HeliosVisualizeConfig,
+    SubCmd,
+)
 
 logger = logging.getLogger(__name__)
-BUDGET = "ai2/d5"
+BUDGET = "ai2/es-platform"
 WORKSPACE = "ai2/earth-systems"
 
 DEFAULT_HELIOS_WEKA_BUCKET = BeakerWekaBucket("dfive-default", "/weka/dfive-default")
 PROJECT_NAME = "helios"
 
-WEKA_CLUSTER_NAMES = ["jupiter", "saturn", "neptune", "ceres", "triton", "titan"]
+WEKA_CLUSTER_NAMES = [
+    "jupiter",
+    "saturn",
+    "neptune",
+    "ceres",
+    "triton",
+    "titan",
+    "rhea",
+]
+
+
+def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
+    """Build the visualize config for an experiment."""
+    return HeliosVisualizeConfig(
+        num_samples=50,
+        output_dir=str(UPath(common.save_folder) / "visualizations"),
+        std_multiplier=2.0,
+    )
 
 
 def get_root_dir(cluster: str) -> str:
@@ -55,7 +78,7 @@ def build_launch_config(
     workspace: str = WORKSPACE,
     budget: str = BUDGET,
     nccl_debug: bool = False,
-) -> BeakerLaunchConfig:
+) -> HeliosBeakerLaunchConfig:
     """Build a launch config for a helios experiment.
 
     THis will be the default setup, any changes that are temporary should be overriden
@@ -77,14 +100,33 @@ def build_launch_config(
                 )
             weka_buckets = []
         if "titan" in c:
-            if len(clusters) > 1:
-                raise ValueError(
-                    "Jobs targeting Titan should not target other clusters since Titan uses pytorch 2.7"
-                )
-            pytorch_upgrade = "pip install --upgrade --no-cache-dir torch==2.7.0 torchvision --index-url https://download.pytorch.org/whl/test/cu128"
+            pass
+            # if len(clusters) > 1:
+            #    raise ValueError(
+            #        "Jobs targeting Titan should not target other clusters since Titan uses pytorch 2.7"
+            #    )
+            # pytorch_upgrade = "pip install --upgrade --pre --no-cache-dir torch==2.8.0.dev20250528+cu128 torchvision==0.22.0.dev20250528+cu128 --index-url https://download.pytorch.org/whl/nightly/cu128"
 
     beaker_user = get_beaker_username()
-    return BeakerLaunchConfig(
+    # Propagate the train module path to the experiment if set
+    env_vars = [
+        BeakerEnvVar(name="NCCL_DEBUG", value="DETAIL" if nccl_debug else "WARN"),
+        BeakerEnvVar(
+            name="TORCH_NCCL_TRACE_BUFFER_SIZE",
+            value="1000000000" if nccl_debug else "0",
+        ),
+        BeakerEnvVar(name="NCCL_BLOCKING_WAIT", value="1" if nccl_debug else "0"),
+        BeakerEnvVar(
+            name="GOOGLE_APPLICATION_CREDENTIALS", value="/etc/gcp_credentials.json"
+        ),
+    ]
+    # Propagate the train module path to the experiment if set
+    train_script_path = os.environ.get("TRAIN_SCRIPT_PATH")
+    if train_script_path is not None:
+        logger.info(f"Propagating train script path to experiment: {train_script_path}")
+        env_vars.append(BeakerEnvVar(name="TRAIN_SCRIPT_PATH", value=train_script_path))
+
+    return HeliosBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",
         budget=budget,
         cmd=cmd,
@@ -92,19 +134,14 @@ def build_launch_config(
         workspace=workspace,
         clusters=clusters,
         weka_buckets=weka_buckets,
-        beaker_image=f"henryh/{OLMoCoreBeakerImage.stable}",  # we can all use the same image for now
+        beaker_image=f"petew/{OLMoCoreBeakerImage.stable_cu128}",  # we can all use the same image for now trying petes to see if it works or we need a copy in our workspace
         num_nodes=1,
         num_gpus=1,
         shared_memory="256GiB",
         shared_filesystem=True,  # We only use Weka for now
         allow_dirty=False,
         priority=BeakerPriority.high,
-        env_vars=[
-            BeakerEnvVar(name="NCCL_DEBUG", value="INFO" if nccl_debug else "WARN"),
-            BeakerEnvVar(
-                name="GOOGLE_APPLICATION_CREDENTIALS", value="/etc/gcp_credentials.json"
-            ),
-        ],
+        env_vars=env_vars,
         env_secrets=[
             BeakerEnvSecret(name="BEAKER_TOKEN", secret=f"{beaker_user}_BEAKER_TOKEN"),
             BeakerEnvSecret(
@@ -127,7 +164,8 @@ def build_launch_config(
             "conda shell.bash activate base",
             # Install torch==2.7 if we're targetting titan
             "pip install -e '.[all]'",
-            "pip install --upgrade beaker-py",
+            # Don't auto upgrade beaker-py, there's conflict with olmo-core
+            # "pip install --upgrade beaker-py",
             # Quickly try a new version of PyTorch like this
             #  "pip install --upgrade --pre torch==2.6.0.dev20241112+cu121 --index-url https://download.pytorch.org/whl/nightly/cu121",
             pytorch_upgrade,
@@ -147,24 +185,38 @@ def build_common_components(
     TRAINING_MODALITIES = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
-        Modality.WORLDCOVER.name,
+        Modality.LANDSAT.name,
+        # Modality.WORLDCOVER.name,
+        # Modality.LATLON.name,
         # Modality.SRTM.name,
-        # Modality.NAIP.name,
-        # Modality.LANDSAT.name,
         # Modality.OPENSTREETMAP_RASTER.name,
+        # Modality.NAIP_10.name,
+        # Modality.ERA5_10.name,
     ]
     cmd_to_launch = SubCmd.train
     if cmd == SubCmd.launch_prep:
         cmd_to_launch = SubCmd.prep
 
+    # Extract nccl_debug from overrides if present
+    nccl_debug = False
+    for override in overrides:
+        if override.startswith("--common.nccl_debug="):
+            logger.info(f"Setting nccl_debug to {override}")
+            nccl_debug = override.split("=")[1].lower() in ("true", "1", "yes")
+            break
+
     launch_config = build_launch_config(
         name=f"{run_name}-{cmd_to_launch}",
         cmd=[script, cmd_to_launch, run_name, cluster, *overrides],
         clusters=cluster,
-        nccl_debug=False,
+        nccl_debug=nccl_debug,
     )
     root_dir = get_root_dir(cluster)
     beaker_user = get_beaker_username()
+    if beaker_user is None:
+        raise ValueError(
+            "Failed to get Beaker username. Make sure you are authenticated with Beaker."
+        )
     return CommonComponents(
         run_name=run_name,
         save_folder=f"{root_dir}/checkpoints/{beaker_user.lower()}/{run_name}",

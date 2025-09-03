@@ -6,11 +6,11 @@ import uuid
 import tqdm
 from beaker import (
     Beaker,
-    Constraints,
-    DataMount,
-    DataSource,
-    ExperimentSpec,
-    Priority,
+    BeakerConstraints,
+    BeakerDataMount,
+    BeakerDataSource,
+    BeakerExperimentSpec,
+    BeakerJobPriority,
 )
 
 PLANETARY_COMPUTER_COMMAND = [
@@ -29,11 +29,27 @@ PLANETARY_COMPUTER_COMMAND = [
     "--ignore-errors",
 ]
 
+OPENSTREETMAP_COMMAND = [
+    "rslearn",
+    "dataset",
+    "ingest",
+    "--root",
+    "{ds_path}",
+    "--group",
+    "res_10",
+    "--workers",
+    "1",
+    "--load-workers",
+    "128",
+    "--no-use-initial-job",
+]
+
 # Map from modality to the commands to run.
 MODALITY_COMMANDS = {
     "sentinel2_l2a": PLANETARY_COMPUTER_COMMAND + ["--group", "res_10"],
     "sentinel1": PLANETARY_COMPUTER_COMMAND + ["--group", "res_10"],
     "naip": PLANETARY_COMPUTER_COMMAND + ["--group", "res_0.625"],
+    "openstreetmap": OPENSTREETMAP_COMMAND,
 }
 
 BEAKER_BUDGET = "ai2/d5"
@@ -42,29 +58,29 @@ BEAKER_WORKSPACE = "ai2/earth-systems"
 
 def launch_job(
     image: str,
-    clusters: list[str],
     ds_path: str,
     modality: str,
+    clusters: list[str] | None = None,
     hostname: str | None = None,
 ) -> None:
     """Launch a Beaker job that materializes the specified modality.
 
     Args:
         image: the name of the Beaker image to use.
-        clusters: list of Beaker clusters to target.
         ds_path: the dataset path.
         modality: the modality to materialize.
+        clusters: optional list of Beaker clusters to target. One of hostname or
+            clusters must be set.
         hostname: optional Beaker host to constrain to.
     """
-    beaker = Beaker.from_env(default_workspace=BEAKER_WORKSPACE)
-    with beaker.session():
+    with Beaker.from_env(default_workspace=BEAKER_WORKSPACE) as beaker:
         # Add random string since experiment names must be unique.
         task_uuid = str(uuid.uuid4())[0:16]
         experiment_name = f"helios-{modality}-{task_uuid}"
 
         command = [arg.format(ds_path=ds_path) for arg in MODALITY_COMMANDS[modality]]
-        weka_mount = DataMount(
-            source=DataSource(weka="dfive-default"),
+        weka_mount = BeakerDataMount(
+            source=BeakerDataSource(weka="dfive-default"),
             mount_path="/weka/dfive-default",
         )
 
@@ -72,30 +88,33 @@ def launch_job(
         # hundreds of jobs scheduled on the same host.
         # Also we can only set cluster constraint if we do not specify hostname.
         resources: dict | None
-        constraints: Constraints
+        constraints: BeakerConstraints
         if hostname is None:
-            resources = {"gpuCount": 1}
-            constraints = Constraints(
+            if modality == "openstreetmap":
+                resources = {"gpuCount": 8}
+            else:
+                resources = {"gpuCount": 1}
+            constraints = BeakerConstraints(
                 cluster=clusters,
             )
         else:
             resources = None
-            constraints = Constraints(
+            constraints = BeakerConstraints(
                 hostname=[hostname],
             )
 
-        experiment_spec = ExperimentSpec.new(
+        experiment_spec = BeakerExperimentSpec.new(
             budget=BEAKER_BUDGET,
             task_name=experiment_name,
             beaker_image=image,
-            priority=Priority.high,
+            priority=BeakerJobPriority.high,
             command=command,
             datasets=[weka_mount],
             resources=resources,
             preemptible=True,
             constraints=constraints,
         )
-        beaker.experiment.create(experiment_name, experiment_spec)
+        beaker.experiment.create(name=experiment_name, spec=experiment_spec)
 
 
 if __name__ == "__main__":
@@ -124,33 +143,34 @@ if __name__ == "__main__":
         "--clusters",
         type=str,
         help="Comma-separated list of clusters to target",
-        required=True,
+        default=None,
     )
     parser.add_argument(
         "--num_jobs",
         type=int,
-        help="Number of Beaker jobs to start (one of num_jobs and hosts must be set)",
+        help="Number of Beaker jobs to start (one of clusters+num_jobs or hosts must be set)",
         default=None,
     )
     parser.add_argument(
         "--hosts",
         type=str,
-        help="Comma-separated list of hosts to start jobs on, one job per host (one of num_jobs and hosts must be set)",
+        help="Comma-separated list of hosts to start jobs on, one job per host (one of clusters+num_jobs or hosts must be set)",
         default=None,
     )
     args = parser.parse_args()
-    clusters = args.clusters.split(",")
 
     if args.num_jobs is not None:
         for i in tqdm.tqdm(list(range(args.num_jobs)), desc="Launching jobs"):
             launch_job(
-                args.image_name, args.clusters.split(","), args.ds_path, args.modality
+                args.image_name,
+                args.ds_path,
+                args.modality,
+                clusters=args.clusters.split(","),
             )
     elif args.hosts is not None:
         for host in args.hosts.split(","):
             launch_job(
                 args.image_name,
-                args.clusters.split(","),
                 args.ds_path,
                 args.modality,
                 hostname=host,

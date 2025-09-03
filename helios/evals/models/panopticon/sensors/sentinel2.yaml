@@ -1,0 +1,97 @@
+instrument: MSI
+level: L1C
+
+srf_filename: rfs_sentinel2_a_13b.npy
+
+bands:
+  B01:
+    name: '01 - Coastal aerosol'
+    gaussian:
+      mu: 442.922568734037
+      sigma: 7.248330717861807
+    GSD: 60
+
+  B02:
+    name: '02 - Blue'
+    gaussian:
+      mu: 492.9971095687347
+      sigma: 23.810316659477703
+    GSD: 10
+
+  B03:
+    name: '03 - Green'
+    gaussian:
+      mu: 559.5987534818435
+      sigma: 12.768882177939654
+    GSD: 10
+
+  B04:
+    name: '04 - Red'
+    gaussian:
+      mu: 664.6300422881802
+      sigma: 11.757355524910432
+    GSD: 10
+
+  B05:
+    name: '05 - Vegetation Red Edge'
+    gaussian:
+      mu: 704.0059319834206
+      sigma: 5.362493403740522
+    GSD: 20
+
+  B06:
+    name: '06 - Vegetation Red Edge'
+    gaussian:
+      mu: 740.5521320760564
+      sigma: 5.2330999827526155
+    GSD: 20
+
+  B07:
+    name: '07 - Vegetation Red Edge'
+    gaussian:
+      mu: 782.4190761493182
+      sigma: 7.212484180540051
+    GSD: 20
+
+  B08:
+    name: '08 - NIR'
+    gaussian:
+      mu: 827.5394062383036
+      sigma: 36.79409520400872
+    GSD: 10
+
+  B8A:
+    name: '08A - Vegetation Red Edge'
+    gaussian:
+      mu: 864.7801257644385
+      sigma: 8.07210759526792
+    GSD: 20
+
+  B09:
+    name: '09 - Water vapour'
+    gaussian:
+      mu: 945.0294901407692
+      sigma: 7.518965324285279
+    GSD: 60
+
+  B10:
+    name: '10 - SWIR - Cirrus'
+    gaussian:
+      mu: 1373.3636762095748
+      sigma: 11.163498916290587
+    GSD: 60
+    p: 2
+
+  B11:
+    name: '11 - SWIR'
+    gaussian:
+      mu: 1613.8624163477282
+      sigma: 34.4986558584479
+    GSD: 20
+
+  B12:
+    name: '12 - SWIR'
+    gaussian:
+      mu: 2203.6182057820033
+      sigma: 64.60648125885301
+    GSD: 20

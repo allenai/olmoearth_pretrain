@@ -1,0 +1,19 @@
+{
+  "layers": {
+    "cdl": {
+      "band_sets": [
+        {
+          "bands": [
+            "cdl"
+          ],
+          "dtype": "uint8"
+        }
+      ],
+      "data_source": {
+        "name": "rslearn.data_sources.usda_cdl.CDL"
+      },
+      "resampling_method": "nearest",
+      "type": "raster"
+    }
+  }
+}

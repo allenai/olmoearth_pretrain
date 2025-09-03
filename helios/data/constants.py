@@ -17,7 +17,19 @@ IMAGE_TILE_SIZE = 256
 
 PROJECTION_CRS = "EPSG:4326"
 
+# Default missing value for raster data.
 MISSING_VALUE = -99999
+
+# Default maximum sequence length.
+MAX_SEQUENCE_LENGTH = 12
+
+# Resolution of the input data in meters
+BASE_GSD = 10
+# Default nodata value for Sentinel-1 data.
+SENTINEL1_NODATA = -32768
+
+# Number of timesteps for YEAR data.
+YEAR_NUM_TIMESTEPS = 12
 
 
 def get_resolution(resolution_factor: int) -> float | int:
@@ -94,13 +106,24 @@ class TimeSpan(str, Enum):
 
 @dataclass(frozen=True)
 class ModalitySpec:
-    """Modality specification."""
+    """Modality specification.
+
+    Args:
+        name: the name of the modality.
+        tile_resolution_factor: the factor of how much more ground area is covered by the tile compared with a tile
+                        of IMAGE_TILE_SIZE x IMAGE_TILE_SIZE pixels at the base resolution.
+        band_sets: the band sets of the modality, ie the units of tokenization.
+        is_multitemporal: whether the modality is multitemporal.
+        ignore_when_parsing: whether to ignore the modality when parsing the data form the csv file.
+        image_tile_size_factor: the factor of how much bigger the dimensions of the image tile are compared with the base tile size.
+    """
 
     name: str
     tile_resolution_factor: int
     band_sets: list[BandSet]
     is_multitemporal: bool
     ignore_when_parsing: bool  # If true this modality is not parsed from the csv file and not loaded form a file
+    image_tile_size_factor: int = 1
 
     def __hash__(self) -> int:
         """Hash this Modality."""
@@ -138,10 +161,18 @@ class ModalitySpec:
         """
         return sum(len(band_set.bands) for band_set in self.band_sets)
 
+    def get_expected_tile_size(self) -> int:
+        """Get the expected size of the tile."""
+        if self.image_tile_size_factor < 0:
+            return IMAGE_TILE_SIZE // abs(self.image_tile_size_factor)
+        else:
+            return IMAGE_TILE_SIZE * self.image_tile_size_factor
+
     @property
     def is_spatial(self) -> bool:
         """Does the modality have spatial data."""
-        return self.get_tile_resolution() > 0
+        # Tile size must be greater than 1 to have spatial varying data.
+        return self.get_tile_resolution() > 0 and self.get_expected_tile_size() > 1
 
     @property
     def is_spacetime_varying(self) -> bool:
@@ -173,6 +204,20 @@ class Modality:
         band_sets=[BandSet(["R", "G", "B", "IR"], 1)],
         is_multitemporal=False,
         ignore_when_parsing=False,
+    )
+
+    # NAIP_10 is the NAIP data that covers the same extent as a IMAGE_TILE_SIZE x IMAGE_TILE_SIZE tile
+    # at 10 m/pixel resolution but is still stored at NAIP resolution.
+    NAIP_10 = ModalitySpec(
+        name="naip_10",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["R", "G", "B", "IR"], 1)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+        # Currently this is set to 4x (2.5 m/pixel) so that it is more feasible to
+        # train with NAIP_10. This way we end up with 512x512 NAIP images in the
+        # 128x128 H5 files instead of 2048x2048, which slows down data loading.
+        image_tile_size_factor=4,
     )
 
     SENTINEL1 = ModalitySpec(
@@ -230,6 +275,28 @@ class Modality:
         name="worldcover",
         tile_resolution_factor=16,
         band_sets=[BandSet(["B1"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    WORLDCEREAL = ModalitySpec(
+        name="worldcereal",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [
+                    "tc-annual-temporarycrops-classification",
+                    "tc-maize-main-irrigation-classification",
+                    "tc-maize-main-maize-classification",
+                    "tc-maize-second-irrigation-classification",
+                    "tc-maize-second-maize-classification",
+                    "tc-springcereals-springcereals-classification",
+                    "tc-wintercereals-irrigation-classification",
+                    "tc-wintercereals-wintercereals-classification",
+                ],
+                16,
+            )
+        ],
         is_multitemporal=False,
         ignore_when_parsing=False,
     )
@@ -332,17 +399,16 @@ class Modality:
 
     ERA5 = ModalitySpec(
         name="era5",
+        # 9 km/pixel bands that we store at 150 m/pixel.
         tile_resolution_factor=256,
         band_sets=[
             BandSet(
                 [
-                    "snow-cover",
-                    "snow-depth",
-                    "soil-temperature-level-1",
+                    "2m-temperature",
+                    "2m-dewpoint-temperature",
+                    "surface-pressure",
                     "10m-u-component-of-wind",
                     "10m-v-component-of-wind",
-                    "2m-temperature",
-                    "skin-temperature",
                     "total-precipitation",
                 ],
                 256,
@@ -352,12 +418,71 @@ class Modality:
         ignore_when_parsing=True,
     )
 
+    ERA5_10 = ModalitySpec(
+        name="era5_10",
+        # 9 km/pixel bands that we store at 2.56 km/pixel.
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [
+                    "2m-temperature",
+                    "2m-dewpoint-temperature",
+                    "surface-pressure",
+                    "10m-u-component-of-wind",
+                    "10m-v-component-of-wind",
+                    "total-precipitation",
+                ],
+                4096,
+            ),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+        image_tile_size_factor=-256,
+    )
+
     LATLON = ModalitySpec(
         name="latlon",
         tile_resolution_factor=0,
         band_sets=[BandSet(["lat", "lon"], 0)],
         is_multitemporal=False,
         ignore_when_parsing=True,
+    )
+
+    GSE = ModalitySpec(
+        name="gse",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [f"A{idx:02d}" for idx in range(64)],
+                16,
+            ),
+        ],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    CDL = ModalitySpec(
+        name="cdl",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["cdl"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    WORLDPOP = ModalitySpec(
+        name="worldpop",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["B1"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    WRI_CANOPY_HEIGHT_MAP = ModalitySpec(
+        name="wri_canopy_height_map",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["B1"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
     )
 
     @classmethod

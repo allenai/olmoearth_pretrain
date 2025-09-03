@@ -56,6 +56,7 @@ def create_image_tiles(tmp_path: Path) -> Callable:
                         ): data_path / "s2_20m.tif",
                         BandSet(["B01", "B09", "B10"], 64): data_path / "s2_40m.tif",
                     },
+                    modality=Modality.SENTINEL2,
                 ),
             ]
         }
@@ -70,6 +71,7 @@ def create_image_tiles(tmp_path: Path) -> Callable:
                     band_sets={
                         BandSet(["VV", "VH"], 16): data_path / "s1_10m.tif",
                     },
+                    modality=Modality.SENTINEL1,
                 ),
             ]
         }
@@ -133,7 +135,7 @@ def test_supporting_latlon(tmp_path: Path, create_image_tiles: Callable) -> None
     assert samples[0].modalities.keys() == {Modality.SENTINEL2}
 
 
-def test_subsetting() -> None:
+def test_default_subsetting() -> None:
     """Test subsetting works."""
     (
         h,
@@ -148,14 +150,44 @@ def test_subsetting() -> None:
         sentinel2_l2a=torch.ones((h, w, t, HeliosSample.num_bands("sentinel2_l2a"))),
         timestamps=torch.ones((t, HeliosSample.num_bands("timestamps"))),
     )
-    subsetted_sample = sample.subset(
-        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4
+    subsetted_sample = sample.subset_default(
+        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
     )
 
     # 16 / 4 = 4 tokens along the height and width dimension
     # total s2 tokens = t * 4 * 4 * 3 (band sets) = 48
     # so a token budget of floor(100 / 48) = 2
     assert subsetted_sample.time == 2
+
+
+def test_cutmix_subsetting() -> None:
+    """Test cutmix subsetting works."""
+    (
+        h,
+        w,
+        t,
+    ) = (
+        16,
+        16,
+        100,
+    )
+    sample = HeliosSample(
+        sentinel2_l2a=torch.ones((h, w, t, HeliosSample.num_bands("sentinel2_l2a"))),
+        timestamps=torch.ones((t, HeliosSample.num_bands("timestamps"))),
+    )
+    default_subsetted_sample = sample.subset_default(
+        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
+    )
+    cutmix_subsetted_sample = sample.subset_cutmix(
+        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
+    )
+    print(default_subsetted_sample)
+    print(cutmix_subsetted_sample)
+    # CutMix is mixing up patches, and should has the exact shape as the default subsetting
+    assert cutmix_subsetted_sample.shape(
+        "sentinel2_l2a"
+    ) == default_subsetted_sample.shape("sentinel2_l2a")
+    assert cutmix_subsetted_sample.time == default_subsetted_sample.time
 
 
 def test_subsetting_worldcover_too() -> None:
@@ -174,8 +206,11 @@ def test_subsetting_worldcover_too() -> None:
         worldcover=torch.ones((h, w, HeliosSample.num_bands("worldcover"))),
         timestamps=torch.ones((t, HeliosSample.num_bands("timestamps"))),
     )
-    subsetted_sample = sample.subset(
-        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4
+    subsetted_sample = sample.subset_default(
+        patch_size=4,
+        max_tokens_per_instance=100,
+        sampled_hw_p=4,
+        current_length=12,
     )
 
     # 16 / 4 = 4 tokens along the height and width dimension

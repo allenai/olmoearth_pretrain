@@ -1,0 +1,31 @@
+{
+  "layers": {
+    "worldpop": {
+      "band_sets": [
+        {
+          "bands": [
+            "B1"
+          ],
+          "dtype": "float32",
+          "nodata_vals": [
+            -99999
+          ]
+        }
+      ],
+      "data_source": {
+        "name": "rslearn.data_sources.worldpop.WorldPop",
+        "query_config": {
+          "max_matches": 16
+        },
+        "worldpop_dir": "source_data/worldpop/"
+      },
+      "type": "raster"
+    }
+  },
+  "tile_store": {
+    "class_path": "rslearn.tile_stores.default.DefaultTileStore",
+    "init_args": {
+      "convert_rasters_to_cogs": false
+    }
+  }
+}

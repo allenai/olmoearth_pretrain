@@ -1,0 +1,60 @@
+instrument: 'PSB.SD'
+processing_level: 'NA'
+
+bands:
+  B01:
+    name: 'Coastal Blue'
+    gaussian:
+      mu: 443.704
+      sigma: 7.9672
+    GSD: 3.7
+
+  B02:
+    name: 'Blue'
+    gaussian:
+      mu: 490.973
+      sigma: 20.5096
+    GSD: 3.7
+
+  B03:
+    name: 'Green I'
+    gaussian:
+      mu: 532.719
+      sigma: 14.4789
+    GSD: 3.7
+
+  B04:
+    name: 'Green'
+    gaussian:
+      mu: 565.811
+      sigma: 15.2825
+    GSD: 3.7
+
+  B05:
+    name: 'Yellow'
+    gaussian:
+      mu: 611.587
+      sigma: 9.33594
+    GSD: 3.7
+
+  B06:
+    name: 'Red'
+    gaussian:
+      mu: 665.751
+      sigma: 12.6253
+    GSD: 3.7
+
+
+  B07:
+    name: 'Red Edge'
+    gaussian:
+      mu: 706.918
+      sigma: 6.92817
+    GSD: 3.7
+
+  B08:
+    name: 'NIR'
+    gaussian:
+      mu: 864.831
+      sigma: 15.2059
+    GSD: 3.7

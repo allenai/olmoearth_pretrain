@@ -1,0 +1,722 @@
+{
+  "cdl": {
+    "cdl": {
+      "count": 100,
+      "mean": 100,
+      "std": 50,
+      "var": 2500
+    }
+  },
+  "gse": {
+    "A00": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A01": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A02": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A03": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A04": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A05": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A06": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A07": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A08": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A09": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A10": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A11": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A12": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A13": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A14": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A15": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A16": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A17": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A18": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A19": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A20": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A21": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A22": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A23": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A24": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A25": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A26": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A27": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A28": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A29": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A30": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A31": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A32": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A33": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A34": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A35": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A36": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A37": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A38": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A39": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A40": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A41": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A42": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A43": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A44": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A45": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A46": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A47": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A48": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A49": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A50": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A51": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A52": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A53": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A54": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A55": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A56": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A57": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A58": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A59": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A60": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A61": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A62": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    },
+    "A63": {
+      "count": 100,
+      "mean": 8192,
+      "std": 4096,
+      "var": 16777216
+    }
+  },
+  "latlon": {
+    "lat": {
+      "max": 90,
+      "min": -90
+    },
+    "lon": {
+      "max": 180,
+      "min": -180
+    }
+  },
+  "latlon_cartesian": {
+    "x": {
+      "max": 1,
+      "min": -1
+    },
+    "y": {
+      "max": 1,
+      "min": -1
+    },
+    "z": {
+      "max": 1,
+      "min": -1
+    }
+  },
+  "openstreetmap_raster": {
+    "aerialway_pylon": {
+      "max": 1,
+      "min": 0
+    },
+    "aerodrome": {
+      "max": 1,
+      "min": 0
+    },
+    "airstrip": {
+      "max": 1,
+      "min": 0
+    },
+    "amenity_fuel": {
+      "max": 1,
+      "min": 0
+    },
+    "building": {
+      "max": 1,
+      "min": 0
+    },
+    "chimney": {
+      "max": 1,
+      "min": 0
+    },
+    "communications_tower": {
+      "max": 1,
+      "min": 0
+    },
+    "crane": {
+      "max": 1,
+      "min": 0
+    },
+    "flagpole": {
+      "max": 1,
+      "min": 0
+    },
+    "fountain": {
+      "max": 1,
+      "min": 0
+    },
+    "generator_wind": {
+      "max": 1,
+      "min": 0
+    },
+    "helipad": {
+      "max": 1,
+      "min": 0
+    },
+    "highway": {
+      "max": 1,
+      "min": 0
+    },
+    "leisure": {
+      "max": 1,
+      "min": 0
+    },
+    "lighthouse": {
+      "max": 1,
+      "min": 0
+    },
+    "obelisk": {
+      "max": 1,
+      "min": 0
+    },
+    "observatory": {
+      "max": 1,
+      "min": 0
+    },
+    "parking": {
+      "max": 1,
+      "min": 0
+    },
+    "petroleum_well": {
+      "max": 1,
+      "min": 0
+    },
+    "power_plant": {
+      "max": 1,
+      "min": 0
+    },
+    "power_substation": {
+      "max": 1,
+      "min": 0
+    },
+    "power_tower": {
+      "max": 1,
+      "min": 0
+    },
+    "river": {
+      "max": 1,
+      "min": 0
+    },
+    "runway": {
+      "max": 1,
+      "min": 0
+    },
+    "satellite_dish": {
+      "max": 1,
+      "min": 0
+    },
+    "silo": {
+      "max": 1,
+      "min": 0
+    },
+    "storage_tank": {
+      "max": 1,
+      "min": 0
+    },
+    "taxiway": {
+      "max": 1,
+      "min": 0
+    },
+    "water_tower": {
+      "max": 1,
+      "min": 0
+    },
+    "works": {
+      "max": 1,
+      "min": 0
+    }
+  },
+  "sentinel1": {
+    "vh": {
+      "max": 0,
+      "min": -50
+    },
+    "vv": {
+      "max": 0,
+      "min": -50
+    }
+  },
+  "sentinel2": {
+    "B01": {
+      "max": 10000,
+      "min": 0
+    },
+    "B02": {
+      "max": 10000,
+      "min": 0
+    },
+    "B03": {
+      "max": 10000,
+      "min": 0
+    },
+    "B04": {
+      "max": 10000,
+      "min": 0
+    },
+    "B05": {
+      "max": 10000,
+      "min": 0
+    },
+    "B06": {
+      "max": 10000,
+      "min": 0
+    },
+    "B07": {
+      "max": 10000,
+      "min": 0
+    },
+    "B08": {
+      "max": 10000,
+      "min": 0
+    },
+    "B09": {
+      "max": 10000,
+      "min": 0
+    },
+    "B10": {
+      "max": 10000,
+      "min": 0
+    },
+    "B11": {
+      "max": 10000,
+      "min": 0
+    },
+    "B12": {
+      "max": 10000,
+      "min": 0
+    },
+    "B8A": {
+      "max": 10000,
+      "min": 0
+    }
+  },
+  "sentinel2_l2a": {
+    "B01": {
+      "max": 10000,
+      "min": 0
+    },
+    "B02": {
+      "max": 10000,
+      "min": 0
+    },
+    "B03": {
+      "max": 10000,
+      "min": 0
+    },
+    "B04": {
+      "max": 10000,
+      "min": 0
+    },
+    "B05": {
+      "max": 10000,
+      "min": 0
+    },
+    "B06": {
+      "max": 10000,
+      "min": 0
+    },
+    "B07": {
+      "max": 10000,
+      "min": 0
+    },
+    "B08": {
+      "max": 10000,
+      "min": 0
+    },
+    "B09": {
+      "max": 10000,
+      "min": 0
+    },
+    "B10": {
+      "max": 10000,
+      "min": 0
+    },
+    "B11": {
+      "max": 10000,
+      "min": 0
+    },
+    "B12": {
+      "max": 10000,
+      "min": 0
+    },
+    "B8A": {
+      "max": 10000,
+      "min": 0
+    }
+  },
+  "srtm": {
+    "srtm": {
+      "max": 8000,
+      "min": 0
+    }
+  },
+  "worldcereal": {
+    "tc-annual-temporarycrops-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-maize-main-irrigation-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-maize-main-maize-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-maize-second-irrigation-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-maize-second-maize-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-springcereals-springcereals-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-wintercereals-irrigation-classification": {
+      "max": 100,
+      "min": 0
+    },
+    "tc-wintercereals-wintercereals-classification": {
+      "max": 100,
+      "min": 0
+    }
+  },
+  "worldcover": {
+    "B1": {
+      "max": 100,
+      "min": 0
+    }
+  },
+  "worldpop": {
+    "B1": {
+      "count": 100,
+      "mean": 150,
+      "std": 100,
+      "var": 2500
+    }
+  },
+  "wri_canopy_height_map": {
+    "B1": {
+      "count": 100,
+      "mean": 10,
+      "std": 5,
+      "var": 25
+    }
+  }
+}

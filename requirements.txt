@@ -1,21 +1,18 @@
-ai2-olmo-core @ git+https://github.com/allenai/olmo-core.git@8919dff
-beaker-py>=1.32.0
+ai2-olmo-core @ git+https://github.com/allenai/OLMo-core.git@abc12e50ba756c21e575452cfc6f150dafa9509e # Pin here until >2.1.0 is released.
+albumentations
+beaker-py==1.34.1
+breizhcrops==0.0.4.1 # Force the latest available
 cartopy
 class-registry
 einops>=0.7.0
 gcsfs
-geobench
-GitPython>=3.0,<4.0
-interrogate
+hdf5plugin
 matplotlib
 numpy
-pandas
-pandera
-pre-commit
-pytest
+pandas>=2.2 # Force this higher than 1.x
 rasterio
-rioxarray
-torch>=2.5
-torchvision>=0.20
+shapely>=2 # temporary hack to force shapely 2.x
+torch>=2.7
+torchvision
 universal_pathlib>=0.2.5
 wandb>=0.19.0

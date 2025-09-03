@@ -1,0 +1,606 @@
+instrument: Intuition
+processing_level: Unknown
+srf_filename: intuition.npy
+
+GSD: 2
+bands:
+  B001:
+    gaussian:
+      mu: 462.08
+      sigma: 3.2
+  B002:
+    gaussian:
+      mu: 465.27
+      sigma: 3.2
+  B003:
+    gaussian:
+      mu: 468.47
+      sigma: 3.2
+  B004:
+    gaussian:
+      mu: 471.67
+      sigma: 3.2
+  B005:
+    gaussian:
+      mu: 474.86
+      sigma: 3.2
+  B006:
+    gaussian:
+      mu: 478.06
+      sigma: 3.2
+  B007:
+    gaussian:
+      mu: 481.26
+      sigma: 3.2
+  B008:
+    gaussian:
+      mu: 484.45
+      sigma: 3.2
+  B009:
+    gaussian:
+      mu: 487.65
+      sigma: 3.2
+  B010:
+    gaussian:
+      mu: 490.85
+      sigma: 3.2
+  B011:
+    gaussian:
+      mu: 494.04
+      sigma: 3.2
+  B012:
+    gaussian:
+      mu: 497.24
+      sigma: 3.2
+  B013:
+    gaussian:
+      mu: 500.43
+      sigma: 3.2
+  B014:
+    gaussian:
+      mu: 503.63
+      sigma: 3.2
+  B015:
+    gaussian:
+      mu: 506.83
+      sigma: 3.2
+  B016:
+    gaussian:
+      mu: 510.03
+      sigma: 3.2
+  B017:
+    gaussian:
+      mu: 513.22
+      sigma: 3.2
+  B018:
+    gaussian:
+      mu: 516.42
+      sigma: 3.2
+  B019:
+    gaussian:
+      mu: 519.61
+      sigma: 3.2
+  B020:
+    gaussian:
+      mu: 522.81
+      sigma: 3.2
+  B021:
+    gaussian:
+      mu: 526.01
+      sigma: 3.2
+  B022:
+    gaussian:
+      mu: 529.20
+      sigma: 3.2
+  B023:
+    gaussian:
+      mu: 532.40
+      sigma: 3.2
+  B024:
+    gaussian:
+      mu: 535.60
+      sigma: 3.2
+  B025:
+    gaussian:
+      mu: 538.79
+      sigma: 3.2
+  B026:
+    gaussian:
+      mu: 541.99
+      sigma: 3.2
+  B027:
+    gaussian:
+      mu: 545.19
+      sigma: 3.2
+  B028:
+    gaussian:
+      mu: 548.38
+      sigma: 3.2
+  B029:
+    gaussian:
+      mu: 551.58
+      sigma: 3.2
+  B030:
+    gaussian:
+      mu: 554.78
+      sigma: 3.2
+  B031:
+    gaussian:
+      mu: 557.97
+      sigma: 3.2
+  B032:
+    gaussian:
+      mu: 561.17
+      sigma: 3.2
+  B033:
+    gaussian:
+      mu: 564.37
+      sigma: 3.2
+  B034:
+    gaussian:
+      mu: 567.56
+      sigma: 3.2
+  B035:
+    gaussian:
+      mu: 570.76
+      sigma: 3.2
+  B036:
+    gaussian:
+      mu: 573.96
+      sigma: 3.2
+  B037:
+    gaussian:
+      mu: 577.15
+      sigma: 3.2
+  B038:
+    gaussian:
+      mu: 580.35
+      sigma: 3.2
+  B039:
+    gaussian:
+      mu: 583.55
+      sigma: 3.2
+  B040:
+    gaussian:
+      mu: 586.74
+      sigma: 3.2
+  B041:
+    gaussian:
+      mu: 589.94
+      sigma: 3.2
+  B042:
+    gaussian:
+      mu: 593.14
+      sigma: 3.2
+  B043:
+    gaussian:
+      mu: 596.33
+      sigma: 3.2
+  B044:
+    gaussian:
+      mu: 599.53
+      sigma: 3.2
+  B045:
+    gaussian:
+      mu: 602.73
+      sigma: 3.2
+  B046:
+    gaussian:
+      mu: 605.92
+      sigma: 3.2
+  B047:
+    gaussian:
+      mu: 609.12
+      sigma: 3.2
+  B048:
+    gaussian:
+      mu: 612.32
+      sigma: 3.2
+  B049:
+    gaussian:
+      mu: 615.51
+      sigma: 3.2
+  B050:
+    gaussian:
+      mu: 618.71
+      sigma: 3.2
+  B051:
+    gaussian:
+      mu: 621.91
+      sigma: 3.2
+  B052:
+    gaussian:
+      mu: 625.10
+      sigma: 3.2
+  B053:
+    gaussian:
+      mu: 628.30
+      sigma: 3.2
+  B054:
+    gaussian:
+      mu: 631.50
+      sigma: 3.2
+  B055:
+    gaussian:
+      mu: 634.69
+      sigma: 3.2
+  B056:
+    gaussian:
+      mu: 637.89
+      sigma: 3.2
+  B057:
+    gaussian:
+      mu: 641.09
+      sigma: 3.2
+  B058:
+    gaussian:
+      mu: 644.28
+      sigma: 3.2
+  B059:
+    gaussian:
+      mu: 647.48
+      sigma: 3.2
+  B060:
+    gaussian:
+      mu: 650.67
+      sigma: 3.2
+  B061:
+    gaussian:
+      mu: 653.87
+      sigma: 3.2
+  B062:
+    gaussian:
+      mu: 657.07
+      sigma: 3.2
+  B063:
+    gaussian:
+      mu: 660.27
+      sigma: 3.2
+  B064:
+    gaussian:
+      mu: 663.46
+      sigma: 3.2
+  B065:
+    gaussian:
+      mu: 666.66
+      sigma: 3.2
+  B066:
+    gaussian:
+      mu: 669.85
+      sigma: 3.2
+  B067:
+    gaussian:
+      mu: 673.05
+      sigma: 3.2
+  B068:
+    gaussian:
+      mu: 676.25
+      sigma: 3.2
+  B069:
+    gaussian:
+      mu: 679.45
+      sigma: 3.2
+  B070:
+    gaussian:
+      mu: 682.64
+      sigma: 3.2
+  B071:
+    gaussian:
+      mu: 685.84
+      sigma: 3.2
+  B072:
+    gaussian:
+      mu: 689.03
+      sigma: 3.2
+  B073:
+    gaussian:
+      mu: 692.23
+      sigma: 3.2
+  B074:
+    gaussian:
+      mu: 695.43
+      sigma: 3.2
+  B075:
+    gaussian:
+      mu: 698.62
+      sigma: 3.2
+  B076:
+    gaussian:
+      mu: 701.82
+      sigma: 3.2
+  B077:
+    gaussian:
+      mu: 705.02
+      sigma: 3.2
+  B078:
+    gaussian:
+      mu: 708.21
+      sigma: 3.2
+  B079:
+    gaussian:
+      mu: 711.41
+      sigma: 3.2
+  B080:
+    gaussian:
+      mu: 714.61
+      sigma: 3.2
+  B081:
+    gaussian:
+      mu: 717.80
+      sigma: 3.2
+  B082:
+    gaussian:
+      mu: 721.00
+      sigma: 3.2
+  B083:
+    gaussian:
+      mu: 724.20
+      sigma: 3.2
+  B084:
+    gaussian:
+      mu: 727.39
+      sigma: 3.2
+  B085:
+    gaussian:
+      mu: 730.59
+      sigma: 3.2
+  B086:
+    gaussian:
+      mu: 733.79
+      sigma: 3.2
+  B087:
+    gaussian:
+      mu: 736.98
+      sigma: 3.2
+  B088:
+    gaussian:
+      mu: 740.18
+      sigma: 3.2
+  B089:
+    gaussian:
+      mu: 743.38
+      sigma: 3.2
+  B090:
+    gaussian:
+      mu: 746.57
+      sigma: 3.2
+  B091:
+    gaussian:
+      mu: 749.77
+      sigma: 3.2
+  B092:
+    gaussian:
+      mu: 752.97
+      sigma: 3.2
+  B093:
+    gaussian:
+      mu: 756.16
+      sigma: 3.2
+  B094:
+    gaussian:
+      mu: 759.36
+      sigma: 3.2
+  B095:
+    gaussian:
+      mu: 762.56
+      sigma: 3.2
+  B096:
+    gaussian:
+      mu: 765.75
+      sigma: 3.2
+  B097:
+    gaussian:
+      mu: 768.95
+      sigma: 3.2
+  B098:
+    gaussian:
+      mu: 772.15
+      sigma: 3.2
+  B099:
+    gaussian:
+      mu: 775.34
+      sigma: 3.2
+  B100:
+    gaussian:
+      mu: 778.54
+      sigma: 3.2
+  B101:
+    gaussian:
+      mu: 781.74
+      sigma: 3.2
+  B102:
+    gaussian:
+      mu: 784.93
+      sigma: 3.2
+  B103:
+    gaussian:
+      mu: 788.13
+      sigma: 3.2
+  B104:
+    gaussian:
+      mu: 791.33
+      sigma: 3.2
+  B105:
+    gaussian:
+      mu: 794.52
+      sigma: 3.2
+  B106:
+    gaussian:
+      mu: 797.72
+      sigma: 3.2
+  B107:
+    gaussian:
+      mu: 800.92
+      sigma: 3.2
+  B108:
+    gaussian:
+      mu: 804.11
+      sigma: 3.2
+  B109:
+    gaussian:
+      mu: 807.31
+      sigma: 3.2
+  B110:
+    gaussian:
+      mu: 810.51
+      sigma: 3.2
+  B111:
+    gaussian:
+      mu: 813.70
+      sigma: 3.2
+  B112:
+    gaussian:
+      mu: 816.90
+      sigma: 3.2
+  B113:
+    gaussian:
+      mu: 820.10
+      sigma: 3.2
+  B114:
+    gaussian:
+      mu: 823.29
+      sigma: 3.2
+  B115:
+    gaussian:
+      mu: 826.49
+      sigma: 3.2
+  B116:
+    gaussian:
+      mu: 829.68
+      sigma: 3.2
+  B117:
+    gaussian:
+      mu: 832.88
+      sigma: 3.2
+  B118:
+    gaussian:
+      mu: 836.08
+      sigma: 3.2
+  B119:
+    gaussian:
+      mu: 839.28
+      sigma: 3.2
+  B120:
+    gaussian:
+      mu: 842.47
+      sigma: 3.2
+  B121:
+    gaussian:
+      mu: 845.67
+      sigma: 3.2
+  B122:
+    gaussian:
+      mu: 848.86
+      sigma: 3.2
+  B123:
+    gaussian:
+      mu: 852.06
+      sigma: 3.2
+  B124:
+    gaussian:
+      mu: 855.26
+      sigma: 3.2
+  B125:
+    gaussian:
+      mu: 858.46
+      sigma: 3.2
+  B126:
+    gaussian:
+      mu: 861.65
+      sigma: 3.2
+  B127:
+    gaussian:
+      mu: 864.85
+      sigma: 3.2
+  B128:
+    gaussian:
+      mu: 868.04
+      sigma: 3.2
+  B129:
+    gaussian:
+      mu: 871.24
+      sigma: 3.2
+  B130:
+    gaussian:
+      mu: 874.44
+      sigma: 3.2
+  B131:
+    gaussian:
+      mu: 877.63
+      sigma: 3.2
+  B132:
+    gaussian:
+      mu: 880.83
+      sigma: 3.2
+  B133:
+    gaussian:
+      mu: 884.03
+      sigma: 3.2
+  B134:
+    gaussian:
+      mu: 887.22
+      sigma: 3.2
+  B135:
+    gaussian:
+      mu: 890.42
+      sigma: 3.2
+  B136:
+    gaussian:
+      mu: 893.62
+      sigma: 3.2
+  B137:
+    gaussian:
+      mu: 896.81
+      sigma: 3.2
+  B138:
+    gaussian:
+      mu: 900.01
+      sigma: 3.2
+  B139:
+    gaussian:
+      mu: 903.21
+      sigma: 3.2
+  B140:
+    gaussian:
+      mu: 906.40
+      sigma: 3.2
+  B141:
+    gaussian:
+      mu: 909.60
+      sigma: 3.2
+  B142:
+    gaussian:
+      mu: 912.80
+      sigma: 3.2
+  B143:
+    gaussian:
+      mu: 915.99
+      sigma: 3.2
+  B144:
+    gaussian:
+      mu: 919.19
+      sigma: 3.2
+  B145:
+    gaussian:
+      mu: 922.39
+      sigma: 3.2
+  B146:
+    gaussian:
+      mu: 925.58
+      sigma: 3.2
+  B147:
+    gaussian:
+      mu: 928.78
+      sigma: 3.2
+  B148:
+    gaussian:
+      mu: 931.98
+      sigma: 3.2
+  B149:
+    gaussian:
+      mu: 935.17
+      sigma: 3.2
+  B150:
+    gaussian:
+      mu: 938.37
+      sigma: 3.2

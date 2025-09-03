@@ -25,15 +25,26 @@ def convert_sentinel1(window_path: UPath, helios_path: UPath) -> None:
         window_path: the rslearn window directory to read data from.
         helios_path: Helios dataset path to write to.
     """
-    convert_freq(
-        window_path,
-        helios_path,
-        LAYER_FREQ,
-        Modality.SENTINEL1,
-        missing_okay=True,
-        unprepared_okay=True,
-    )
-    convert_monthly(window_path, helios_path, LAYER_MONTHLY, Modality.SENTINEL1)
+    try:
+        convert_freq(
+            window_path,
+            helios_path,
+            LAYER_FREQ,
+            Modality.SENTINEL1,
+            missing_okay=True,
+            unprepared_okay=True,
+        )
+    except Exception as e:
+        print(
+            f"warning: got error {e} while converting frequent data for window {window_path}"
+        )
+
+    try:
+        convert_monthly(window_path, helios_path, LAYER_MONTHLY, Modality.SENTINEL1)
+    except Exception as e:
+        print(
+            f"warning: got error {e} while converting monthly data for window {window_path}"
+        )
 
 
 if __name__ == "__main__":

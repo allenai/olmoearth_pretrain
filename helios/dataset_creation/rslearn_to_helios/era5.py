@@ -20,7 +20,6 @@ from helios.dataset.utils import get_modality_fname
 
 from ..constants import METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
-from .multitemporal_raster import get_adjusted_projection_and_bounds
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "era5"
@@ -71,20 +70,17 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
         # Use first item in the group to get the start time for this image.
         time_range = Item.deserialize(group[0]).geometry.time_range
 
-        # Compute bounds of this raster adjusted for the resolution.
-        adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
-            Modality.ERA5, band_set, window.projection, window.bounds
-        )
-
         raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands, group_idx)
         image = raster_format.decode_raster(
-            raster_dir, adjusted_projection, adjusted_bounds
+            raster_dir, window.projection, window.bounds
         )
 
         year_images.append(image)
         year_time_ranges.append(time_range)
 
         # Should we use this image for the frequent data for this window?
+        assert window.time_range is not None, "Window time range should not be None"
+        assert time_range is not None, "Item time range should not be None"
         if (
             window.time_range[0] < time_range[1]
             and time_range[0] < window.time_range[1]
@@ -97,6 +93,11 @@ def convert_era5(window_path: UPath, helios_path: UPath) -> None:
             f"skipping window {window.name} because it only has {len(year_images)} images in {LAYER_NAME}"
         )
         return
+    else:
+        # In case there are more than 12 images, only use the first 12
+        year_images = year_images[:12]
+        year_time_ranges = year_time_ranges[:12]
+
     if two_week_image is None or two_week_time_range is None:
         logger.warning(
             f"skipping window {window.name} because it did not have an image intersecting the window time range"

@@ -8,6 +8,7 @@ import torch
 from helios.data.constants import Modality, ModalitySpec
 from helios.nn.flexihelios import Encoder, Predictor
 from helios.nn.latent_mim import LatentMIM
+from helios.nn.utils import unpack_encoder_output
 from helios.train.loss import PatchDiscriminationLoss
 from helios.train.masking import MaskedHeliosSample
 
@@ -70,7 +71,6 @@ def test_latentmim_with_loss(
         num_heads=NUM_HEADS,
         mlp_ratio=MLP_RATIO,
         max_sequence_length=MAX_SEQ_LENGTH,
-        use_channel_embs=True,
         depth=DEPTH,
         drop_path=DROP_PATH,
     )
@@ -83,11 +83,10 @@ def test_latentmim_with_loss(
         num_heads=NUM_HEADS,
         max_sequence_length=MAX_SEQ_LENGTH,
         drop_path=DROP_PATH,
-        learnable_channel_embeddings=True,
     )
     latentmim = LatentMIM(encoder, predictor)
 
-    _, output = latentmim.forward(x, patch_size)
+    _, output, _, _ = latentmim.forward(x, patch_size)
     output = predictor.forward(output, x.timestamps, patch_size, input_res=1)
     patched_H = H // patch_size
     patched_W = W // patch_size
@@ -139,13 +138,14 @@ def test_latentmim_with_loss(
     loss_fn = PatchDiscriminationLoss()
     with torch.no_grad():
         logger.info("target encoder running here")
-        target_output = latentmim.target_encoder.forward(
+        output_dict = latentmim.target_encoder.forward(
             x.unmask(),
             patch_size=patch_size,
             token_exit_cfg={
                 modality: 0 for modality in latentmim.encoder.supported_modality_names
             },
         )
+        target_output, _, _ = unpack_encoder_output(output_dict)
     loss_fn.compute(output, target_output).backward()
 
     for name, param in latentmim.encoder.named_parameters():
@@ -159,6 +159,7 @@ def test_latentmim_with_loss(
                 "composite_encodings.per_modality_channel_embeddings.worldcover",
                 "patch_embeddings.per_modality_embeddings.latlon",
                 "patch_embeddings.per_modality_embeddings.worldcover",
+                "project_and_aggregate",
             ]
         ):
             assert param.grad is not None, name

@@ -268,6 +268,7 @@ class MADOSDataset(Dataset):
         """Return a single MADOS data instance."""
         image = self.images[idx]  # (80, 80, 13)
         label = self.labels[idx]  # (80, 80)
+
         if not self.norm_stats_from_pretrained:
             image = normalize_bands(
                 image.numpy(), self.means, self.stds, self.norm_method
@@ -278,8 +279,10 @@ class MADOSDataset(Dataset):
             :,
             EVAL_TO_HELIOS_S2_BANDS,
         ]
+
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
+
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
         masked_sample = MaskedHeliosSample.from_heliossample(
             HeliosSample(

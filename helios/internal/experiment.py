@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import cast
 
 import numpy as np
+from beaker import ExperimentSpec
 from olmo_core.config import Config, StrEnum
 from olmo_core.distributed.utils import get_local_rank
 from olmo_core.launch.beaker import BeakerLaunchConfig
@@ -22,25 +23,44 @@ from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig, collate_helios
 from helios.data.visualize import visualize_sample
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 from helios.train.train_module.train_module import HeliosTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
-# TODO: Make this more agnostic to the training setup
-# TODO: Add support for different model configs
-# TODO: Add support for different train module configs
+
+@dataclass
+class HeliosBeakerLaunchConfig(BeakerLaunchConfig):
+    """Extend BeakerLaunchConfig with hostnames option.
+
+    This enables targeting specific Beaker hosts.
+    """
+
+    hostnames: list[str] | None = None
+
+    def build_experiment_spec(
+        self, torchrun: bool = True, entrypoint: str | None = None
+    ) -> ExperimentSpec:
+        """Build the experiment spec."""
+        # We simply call the superclass build_experiment_spec, but just replace cluster
+        # setting in the Constraints with hostname setting if user provided hostname
+        # list.
+        spec = super().build_experiment_spec(torchrun, entrypoint)
+        if self.hostnames:
+            constraints = spec.tasks[0].constraints
+            constraints.cluster = None
+            constraints.hostname = self.hostnames
+        return spec
 
 
-# maybe this build common components can be the same function for every experiment
 @dataclass
 class CommonComponents(Config):
     """Any configurable items that are common to all experiments."""
 
     run_name: str
     save_folder: str
-    launch: BeakerLaunchConfig
+    launch: HeliosBeakerLaunchConfig
     training_modalities: list[str]
+    nccl_debug: bool = False
     # callbacks: dict[str, Callback]
 
     def validate(self) -> None:
@@ -70,13 +90,13 @@ class HeliosExperimentConfig(Config):
     """Configuration for a Helios experiment."""
 
     run_name: str
-    launch: BeakerLaunchConfig
+    launch: HeliosBeakerLaunchConfig
     model: Config
     dataset: Config  # will likely be fixed for us
     data_loader: HeliosDataLoaderConfig  # will likely be fixed for us
     train_module: HeliosTrainModuleConfig
     trainer: TrainerConfig
-    visualize_config: HeliosVisualizeConfig | None = None
+    visualize: HeliosVisualizeConfig | None = None
     init_seed: int = 12536
 
 
@@ -129,7 +149,7 @@ def build_config(
         data_loader=dataloader_config,
         train_module=train_module_config,
         trainer=trainer_config,
-        visualize_config=visualize_config,
+        visualize=visualize_config,
         launch=common.launch,
     )
     logger.info("Overrides: %s", overrides)
@@ -165,9 +185,9 @@ def train(config: HeliosExperimentConfig) -> None:
 def visualize(config: HeliosExperimentConfig) -> None:
     """Visualize the dataset for an experiment."""
     logger.info("Visualizing the dataset")
-    if config.visualize_config is None:
+    if config.visualize is None:
         raise ValueError("visualize_config is not set")
-    global_step = config.visualize_config.global_step
+    global_step = config.visualize.global_step
     dataset = config.dataset.build()
     if global_step is not None:
         data_loader = config.data_loader.build(
@@ -176,11 +196,11 @@ def visualize(config: HeliosExperimentConfig) -> None:
         sample_indices = data_loader.fast_forward(global_step)
     else:
         sample_indices = np.random.randint(
-            0, len(dataset), config.visualize_config.num_samples
+            0, len(dataset), config.visualize.num_samples
         )
     logger.info(f"sample indices: {sample_indices}")
     for sample_index in sample_indices:
-        visualize_sample(dataset, sample_index, config.visualize_config.output_dir)
+        visualize_sample(dataset, sample_index, config.visualize.output_dir)
     logger.info("Done visualizing the dataset")
 
 
@@ -261,7 +281,7 @@ class SubCmd(StrEnum):
         if self == SubCmd.launch:
             launch(config)
         elif self == SubCmd.dry_run:
-            pass
+            logger.info(config)
         elif self == SubCmd.visualize:
             seed_all(config.init_seed)
             visualize(config)
@@ -296,9 +316,7 @@ def main(
     dataset_config_builder: Callable[[CommonComponents], Config],
     dataloader_config_builder: Callable[[CommonComponents], HeliosDataLoaderConfig],
     trainer_config_builder: Callable[[CommonComponents], TrainerConfig],
-    train_module_config_builder: Callable[
-        [CommonComponents], LatentMIMTrainModuleConfig
-    ],
+    train_module_config_builder: Callable[[CommonComponents], HeliosTrainModuleConfig],
     visualize_config_builder: (
         Callable[[CommonComponents], HeliosVisualizeConfig] | None
     ) = None,
@@ -327,7 +345,7 @@ If running command on a local machine ie from a session, you can use the [b]loca
     # Visualize the dataset
     python train.py visualize
     """.strip()
-
+    logger.info(f"Running {sys.argv}")
     if len(sys.argv) < 4 or sys.argv[1] not in set(SubCmd):
         import rich
 

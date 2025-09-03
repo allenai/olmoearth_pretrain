@@ -7,12 +7,14 @@ import types
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
 import rasterio
 import torch
 from rasterio.transform import from_origin
+from upath import UPath
 
 from helios.data.constants import MISSING_VALUE, BandSet, Modality, ModalitySpec
 from helios.data.dataset import HeliosSample
@@ -73,10 +75,10 @@ def create_geotiff(
             dst.write(data[band - 1], band)
 
 
-@pytest.fixture
-def prepare_samples_and_supported_modalities() -> (
-    tuple[Callable[[Path], list[SampleInformation]], list[ModalitySpec]]
-):
+@pytest.fixture(scope="session")
+def prepare_samples_and_supported_modalities() -> tuple[
+    Callable[[Path], list[SampleInformation]], list[ModalitySpec]
+]:
     """Function to create samples in a directory.
 
     and also returns what modalities are supported in these samples
@@ -130,6 +132,7 @@ def prepare_samples_and_supported_modalities() -> (
                             ): data_path / "s2_l2a_20m.tif",
                             BandSet(["B01", "B09"], 64): data_path / "s2_l2a_40m.tif",
                         },
+                        modality=Modality.SENTINEL2_L2A,
                     ),
                     Modality.SENTINEL1: ModalityTile(
                         grid_tile=GridTile(
@@ -140,6 +143,7 @@ def prepare_samples_and_supported_modalities() -> (
                         band_sets={
                             BandSet(["VV", "VH"], 16): data_path / "s1_10m.tif",
                         },
+                        modality=Modality.SENTINEL1,
                     ),
                     Modality.WORLDCOVER: ModalityTile(
                         grid_tile=GridTile(
@@ -148,6 +152,7 @@ def prepare_samples_and_supported_modalities() -> (
                         images=images,
                         center_time=datetime(2020, 6, 30),
                         band_sets={BandSet(["B1"], 16): data_path / "worldcover.tif"},
+                        modality=Modality.WORLDCOVER,
                     ),
                     Modality.OPENSTREETMAP_RASTER: ModalityTile(
                         grid_tile=GridTile(
@@ -192,6 +197,7 @@ def prepare_samples_and_supported_modalities() -> (
                                 4,
                             ): data_path / "openstreetmap.tif",
                         },
+                        modality=Modality.OPENSTREETMAP_RASTER,
                     ),
                 },
             )
@@ -210,15 +216,21 @@ def prepare_samples_and_supported_modalities() -> (
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
+def session_tmp_path(tmp_path_factory: Any) -> Path:
+    """Session-scoped temporary directory."""
+    return tmp_path_factory.mktemp("session")
+
+
+@pytest.fixture(scope="session")
 def setup_h5py_dir(
-    tmp_path: Path, prepare_samples_and_supported_modalities: tuple
-) -> Path:
+    session_tmp_path: Path, prepare_samples_and_supported_modalities: tuple
+) -> UPath:
     """Setup the h5py directory."""
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
-    prepared_samples = prepare_samples(tmp_path)
+    prepared_samples = prepare_samples(session_tmp_path)
     convert_to_h5py = ConvertToH5py(
-        tile_path=tmp_path,
+        tile_path=session_tmp_path,
         supported_modalities=[m for m in supported_modalities if m != Modality.LATLON],
         multiprocessed_h5_creation=False,
     )
@@ -226,7 +238,44 @@ def setup_h5py_dir(
     supported_modalities = [
         m.name for m in supported_modalities if m != Modality.LATLON
     ]
-    return tmp_path / "h5py_data" / "_".join(sorted(supported_modalities)) / "1"
+    assert convert_to_h5py is not None
+    return convert_to_h5py.h5py_dir
+
+
+def prepare_h5py_dir_n_samples(
+    tmp_path: Path, prepare_samples_and_supported_modalities: tuple, n: int
+) -> UPath:
+    """Setup the h5py directory with n samples."""
+    prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
+    prepared_samples = prepare_samples(tmp_path)
+    convert_to_h5py = ConvertToH5py(
+        tile_path=tmp_path,
+        supported_modalities=[m for m in supported_modalities if m != Modality.LATLON],
+        multiprocessed_h5_creation=False,
+    )
+    convert_to_h5py.prepare_h5_dataset(prepared_samples * n)
+    assert convert_to_h5py is not None
+    return convert_to_h5py.h5py_dir
+
+
+@pytest.fixture(scope="session")
+def setup_h5py_dir_100_samples(
+    session_tmp_path: Path, prepare_samples_and_supported_modalities: tuple
+) -> UPath:
+    """Setup the h5py directory with 100 samples."""
+    return prepare_h5py_dir_n_samples(
+        session_tmp_path, prepare_samples_and_supported_modalities, 100
+    )
+
+
+@pytest.fixture(scope="session")
+def setup_h5py_dir_20_samples(
+    session_tmp_path: Path, prepare_samples_and_supported_modalities: tuple
+) -> UPath:
+    """Setup the h5py directory with 20 samples."""
+    return prepare_h5py_dir_n_samples(
+        session_tmp_path, prepare_samples_and_supported_modalities, 20
+    )
 
 
 @pytest.fixture
@@ -237,7 +286,7 @@ def masked_sample_dict(
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
     B, H, W, T, C = (
-        4,
+        2,
         4,
         4,
         2,
@@ -282,14 +331,24 @@ def masked_sample_dict(
 @pytest.fixture
 def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
     """Samples with missing modalities."""
-    s2_H, s2_W, s2_T, s2_C = 16, 16, 12, 13
-    s1_H, s1_W, s1_T, s1_C = 16, 16, 12, 2
-    wc_H, wc_W, wc_T, wc_C = 16, 16, 1, 10
+    s2_H, s2_W, s2_T, s2_C = 8, 8, 12, 13
+    s1_H, s1_W, s1_T, s1_C = 8, 8, 12, 2
+    wc_H, wc_W, wc_T, wc_C = 8, 8, 1, 10
+    na_H, na_W, na_T, na_C = 128, 128, 1, 10
 
-    example_s2_data = np.random.randn(s2_H, s2_W, s2_T, s2_C)
-    example_s1_data = np.random.randn(s1_H, s1_W, s1_T, s1_C)
-    example_wc_data = np.random.randn(wc_H, wc_W, wc_T, wc_C)
-    example_latlon_data = np.random.randn(2)
+    example_s2_data = np.random.randn(s2_H, s2_W, s2_T, s2_C).astype(np.float32)
+    example_s1_data = np.random.randn(s1_H, s1_W, s1_T, s1_C).astype(np.float32)
+    example_wc_data = np.random.randn(wc_H, wc_W, wc_T, wc_C).astype(np.float32)
+    example_na_data = np.random.randn(na_H, na_W, na_T, na_C).astype(np.float32)
+    example_latlon_data = np.random.randn(2).astype(np.float32)
+
+    missing_s1_data = np.full((s1_H, s1_W, s1_T, s1_C), MISSING_VALUE).astype(
+        np.float32
+    )
+    missing_wc_data = np.full((wc_H, wc_W, wc_T, wc_C), MISSING_VALUE).astype(
+        np.float32
+    )
+
     timestamps = np.array(
         [
             [15, 7, 2023],
@@ -307,21 +366,12 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
         ],
         dtype=np.int32,
     )
-    missing_s1_data = np.random.randn(s1_H, s1_W, s1_T, s1_C)
-    missing_s1_data[:] = MISSING_VALUE
-    missing_wc_data = np.random.randn(wc_H, wc_W, wc_T, wc_C)
-    missing_wc_data[:] = MISSING_VALUE
-    example_s2_data = example_s2_data.astype(np.float32)
-    example_s1_data = example_s1_data.astype(np.float32)
-    example_wc_data = example_wc_data.astype(np.float32)
-    example_latlon_data = example_latlon_data.astype(np.float32)
-    missing_s1_data = missing_s1_data.astype(np.float32)
-    missing_wc_data = missing_wc_data.astype(np.float32)
 
     sample1 = HeliosSample(
         sentinel2_l2a=example_s2_data,
         sentinel1=example_s1_data,
         worldcover=example_wc_data,
+        naip_10=example_na_data,
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
@@ -330,6 +380,7 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
         sentinel2_l2a=example_s2_data,
         sentinel1=missing_s1_data,
         worldcover=example_wc_data,
+        naip_10=example_na_data,
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
@@ -338,6 +389,7 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
         sentinel2_l2a=example_s2_data,
         sentinel1=example_s1_data,
         worldcover=missing_wc_data,
+        naip_10=example_na_data,
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
@@ -351,13 +403,15 @@ def samples_without_missing_modalities(
     set_random_seeds: None,
 ) -> list[tuple[int, HeliosSample]]:
     """Samples without missing modalities."""
-    s2_H, s2_W, s2_T, s2_C = 16, 16, 12, 13
-    s1_H, s1_W, s1_T, s1_C = 16, 16, 12, 2
-    wc_H, wc_W, wc_T, wc_C = 16, 16, 1, 10
+    s2_H, s2_W, s2_T, s2_C = 8, 8, 12, 13
+    s1_H, s1_W, s1_T, s1_C = 8, 8, 12, 2
+    wc_H, wc_W, wc_T, wc_C = 8, 8, 1, 10
+    na_H, na_W, na_T, na_C = 128, 128, 1, 10
     example_s2_data = np.random.randn(s2_H, s2_W, s2_T, s2_C).astype(np.float32)
     example_s1_data = np.random.randn(s1_H, s1_W, s1_T, s1_C).astype(np.float32)
     example_wc_data = np.random.randn(wc_H, wc_W, wc_T, wc_C).astype(np.float32)
     example_latlon_data = np.random.randn(2).astype(np.float32)
+    example_na_data = np.random.randn(na_H, na_W, na_T, na_C).astype(np.float32)
     timestamps = np.array(
         [
             [15, 7, 2023],
@@ -380,6 +434,7 @@ def samples_without_missing_modalities(
         sentinel2_l2a=example_s2_data,
         sentinel1=example_s1_data,
         worldcover=example_wc_data,
+        naip_10=example_na_data,
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
@@ -388,6 +443,7 @@ def samples_without_missing_modalities(
         sentinel2_l2a=example_s2_data,
         sentinel1=example_s1_data,
         worldcover=example_wc_data,
+        naip_10=example_na_data,
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
@@ -396,9 +452,28 @@ def samples_without_missing_modalities(
         sentinel2_l2a=example_s2_data,
         sentinel1=example_s1_data,
         worldcover=example_wc_data,
+        naip_10=example_na_data,
         latlon=example_latlon_data,
         timestamps=timestamps,
     )
 
     batch = [(1, sample1), (1, sample2), (1, sample_3)]
     return batch
+
+
+@pytest.fixture
+def modality_band_set_len_and_total_bands(
+    supported_modalities: list[ModalitySpec],
+) -> dict[str, tuple[int, int]]:
+    """Get the number of band sets and total bands for each modality.
+
+    Returns:
+        Dictionary mapping modality name to tuple of (num_band_sets, total_bands)
+    """
+    return {
+        modality.name: (
+            len(modality.band_sets),
+            modality.num_bands,
+        )
+        for modality in supported_modalities
+    }

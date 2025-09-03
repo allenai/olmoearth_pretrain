@@ -5,7 +5,7 @@ import multiprocessing
 import random
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from multiprocessing.pool import IMapIterator
 from typing import Any
 
@@ -35,8 +35,8 @@ FALLBACK_RESOLUTION = 10
 COARSE_RESOLUTION = 160
 
 # Time range to use in case no high-resolution imagery is available.
-START_TIME = datetime(2016, 6, 1, tzinfo=timezone.utc)
-END_TIME = datetime(2024, 6, 1, tzinfo=timezone.utc)
+START_TIME = datetime(2016, 6, 1, tzinfo=UTC)
+END_TIME = datetime(2024, 6, 1, tzinfo=UTC)
 
 
 @dataclass(frozen=True)
@@ -281,7 +281,7 @@ def sample_timestamp(start_time: datetime, end_time: datetime) -> datetime:
     selected_seconds = random.randint(0, int(total_seconds))
     selected_ts = START_TIME + timedelta(seconds=selected_seconds)
     selected_date = datetime(
-        selected_ts.year, selected_ts.month, selected_ts.day, tzinfo=timezone.utc
+        selected_ts.year, selected_ts.month, selected_ts.day, tzinfo=UTC
     )
     return selected_date
 

@@ -16,6 +16,7 @@ from helios.nn.flexihelios import (
     Predictor,
     TokensAndMasks,
 )
+from helios.nn.utils import unpack_encoder_output
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,64 @@ class TestFlexiHeliosPatchEmbeddings:
         )  # B, C_G , D
         assert output["latlon_mask"].shape == (B, latlon_num_band_sets)  # B, C_G
 
+    def test_forward_with_missing_modalities(
+        self,
+        patch_embeddings: FlexiHeliosPatchEmbeddings,
+        modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    ) -> None:
+        """Test the forward pass of the patch embeddings."""
+        sentinel_2_num_band_sets, sentinel_2_num_bands = (
+            modality_band_set_len_and_total_bands["sentinel2_l2a"]
+        )
+        latlon_num_band_sets, latlon_num_bands = modality_band_set_len_and_total_bands[
+            "latlon"
+        ]
+        B, H, W, T, num_bands = 1, 16, 16, 3, sentinel_2_num_bands
+        sentinel2_l2a = torch.randn((B, H, W, T, num_bands))
+        sentinel2_l2a_mask = torch.zeros((B, H, W, T, num_bands), dtype=torch.long)
+        patch_size = 4
+
+        latlon = torch.randn(B, latlon_num_bands)
+        # ones means it should all be masked out from the perspective of the patch embeddings
+        latlon_mask = torch.ones((B, latlon_num_bands), dtype=torch.float32)
+        days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+        months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+        years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
+
+        masked_sample_dict = {
+            "sentinel2_l2a": sentinel2_l2a,
+            "sentinel2_l2a_mask": sentinel2_l2a_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+            "timestamps": timestamps,
+        }
+        sample = MaskedHeliosSample(**masked_sample_dict)
+        output = patch_embeddings.forward(sample, patch_size)
+        embedding_size = patch_embeddings.embedding_size
+        assert output["sentinel2_l2a"].shape == (
+            B,
+            H // patch_size,
+            W // patch_size,
+            T,
+            sentinel_2_num_band_sets,  # of band sets
+            embedding_size,
+        )
+        assert output["sentinel2_l2a_mask"].shape == (
+            B,
+            H // patch_size,
+            W // patch_size,
+            T,
+            sentinel_2_num_band_sets,  # of band sets
+        )
+        assert output["latlon"].shape == (
+            B,
+            latlon_num_band_sets,
+            embedding_size,
+        )  # B, C_G , D
+        assert (output["latlon"] == 0).all()
+        assert output["latlon_mask"].shape == (B, latlon_num_band_sets)  # B, C_G
+
 
 class TestEncoder:
     """Integration tests for the Encoder class."""
@@ -141,7 +200,6 @@ class TestEncoder:
             drop_path=0.1,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
-            use_channel_embs=True,
         )
 
     def test_apply_attn(
@@ -180,25 +238,30 @@ class TestEncoder:
         patch_size = 4
         input_res = 10
 
-        output = encoder.apply_attn(
-            x=x, timestamps=timestamps, patch_size=patch_size, input_res=input_res
-        )
+        for always_pass_none_mask_to_transformer in [True, False]:
+            output = encoder.apply_attn(
+                x=x,
+                timestamps=timestamps,
+                patch_size=patch_size,
+                input_res=input_res,
+                always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+            )
 
-        # Ensure shape is preserved in the output tokens.
-        assert (
-            output["sentinel2_l2a"].shape == sentinel2_l2a_tokens.shape
-        ), f"Expected output 'sentinel2_l2a' shape {sentinel2_l2a_tokens.shape}, got {output['sentinel2_l2a'].shape}."
+            # Ensure shape is preserved in the output tokens.
+            assert output["sentinel2_l2a"].shape == sentinel2_l2a_tokens.shape, (
+                f"Expected output 'sentinel2_l2a' shape {sentinel2_l2a_tokens.shape}, got {output['sentinel2_l2a'].shape}."
+            )
 
-        # Confirm the mask was preserved and that masked tokens are zeroed out in the output.
-        assert (
-            output["sentinel2_l2a_mask"] == sentinel2_l2a_mask
-        ).all(), "Mask should be preserved in output"
-        assert (
-            output["sentinel2_l2a"][
-                sentinel2_l2a_mask >= MaskValue.TARGET_ENCODER_ONLY.value
-            ]
-            == 0
-        ).all(), "Masked tokens should be 0 in output"
+            # Confirm the mask was preserved and that masked tokens are zeroed out in the output.
+            assert (output["sentinel2_l2a_mask"] == sentinel2_l2a_mask).all(), (
+                "Mask should be preserved in output"
+            )
+            assert (
+                output["sentinel2_l2a"][
+                    sentinel2_l2a_mask >= MaskValue.TARGET_ENCODER_ONLY.value
+                ]
+                == 0
+            ).all(), "Masked tokens should be 0 in output"
 
     def test_forward_exit_config_none(
         self,
@@ -239,7 +302,8 @@ class TestEncoder:
         input_res = 1
 
         # No early exit configuration is provided.
-        output = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output_dict = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output, _, _ = unpack_encoder_output(output_dict)
 
         # After patchification the spatial dimensions reduce.
         expected_H = H // patch_size
@@ -258,9 +322,9 @@ class TestEncoder:
         assert output.sentinel2_l2a_mask is not None
         assert output.latlon is not None
         assert output.latlon_mask is not None
-        assert (
-            output.sentinel2_l2a.shape == expected_shape
-        ), f"Expected output sentinel2_l2a shape {expected_shape}, got {output.sentinel2_l2a.shape}"
+        assert output.sentinel2_l2a.shape == expected_shape, (
+            f"Expected output sentinel2_l2a shape {expected_shape}, got {output.sentinel2_l2a.shape}"
+        )
 
         expected_mask_shape = (
             B,
@@ -269,21 +333,20 @@ class TestEncoder:
             T,
             sentinel2_l2a_num_band_sets,
         )
-        assert (
-            output.sentinel2_l2a_mask.shape == expected_mask_shape
-        ), f"Expected output sentinel2_l2a_mask shape {expected_mask_shape}, got {output.sentinel2_l2a_mask.shape}"
+        assert output.sentinel2_l2a_mask.shape == expected_mask_shape, (
+            f"Expected output sentinel2_l2a_mask shape {expected_mask_shape}, got {output.sentinel2_l2a_mask.shape}"
+        )
         assert output.latlon.shape == (
             B,
             latlon_num_band_sets,
             expected_embedding_size,
         ), f"Expected output latlon shape {latlon.shape}, got {output.latlon.shape}"
-        assert (
-            output.latlon_mask.shape
-            == (
-                B,
-                latlon_num_band_sets,
-            )
-        ), f"Expected output latlon_mask shape {latlon_mask.shape}, got {output.latlon_mask.shape}"
+        assert output.latlon_mask.shape == (
+            B,
+            latlon_num_band_sets,
+        ), (
+            f"Expected output latlon_mask shape {latlon_mask.shape}, got {output.latlon_mask.shape}"
+        )
 
         # test the gradients are correct too
         output.sentinel2_l2a.sum().backward()
@@ -293,6 +356,7 @@ class TestEncoder:
             if not any(
                 ignore_param in name
                 for ignore_param in [
+                    "project_and_aggregate",
                     "pos_embed",
                     "month_embed",
                     "composite_encodings.per_modality_channel_embeddings.latlon",
@@ -340,13 +404,13 @@ class TestEncoder:
 
         token_exit_cfg = {"sentinel2_l2a": 2, "latlon": 0}
 
-        output = encoder.forward(
+        output_dict = encoder.forward(
             x,
             patch_size,
             input_res,
             token_exit_cfg=token_exit_cfg,
         )
-
+        output, _, _ = unpack_encoder_output(output_dict)
         expected_H = H // patch_size
         expected_W = W // patch_size
         expected_embedding_size = encoder.embedding_size
@@ -362,9 +426,9 @@ class TestEncoder:
         assert output.sentinel2_l2a_mask is not None
         assert output.latlon is not None
         assert output.latlon_mask is not None
-        assert (
-            output.sentinel2_l2a.shape == expected_shape_sentinel2_l2a
-        ), f"Expected output sentinel2_l2a shape {expected_shape_sentinel2_l2a}, got {output.sentinel2_l2a.shape}"
+        assert output.sentinel2_l2a.shape == expected_shape_sentinel2_l2a, (
+            f"Expected output sentinel2_l2a shape {expected_shape_sentinel2_l2a}, got {output.sentinel2_l2a.shape}"
+        )
 
         expected_mask_shape = (
             B,
@@ -373,17 +437,17 @@ class TestEncoder:
             T,
             sentinel2_l2a_num_band_sets,
         )
-        assert (
-            output.sentinel2_l2a_mask.shape == expected_mask_shape
-        ), f"Expected output sentinel2_l2a_mask shape {expected_mask_shape}, got {output.sentinel2_l2a_mask.shape}"
+        assert output.sentinel2_l2a_mask.shape == expected_mask_shape, (
+            f"Expected output sentinel2_l2a_mask shape {expected_mask_shape}, got {output.sentinel2_l2a_mask.shape}"
+        )
         expected_shape_latlon = (
             B,
             latlon_num_band_sets,
             expected_embedding_size,
         )
-        assert (
-            output.latlon.shape == expected_shape_latlon
-        ), f"Expected output latlon shape {expected_shape_latlon}, got {output.latlon.shape}"
+        assert output.latlon.shape == expected_shape_latlon, (
+            f"Expected output latlon shape {expected_shape_latlon}, got {output.latlon.shape}"
+        )
 
         output.sentinel2_l2a.sum().backward()
         for name, param in encoder.named_parameters():
@@ -392,6 +456,7 @@ class TestEncoder:
                 any(
                     ignore_param in name
                     for ignore_param in [
+                        "project_and_aggregate",
                         "pos_embed",
                         "month_embed",
                         "composite_encodings.per_modality_channel_embeddings.latlon",
@@ -438,7 +503,8 @@ class TestEncoder:
         patch_size = 4
         input_res = 1
 
-        output = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output_dict = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output, _, _ = unpack_encoder_output(output_dict)
 
         # After patchification the spatial dimensions reduce.
         expected_H = H // patch_size
@@ -457,9 +523,9 @@ class TestEncoder:
         assert output.sentinel2_l2a_mask is not None
         assert output.latlon is not None
         assert output.latlon_mask is not None
-        assert (
-            output.sentinel2_l2a.shape == expected_shape
-        ), f"Expected output sentinel2_l2a shape {expected_shape}, got {output.sentinel2_l2a.shape}"
+        assert output.sentinel2_l2a.shape == expected_shape, (
+            f"Expected output sentinel2_l2a shape {expected_shape}, got {output.sentinel2_l2a.shape}"
+        )
 
         expected_mask_shape = (
             B,
@@ -468,21 +534,20 @@ class TestEncoder:
             T,
             sentinel2_l2a_num_band_sets,
         )
-        assert (
-            output.sentinel2_l2a_mask.shape == expected_mask_shape
-        ), f"Expected output sentinel2_l2a_mask shape {expected_mask_shape}, got {output.sentinel2_l2a_mask.shape}"
+        assert output.sentinel2_l2a_mask.shape == expected_mask_shape, (
+            f"Expected output sentinel2_l2a_mask shape {expected_mask_shape}, got {output.sentinel2_l2a_mask.shape}"
+        )
         assert output.latlon.shape == (
             B,
             1,
             expected_embedding_size,
         ), f"Expected output latlon shape {latlon.shape}, got {output.latlon.shape}"
-        assert (
-            output.latlon_mask.shape
-            == (
-                B,
-                1,
-            )
-        ), f"Expected output latlon_mask shape {latlon_mask.shape}, got {output.latlon_mask.shape}"
+        assert output.latlon_mask.shape == (
+            B,
+            1,
+        ), (
+            f"Expected output latlon_mask shape {latlon_mask.shape}, got {output.latlon_mask.shape}"
+        )
 
         output.sentinel2_l2a.sum().backward()
         for name, param in encoder.named_parameters():
@@ -495,6 +560,7 @@ class TestEncoder:
                         "month_embed",
                         "composite_encodings.per_modality_channel_embeddings.latlon",
                         "patch_embeddings.per_modality_embeddings.latlon",
+                        "project_and_aggregate",
                     ]
                 )
                 or ("block" in name)
@@ -521,7 +587,6 @@ class TestPredictor:
             num_heads=2,
             max_sequence_length=12,
             drop_path=0.1,
-            learnable_channel_embeddings=True,
             output_embedding_size=8,
         )
 
@@ -588,14 +653,14 @@ class TestPredictor:
         assert output.sentinel2_l2a_mask is not None
         assert output.latlon is not None
         assert output.latlon_mask is not None
-        assert (
-            output.sentinel2_l2a.shape == expected_token_shape
-        ), f"Expected tokens shape {expected_token_shape}, got {output.sentinel2_l2a.shape}"
+        assert output.sentinel2_l2a.shape == expected_token_shape, (
+            f"Expected tokens shape {expected_token_shape}, got {output.sentinel2_l2a.shape}"
+        )
 
         expected_mask_shape = (B, H, W, T, sentinel2_l2a_num_band_sets)
-        assert (
-            output.sentinel2_l2a_mask.shape == expected_mask_shape
-        ), f"Expected mask shape {expected_mask_shape}, got {output.sentinel2_l2a_mask.shape}"
+        assert output.sentinel2_l2a_mask.shape == expected_mask_shape, (
+            f"Expected mask shape {expected_mask_shape}, got {output.sentinel2_l2a_mask.shape}"
+        )
         assert output.latlon.shape == (
             B,
             latlon_num_band_sets,
@@ -678,14 +743,14 @@ class TestPredictor:
         assert output.sentinel2_l2a_mask is not None
         assert output.latlon is not None
         assert output.latlon_mask is not None
-        assert (
-            output.sentinel2_l2a.shape == expected_token_shape
-        ), f"Expected tokens shape {expected_token_shape}, got {output.sentinel2_l2a.shape}"
+        assert output.sentinel2_l2a.shape == expected_token_shape, (
+            f"Expected tokens shape {expected_token_shape}, got {output.sentinel2_l2a.shape}"
+        )
 
         expected_mask_shape = (B, H, W, T, sentinel2_l2a_num_band_sets)
-        assert (
-            output.sentinel2_l2a_mask.shape == expected_mask_shape
-        ), f"Expected mask shape {expected_mask_shape}, got {output.sentinel2_l2a_mask.shape}"
+        assert output.sentinel2_l2a_mask.shape == expected_mask_shape, (
+            f"Expected mask shape {expected_mask_shape}, got {output.sentinel2_l2a_mask.shape}"
+        )
         assert output.latlon.shape == (
             B,
             latlon_num_band_sets,
@@ -700,6 +765,7 @@ class TestPredictor:
                     "pos_embed",
                     "month_embed",
                     "composite_encodings.per_modality_channel_embeddings.latlon",
+                    "project_and_aggregate",
                 ]
             ):
                 assert param.grad is not None, name
@@ -742,7 +808,6 @@ def test_end_to_end_with_exit_config(
         num_heads=NUM_HEADS,
         mlp_ratio=MLP_RATIO,
         max_sequence_length=MAX_SEQ_LENGTH,
-        use_channel_embs=True,
         depth=DEPTH,
         drop_path=DROP_PATH,
     )
@@ -755,15 +820,17 @@ def test_end_to_end_with_exit_config(
         num_heads=NUM_HEADS,
         max_sequence_length=MAX_SEQ_LENGTH,
         drop_path=DROP_PATH,
-        learnable_channel_embeddings=True,
     )
-    output = encoder.forward(
+    output_dict = encoder.forward(
         x,
         patch_size,
         input_res,
         token_exit_cfg=token_exit_cfg,
     )
-    output = predictor.forward(output, x.timestamps, patch_size, input_res)
+    output, _, decoder_kwargs = unpack_encoder_output(output_dict)
+    output = predictor.forward(
+        output, x.timestamps, patch_size, input_res, **decoder_kwargs
+    )
     patched_H = H // patch_size
     patched_W = W // patch_size
     assert output.sentinel2_l2a is not None
@@ -819,6 +886,7 @@ def test_end_to_end_with_exit_config(
                 "pos_embed",
                 "month_embed",
                 "composite_encodings.per_modality_channel_embeddings.latlon",
+                "project_and_aggregate",
             ]
         ):
             assert param.grad is not None, name
