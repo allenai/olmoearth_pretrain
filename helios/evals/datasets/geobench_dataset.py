@@ -286,7 +286,7 @@ class GeobenchDataset(Dataset):
                     axis=-1,
                 )[:, :, :, EVAL_TO_HELIOS_L8_BANDS]
 
-            sample_dict["landsat"] = torch.tensor(landsat).float()
+            sample_dict["landsat"] = torch.as_tensor(landsat, dtype=torch.float32)
 
         else:
             s2 = repeat(x, "h w c -> h w t c", t=1)[
