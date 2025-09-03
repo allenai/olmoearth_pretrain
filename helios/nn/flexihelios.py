@@ -992,7 +992,7 @@ class FlexiHeliosBase(nn.Module):
         return tokens, masks
 
     def stack_spatial_modalities_and_masks(
-        self, tokens_dict: dict[str, Tensor]
+        self, tokens_dict: dict[str, Tensor],
     ) -> Tensor:
         """Stack the spatial modalities together."""
         available_modalities = return_modalities_from_dict(tokens_dict)
@@ -1002,7 +1002,10 @@ class FlexiHeliosBase(nn.Module):
         mask_list = []
         data_list = []
         for modality in modalities_to_process:
-            if Modality.get(modality).is_spatial:
+            # Hack for now only encoding spatial temporal modalities
+            modality_spec = Modality.get(modality)
+            if modality_spec.is_spatial and modality_spec.is_multitemporal:
+                logger.info(f"modality: {modality} is spatial")
                 masked_modality_name = MaskedHeliosSample.get_masked_modality_name(
                     modality
                 )

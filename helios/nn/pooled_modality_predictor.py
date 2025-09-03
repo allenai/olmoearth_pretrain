@@ -511,6 +511,7 @@ class EncodeEarlyAttnPool(Encoder):
         # update the tokens_dict with the original masks
         tokens_dict.update(original_masks_dict)
         logger.info(f"tokens_dict keys: {tokens_dict.keys()}")
+        # Dropping decode only modalities
         spatial_tokens, spatial_masks = self.stack_spatial_modalities_and_masks(
             tokens_dict
         )
