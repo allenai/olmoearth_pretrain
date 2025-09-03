@@ -71,12 +71,12 @@ def my_build_common_components(
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
         # Modality.NAIP_10.name,
-        Modality.WORLDCOVER.name,
+        # Modality.WORLDCOVER.name,
         # Modality.LATLON.name,
-        Modality.SRTM.name,
-        Modality.OPENSTREETMAP_RASTER.name,
-        Modality.WRI_CANOPY_HEIGHT_MAP.name,
-        Modality.CDL.name,
+        # Modality.SRTM.name,
+        # Modality.OPENSTREETMAP_RASTER.name,
+        # Modality.WRI_CANOPY_HEIGHT_MAP.name,
+        # Modality.CDL.name,
         # Modality.ERA5_10.name,
     ]
     return config
