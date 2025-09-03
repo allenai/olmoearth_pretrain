@@ -1357,6 +1357,37 @@ class Encoder(FlexiHeliosBase):
         else:
             return new_mask
 
+    def get_token_norm_stats(self, tokens: Tensor, register_tokens: Tensor) -> dict[str, float]:
+        """Get the token norm stats."""
+        # Compute norms for register tokens: [batch_size, num_register_tokens]
+        register_tokens_norms = torch.norm(register_tokens, dim=2)
+        reg_norms_flat = register_tokens_norms.flatten()
+        reg_stats = {
+            "register_mean": reg_norms_flat.mean().item(),
+            "register_min": reg_norms_flat.min().item(),
+            "register_max": reg_norms_flat.max().item(),
+        }
+
+        # Compute norms for non-register tokens: [batch_size, seq_len]
+        nonreg_tokens_norms = torch.norm(tokens, dim=2)
+        nonreg_norms_flat = nonreg_tokens_norms.flatten()
+        percentiles = [25.0, 75.0, 90.0, 95.0, 99.0]
+        nonreg_percentiles = torch.quantile(nonreg_norms_flat.float(), torch.tensor([p / 100.0 for p in percentiles], device=nonreg_norms_flat.device)).tolist()
+        nonreg_stats = {
+            "nonregister_mean": nonreg_norms_flat.mean().item(),
+            "nonregister_min": nonreg_norms_flat.min().item(),
+            "nonregister_max": nonreg_norms_flat.max().item(),
+            "nonregister_std": nonreg_norms_flat.std().item(),
+            "nonregister_25th": nonreg_percentiles[0],
+            "nonregister_75th": nonreg_percentiles[1],
+            "nonregister_90th": nonreg_percentiles[2],
+            "nonregister_95th": nonreg_percentiles[3],
+            "nonregister_99th": nonreg_percentiles[4],
+        }
+
+        token_norm_stats = {**reg_stats, **nonreg_stats}
+        return token_norm_stats
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -1452,34 +1483,7 @@ class Encoder(FlexiHeliosBase):
             register_tokens = tokens[:, :self.num_register_tokens, :]
             tokens = tokens[:, self.num_register_tokens:, :]
 
-            # Compute norms for register tokens: [batch_size, num_register_tokens]
-            register_tokens_norms = torch.norm(register_tokens, dim=2)
-            reg_norms_flat = register_tokens_norms.flatten()
-            reg_stats = {
-                "register_mean": reg_norms_flat.mean().item(),
-                "register_min": reg_norms_flat.min().item(),
-                "register_max": reg_norms_flat.max().item(),
-            }
-
-            # Compute norms for non-register tokens: [batch_size, seq_len]
-            nonreg_tokens_norms = torch.norm(tokens, dim=2)
-            nonreg_norms_flat = nonreg_tokens_norms.flatten()
-            percentiles = [25.0, 75.0, 90.0, 95.0, 99.0]
-            nonreg_percentiles = torch.quantile(nonreg_norms_flat.float(), torch.tensor([p / 100.0 for p in percentiles], device=nonreg_norms_flat.device)).tolist()
-            nonreg_stats = {
-                "nonregister_mean": nonreg_norms_flat.mean().item(),
-                "nonregister_min": nonreg_norms_flat.min().item(),
-                "nonregister_max": nonreg_norms_flat.max().item(),
-                "nonregister_std": nonreg_norms_flat.std().item(),
-                "nonregister_25th": nonreg_percentiles[0],
-                "nonregister_75th": nonreg_percentiles[1],
-                "nonregister_90th": nonreg_percentiles[2],
-                "nonregister_95th": nonreg_percentiles[3],
-                "nonregister_99th": nonreg_percentiles[4],
-            }
-
-            token_norm_stats = {**reg_stats, **nonreg_stats}
-            # You can log or hook token_norm_stats as needed
+            token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
 
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)

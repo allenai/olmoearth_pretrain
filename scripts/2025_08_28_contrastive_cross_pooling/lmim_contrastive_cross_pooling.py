@@ -94,8 +94,9 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
         num_pre_modality_pooling_layers=2,
-        use_mlp=False,
-        pooling_attn_dim=1536,
+        use_mlp=True,
+        num_register_tokens=4,
+        attn_pool_mlp_ratio=4.0,
     )
     decoder_config = PooledModalityPredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
