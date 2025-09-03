@@ -37,6 +37,10 @@ from helios.nn.flexihelios import (
     PoolingType,
 )
 from helios.nn.latent_mim import LatentMIMConfig
+from helios.nn.pooled_modality_predictor import (
+    EncoderEarlyAttnPoolConfig,
+    PooledModalityPredictorConfig,
+)
 from helios.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
@@ -48,10 +52,7 @@ from helios.train.masking import MaskingConfig
 from helios.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
 )
-from helios.nn.pooled_modality_predictor import (
-    EncoderEarlyAttnPoolConfig,
-    PooledModalityPredictorConfig,
-)
+
 logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
@@ -112,7 +113,6 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         decoder_config=decoder_config,
     )
     return model_config
-
 
 
 def build_train_module_config(
@@ -252,13 +252,14 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             use_pooled_tokens=use_pooled_tokens,
         ),
         "m_bigearthnet": DownstreamTaskConfig(
-        dataset="m-bigearthnet",
-        embedding_batch_size=64,
-        num_workers=4,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        eval_interval=Duration.steps(25000),
-    ),
+            dataset="m-bigearthnet",
+            embedding_batch_size=64,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.steps(25000),
+            use_pooled_tokens=use_pooled_tokens,
+        ),
         "m_so2sat": DownstreamTaskConfig(
             dataset="m-so2sat",
             embedding_batch_size=128,
@@ -266,6 +267,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.epochs(10000),
+            use_pooled_tokens=use_pooled_tokens,
         ),
         # add cashew plant, so2sat and big earthnet
     }
