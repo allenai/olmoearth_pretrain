@@ -532,16 +532,16 @@ class Block(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
         self.norm2 = norm_layer(dim)
-        self.mlp = Mlp(
-            in_features=dim,
-            hidden_features=int(dim * mlp_ratio),
-            act_layer=act_layer,
-            drop=drop,
-        )
-        # # Try switch to SwiGLU
-        # self.mlp = MlpSwiGLU(
-        #     in_features=dim, hidden_mult=4.0, out_features=dim, drop=drop
+        # self.mlp = Mlp(
+        #     in_features=dim,
+        #     hidden_features=int(dim * mlp_ratio),
+        #     act_layer=act_layer,
+        #     drop=drop,
         # )
+        # Try switch to SwiGLU
+        self.mlp = MlpSwiGLU(
+            in_features=dim, hidden_mult=2.0, out_features=dim, drop=drop
+        )
 
         self.ls2 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
