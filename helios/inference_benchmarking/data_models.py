@@ -106,6 +106,11 @@ class RunParams:
         )
 
     @staticmethod
+    def from_config(config: dict) -> "RunParams":
+        """Recreate an instance of 'RunParams' from a config dict."""
+        return RunParams(**config)
+
+    @staticmethod
     def from_run_name(name: str) -> "RunParams":
         """Recreate an instance of 'RunParams' from a prior run's stringified name."""
         split_name = name.split("_")

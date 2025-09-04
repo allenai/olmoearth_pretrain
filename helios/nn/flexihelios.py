@@ -1351,6 +1351,7 @@ class Encoder(FlexiHeliosBase):
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
+        # already a no-op but we could remove entirely
         exit_ids_seq = self.create_exit_seqs(
             tokens_only_dict, original_masks_dict, token_exit_cfg
         )
@@ -1368,6 +1369,7 @@ class Encoder(FlexiHeliosBase):
 
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
 
+        # we could remove this sort entirely
         tokens, indices, new_mask, seq_lengths, max_seqlen = self.remove_masked_tokens(
             tokens, bool_mask
         )
@@ -1379,6 +1381,8 @@ class Encoder(FlexiHeliosBase):
             exited_tokens, _, _, _, _ = self.remove_masked_tokens(
                 exited_tokens, bool_mask
             )
+
+        # TODO: we can remove this if we are using the torch flash attention implementation for inference
         cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
         # Pack x tokens
         if self.use_flash_attn:
@@ -1432,6 +1436,7 @@ class Encoder(FlexiHeliosBase):
         tokens = self.norm(tokens)
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
+        # TODO: Need this to be even more of a no-op
         tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict

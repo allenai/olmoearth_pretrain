@@ -1,7 +1,7 @@
 """Shared constants important for inference throughput benchmarking."""
 
 # BEAKER-LAND
-BEAKER_BUDGET = "ai2/d5"
+BEAKER_BUDGET = "ai2/es-platform"
 BEAKER_WORKSPACE = "ai2/earth-systems"
 BEAKER_IMAGE_NAME = "chrisw/helios-inf-throughput-flashattn-no-mask-2024-04-21_01"
 WEKA_BUCKET = "dfive-default"
@@ -26,10 +26,10 @@ PROJECT_NAME = "inference-throughput-no-mask"
 ENTITY_NAME = "eai-ai2"
 
 # representative model weights at each size, predictions not important for benchmark, only computation itself
-NANO_PATH = "helios/checkpoints/henryh/missing_mosality_test_updated_2/step197250"
-TINY_PATH = "helios/checkpoints/henryh/8latent_mim_random_patch_disc_new_exit_full_lr_0.0004_tiny/step154250"
-BASE_PATH = "helios/checkpoints/henryh/8latent_mim_random_patch_disc_new_exit_full_lr_0.0004_base_shallow_decoder/step95000"
-LARGE_PATH = "helios/checkpoints/henryh/8latent_mim_random_patch_disc_new_exit_full_lr_0.0004_large_shallow_decoder/step95000"
+NANO_PATH = ""
+TINY_PATH = ""
+BASE_PATH = "/weka/dfive-default/helios/checkpoints/henryh/new_latent_mim_cross_random_contrastive_per-modality_0.01/step420000"
+LARGE_PATH = ""
 
 MODEL_SIZE_MAP = {
     "NANO": NANO_PATH,
@@ -45,6 +45,10 @@ PER_BATCH_TOKEN_RATE_METRIC = "per_batch_token_rate"  # nosec
 MEAN_BATCH_TOKEN_RATE_METRIC = "mean_batch_token_rate"  # nosec
 MEAN_BATCH_TIME_METRIC = "mean_batch_time"  # nosec
 NUM_TOKENS_PER_BATCH_METRIC = "num_tokens_per_batch"  # nosec
+SQUARE_KM_PER_SECOND_METRIC = "square_km_per_second"  # nosec
+HRS_TO_PROCESS_ALL_LAND_METRIC = "hrs_to_process_all_land"  # nosec
+OVERALL_TIME_TAKEN_METRIC = "overall_time_taken"  # nosec
+
 
 PARAM_KEYS = dict(
     model_size="MODEL_SIZE",
@@ -65,3 +69,5 @@ PARAM_KEYS = dict(
     owner="OWNER",
     name="NAME",
 )
+
+# set PARAN kets
