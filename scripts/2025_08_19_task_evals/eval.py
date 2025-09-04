@@ -260,7 +260,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         ),
         "breizhcrops": DownstreamTaskConfig(
             dataset="breizhcrops",
-            embedding_batch_size=128 // factor,
+            embedding_batch_size=64 // factor,
             probe_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
