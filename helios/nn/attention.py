@@ -347,6 +347,45 @@ class Mlp(nn.Module):
         return x
 
 
+class MlpSwiGLU(nn.Module):
+    """SwiGLU feed-forward block.
+
+    Cheaper than GeLU-FFN when you use a smaller hidden (e.g., ~2.0x instead of 4.0x).
+
+    Args:
+        in_features: model dim d
+        hidden_mult: hidden size multiplier relative to d (use 1.75–2.0)
+        out_features: output dim (defaults to d)
+        bias: linear bias (consider False if you LN before this block)
+        drop: dropout prob applied after the second linear
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        hidden_mult: float = 2.0,
+        out_features: int | None = None,
+        bias: bool = True,
+        drop: float = 0.0,
+    ):
+        """Initialize the SwiGLU MLP module."""
+        super().__init__()
+        out_features = out_features or in_features
+        h = int(round(hidden_mult * in_features))
+
+        # One matmul that produces gate and value halves
+        self.fc1 = nn.Linear(in_features, 2 * h, bias=bias)
+        self.fc2 = nn.Linear(h, out_features, bias=bias)
+        self.drop = nn.Dropout(drop)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass."""
+        a, b = self.fc1(x).chunk(2, dim=-1)  # a,b: [B,N,h]
+        x = F.silu(a) * b  # SwiGLU gating
+        x = self.fc2(x)
+        return self.drop(x)
+
+
 class LayerScale(nn.Module):
     """Learnable scaling layer.
 
@@ -493,12 +532,17 @@ class Block(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
         self.norm2 = norm_layer(dim)
-        self.mlp = Mlp(
-            in_features=dim,
-            hidden_features=int(dim * mlp_ratio),
-            act_layer=act_layer,
-            drop=drop,
+        # self.mlp = Mlp(
+        #     in_features=dim,
+        #     hidden_features=int(dim * mlp_ratio),
+        #     act_layer=act_layer,
+        #     drop=drop,
+        # )
+        # Try switch to SwiGLU
+        self.mlp = MlpSwiGLU(
+            in_features=dim, hidden_mult=2.0, out_features=dim, drop=drop
         )
+
         self.ls2 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         )

@@ -100,7 +100,7 @@ MODEL_SIZE_ARGS = {
         "encoder_depth": 12,
         "encoder_num_heads": 12,
         "decoder_num_heads": 12,
-        "mlp_ratio": 1.0,
+        "mlp_ratio": 4.0,
     },
     "large_shallow_decoder": {
         "decoder_depth": 4,
