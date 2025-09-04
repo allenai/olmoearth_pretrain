@@ -76,7 +76,7 @@ def my_build_common_components(
         # Modality.SRTM.name,
         # Modality.OPENSTREETMAP_RASTER.name,
         # Modality.WRI_CANOPY_HEIGHT_MAP.name,
-        # Modality.CDL.name,
+        Modality.CDL.name,
         # Modality.ERA5_10.name,
     ]
     return config
@@ -125,13 +125,13 @@ def build_train_module_config(
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
-                # "only_decode_modalities": [
-                #     "worldcover",
-                #     "srtm",
-                #     "openstreetmap_raster",
-                #     "cdl",
-                #     "wri_canopy_height_map",
-                # ],
+                "only_decode_modalities": [
+                    "worldcover",
+                    "srtm",
+                    "openstreetmap_raster",
+                    "cdl",
+                    # "wri_canopy_height_map",
+                ],
             }
         ),
         loss_config=LossConfig(
