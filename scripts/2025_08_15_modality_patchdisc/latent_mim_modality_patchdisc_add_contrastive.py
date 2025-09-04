@@ -84,7 +84,7 @@ def my_build_common_components(
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["tiny_shallow_decoder"]
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
     encoder_config = EncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
@@ -117,7 +117,7 @@ def build_train_module_config(
 ) -> ContrastiveLatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0002, weight_decay=0.02, fused=True),
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         rank_microbatch_size=64,
         masking_config=MaskingConfig(
             strategy_config={
