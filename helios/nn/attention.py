@@ -540,7 +540,7 @@ class Block(nn.Module):
         # )
         # Try switch to SwiGLU
         self.mlp = MlpSwiGLU(
-            in_features=dim, hidden_mult=2.0, out_features=dim, drop=drop
+            in_features=dim, hidden_mult=4.0, out_features=dim, drop=drop
         )
 
         self.ls2 = (
