@@ -361,13 +361,15 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         if self.mean_of_modalities:
             total_loss = torch.stack(
                 [loss.mean() for loss in losses if loss.numel() > 0]
-            ).mean()
+            )
+            total_loss = total_loss.mean() if total_loss.numel() > 0 else 0
         elif self.sum_of_modalities:
             total_loss = torch.stack(
                 [loss.mean() for loss in losses if loss.numel() > 0]
             ).sum()
         else:
-            total_loss = torch.cat([loss.flatten() for loss in losses]).mean()
+            total_loss = torch.cat([loss.flatten() for loss in losses])
+            total_loss = total_loss.mean() if total_loss.numel() > 0 else 0
 
         return self.weight * total_loss
 
