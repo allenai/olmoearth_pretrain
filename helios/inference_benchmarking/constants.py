@@ -48,6 +48,7 @@ NUM_TOKENS_PER_BATCH_METRIC = "num_tokens_per_batch"  # nosec
 SQUARE_KM_PER_SECOND_METRIC = "square_km_per_second"  # nosec
 HRS_TO_PROCESS_ALL_LAND_METRIC = "hrs_to_process_all_land"  # nosec
 OVERALL_TIME_TAKEN_METRIC = "overall_time_taken"  # nosec
+PIXELS_PER_SECOND_METRIC = "pixels_per_second"  # nosec
 
 
 PARAM_KEYS = dict(

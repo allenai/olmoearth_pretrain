@@ -152,6 +152,7 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
         time_taken_per_batch: list[float] = []
         # log that the data is prepared
         logger.info("Data prepared, starting benchmark")
+        torch.cuda.set_sync_debug_mode("warn")
         # Run 5 forward passes as warmup
         for _ in range(5):
             with torch.inference_mode():
@@ -162,7 +163,7 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
                         )
                 else:
                     results = model.forward(masked_sample, patch_size=run_params.patch_size)
-
+        raise Exception("Stop here")
         num_forward_passes = 0
         if device.type == "cuda":
             torch.cuda.synchronize()
@@ -184,6 +185,7 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
                         )
                 else:
                     results = model.forward(masked_sample, patch_size=run_params.patch_size)
+            time_taken_per_batch.append(time.monotonic() - batch_start)
             num_forward_passes += 1
             num_s1_tokens = calculate_num_token_embeddings(results.sentinel1)
             num_s2_tokens = calculate_num_token_embeddings(results.sentinel2_l2a)
@@ -191,7 +193,6 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
             tokens_processed_per_batch.append(
                 num_s1_tokens + num_s2_tokens + num_landsat_tokens
             )
-            time_taken_per_batch.append(time.monotonic() - batch_start)
         if device.type == "cuda":
             torch.cuda.synchronize()
         overall_time_taken = time.monotonic() - overall_start_time
@@ -213,11 +214,14 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
             / len(tokens_processed_per_batch),
         }
         num_batches = len(time_taken_per_batch)  # or use num_forward_passes
+        num_centroids = num_batches * batch_size
+        centroids_per_second = num_centroids / sum(time_taken_per_batch)
         tile_km2 = (run_params.image_size * BASE_GSD / 1000.0) ** 2  # m -> km, then square
         area_processed_km2 = batch_size * tile_km2 * num_batches
         square_km_per_second = area_processed_km2 / sum(time_taken_per_batch)
         squarekm_per_second_per_batch_size[batch_size] = square_km_per_second
         metrics_to_submit[constants.SQUARE_KM_PER_SECOND_METRIC] = square_km_per_second
+        metrics_to_submit[constants.PIXELS_PER_SECOND_METRIC] = centroids_per_second
         metrics_to_submit[constants.HRS_TO_PROCESS_ALL_LAND_METRIC] = (
             NUM_SQUARE_KM_LAND_IN_WORLD / square_km_per_second / 3600.0
         )
@@ -230,6 +234,7 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
     highest_batch_size = max(squarekm_per_second_per_batch_size, key=squarekm_per_second_per_batch_size.get)
     logger.info(f"Highest batch size: {highest_batch_size}")
     logger.info(f"Highest square km per second: {squarekm_per_second_per_batch_size[highest_batch_size]}")
+
 class Metrics:
     """Simple metrics logger that stores logs per step, but does not submit to wandb."""
 
@@ -262,7 +267,7 @@ if __name__ == "__main__":
     os.environ[constants.PARAM_KEYS["patch_size"]] = "2"
     os.environ[constants.PARAM_KEYS["image_size"]] = "4"
     os.environ[constants.PARAM_KEYS["num_timesteps"]] = "12"
-    os.environ[constants.PARAM_KEYS["batch_sizes"]] = "8,64,128,256,512,1024,2048,4096,8192"
+    os.environ[constants.PARAM_KEYS["batch_sizes"]] = "4096"
     # make sure bfloat16 is on
     os.environ[constants.PARAM_KEYS["bf16"]] = "1"
     checkpoint_path = os.getenv(constants.PARAM_KEYS["checkpoint_path"], "/artifacts")
