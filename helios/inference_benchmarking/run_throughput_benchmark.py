@@ -1,26 +1,28 @@
 """Script for performing an inference throughput benchmarking run."""
 
 import json
+import logging
 import os
 import time
+from logging import getLogger
 from typing import Any
-import logging
 
 import numpy as np
-from logging import getLogger
 import torch
 import wandb
 from olmo_core.config import Config
 from olmo_core.distributed.checkpoint import load_model_and_optim_state
 
-from helios.data.constants import BASE_GSD, Modality, BASE_RESOLUTION
+from helios.data.constants import BASE_GSD, Modality
 from helios.inference_benchmarking import constants
 from helios.inference_benchmarking.data_models import RunParams
-from helios.nn.flexihelios import TokensAndMasks, Encoder
+from helios.nn.flexihelios import Encoder, TokensAndMasks
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 NUM_S1_BANDS = Modality.SENTINEL1.num_bands
 NUM_S2_BANDS = Modality.SENTINEL2.num_bands
@@ -29,6 +31,8 @@ NUM_LANDSAT_BANDS = Modality.LANDSAT.num_bands
 NUM_SQUARE_KM_LAND_IN_WORLD = 149_000_000
 
 logger = getLogger(__name__)
+
+
 class Helios(torch.nn.Module):
     """Thin wrapper around Helios checkpoint that loads just the encoder."""
 
@@ -51,14 +55,22 @@ class Helios(torch.nn.Module):
         load_model_and_optim_state(train_module_dir, model)
         model = getattr(model, "encoder")
 
-
         self.model: Encoder = model
         self.model.eval()
         self.model.apply_compile()
 
-    def forward(self, x: MaskedHeliosSample, patch_size: int) -> TokensAndMasks:
+    def forward(
+        self,
+        x: MaskedHeliosSample,
+        patch_size: int,
+        always_pass_none_mask_to_transformer: bool = True,
+    ) -> TokensAndMasks:
         """Pass-through."""
-        return self.model.forward(x, patch_size=patch_size, always_pass_none_mask_to_transformer=True)["tokens_and_masks"]
+        return self.model.forward(
+            x,
+            patch_size=patch_size,
+            always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+        )["tokens_and_masks"]
 
 
 def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None:
@@ -134,6 +146,7 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
                     * MaskValue.ONLINE_ENCODER.value
                 )
             return None
+
         # log the s2 tensor shape
         logger.info(f"S2 tensor shape: {s2_tensor.shape}")
         masked_sample = MaskedHeliosSample(
@@ -152,18 +165,21 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
         time_taken_per_batch: list[float] = []
         # log that the data is prepared
         logger.info("Data prepared, starting benchmark")
-        torch.cuda.set_sync_debug_mode("warn")
+        # torch.cuda.set_sync_debug_mode("warn")
         # Run 5 forward passes as warmup
         for _ in range(5):
             with torch.inference_mode():
                 if run_params.bf16:
-                    with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
+                    with torch.amp.autocast(
+                        device_type=device.type, dtype=torch.bfloat16
+                    ):
                         results = model.forward(
                             masked_sample, patch_size=run_params.patch_size
                         )
                 else:
-                    results = model.forward(masked_sample, patch_size=run_params.patch_size)
-        raise Exception("Stop here")
+                    results = model.forward(
+                        masked_sample, patch_size=run_params.patch_size
+                    )
         num_forward_passes = 0
         if device.type == "cuda":
             torch.cuda.synchronize()
@@ -179,12 +195,17 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
             results: TokensAndMasks
             with torch.inference_mode():
                 if run_params.bf16:
-                    with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
+                    with torch.amp.autocast(
+                        device_type=device.type, dtype=torch.bfloat16
+                    ):
                         results = model.forward(
-                            masked_sample, patch_size=run_params.patch_size
+                            masked_sample,
+                            patch_size=run_params.patch_size,
                         )
                 else:
-                    results = model.forward(masked_sample, patch_size=run_params.patch_size)
+                    results = model.forward(
+                        masked_sample, patch_size=run_params.patch_size
+                    )
             time_taken_per_batch.append(time.monotonic() - batch_start)
             num_forward_passes += 1
             num_s1_tokens = calculate_num_token_embeddings(results.sentinel1)
@@ -196,7 +217,9 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
         if device.type == "cuda":
             torch.cuda.synchronize()
         overall_time_taken = time.monotonic() - overall_start_time
-        logger.info(f"Overall time taken: {overall_time_taken} sum of time taken per batch: {sum(time_taken_per_batch)}")
+        logger.info(
+            f"Overall time taken: {overall_time_taken} sum of time taken per batch: {sum(time_taken_per_batch)}"
+        )
         metrics_to_submit = {
             constants.PER_BATCH_TOKEN_RATE_METRIC: wandb.Histogram(
                 np.array(
@@ -216,7 +239,9 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
         num_batches = len(time_taken_per_batch)  # or use num_forward_passes
         num_centroids = num_batches * batch_size
         centroids_per_second = num_centroids / sum(time_taken_per_batch)
-        tile_km2 = (run_params.image_size * BASE_GSD / 1000.0) ** 2  # m -> km, then square
+        tile_km2 = (
+            run_params.image_size * BASE_GSD / 1000.0
+        ) ** 2  # m -> km, then square
         area_processed_km2 = batch_size * tile_km2 * num_batches
         square_km_per_second = area_processed_km2 / sum(time_taken_per_batch)
         squarekm_per_second_per_batch_size[batch_size] = square_km_per_second
@@ -229,11 +254,18 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
         # For N timesteps that number is what we care about
         print(f"Metrics for {batch_size} were: {metrics_to_submit}")
         metrics.log(metrics_to_submit, step=idx)
-    logger.info(f"Square km per second per batch size: {squarekm_per_second_per_batch_size}")
+    logger.info(
+        f"Square km per second per batch size: {squarekm_per_second_per_batch_size}"
+    )
     # which batch size has the highest square km per second
-    highest_batch_size = max(squarekm_per_second_per_batch_size, key=squarekm_per_second_per_batch_size.get)
+    highest_batch_size = max(
+        squarekm_per_second_per_batch_size, key=squarekm_per_second_per_batch_size.get
+    )
     logger.info(f"Highest batch size: {highest_batch_size}")
-    logger.info(f"Highest square km per second: {squarekm_per_second_per_batch_size[highest_batch_size]}")
+    logger.info(
+        f"Highest square km per second: {squarekm_per_second_per_batch_size[highest_batch_size]}"
+    )
+
 
 class Metrics:
     """Simple metrics logger that stores logs per step, but does not submit to wandb."""
@@ -244,6 +276,7 @@ class Metrics:
     def log(self, metrics: dict, step: int = None):
         entry = {"step": step, "metrics": metrics}
         self.logged.append(entry)
+
 
 def calculate_num_token_embeddings(t: torch.Tensor | None) -> int:
     """Determines how many tokens are represented in the given tensor."""
@@ -257,7 +290,10 @@ def calculate_num_token_embeddings(t: torch.Tensor | None) -> int:
 # Make this whole thing omega config based
 if __name__ == "__main__":
     # Configure logging
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
 
     os.environ[constants.PARAM_KEYS["checkpoint_path"]] = constants.BASE_PATH
     # set benchmark interval to 15 seconds
@@ -296,6 +332,7 @@ if __name__ == "__main__":
 
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         wandb.finish(exit_code=1, quiet=True)
         raise e

@@ -395,7 +395,11 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             )
 
     def apply_embedding_to_modality(
-        self, modality: str, input_data: MaskedHeliosSample, patch_size: int, inference_fast_pass: bool = False
+        self,
+        modality: str,
+        input_data: MaskedHeliosSample,
+        patch_size: int,
+        inference_fast_pass: bool = False,
     ) -> tuple[Tensor, Tensor]:
         """Apply embedding to a modality."""
         logger.debug(f"applying embedding to modality:{modality}")
@@ -1382,8 +1386,8 @@ class Encoder(FlexiHeliosBase):
             seq_lengths = None
             max_seqlen = None
         else:
-            tokens, indices, new_mask, seq_lengths, max_seqlen = self.remove_masked_tokens(
-                tokens, bool_mask
+            tokens, indices, new_mask, seq_lengths, max_seqlen = (
+                self.remove_masked_tokens(tokens, bool_mask)
             )
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -1405,7 +1409,8 @@ class Encoder(FlexiHeliosBase):
             tokens = self.pack_tokens(tokens, new_mask)
 
         attn_mask = self.get_attn_or_none_mask(
-            new_mask, always_pass_none_mask_to_transformer
+            new_mask,
+            always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
         )
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
@@ -1485,7 +1490,9 @@ class Encoder(FlexiHeliosBase):
             TokensAndMasks containing the encoded representations and their masks
         """
         # TODO: Add step to validate the exit config is valid
-        patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size, inference_fast_pass=always_pass_none_mask_to_transformer)
+        patchified_tokens_and_masks = self.patch_embeddings.forward(
+            x, patch_size, inference_fast_pass=always_pass_none_mask_to_transformer
+        )
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
