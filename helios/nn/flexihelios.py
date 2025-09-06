@@ -347,10 +347,27 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         self.supported_modality_names = supported_modality_names
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
+
         for modality in self.supported_modality_names:
             self.per_modality_embeddings[modality] = (
                 self._get_patch_embedding_module_for_modality(modality)
             )
+
+        # For every patch embedding module we want to create a unique
+        for modality in self.supported_modality_names:
+            for idx, bandset_indices in enumerate(
+                Modality.get(modality).bandsets_as_indices()
+            ):
+                buffer_name = self._get_buffer_name(modality, idx)
+                banset_indices_tensor = torch.tensor(bandset_indices, dtype=torch.long)
+                self.register_buffer(buffer_name, banset_indices_tensor)
+
+        # Create a dictionary of per modality index tensors to do  index select with registered buffer
+
+    @staticmethod
+    def _get_buffer_name(modality: str, idx: int) -> str:
+        """Get the buffer name."""
+        return f"{modality}__{idx}_buffer"
 
     @staticmethod
     def _get_embedding_module_name(modality: str, idx: int) -> str:
@@ -430,7 +447,10 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             else:
                 should_embed = (token_mask == MaskValue.ONLINE_ENCODER.value).any()
             if should_embed:
-                patchified_data = modality_data[..., channel_set_indices]
+                buffer_name = self._get_buffer_name(modality, idx)
+                patchified_data = torch.index_select(
+                    modality_data, -1, getattr(self, buffer_name)
+                )
                 embedding_module = self.per_modality_embeddings[modality][
                     self._get_embedding_module_name(modality, idx)
                 ]
@@ -1376,8 +1396,6 @@ class Encoder(FlexiHeliosBase):
         tokens_dict.update(original_masks_dict)
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
-        bool_mask = mask == MaskValue.ONLINE_ENCODER.value
-
         # we could remove this sort entirely
         if always_pass_none_mask_to_transformer:
             # This is the inference fast pass
@@ -1386,6 +1404,7 @@ class Encoder(FlexiHeliosBase):
             seq_lengths = None
             max_seqlen = None
         else:
+            bool_mask = mask == MaskValue.ONLINE_ENCODER.value
             tokens, indices, new_mask, seq_lengths, max_seqlen = (
                 self.remove_masked_tokens(tokens, bool_mask)
             )

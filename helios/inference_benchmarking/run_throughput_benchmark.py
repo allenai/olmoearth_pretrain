@@ -16,7 +16,14 @@ from olmo_core.distributed.checkpoint import load_model_and_optim_state
 from helios.data.constants import BASE_GSD, Modality
 from helios.inference_benchmarking import constants
 from helios.inference_benchmarking.data_models import RunParams
-from helios.nn.flexihelios import Encoder, TokensAndMasks
+from helios.internal.utils import MODEL_SIZE_ARGS
+from helios.nn.flexihelios import (
+    Encoder,
+    EncoderConfig,
+    PredictorConfig,
+    TokensAndMasks,
+)
+from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 # Configure logging
@@ -36,23 +43,34 @@ logger = getLogger(__name__)
 class Helios(torch.nn.Module):
     """Thin wrapper around Helios checkpoint that loads just the encoder."""
 
-    def __init__(self, checkpoint_path: str):
+    def __init__(
+        self, checkpoint_path: str | None = None, model_config: Config | None = None
+    ):
         """Loads the checkpoint, keeps only the encoder."""
         super().__init__()
 
+        # TODO: Need to create a new checkpoint with the buffers
         # Load the model config and initialize it.
         # We avoid loading the train module here because it depends on running within
         # olmo_core.
-        with open(f"{checkpoint_path}/config.json") as f:
-            config_dict = json.load(f)
-            model_config = Config.from_dict(config_dict["model"])
+        if checkpoint_path is not None:
+            with open(f"{checkpoint_path}/config.json") as f:
+                config_dict = json.load(f)
+                model_config = Config.from_dict(config_dict["model"])
+        elif model_config is not None:
+            logger.info("Using provided model config")
+            model_config = model_config
+        else:
+            raise ValueError("Either checkpoint_path or model_config must be provided")
 
         # We only want the encoder, as the rest of the network will throw off
         # memory and latency estimates
         model = model_config.build()
 
-        train_module_dir = f"{checkpoint_path}/model_and_optim"
-        load_model_and_optim_state(train_module_dir, model)
+        if checkpoint_path is not None:
+            train_module_dir = f"{checkpoint_path}/model_and_optim"
+            load_model_and_optim_state(train_module_dir, model)
+
         model = getattr(model, "encoder")
 
         self.model: Encoder = model
@@ -165,7 +183,7 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
         time_taken_per_batch: list[float] = []
         # log that the data is prepared
         logger.info("Data prepared, starting benchmark")
-        # torch.cuda.set_sync_debug_mode("warn")
+        torch.cuda.set_sync_debug_mode("warn")
         # Run 5 forward passes as warmup
         for _ in range(5):
             with torch.inference_mode():
@@ -321,10 +339,36 @@ if __name__ == "__main__":
     #     entity=owner,
     #     name=name,
     # )
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    training_modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.LANDSAT.name,
+    ]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=training_modalities,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=training_modalities,
+        max_sequence_length=12,
+    )
+    model_config = LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
     metrics = Metrics()
     try:
         logger.info("Loading model...")
-        model = Helios(checkpoint_path)
+        model = Helios(model_config=model_config)
         if torch.cuda.is_available():
             model.to("cuda:0")
             logger.info("helios loaded and on gpu")
