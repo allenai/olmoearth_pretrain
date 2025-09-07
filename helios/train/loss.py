@@ -200,7 +200,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                 .unsqueeze(1)
                 .expand_as(score)
             )
-            score[score_mask] = float("-inf")
+            score[score_mask] = torch.finfo(score.dtype).min
         label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
         loss = F.cross_entropy(
             score.flatten(0, 1),
@@ -221,7 +221,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             score_mask = (
                 (masks_flat != MaskValue.DECODER.value).unsqueeze(1).expand_as(score)
             )
-            score[score_mask] = float("-inf")
+            score[score_mask] = torch.finfo(score.dtype).min
         label = torch.arange(score.shape[2], dtype=torch.long, device=score.device)
         loss = F.cross_entropy(
             score.flatten(0, 1),
@@ -246,7 +246,8 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                 .unsqueeze(1)
                 .expand_as(score)
             )
-            score[score_mask] = float("-inf")
+            score[score_mask] = torch.finfo(score.dtype).min
+
         label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
         loss = F.cross_entropy(
             score.flatten(0, 1),
@@ -271,7 +272,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                 .unsqueeze(1)
                 .expand_as(score)
             )
-            score[score_mask] = float("-inf")
+            score[score_mask] = torch.finfo(score.dtype).min
         label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
         loss = F.cross_entropy(
             score.flatten(0, 1),
@@ -296,7 +297,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
                 .unsqueeze(1)
                 .expand_as(score)
             )
-            score[score_mask] = float("-inf")
+            score[score_mask] = torch.finfo(score.dtype).min
         label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
         loss = F.cross_entropy(
             score.flatten(0, 1),
