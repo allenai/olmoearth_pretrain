@@ -112,7 +112,6 @@ class AttnPool(nn.Module):
         Bc, N, _ = feat_tokens.shape
         H = self.num_heads
         D = self.attn_dim
-        logger.info(f"d and H: {D} {H}")
         Dh = D // H
 
         # queries: [B*, k, D] -> [B*, H, k, Dh]
@@ -128,9 +127,6 @@ class AttnPool(nn.Module):
         kv = self.kv(feat_tokens).reshape(Bc, N, 2, H, Dh)
         kv = rearrange(kv, "b n two h d -> two b h n d")
         k, v = torch.unbind(kv, dim=0)  # [B*, H, N, Dh] each
-        logger.info(f"shape of k: {k.shape}")
-        logger.info(f"shape of v: {v.shape}")
-        logger.info(f"shape of q: {q.shape}")
 
         # mask -> [B*, H, k, N] (broadcastable is fine, but expand for clarity)
         attn_mask = None
@@ -492,7 +488,7 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         always_pass_none_mask_to_transformer: bool = False,
-    ) -> dict[str, Tensor]:
+    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)

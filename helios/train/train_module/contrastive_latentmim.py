@@ -283,13 +283,10 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                 decoded,
                 latent_projected_and_pooled,
                 reconstructed,
-                token_norm_stats,
+                extra_metrics,
             ) = self.model(batch, patch_size)
-            if token_norm_stats is not None:
-                logger.warning(f"Token norm stats: {token_norm_stats}")
-                # record the token norm stats
-                for key, value in token_norm_stats.items():
-                    self.trainer.record_metric(f"token_norm_stats/{key}", value)
+            if extra_metrics is not None:
+                self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(

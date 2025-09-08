@@ -200,13 +200,10 @@ class TokensAndMasks(NamedTuple):
                     pooled_attr = torch.mean(attr, dim=(-3))
                     spatial_stacked_features.append(pooled_attr)
         if len(spatial_stacked_features) == 0:
-            raise ValueError(
-                "Missing unmasked spatial modalities for spatial pooling."
-            )
+            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
         # Concatenate along the band sets dimension instead of stacking
         spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
         return spatial_stacked_features
-
 
     def pool_spatially(self, pooling_type: PoolingType) -> Tensor:
         """Pool the modalities across time to get spatial features."""
@@ -227,15 +224,12 @@ class TokensAndMasks(NamedTuple):
                             torch.max(torch.max(attr, dim=-2).values, dim=-2).values
                         )
         if len(spatial_average) == 0:
-            raise ValueError(
-                "Missing unmasked spatial modalities for spatial pooling."
-            )
+            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
         spatial_average_t = torch.stack(spatial_average, dim=-1)
         if pooling_type == PoolingType.MEAN:
             return spatial_average_t.mean(dim=-1)
         else:
             return spatial_average_t.max(dim=-1).values
-
 
     def pool_instance_wise(self, pooling_type: PoolingType) -> Tensor:
         """Pool al the tokens in the instance."""
@@ -1440,7 +1434,7 @@ class Encoder(FlexiHeliosBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         always_pass_none_mask_to_transformer: bool = False,
-    ) -> dict[str, Tensor]:
+    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
@@ -1533,6 +1527,8 @@ class Encoder(FlexiHeliosBase):
             tokens = tokens[:, self.num_register_tokens :, :]
 
             token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
+        else:
+            token_norm_stats = None
 
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
@@ -2015,7 +2011,7 @@ class EncoderConfig(Config):
     depth: int = 2
     drop_path: float = 0.1
     max_sequence_length: int = 12
-    num_register_tokens: int = (0,)
+    num_register_tokens: int = 0
     learnable_channel_embeddings: bool = True
     random_channel_embeddings: bool = False
     num_projection_layers: int = 1
