@@ -1,1276 +1,330 @@
-"""Model code for the Helios model."""
+"""Alternate Encoder Predictor pairs that allow for tokens to be pooled at different stages of the model and then the decoding to happen from the pooled tokens."""
 
 import logging
-import math
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, NamedTuple
+from typing import Any
 
 import torch
-from einops import rearrange, reduce, repeat
-from olmo_core.config import Config
-from torch import Tensor, nn
-from torch.distributed.fsdp import fully_shard
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange
+from torch import Tensor
 
-from helios.data.constants import BASE_GSD, Modality, ModalitySpec
-from helios.dataset.utils import get_modality_specs_from_names
-from helios.nn.attention import Block
-from helios.nn.encodings import (
-    get_1d_sincos_pos_encoding,
-    get_2d_sincos_pos_encoding_with_resolution,
-    get_month_encoding_table,
+from helios.data.constants import BASE_GSD, Modality
+from helios.nn.attention import Mlp
+from helios.nn.flexihelios import (
+    Encoder,
+    EncoderConfig,
+    PredictorBase,
+    PredictorConfig,
+    TokensAndMasks,
+    get_modalities_to_process,
+    return_modalities_from_dict,
 )
-from helios.nn.flexi_patch_embed import FlexiPatchEmbed, FlexiPatchReconstruction
 from helios.nn.utils import get_cumulative_sequence_lengths
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
 
-def get_modalities_to_process(
-    available_modalities: list[str], supported_modality_names: list[str]
-) -> list[str]:
-    """Get the modalities to process."""
-    modalities_to_process = set(supported_modality_names).intersection(
-        set(available_modalities)
-    )
-    return list(modalities_to_process)
+class DimsToPool(StrEnum):
+    """Dimensions to pool over."""
+
+    MODALITY = "modality"  # 1
+    TEMPORAL = "temporal"  # 2
+    SPATIAL = "spatial"
+    MODALITY_TEMPORAL = "modality_temporal"  # 3
+    ALL = "all"  # 4
 
 
-def return_modalities_from_dict(
-    per_modality_input_tokens: dict[str, Tensor],
-) -> list[str]:
-    """Return the modalities from a dictionary of per modality input tokens."""
-    return [
-        key for key in per_modality_input_tokens.keys() if not key.endswith("_mask")
-    ]
-
-
-class PoolingType(StrEnum):
-    """Strategy for pooling the tokens."""
-
-    MAX = "max"
-    MEAN = "mean"
-
-
-class TokensAndMasks(NamedTuple):
-    """Output to compute the loss on.
+class AttnPool(nn.Module):
+    """Multi-query attention pooling with gated averaging.
 
     Args:
-        sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
-        sentinel2_mask: sentinel 2 mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
-        sentinel1: sentinel 1 data of shape (B, P_H, P_W, T, Band_Sets, D)
-        sentinel1_mask: sentinel 1 mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
-        worldcover: worldcover data of shape (B, P_H, P_W, T, Band_Sets, D)
-        worldcover_mask: worldcover mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
-        latlon: lat lon data containing geographical coordinates
-        latlon_mask: lat lon mask indicating which coordinates are masked/unmasked
-        openstreetmap_raster: openstreetmap raster data of shape (B, P_H, P_W, T, Band_Sets, D)
-        openstreetmap_raster_mask: openstreetmap raster mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
+        in_dim (int): token dim (must be divisible by 64; head_dim=64).
+        hidden_dim (int): MLP hidden/out dim (defaults to in_dim unless mlp_ratio provided).
+        mlp_ratio (float|None): if set, hidden_dim := int(in_dim * mlp_ratio)
+        num_queries (int): number of learned queries per (t,s) group.
+        gate_temperature (float): temperature for softmax gating (>0).
     """
 
-    sentinel2_l2a: Tensor | None = None
-    sentinel2_l2a_mask: Tensor | None = None
-    sentinel1: Tensor | None = None
-    sentinel1_mask: Tensor | None = None
-    worldcover: Tensor | None = None
-    worldcover_mask: Tensor | None = None
-    latlon: Tensor | None = None
-    latlon_mask: Tensor | None = None
-    openstreetmap_raster: Tensor | None = None
-    openstreetmap_raster_mask: Tensor | None = None
-    srtm: Tensor | None = None
-    srtm_mask: Tensor | None = None
-    landsat: Tensor | None = None
-    landsat_mask: Tensor | None = None
-    naip: Tensor | None = None
-    naip_mask: Tensor | None = None
-    naip_10: Tensor | None = None
-    naip_10_mask: Tensor | None = None
-    gse: Tensor | None = None
-    gse_mask: Tensor | None = None
-    cdl: Tensor | None = None
-    cdl_mask: Tensor | None = None
-    worldpop: Tensor | None = None
-    worldpop_mask: Tensor | None = None
-    worldcereal: Tensor | None = None
-    worldcereal_mask: Tensor | None = None
-    wri_canopy_height_map: Tensor | None = None
-    wri_canopy_height_map_mask: Tensor | None = None
-    era5_10: Tensor | None = None
-    era5_10_mask: Tensor | None = None
-
-    @property
-    def device(self) -> torch.device:
-        """Get the device of the tokens and masks."""
-        if self.sentinel2_l2a is not None:
-            return self.sentinel2_l2a.device
-        else:
-            # look for any other modality that is not None
-            for modality in self._fields:
-                if getattr(self, modality) is not None:
-                    return getattr(self, modality).device
-            raise ValueError("No data to get device from")
-
-    # TODO: It seems like we want a lot of our named tuples to have this functionality so we should probably create a utility base class for the named tuples and double subclass
-    @classmethod
-    def get_masked_modality_name(cls, modality: str) -> str:
-        """Get the masked modality name."""
-        return f"{modality}_mask"
-
-    def as_dict(self, return_none: bool = True) -> dict[str, Any]:
-        """Convert the namedtuple to a dictionary.
-
-        Returns:
-            Dictionary representation of the namedtuple.
-        """
-        return_dict = {}
-        for field in self._fields:
-            val = getattr(self, field)
-            if return_none:
-                return_dict[field] = val
-            else:
-                if val is not None:
-                    return_dict[field] = val
-        return return_dict
-
-    @property
-    def modalities(self) -> list[str]:
-        """Return all data fields."""
-        return [
-            x
-            for x in self._fields
-            if not x.endswith("mask") and getattr(self, x) is not None
-        ]
-
-    def get_shape_dict(self) -> dict[str, tuple]:
-        """Return a dictionary of the shapes of the fields."""
-        return {x: getattr(self, x).shape for x in self._fields}
-
-    @staticmethod
-    def _flatten(x: Tensor) -> Tensor:
-        return rearrange(x, "b ... d -> b (...) d")
-
-    def flatten_tokens_and_masks(
-        self, return_lists: bool = False
-    ) -> tuple[Tensor, Tensor]:
-        """Return the flattened tokens and masks.
-
-        Args:
-            return_lists: If True, return the original lists before concatenation.
-                          If False, return concatenated tensors.
-
-        Tokens will have shape [B, T, D] and masks will have shape [B, T]
-        """
-        flattened_x, flattened_masks = [], []
-        for attr_name in self.modalities:
-            mask_attr_name = self.get_masked_modality_name(attr_name)
-            attr = getattr(self, attr_name)
-            masked_attr = getattr(self, mask_attr_name)
-            if attr is not None:
-                if masked_attr is None:
-                    raise ValueError(
-                        f"Can't have present {attr_name} but None {mask_attr_name}"
-                    )
-                masked_attr = masked_attr.unsqueeze(dim=-1)
-                flattened_x.append(self._flatten(attr))
-                flattened_masks.append(self._flatten(masked_attr))
-
-        if return_lists:
-            # Remove the extra dimension from the masks
-            flattened_masks = [mask[:, :, 0] for mask in flattened_masks]
-            return flattened_x, flattened_masks
-
-        x = torch.cat(flattened_x, dim=1)
-        masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
-        return x, masks
-
-    def pool_spatially_and_concat_modalities(self) -> Tensor:
-        """Pool the modalities  across time to get spatial features and concatenate the features."""
-        spatial_stacked_features = []
-        for attr_name in self.modalities:
-            if Modality.get(attr_name).is_spatial:
-                mask_attr_name = self.get_masked_modality_name(attr_name)
-                masked_attr = getattr(self, mask_attr_name)
-                if masked_attr is None:
-                    continue
-                if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
-                    attr = getattr(self, attr_name)
-                    # only mean in temporal dimension
-                    pooled_attr = torch.mean(attr, dim=(-3))
-                    spatial_stacked_features.append(pooled_attr)
-        if len(spatial_stacked_features) == 0:
-            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
-        # Concatenate along the band sets dimension instead of stacking
-        spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
-        return spatial_stacked_features
-
-    def pool_spatially(self, pooling_type: PoolingType) -> Tensor:
-        """Pool the modalities across time to get spatial features."""
-        spatial_average = []
-        for attr_name in self.modalities:
-            if Modality.get(attr_name).is_spatial:
-                mask_attr_name = self.get_masked_modality_name(attr_name)
-                masked_attr = getattr(self, mask_attr_name)
-                if masked_attr is None:
-                    continue
-                if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
-                    attr = getattr(self, attr_name)
-                    # pool across time and bandset dimensions
-                    if pooling_type == PoolingType.MEAN:
-                        spatial_average.append(torch.mean(attr, dim=(-2, -3)))
-                    else:
-                        spatial_average.append(
-                            torch.max(torch.max(attr, dim=-2).values, dim=-2).values
-                        )
-        if len(spatial_average) == 0:
-            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
-        spatial_average_t = torch.stack(spatial_average, dim=-1)
-        if pooling_type == PoolingType.MEAN:
-            return spatial_average_t.mean(dim=-1)
-        else:
-            return spatial_average_t.max(dim=-1).values
-
-    def pool_instance_wise(self, pooling_type: PoolingType) -> Tensor:
-        """Pool al the tokens in the instance."""
-        x, mask = self.flatten_tokens_and_masks()
-        # 1s for online encoder, 0s elsewhere
-        mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
-        x_for_pooling = x * mask.unsqueeze(-1)
-        if pooling_type == PoolingType.MAX:
-            x_for_pooling = x_for_pooling.masked_fill(
-                ~mask.bool().unsqueeze(-1), -float("inf")
-            )
-            return x_for_pooling.max(dim=1).values
-        elif pooling_type == PoolingType.MEAN:
-            num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
-            logger.debug(f"num_encoded_tokens: {num_encoded_tokens}")
-            if (num_encoded_tokens == 0).any():
-                raise ValueError(
-                    f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
-                )
-            return x_for_pooling.sum(dim=1) / num_encoded_tokens
-        else:
-            raise ValueError(f"Invalid pooling type: {pooling_type}")
-
-    def pool_unmasked_tokens(
-        self,
-        pooling_type: PoolingType = PoolingType.MAX,
-        spatial_pooling: bool = False,
-        concat_features: bool = False,
-    ) -> Tensor:
-        """Pool the unmasked tokens.
-
-        Args:
-            pooling_type: Pooling type for the tokens
-            spatial_pooling: Whether to keep the spatial dimensions when pooling. If true,
-                this expects the masks within a spatial modality to be consistent (e.g. all
-                s2 tokens would have the same mask.)
-            concat_features: Whether to concatenate the features instead of averaging them, only enabled for spatial pooling as of now,
-            requires no masked out tokens
-        """
-        if concat_features and spatial_pooling:
-            return self.pool_spatially_and_concat_modalities()
-        if concat_features:
-            raise ValueError("concat_features is not supported for non-spatial pooling")
-        if not spatial_pooling:
-            return self.pool_instance_wise(pooling_type)
-        else:
-            return self.pool_spatially(pooling_type)
-
-
-class ProjectAndAggregate(nn.Module):
-    """Module that applies a linear projection to tokens and masks."""
-
     def __init__(
         self,
-        embedding_size: int,
-        num_layers: int,
-        aggregate_then_project: bool = True,
-    ):
-        """Initialize the linear module.
-
-        embedding_size: The embedding size of the input TokensAndMasks
-        num_layers: The number of layers to use in the projection. If >1, then
-            a ReLU activation will be applied between layers
-        aggregate_then_project: If True, then we will average the tokens before applying
-            the projection. If False, we will apply the projection first.
-        """
-        super().__init__()
-        projections = [nn.Linear(embedding_size, embedding_size)]
-        for _ in range(1, num_layers):
-            projections.append(nn.ReLU())
-            projections.append(nn.Linear(embedding_size, embedding_size))
-        self.projection = nn.Sequential(*projections)
-        self.aggregate_then_project = aggregate_then_project
-
-    def apply_aggregate_then_project(
-        self, x: TokensAndMasks | torch.Tensor
-    ) -> torch.Tensor:
-        """Apply the aggregate operation to the input."""
-        if isinstance(x, TokensAndMasks):
-            pooled_for_contrastive = x.pool_unmasked_tokens(
-                PoolingType.MEAN, spatial_pooling=False
-            )
-        elif isinstance(x, torch.Tensor):
-            pooled_for_contrastive = reduce(x, "b ... d -> b  d", "mean")
-        else:
-            raise ValueError(f"Invalid input type: {type(x)}")
-        return self.projection(pooled_for_contrastive)
-
-    def apply_project_then_aggregate(
-        self, x: TokensAndMasks | torch.Tensor
-    ) -> torch.Tensor:
-        """Apply the project operation to the input then aggregate."""
-        if isinstance(x, TokensAndMasks):
-            decoder_emedded_dict = x._asdict()
-            for modality in x.modalities:
-                x_modality = getattr(x, modality)
-                # Are these normalizations masked correctly?
-                x_modality = self.projection(x_modality)
-                masked_modality_name = x.get_masked_modality_name(modality)
-                decoder_emedded_dict[modality] = x_modality
-                decoder_emedded_dict[masked_modality_name] = getattr(
-                    x, masked_modality_name
-                )
-            x_projected = TokensAndMasks(**decoder_emedded_dict)
-            projected_pooled = x_projected.pool_unmasked_tokens(
-                PoolingType.MEAN, spatial_pooling=False
-            )
-        elif isinstance(x, torch.Tensor):
-            x_projected = self.projection(x)
-            projected_pooled = reduce(x_projected, "b ... d -> b  d", "mean")
-        else:
-            raise ValueError(f"Invalid input type: {type(x)}")
-        return projected_pooled
-
-    def forward(self, x: TokensAndMasks | torch.Tensor) -> torch.Tensor:
-        """Apply a (non)linear projection to an input TokensAndMasks.
-
-        This can be applied either before or after pooling the tokens.
-        """
-        return (
-            self.apply_aggregate_then_project(x)
-            if self.aggregate_then_project
-            else self.apply_project_then_aggregate(x)
-        )
-
-
-class FlexiHeliosPatchEmbeddings(nn.Module):
-    """Module that patchifies and encodes the input data."""
-
-    def __init__(
-        self,
-        supported_modality_names: list[str],
-        max_patch_size: int,
-        embedding_size: int,
-    ):
-        """Initialize the patch embeddings.
-
-        Args:
-            supported_modality_names: Which modalities from Modality this model
-                instantiation supports
-            max_patch_size: Maximum size of patches
-            embedding_size: Size of embeddings
-        """
-        super().__init__()
-        self.max_patch_size = max_patch_size
-        self.embedding_size = embedding_size
-        self.supported_modality_names = supported_modality_names
-        # TODO: want to be able to remove certain bands and modalities
-        self.per_modality_embeddings = nn.ModuleDict({})
-        for modality in self.supported_modality_names:
-            self.per_modality_embeddings[modality] = (
-                self._get_patch_embedding_module_for_modality(modality)
-            )
-
-    @staticmethod
-    def _get_embedding_module_name(modality: str, idx: int) -> str:
-        """Get the embedding module name.
-
-        Module Dicts require string keys
-        """
-        return f"{modality}__{idx}"
-
-    def _get_patch_embedding_module_for_modality(self, modality: str) -> nn.Module:
-        """Get the patch embedding module for a modality."""
-        modality_spec = Modality.get(modality)
-        # Based on the modality name we choose the way to embed the data
-
-        # I likely will need to know about what the embedding strategy is in the forward as well
-        # Static modality
-        if not modality_spec.is_spatial:
-            # static in space
-            return nn.ModuleDict(
-                {
-                    self._get_embedding_module_name(modality, idx): nn.Linear(
-                        len(channel_set_idxs), self.embedding_size
-                    )
-                    for idx, channel_set_idxs in enumerate(
-                        modality_spec.bandsets_as_indices()
-                    )
-                }
-            )
-        else:
-            return nn.ModuleDict(
-                {
-                    self._get_embedding_module_name(modality, idx): FlexiPatchEmbed(
-                        in_chans=len(channel_set_idxs),
-                        embedding_size=self.embedding_size,
-                        patch_size_at_16=self.max_patch_size,
-                        modality_spec=modality_spec,
-                    )
-                    for idx, channel_set_idxs in enumerate(
-                        modality_spec.bandsets_as_indices()
-                    )
-                }
-            )
-
-    def apply_embedding_to_modality(
-        self, modality: str, input_data: MaskedHeliosSample, patch_size: int
-    ) -> tuple[Tensor, Tensor]:
-        """Apply embedding to a modality."""
-        logger.debug(f"applying embedding to modality:{modality}")
-        masked_modality_name = input_data.get_masked_modality_name(modality)
-        modality_mask = getattr(input_data, masked_modality_name)
-        modality_data = getattr(input_data, modality)
-
-        modality_spec = Modality.get(modality)
-
-        modality_tokens, modality_masks = [], []
-        for idx, channel_set_indices in enumerate(modality_spec.bandsets_as_indices()):
-            modality_specific_kwargs = {}
-            if not modality_spec.is_spatial:
-                # static in time
-                token_mask = modality_mask[..., idx]
-            else:
-                token_mask = modality_mask[
-                    :,
-                    0 :: patch_size * modality_spec.image_tile_size_factor,
-                    0 :: patch_size * modality_spec.image_tile_size_factor,
-                    ...,
-                    idx,
-                ]
-                modality_specific_kwargs = {"patch_size": patch_size}
-            # Now apply the embedding to the patchified data
-            if (token_mask == MaskValue.ONLINE_ENCODER.value).any():
-                patchified_data = modality_data[..., channel_set_indices]
-                embedding_module = self.per_modality_embeddings[modality][
-                    self._get_embedding_module_name(modality, idx)
-                ]
-                patchified_data = embedding_module(
-                    patchified_data, **modality_specific_kwargs
-                )
-            else:
-                mask_shape = token_mask.shape + (self.embedding_size,)
-                patchified_data = torch.zeros(
-                    mask_shape, dtype=token_mask.dtype, device=token_mask.device
-                )
-
-            modality_tokens.append(patchified_data)
-            modality_masks.append(token_mask)
-        return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
-
-    @staticmethod
-    def is_any_data_seen_by_encoder(modality_mask: Tensor) -> bool:
-        """Check if any data is seen by the encoder."""
-        return (MaskValue.ONLINE_ENCODER.value == modality_mask).any()
-
-    def forward(
-        self,
-        input_data: MaskedHeliosSample,
-        patch_size: int,
-    ) -> dict[str, Tensor]:
-        """Return flexibly patchified embeddings for each modality of the input data.
-
-        Given a [B, H, W, (T), C] inputs, returns a [B, H, W, (T), b_s, D] output.
-
-        We assume that the spatial masks are consistent for the given patch size,
-        so that if patch_size == 2 then one possible mask would be
-        [0, 0, 1, 1]
-        [0, 0, 1, 1]
-        [1, 1, 0, 0]
-        [1, 1, 0, 0]
-        for the H, W dimensions
-        """
-        output_dict = {}
-        modalities_to_process = get_modalities_to_process(
-            input_data.modalities, self.supported_modality_names
-        )
-        for modality in modalities_to_process:
-            modality_tokens, modality_masks = self.apply_embedding_to_modality(
-                modality, input_data, patch_size
-            )
-            output_dict[modality] = modality_tokens
-            modality_mask_name = input_data.get_masked_modality_name(modality)
-            output_dict[modality_mask_name] = modality_masks
-        return output_dict
-
-
-class Reconstructor(nn.Module):
-    """Module that patchifies and encodes the input data."""
-
-    def __init__(
-        self,
-        decoder: nn.Module,
-        supported_modalities: list[ModalitySpec],
-        max_patch_size: int,
-    ):
-        """Initialize the patch embeddings.
-
-        Args:
-            decoder: Predictor nn module to use on before reconstructor on input
-            supported_modalities: Which modalities from Modality this model
-                instantiation supports
-            max_patch_size: Maximum size of patches
-        """
-        super().__init__()
-        self.max_patch_size = max_patch_size
-        self.embedding_size = decoder.output_embedding_size
-        self.supported_modalities = supported_modalities
-        self.decoder = decoder
-        # TODO: want to be able to remove certain bands and modalities
-        self.per_modality_reconstructions = nn.ModuleDict({})
-        for modality in self.supported_modalities:
-            self.per_modality_reconstructions[modality.name] = (
-                self._get_patch_reconstruction_module_for_modality(modality)
-            )
-
-    def apply_compile(self) -> None:
-        """Apply torch.compile to the model."""
-        self.decoder.apply_compile()
-
-    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
-        """Apply FSDP to the model."""
-        self.decoder.apply_fsdp(**fsdp_kwargs)
-
-    @staticmethod
-    def _get_reconstruction_module_name(modality: str, idx: int) -> str:
-        """Get the reconstruction module name.
-
-        Module Dicts require string keys
-        """
-        return f"{modality}__{idx}"
-
-    def _get_patch_reconstruction_module_for_modality(
-        self, modality: ModalitySpec
-    ) -> nn.Module:
-        """Get the patch reconstruction module for a modality."""
-        # Based on the modality name we choose the way to embed the data
-
-        # I likely will need to know about what the embedding strategy is in the forward as well
-        # Static modality
-        if modality.get_tile_resolution() == 0:
-            # static in space
-            return nn.ModuleDict(
-                {
-                    self._get_reconstruction_module_name(modality.name, idx): nn.Linear(
-                        self.embedding_size, len(channel_set_idxs)
-                    )
-                    for idx, channel_set_idxs in enumerate(
-                        modality.bandsets_as_indices()
-                    )
-                }
-            )
-        else:
-            return nn.ModuleDict(
-                {
-                    self._get_reconstruction_module_name(
-                        modality.name, idx
-                    ): FlexiPatchReconstruction(
-                        out_chans=len(channel_set_idxs),
-                        embedding_size=self.embedding_size,
-                        max_patch_size=self.max_patch_size,
-                    )
-                    for idx, channel_set_idxs in enumerate(
-                        modality.bandsets_as_indices()
-                    )
-                }
-            )
-
-    # TODO: Likely we want a single object that stores all the data related configuration etc per modality including channel grous bands patch size etc
-    def apply_reconstruction_to_modality(
-        self, modality: str, input_data: TokensAndMasks, patch_size: int
-    ) -> tuple[Tensor, Tensor]:
-        """Apply reconstruction to a modality."""
-        masked_modality_name = input_data.get_masked_modality_name(modality)
-        modality_mask = getattr(input_data, masked_modality_name)
-        modality_data = getattr(input_data, modality)
-
-        modality_spec = Modality.get(modality)
-
-        # x: Input tensor with shape [b, h, w, (t), b_s, d]
-        modality_tokens, modality_masks = [], []
-        for idx, channel_set_indices in enumerate(modality_spec.bandsets_as_indices()):
-            data = modality_data[..., idx, :]
-            masks = modality_mask[..., idx]
-            r_model = self.per_modality_reconstructions[modality][
-                self._get_reconstruction_module_name(modality, idx)
-            ]
-            if modality_spec.get_tile_resolution() == 0:
-                data = r_model(data)
-            else:
-                data = r_model(data, patch_size=patch_size)
-            modality_tokens.append(data)
-            masks = repeat(
-                masks,
-                "b h w ... -> b (h p_h) (w p_w) ...",
-                p_h=patch_size,
-                p_w=patch_size,
-            )
-            modality_masks.append(masks)
-        modality_mask = repeat(
-            modality_mask,
-            "b h w ... -> b (h p_h) (w p_w) ...",
-            p_h=patch_size,
-            p_w=patch_size,
-        )
-        return torch.cat(modality_tokens, dim=-1), modality_mask
-
-    def forward(
-        self,
-        x: TokensAndMasks,
-        timestamps: Tensor,
-        patch_size: int,
-        input_res: int = BASE_GSD,
-    ) -> TokensAndMasks:
-        """Return flexibly patchified reconstruction for each modality of the input data.
-
-        Given a [B, H, W, (T), b_s, D] inputs, returns a [B, H, W, (T), C] output.
-        """
-        input_data = self.decoder(x, timestamps, patch_size, input_res)
-        output_dict = {}
-        modalities_to_process = get_modalities_to_process(
-            input_data.modalities, [m.name for m in self.supported_modalities]
-        )
-        for modality in modalities_to_process:
-            modality_tokens, modality_masks = self.apply_reconstruction_to_modality(
-                modality, input_data, patch_size
-            )
-            output_dict[modality] = modality_tokens
-            modality_mask_name = input_data.get_masked_modality_name(modality)
-            output_dict[modality_mask_name] = modality_masks
-        return TokensAndMasks(**output_dict)
-
-
-@dataclass
-class ReconstructorConfig(Config):
-    """Configuration for the Reconstructor."""
-
-    decoder_config: "Config"
-    supported_modality_names: list[str]
-    max_patch_size: int = 8
-
-    def validate(self) -> None:
-        """Validate the configuration."""
-        if len(self.supported_modalities) == 0:
-            raise ValueError("At least one modality must be added!")
-        else:
-            for modality in self.supported_modalities:
-                if modality not in Modality.values():
-                    raise ValueError(f"Modality {modality} is not supported")
-
-    @property
-    def supported_modalities(self) -> list[ModalitySpec]:
-        """Get the supported modalities."""
-        return get_modality_specs_from_names(self.supported_modality_names)
-
-    def build(self) -> "Reconstructor":
-        """Build the reconstructor."""
-        self.validate()
-        kwargs = self.as_dict(exclude_none=True, recurse=False)
-        kwargs.pop("supported_modality_names")
-        kwargs["supported_modalities"] = self.supported_modalities
-        kwargs.pop("decoder_config")
-        kwargs["decoder"] = self.decoder_config.build()
-        logger.info(f"Predictor kwargs: {kwargs}")
-        return Reconstructor(**kwargs)
-
-
-class FlexiHeliosCompositeEncodings(nn.Module):
-    """Composite encodings for the FlexiHelios model."""
-
-    def __init__(
-        self,
-        embedding_size: int,
-        supported_modalities: list[ModalitySpec],
-        max_sequence_length: int,
-        learnable_channel_embeddings: bool = True,
-        random_channel_embeddings: bool = False,
-    ):
-        """Initialize the composite encodings.
-
-        Args:
-            embedding_size: Size of token embeddings
-            supported_modalities: Which modalities from Modality this model
-                instantiation supports
-            max_sequence_length: Maximum sequence length
-            learnable_channel_embeddings: Whether to use learnable channel embeddings
-            random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
-        """
-        super().__init__()
-        self.embedding_size = embedding_size
-        self.supported_modalities = supported_modalities
-        self.supported_modality_names = [
-            modality.name for modality in supported_modalities
-        ]
-        self.embedding_size = embedding_size
-        self.max_sequence_length = (
-            max_sequence_length  # This max sequence length is a time dim thing
-        )
-        # TODO: we need to be able to calculate the size of the param based on what types of embeddings it will get
-
-        # we have 4 embeddings types (pos_in_time, pos_in_space, month, channel) so each get
-        # 0.25 of the dimension
-        self.embedding_dim_per_embedding_type = int(embedding_size * 0.25)
-        # Position encodings for time dimension initialized to 1D sinusoidal encodings
-        self.pos_embed = nn.Parameter(
-            get_1d_sincos_pos_encoding(
-                torch.arange(max_sequence_length),
-                self.embedding_dim_per_embedding_type,
-            ),
-            requires_grad=False,
-        )
-        # Month encodings
-        month_tab = get_month_encoding_table(self.embedding_dim_per_embedding_type)
-        self.month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
-        if not learnable_channel_embeddings and not random_channel_embeddings:
-            self.per_modality_channel_embeddings = nn.ParameterDict()
-            for modality in self.supported_modalities:
-                shape = (len(modality.band_sets), self.embedding_dim_per_embedding_type)
-                channel_embeddings = nn.Parameter(
-                    torch.zeros(shape), requires_grad=False
-                )
-                self.per_modality_channel_embeddings[modality.name] = channel_embeddings
-        else:
-            # Channel embeddings
-            if learnable_channel_embeddings:
-                args = {"requires_grad": True}
-            else:
-                args = {"requires_grad": False}
-
-            self.per_modality_channel_embeddings = nn.ParameterDict()
-            for modality in self.supported_modalities:
-                shape = (len(modality.band_sets), self.embedding_dim_per_embedding_type)
-                if random_channel_embeddings:
-                    channel_embeddings = nn.Parameter(torch.rand(shape), **args)
-                else:
-                    channel_embeddings = nn.Parameter(torch.zeros(shape), **args)
-                self.per_modality_channel_embeddings[modality.name] = channel_embeddings
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m: nn.Module) -> None:
-        if isinstance(m, nn.Linear):
-            # we use xavier_uniform following official JAX ViT:
-            torch.nn.init.xavier_uniform_(m.weight)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                # TODO: fix the dtype here
-                nn.init.constant_(m.bias, 0).to(torch.float32)
-
-    @staticmethod
-    def calculate_gsd_ratio(input_res: float, patch_size: int) -> float:
-        """Calculate the Ground Sample Distance ratio."""
-        return input_res * patch_size / BASE_GSD
-
-    def _apply_encodings_per_modality(
-        self,
-        modality_name: str,
-        modality_tokens: Tensor,
-        timestamps: Tensor | None = None,
-        patch_size: int | None = None,
-        input_res: int | None = None,
-        use_modality_encodings: bool = True,
-        use_temporal_encodings: bool = True,
-    ) -> Tensor:
-        """Apply the encodings to the patchified data based on modality type.
-
-        Args:
-            modality_name: Name of the modality being processed
-            modality_tokens: Token embeddings for the modality
-            timestamps: Optional timestamps for temporal encodings
-            patch_size: Optional patch size for spatial encodings
-            input_res: Optional input resolution for spatial encodings
-            use_modality_encodings: Whether to use modality encodings
-            use_temporal_encodings: Whether to use temporal encodings
-
-        Returns:
-            Tensor with encodings applied based on modality type
-        """
-        logger.info(
-            f"use_modality_encodings: {use_modality_encodings}, use_temporal_encodings: {use_temporal_encodings}"
-        )
-        # TODO: Improve this implementation it is quite bad
-
-        modality = Modality.get(modality_name)
-        logger.debug(f"Applying encodings to modality {modality}")
-        if not use_modality_encodings and use_temporal_encodings:
-            b, h, w, t, _ = modality_tokens.shape
-            ein_string, ein_dict = (
-                "b h w t d",
-                {"b": b, "h": h, "w": w, "t": t},
-            )
-        elif not use_temporal_encodings and not use_modality_encodings:
-            b, h, w, _ = modality_tokens.shape
-            ein_string, ein_dict = (
-                "b h w d",
-                {"b": b, "h": h, "w": w},
-            )
-        elif not use_temporal_encodings and use_modality_encodings:
-            raise NotImplementedError("Not implemented")
-        else:
-            if modality_tokens.ndim == 3:
-                # modality_tokens = [B, Band_Sets, D]; static in space, static in time
-                b, b_s, _ = modality_tokens.shape
-                ein_string, ein_dict = "b b_s d", {"b": b, "b_s": b_s}
-            elif modality_tokens.ndim == 4:
-                b, t, b_s, _ = modality_tokens.shape
-                ein_string, ein_dict = "b t b_s d", {"b": b, "t": t, "b_s": b_s}
-            elif modality_tokens.ndim == 5:
-                b, h, w, b_s, _ = modality_tokens.shape
-                ein_string, ein_dict = (
-                    "b h w b_s d",
-                    {"b": b, "h": h, "w": w, "b_s": b_s},
-                )
-            elif modality_tokens.ndim == 6:
-                b, h, w, t, b_s, _ = modality_tokens.shape
-                ein_string, ein_dict = (
-                    "b h w t b_s d",
-                    {"b": b, "h": h, "w": w, "t": t, "b_s": b_s},
-                )
-            else:
-                raise ValueError(f"Unsupported tokens shape: {modality_tokens.shape}")
-
-        device = modality_tokens.device
-        modality_embed = torch.zeros(modality_tokens.shape, device=device)
-        n = self.embedding_dim_per_embedding_type
-
-        # Channel embeddings
-        if use_modality_encodings:
-            channel_embed = self.per_modality_channel_embeddings[modality.name]
-            channel_embed = repeat(
-                channel_embed, f"b_s d -> {ein_string}", **ein_dict
-            ).to(device)
-            modality_embed[..., :n] += channel_embed
-
-        if modality.is_multitemporal and use_temporal_encodings:
-            # Time position encodings
-            time_embed = repeat(self.pos_embed[:t], f"t d -> {ein_string}", **ein_dict)
-            modality_embed[..., n : n * 2] += time_embed.to(device)
-
-            # Month encodings
-            assert timestamps is not None
-            months = timestamps[:, :, 1]
-            month_embed = self.month_embed(months)
-            month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
-            modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
-        if modality.is_spatial:
-            # Spatial encodings
-            assert input_res is not None
-            assert patch_size is not None
-            gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
-            spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
-                grid_size=h,
-                res=torch.ones(b, device=device) * gsd_ratio,
-                encoding_dim=self.embedding_dim_per_embedding_type,
-                device=device,
-            )
-            spatial_embed = rearrange(spatial_embed, "b (h w) d -> b h w d", h=h, w=w)
-            spatial_embed = repeat(
-                spatial_embed, f"b h w d -> {ein_string}", **ein_dict
-            )
-            modality_embed[..., n * 3 : n * 4] += spatial_embed
-        return modality_tokens + modality_embed
-
-    def forward(
-        self,
-        per_modality_input_tokens: dict[str, Tensor],
-        timestamps: Tensor,
-        patch_size: int,
-        input_res: int = BASE_GSD,
-    ) -> dict[str, Tensor]:
-        """Apply the encodings to the patchified data.
-
-        Args:
-            per_modality_input_tokens: Tokens only for each modality
-            timestamps: Timestamps of the data
-            patch_size: Size of patches
-            input_res: Resolution of the input data
-
-        Returns:
-            Tokens only for each modality
-        """
-        output_dict = {}
-        available_modalities = return_modalities_from_dict(per_modality_input_tokens)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
-        )
-        for modality_name in modalities_to_process:
-            output_dict[modality_name] = self._apply_encodings_per_modality(
-                modality_name,
-                per_modality_input_tokens[modality_name],
-                timestamps=timestamps,
-                patch_size=patch_size,
-                input_res=input_res,
-            )
-        return output_dict
-
-
-class FlexiHeliosBase(nn.Module):
-    """FlexiHeliosBase is a base class for FlexiHelios models."""
-
-    cross_attn: bool = False
-
-    def __init__(
-        self,
-        embedding_size: int,
-        max_sequence_length: int,
-        num_heads: int,
-        mlp_ratio: float,
-        depth: int,
-        drop_path: float,
-        supported_modalities: list[ModalitySpec],
-        learnable_channel_embeddings: bool = True,
-        random_channel_embeddings: bool = False,
-        use_flash_attn: bool = False,
-        qk_norm: bool = False,
+        in_dim: int,
+        attn_dim: int | None = None,
+        hidden_dim: int | None = None,
+        mlp_ratio: float | None = None,
+        num_queries: int = 1,
+        num_heads: int | None = None,
+        gate_temperature: float = 1.0,
+        use_mlp: bool = False,
     ) -> None:
-        """Initialize the FlexiHeliosBase class."""
+        """Initialize the Attn pooling layer."""
         super().__init__()
+        assert in_dim % 64 == 0, "in_dim must be divisible by 64"
+        self.attn_dim = attn_dim or in_dim
+        self.num_heads: int = num_heads or self.attn_dim // 64
+        self.num_queries: int = num_queries
+        self.gate_temperature: float = gate_temperature
+        self.use_mlp = use_mlp
 
-        self.embedding_size = embedding_size
-        self.supported_modalities = supported_modalities
-        self.supported_modality_names = [x.name for x in supported_modalities]
-        logger.info(f"modalities being used by model: {self.supported_modality_names}")
-
-        self.max_sequence_length = max_sequence_length
-
-        self.use_flash_attn = use_flash_attn
-        self.learnable_channel_embeddings = learnable_channel_embeddings
-        self.random_channel_embeddings = random_channel_embeddings
-        self.blocks = nn.ModuleList(
-            [
-                Block(
-                    embedding_size,
-                    num_heads,
-                    mlp_ratio,
-                    qkv_bias=True,
-                    qk_norm=qk_norm,
-                    norm_layer=nn.LayerNorm,  # TODO: This should be configurable
-                    cross_attn=self.cross_attn,
-                    drop_path=drop_path,
-                    use_flash_attn=self.use_flash_attn,
-                )
-                for _ in range(depth)
-            ]
+        self.query_tokens: nn.Parameter = nn.Parameter(
+            torch.empty(num_queries, self.attn_dim)
         )
 
-        self.composite_encodings = FlexiHeliosCompositeEncodings(
-            embedding_size,
-            self.supported_modalities,
-            max_sequence_length,
-            learnable_channel_embeddings,
-            random_channel_embeddings,
+        # shared KV projection
+        self.kv: nn.Linear = nn.Linear(in_dim, self.attn_dim * 2)
+
+        # output MLP (+ optional expansion via mlp_ratio)
+        if mlp_ratio is not None:
+            hidden_dim = int(in_dim * mlp_ratio)
+        hidden_dim = hidden_dim or in_dim
+        self.out_layer: Mlp = Mlp(self.attn_dim, hidden_dim)
+        self.out_norm = nn.LayerNorm(self.attn_dim)
+        self.out_proj = (
+            nn.Linear(self.attn_dim, in_dim)
+            if in_dim != self.attn_dim
+            else nn.Identity()
         )
-        self.apply(self._init_weights)
 
-    def _init_weights(self, m: nn.Module) -> None:
-        if isinstance(m, nn.Linear):
-            # we use xavier_uniform following official JAX ViT:
-            torch.nn.init.xavier_uniform_(m.weight)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-
-    @staticmethod
-    def grab_modality_specific_dims(modality_data: Tensor) -> tuple[int, ...]:
-        """Grab the modality specific dimensions from the modality data.
-
-        Assumes [B, ..., C, D]
-
-        Every modality will have a batch dimension, a channel dimension and embedding dimension.
-
-        Args:
-            modality_data: Modality data
-
-        Returns:
-            Modality specific dimensions
-        """
-        return modality_data.shape[1:-2] if modality_data.ndim > 3 else ()
-
-    # is naming here confusing if one of these channels can be missing?
-    def collapse_and_combine_hwtc(self, x: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
-        """Collapse the tokens and masks, respectively, into two tensors."""
-        tokens, masks = [], []
-        available_modalities = return_modalities_from_dict(x)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
+        # gating over k query outputs (maps D -> 1 per query)
+        self.gate: nn.Linear | None = (
+            nn.Linear(in_dim, 1, bias=False) if num_queries > 1 else None
         )
-        for modality in modalities_to_process:
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
-            x_modality = x[modality]
-            x_modality_mask = x[masked_modality_name]
-            tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
-            masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
-        tokens = torch.cat(tokens, dim=1)
-        masks = torch.cat(masks, dim=1)
 
-        return tokens, masks
+        self.init_weights()
 
-    def stack_spatial_modalities_and_masks(
-        self,
-        tokens_dict: dict[str, Tensor],
-    ) -> Tensor:
-        """Stack the spatial modalities together."""
-        available_modalities = return_modalities_from_dict(tokens_dict)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
+    def init_weights(self) -> None:
+        """Initialize weights for the probe."""
+        nn.init.trunc_normal_(self.query_tokens, std=0.02)
+        nn.init.trunc_normal_(self.kv.weight, std=0.02)
+        nn.init.zeros_(self.kv.bias)
+
+        nn.init.zeros_(self.kv.bias)
+        if self.gate is not None:
+            nn.init.zeros_(self.gate.weight)  # start near uniform mix
+
+    def forward(
+        self, feat_tokens: torch.Tensor, mask: torch.Tensor | None
+    ) -> torch.Tensor:
+        """Apply attention pooling to the tokens."""
+        Bc, N, _ = feat_tokens.shape
+        H = self.num_heads
+        D = self.attn_dim
+        Dh = D // H
+
+        # queries: [B*, k, D] -> [B*, H, k, Dh]
+        q = (
+            self.query_tokens[None, :, :]
+            .expand(Bc, -1, -1)
+            .reshape(Bc, self.num_queries, H, Dh)
         )
-        mask_list = []
-        data_list = []
-        for modality in modalities_to_process:
-            # Hack for now only encoding spatial temporal modalities
-            modality_spec = Modality.get(modality)
-            if modality_spec.is_spatial and modality_spec.is_multitemporal:
-                logger.info(f"modality: {modality} is spatial")
-                masked_modality_name = MaskedHeliosSample.get_masked_modality_name(
-                    modality
-                )
-                logger.info(
-                    f"modality: {modality}, masked_modality_name: {masked_modality_name}"
-                )
-                data = tokens_dict[modality]
-                mask = tokens_dict[masked_modality_name]
-                data_list.append(data)
-                mask_list.append(mask)
-        # stack in the modality dimension
-        return torch.cat(data_list, dim=4), torch.cat(mask_list, dim=4)
+        q = rearrange(q, "b k h d -> b h k d")
 
-    @staticmethod
-    def _construct_einops_pattern(
-        spatial_dims: tuple[int, ...],
-    ) -> tuple[str, dict[str, int]]:
-        """Given a tuple of spatial dimensions (e.g. [B, H, W, T, ...]).
+        # K/V: [B*, N, D] -> [2, B*, H, N, Dh]
+        feat_tokens = feat_tokens.to(self.kv.weight.dtype)
+        kv = self.kv(feat_tokens).reshape(Bc, N, 2, H, Dh)
+        kv = rearrange(kv, "b n two h d -> two b h n d")
+        k, v = torch.unbind(kv, dim=0)  # [B*, H, N, Dh] each
 
-        build (1) an einops rearrange pattern of the form:
-            "d -> (dim0) (dim1) (dim2)... d"
-        and (2) a dictionary mapping dim0..dimN to the actual sizes.
+        # mask -> [B*, H, k, N] (broadcastable is fine, but expand for clarity)
+        attn_mask = None
+        if mask is not None:
+            m = mask[:, None, None, :]  # [B*,1,1,N]
+            attn_mask = m.expand(Bc, H, self.num_queries, N)
 
-        This allows reshaping a single-dimensional tensor [D] into
-        [B, H, W, T, ..., D] using einops.
-        """
-        dim_dict = {f"dim{i}": size for i, size in enumerate(spatial_dims)}
-        # e.g., "d -> (dim0) (dim1) (dim2) (dim3) d"
-        pattern_input = (
-            "d -> " + " ".join(f"(dim{i})" for i in range(len(spatial_dims))) + " d"
-        )
-        return pattern_input, dim_dict
+        # H100 chunking on batch axis
+        max_size = 63488
+        x_chunks = []
+        for i in range(0, Bc, max_size):
+            q_chunk = q[i : i + max_size, ...]
+            k_chunk = k[i : i + max_size, ...]
+            v_chunk = v[i : i + max_size, ...]
+            m_chunk = (
+                attn_mask[i : i + max_size, ...] if attn_mask is not None else None
+            )
+            # SDPA expects [B,H,Q,D] x [B,H,K,D] -> [B,H,Q,D]
+            x_chunk = F.scaled_dot_product_attention(
+                q_chunk, k_chunk, v_chunk, attn_mask=m_chunk
+            )
+            x_chunks.append(x_chunk)
 
-    def split_tokens_masks_and_dims(
-        self, x: dict[str, Tensor]
-    ) -> tuple[dict[str, Tensor], dict[str, Tensor], dict[str, tuple]]:
-        """Split the tokens, masks, and dimensions out into separate dicts."""
-        tokens_only_dict = {}
-        original_masks_dict = {}
-        modalities_to_dims_dict = {}
-        # TODO: Should I have a dict like object that has methods that can return a mask or atoken here?
-        available_modalities = return_modalities_from_dict(x)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
-        )
-        for modality in modalities_to_process:
-            x_modality = x[modality]
-            tokens_only_dict[modality] = x_modality
-            modalities_to_dims_dict[modality] = x_modality.shape
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
-            original_masks_dict[masked_modality_name] = x[masked_modality_name]
-        return tokens_only_dict, original_masks_dict, modalities_to_dims_dict
+        # [B*, H, k, Dh] -> [B*, k, D]
+        x = torch.cat(x_chunks, dim=0)
+        o = rearrange(x, "b h k d -> b k (h d)")
 
-    @staticmethod
-    def split_and_expand_per_modality(
-        x: Tensor, modalities_to_dims_dict: dict
-    ) -> dict[str, Tensor]:
-        """Split and expand the tokens per modality.
+        # gated average across k, or pass-through if k=1
+        if self.num_queries > 1 and self.gate is not None:
+            o_for_gate = F.layer_norm(o, (D,))  # normalize only for gating
+            logits = self.gate(o_for_gate).squeeze(-1)  # [B*, k]
+            w = torch.softmax(logits, dim=1)
+            z = (w.unsqueeze(-1) * o).sum(dim=1)  # mix the *unnormalized* values
+        else:
+            z = o.squeeze(1)
 
-        Args:
-            x: Tokens to split and expand (b n d)
-            modalities_to_dims_dict: Dictionary mapping modalities to their dimensions
-        Returns:
-            tokens_only_dict: mapping modalities to their tokens
-        """
-        tokens_only_dict = {}
-        tokens_reshaped = 0
-        for modality, dims in modalities_to_dims_dict.items():
-            # Skip batch (first) and embedding (last) dimensions
-            middle_dims = dims[1:-1]
-            num_tokens_for_modality = math.prod(middle_dims)
-
-            # Extract tokens for this modality (b n d)
-            modality_tokens = x[
-                :, tokens_reshaped : tokens_reshaped + num_tokens_for_modality
-            ]
-
-            # TODO: see if there  is a general and clean einops way to do this
-            # Reshape to original dimensions (e.g., for 4D spatial dims: b d1 d2 d3 d4 e)
-            x_modality = modality_tokens.view(x.shape[0], *middle_dims, x.shape[-1])
-
-            tokens_reshaped += num_tokens_for_modality
-            tokens_only_dict[modality] = x_modality
-
-        return tokens_only_dict
-
-    @staticmethod
-    def pack_tokens(tokens: Tensor, mask: Tensor) -> Tensor:
-        """Pack the Batch and sequence length dimensions of tokens and mask into a single tensor.
-
-        Args:
-            tokens: Tokens to pack
-            mask: Mask to pack
-
-        Returns:
-            Packed tokens enabling varlen flash attention
-        """
-        tokens_packed = torch.flatten(tokens, end_dim=1)
-        mask = torch.flatten(mask)
-        tokens = tokens_packed[mask]
-        return tokens
-
-    @staticmethod
-    def unpack_tokens(tokens: Tensor, mask: Tensor, og_shape: tuple) -> Tensor:
-        """Unpack the Batch and sequence length dimensions of tokens and mask into a single tensor.
-
-        Args:
-            tokens: Tokens to unpack
-            mask: Mask to unpack
-            og_shape: Original shape of the tokens
-        """
-        tokens_new = tokens.new_zeros(og_shape[0] * og_shape[1], og_shape[2])
-        mask = torch.flatten(mask)
-        tokens_new[mask] = tokens
-        tokens = tokens_new.reshape(og_shape[0], og_shape[1], -1)
-        return tokens
-
-    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
-        """Apply FSDP to the model."""
-        for block in self.blocks:
-            block.apply_fsdp(**fsdp_kwargs)
-
-    def apply_compile(self) -> None:
-        """Apply torch.compile to the model."""
-        for block in self.blocks:
-            block.apply_compile()
+        # MLP + LN head
+        if self.use_mlp:
+            z = self.out_norm(self.out_layer(z))
+        return self.out_proj(z)
 
 
-class Encoder(FlexiHeliosBase):
-    """Encoder module that processes masked input samples into token representations."""
-
-    cross_attn: bool = False
+class EncodeEarlyAttnPool(Encoder):
+    """Encoder that pools the tokens across modalities."""
 
     def __init__(
         self,
-        embedding_size: int,
-        max_patch_size: int,
-        min_patch_size: int,
-        num_heads: int,
-        mlp_ratio: float,
-        depth: int,
-        drop_path: float,
-        supported_modalities: list[ModalitySpec],
-        max_sequence_length: int,
-        num_register_tokens: int = 0,
-        learnable_channel_embeddings: bool = True,
-        random_channel_embeddings: bool = False,
-        num_projection_layers: int = 1,
-        aggregate_then_project: bool = True,
-        use_flash_attn: bool = False,
-        frozen_patch_embeddings: bool = False,
-        qk_norm: bool = False,
-    ):
-        """Initialize the encoder.
-
-        Args:
-            embedding_size: Size of token embeddings
-            max_patch_size: Maximum patch size for patchification
-            min_patch_size: Minimum patch size for patchification
-            num_heads: Number of attention heads
-            mlp_ratio: Ratio for MLP hidden dimension
-            depth: Number of transformer layers
-            drop_path: Drop path rate
-            supported_modalities: list documenting modalities used in a given model instantiation
-            max_sequence_length: Maximum sequence length
-            num_register_tokens: Number of register tokens to use
-            learnable_channel_embeddings: Whether to use learnable channel embeddings
-            random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
-            num_projection_layers: The number of layers to use in the projection. If >1, then
-                a ReLU activation will be applied between layers
-            aggregate_then_project: If True, then we will average the tokens before applying
-                the projection. If False, we will apply the projection first.
-            use_flash_attn: Whether to use flash attention
-            frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
-                https://arxiv.org/pdf/2104.02057, Section 4.2
-            qk_norm: Whether to apply normalization to Q and K in attention
-        """
-        super().__init__(
-            embedding_size=embedding_size,
-            depth=depth,
-            mlp_ratio=mlp_ratio,
-            num_heads=num_heads,
-            max_sequence_length=max_sequence_length,
-            learnable_channel_embeddings=learnable_channel_embeddings,
-            drop_path=drop_path,
-            supported_modalities=supported_modalities,
-            use_flash_attn=use_flash_attn,
-            random_channel_embeddings=random_channel_embeddings,
-            qk_norm=qk_norm,
+        dims_to_pool: str,
+        pooling_attn_dim: int | None = None,
+        attn_pool_mlp_ratio: float | None = None,
+        num_queries: int = 1,
+        use_mlp: bool = False,
+        num_pre_modality_pooling_layers: int = 0,
+        num_attn_pool_heads: int | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the EncodeEarlyAttnPool."""
+        super().__init__(*args, **kwargs)
+        self.attn_pool = AttnPool(
+            in_dim=self.embedding_size,
+            attn_dim=pooling_attn_dim,
+            mlp_ratio=attn_pool_mlp_ratio,
+            num_queries=num_queries,
+            use_mlp=use_mlp,
+            num_heads=num_attn_pool_heads,
         )
-        self.num_register_tokens = num_register_tokens
-        self.has_register_tokens = num_register_tokens > 0
-        if self.has_register_tokens:
-            self.register_tokens = nn.Parameter(
-                torch.zeros(num_register_tokens, embedding_size)
-            )
-        self.min_patch_size = min_patch_size
-        self.max_patch_size = max_patch_size
-        self.embedding_size = embedding_size
-        self.patch_embeddings = FlexiHeliosPatchEmbeddings(
-            self.supported_modality_names,
-            self.max_patch_size,
-            self.embedding_size,
+        self.num_pre_modality_pooling_layers = num_pre_modality_pooling_layers
+
+        self.dims_to_pool = dims_to_pool
+        if self.use_flash_attn:
+            raise NotImplementedError("Flash attn not implemented")
+
+    def _get_reduce_and_expand_args(
+        self, shape: tuple[int, ...]
+    ) -> tuple[str, str, str, str, str, str, dict[str, int], dict[str, int]]:
+        """Get the reduction and expansion arguments for the dimensions to pool."""
+        B, H, W, T, M, D = shape
+        # Make a reduction args and expand args for each dim pooling type
+        if self.dims_to_pool == DimsToPool.MODALITY:
+            reduction_args = "(b h w t) m d"
+            reduction_mask_args = "(b h w t) m"
+            pre_expand_args = "(b h w t) d"
+            expand_args = "b h w t d"
+            expand_mask_kwargs = {"b": B, "h": H, "w": W, "t": T}
+            expand_kwargs = {"b": B, "h": H, "w": W, "t": T, "d": D}
+        elif self.dims_to_pool == DimsToPool.TEMPORAL:
+            reduction_args = "(b h w m) t d"
+            reduction_mask_args = "(b h w m) t"
+            pre_expand_args = "(b h w m) d"
+            expand_args = "b h w m d"
+            expand_mask_kwargs = {"b": B, "h": H, "w": W, "m": M}
+            expand_kwargs = {"b": B, "h": H, "w": W, "m": M, "d": D}
+        elif self.dims_to_pool == DimsToPool.SPATIAL:
+            reduction_args = "(b t m) (h w) d"
+            reduction_mask_args = "(b t m) (h w)"
+            pre_expand_args = "(b t m) d"
+            expand_args = "b t m d"
+            expand_mask_kwargs = {"b": B, "t": T, "m": M}
+            expand_kwargs = {"b": B, "t": T, "m": M, "d": D}
+            # Next do Modality and Temporal
+            # Then do All
+        elif self.dims_to_pool == DimsToPool.MODALITY_TEMPORAL:
+            reduction_args = "(b h w ) (t m) d"
+            reduction_mask_args = "(b h w ) (t m)"
+            pre_expand_args = "(b h w) d"
+            expand_args = "b h w d"
+            expand_mask_kwargs = {"b": B, "h": H, "w": W}
+            expand_kwargs = {"b": B, "h": H, "w": W, "d": D}
+        elif self.dims_to_pool == DimsToPool.ALL:
+            reduction_args = "b (h w t m)  d"
+            reduction_mask_args = "b (h w t m)"
+            pre_expand_args = "(b n) d"
+            expand_args = "b n d"
+            expand_mask_kwargs = {"b": B, "n": 1}
+            expand_kwargs = {"b": B, "n": 1, "d": D}
+        else:
+            raise ValueError(f"Invalid dimensions to pool options: {self.dims_to_pool}")
+        pre_expand_mask_args = pre_expand_args.replace(" d", "")
+        expand_mask_args = expand_args.replace(" d", "")
+        return (
+            reduction_args,
+            reduction_mask_args,
+            pre_expand_args,
+            pre_expand_mask_args,
+            expand_args,
+            expand_mask_args,
+            expand_mask_kwargs,
+            expand_kwargs,
         )
-        self.project_and_aggregate = ProjectAndAggregate(
-            embedding_size=self.embedding_size,
-            num_layers=num_projection_layers,
-            aggregate_then_project=aggregate_then_project,
+
+    def apply_attn_pooling(
+        self, spatial_tokens: torch.Tensor, spatial_masks: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """Attentive pool the tokens across the dimensions specified in self.dims_to_pool."""
+        (
+            reduction_args,
+            reduction_mask_args,
+            pre_expand_args,
+            pre_expand_mask_args,
+            expand_args,
+            expand_mask_args,
+            expand_mask_kwargs,
+            expand_kwargs,
+        ) = self._get_reduce_and_expand_args(spatial_tokens.shape)
+        # Here is where I pick which dimensions to collapse out of modality, time, and space
+        spatial_tokens = rearrange(spatial_tokens, f"b h w t m d -> {reduction_args}")
+
+        spatial_masks = rearrange(spatial_masks, f"b h w t m -> {reduction_mask_args}")
+        # print the unique values of the masks
+        pooled_attn_mask = spatial_masks == MaskValue.ONLINE_ENCODER.value
+        pooled_tokens = self.attn_pool(spatial_tokens, pooled_attn_mask)
+        logger.info(f"shape of pooled tokens: {pooled_tokens.shape}")
+        pooled_tokens = rearrange(
+            pooled_tokens, f"{pre_expand_args} -> {expand_args}", **expand_kwargs
         )
-        self.norm = nn.LayerNorm(self.embedding_size)
-        self.apply(self._init_weights)
-
-        if frozen_patch_embeddings:
-            for p in self.patch_embeddings.parameters():
-                p.requires_grad = False
-        if self.has_register_tokens:
-            self._init_register_tokens()
-
-    def _init_register_tokens(self) -> None:
-        """Initialize the register tokens."""
-        nn.init.xavier_uniform_(self.register_tokens)
-
-    def create_token_exit_ids(
-        self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
-    ) -> dict[str, Tensor]:
-        """Create the token exit ids for # of layers of attention for each band group.
-
-        Assumes modality channel groups are in the second to last dimension of the tokens.
-        """
-        exit_ids_per_modality_dict = {}
-        available_modalities = return_modalities_from_dict(x)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
+        # for spatial_masks if any in the modality dimension is online encode, set the token to online encoder only
+        # otherwise set to Missing Value
+        online_encoder_only_mask = (
+            spatial_masks == MaskValue.ONLINE_ENCODER.value
+        ).any(dim=-1)
+        pooled_attn_mask = torch.where(
+            online_encoder_only_mask,
+            MaskValue.ONLINE_ENCODER.value,
+            MaskValue.MISSING.value,
         )
-        for modality in modalities_to_process:
-            num_exit_layers = token_exit_cfg[modality]
-            exit_seq_modality = torch.full_like(x[modality], fill_value=num_exit_layers)
-            exit_ids_per_modality_dict[modality] = exit_seq_modality
-        return exit_ids_per_modality_dict
+
+        pooled_attn_mask = rearrange(
+            pooled_attn_mask,
+            f"{pre_expand_mask_args} -> {expand_mask_args}",
+            **expand_mask_kwargs,
+        )
+        # TODO: Update names so they make sense for all the different options
+        pooled_tokens_and_masks = {
+            "modality_pooled_tokens": pooled_tokens,
+            "modality_pooled_masks": pooled_attn_mask,
+        }
+        return pooled_tokens_and_masks
+
+    def collapse_and_combine_hwtc_pooled_tokens(
+        self, x: dict[str, Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Collapse and combine the pooled tokens and masks."""
+        pooled_tokens = x["modality_pooled_tokens"]
+        pooled_masks = x["modality_pooled_masks"]
+        pooled_tokens = rearrange(pooled_tokens, "b ... d -> b (...) d")
+        pooled_masks = rearrange(pooled_masks, "b ...  -> b (...) ")
+        return pooled_tokens, pooled_masks
+
+    def reshape_pooled_tokens(
+        self, pooled_tokens: torch.Tensor, pooled_dims: tuple[int, ...]
+    ) -> torch.Tensor:
+        """Reshape the pooled tokens to the dimensions specified in pooled_dims."""
+        b = pooled_tokens.shape[0]
+        middle_dims = pooled_dims[1:-1]
+        d = pooled_tokens.shape[-1]
+        tokens_reshaped = pooled_tokens.view(b, *middle_dims, d)
+        return tokens_reshaped
 
     @staticmethod
     def remove_masked_tokens(
@@ -1296,6 +350,9 @@ class Encoder(FlexiHeliosBase):
             max_length: [1]
             where T is the max number of unmasked tokens for an instance
         """
+        # log the shape of x and mask
+        logger.info(f"remove masked tokens shape of x: {x.shape}")
+        logger.info(f"remove masked tokens shape of mask: {mask.shape}")
         sorted_mask, indices = torch.sort(mask, dim=1, descending=True, stable=True)
         # Now all the places where we want to keep the token are at the front of the tensor
         x = x.gather(1, indices[:, :, None].expand_as(x))
@@ -1313,180 +370,16 @@ class Encoder(FlexiHeliosBase):
 
         return x, indices, updated_mask, seq_lengths, max_length
 
-    @staticmethod
-    def add_removed_tokens(
-        x: Tensor, indices: Tensor, mask: Tensor
-    ) -> tuple[Tensor, Tensor]:
-        """Add removed tokens to the tokens and masks.
-
-        Args:
-            x: Tokens to add removed tokens to
-            indices: Original indices of the masked tokens
-            mask: Mask to add removed tokens to
-
-        Returns:
-            tokens: Tokens with removed tokens added
-            mask: Mask with removed tokens added
-        """
-        assert x.shape[1] > 0, (
-            "x must have at least one token we should not mask all tokens"
-        )
-        masked_tokens = repeat(
-            torch.zeros_like(x[0, 0, :]), "d -> b t d", b=x.shape[0], t=indices.shape[1]
-        )
-        full_mask = torch.cat(
-            (
-                mask,
-                torch.zeros(
-                    (x.shape[0], indices.shape[1] - x.shape[1]),
-                    device=x.device,
-                    dtype=mask.dtype,
-                ),
-            ),
-            dim=-1,
-        )
-        # can't set value on leaf variable
-        out = masked_tokens.clone()
-        # put tokens in full masked tensor (at the first N positions in every row)
-        out[full_mask] = x[mask]
-        # then move them to their original positions
-        out = out.scatter(1, indices[:, :, None].expand_as(out), out)
-        full_mask = full_mask.scatter(1, indices.expand_as(full_mask), full_mask)
-        # Values that were masked out are not returned but the values that are still there are returned to the original positions
-        return out, full_mask
-
-    def create_exit_seqs(
+    def apply_unpooled_attn(
         self,
-        tokens_only_dict: dict[str, Tensor],
-        mask_only_dict: dict[str, Tensor],
-        token_exit_cfg: dict[str, int] | None,
-    ) -> tuple[Tensor | None]:
-        """Create the exit sequences and tokens."""
-        # Check that tokens_only_dict doesn't contain any mask keys
-        assert all(not key.endswith("_mask") for key in tokens_only_dict), (
-            "tokens_only_dict should not contain mask keys"
-        )
-        if token_exit_cfg:
-            exit_ids_per_modality = self.create_token_exit_ids(
-                tokens_only_dict, token_exit_cfg
-            )
-            exit_ids_per_modality.update(mask_only_dict)
-            # Exit ids seqs tells us which layer to exit each token
-            exit_ids_seq, _ = self.collapse_and_combine_hwtc(exit_ids_per_modality)
-        else:
-            exit_ids_seq = None
-        return exit_ids_seq
-
-    def get_attn_or_none_mask(
-        self,
-        new_mask: Tensor,
-        always_pass_none_mask_to_transformer: bool,
-    ) -> Tensor | None:
-        """Get the attention mask or None if we should pass None to the transformer."""
-        if always_pass_none_mask_to_transformer or not self.training:
-            return None
-        else:
-            return new_mask
-
-    def add_register_tokens_and_masks(
-        self,
-        tokens: Tensor,
-        attn_mask: Tensor | None,
-        processed_register_tokens: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor | None]:
-        """Concatenate register tokens to the tokens."""
-        batch_size = tokens.shape[0]
-        # Expand register tokens to match batch size: [num_register_tokens, embedding_size] -> [batch_size, num_register_tokens, embedding_size]
-        if processed_register_tokens is None:
-            reg_tokens = self.register_tokens.unsqueeze(0).expand(batch_size, -1, -1)
-        else:
-            reg_tokens = processed_register_tokens
-        # Concatenate register tokens at the beginning: [batch_size, seq_len, embedding_size] -> [batch_size, num_register_tokens + seq_len, embedding_size]
-        tokens = torch.cat([reg_tokens, tokens], dim=1)
-        if attn_mask is not None:
-            # Create mask for register tokens (all True - they should participate in attention)
-            reg_mask = torch.ones(
-                batch_size,
-                self.num_register_tokens,
-                dtype=attn_mask.dtype,
-                device=attn_mask.device,
-            )
-            attn_mask = torch.cat([reg_mask, attn_mask], dim=1)
-        else:
-            reg_mask = None
-        return tokens, attn_mask
-
-    def pop_register_tokens(self, tokens: Tensor) -> tuple[Tensor, Tensor]:
-        """Pop the register tokens from the tokens."""
-        register_tokens = tokens[:, : self.num_register_tokens, :]
-        tokens = tokens[:, self.num_register_tokens :, :]
-        return tokens, register_tokens
-
-    def get_token_norm_stats(
-        self, tokens: Tensor, register_tokens: Tensor
-    ) -> dict[str, float]:
-        """Get the token norm stats."""
-        # Compute norms for register tokens: [batch_size, num_register_tokens]
-        register_tokens_norms = torch.norm(register_tokens, dim=2)
-        reg_norms_flat = register_tokens_norms.flatten()
-        reg_stats = {
-            "register_mean": reg_norms_flat.mean().item(),
-            "register_min": reg_norms_flat.min().item(),
-            "register_max": reg_norms_flat.max().item(),
-        }
-
-        # Compute norms for non-register tokens: [batch_size, seq_len]
-        nonreg_tokens_norms = torch.norm(tokens, dim=2)
-        nonreg_norms_flat = nonreg_tokens_norms.flatten()
-        percentiles = [25.0, 75.0, 90.0, 95.0, 99.0]
-        nonreg_percentiles = torch.quantile(
-            nonreg_norms_flat.float(),
-            torch.tensor(
-                [p / 100.0 for p in percentiles], device=nonreg_norms_flat.device
-            ),
-        ).tolist()
-        nonreg_stats = {
-            "nonregister_mean": nonreg_norms_flat.mean().item(),
-            "nonregister_min": nonreg_norms_flat.min().item(),
-            "nonregister_max": nonreg_norms_flat.max().item(),
-            "nonregister_std": nonreg_norms_flat.std().item(),
-            "nonregister_25th": nonreg_percentiles[0],
-            "nonregister_75th": nonreg_percentiles[1],
-            "nonregister_90th": nonreg_percentiles[2],
-            "nonregister_95th": nonreg_percentiles[3],
-            "nonregister_99th": nonreg_percentiles[4],
-        }
-
-        token_norm_stats = {**reg_stats, **nonreg_stats}
-        return token_norm_stats
-
-    def apply_attn(
-        self,
-        x: dict[str, Tensor],
-        timestamps: Tensor,
-        patch_size: int,
-        input_res: int,
-        token_exit_cfg: dict[str, int] | None = None,
+        tokens_and_masks_dict: dict[str, Tensor],
+        modalities_to_dims_dict: dict,
+        exit_ids_seq: Tensor | None = None,
+        exited_tokens: Tensor | None = None,
         always_pass_none_mask_to_transformer: bool = False,
-    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
+    ) -> tuple[dict[str, Tensor], Tensor | None]:
         """Apply the attention to the tokens and masks."""
-        tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
-            self.split_tokens_masks_and_dims(x)
-        )
-        exit_ids_seq = self.create_exit_seqs(
-            tokens_only_dict, original_masks_dict, token_exit_cfg
-        )
-        # exited tokens are just the linear projection
-        exited_tokens, _ = self.collapse_and_combine_hwtc(x)
-
-        tokens_dict = self.composite_encodings.forward(
-            tokens_only_dict,
-            timestamps,
-            patch_size,
-            input_res,
-        )
-        tokens_dict.update(original_masks_dict)
-        tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        tokens, mask = self.collapse_and_combine_hwtc(tokens_and_masks_dict)
 
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
 
@@ -1511,11 +404,16 @@ class Encoder(FlexiHeliosBase):
             new_mask, always_pass_none_mask_to_transformer
         )
 
+        # Add register tokens before attention layers
+        register_tokens = None
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
 
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
+            if i_blk == self.num_pre_modality_pooling_layers:
+                break
+            logger.debug(f"i_blk pre-modality pooling: {i_blk}")
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
             if (exit_ids_seq is not None) and (i_blk > 0):
                 # this should only ever be called by the target encoder,
@@ -1539,14 +437,138 @@ class Encoder(FlexiHeliosBase):
                 attn_mask=attn_mask,
             )
 
+        # Remove register tokens after attention layers
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
-            token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
-        else:
-            token_norm_stats = None
 
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
+
+        if exit_ids_seq is not None:
+            # this should only ever be called by the target encoder,
+            # in a torch.no_grad context
+            assert exited_tokens is not None
+            # full depth
+            # IMPORTANT: write this to x
+            tokens = torch.where(
+                condition=(exit_ids_seq == (i_blk + 1)),  # 2 for full depth
+                input=tokens,
+                other=exited_tokens,
+            )
+        # we don't care about the mask returned by add_removed_tokens, since we will
+        # just use the original, unclipped mask here
+        tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
+        tokens_per_modality_dict = self.split_and_expand_per_modality(
+            tokens, modalities_to_dims_dict
+        )
+        # Return both the tokens per modality and the register tokens for pooled attention
+        return tokens_per_modality_dict, register_tokens
+
+    def apply_attn(
+        self,
+        x: dict[str, Tensor],
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int,
+        token_exit_cfg: dict[str, int] | None = None,
+        always_pass_none_mask_to_transformer: bool = False,
+    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
+        """Apply the attention to the tokens and masks."""
+        tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
+            self.split_tokens_masks_and_dims(x)
+        )
+        exit_ids_seq = self.create_exit_seqs(
+            tokens_only_dict, original_masks_dict, token_exit_cfg
+        )
+        # exited tokens are just the linear projection
+        exited_tokens, _ = self.collapse_and_combine_hwtc(x)
+
+        tokens_dict = self.composite_encodings.forward(
+            tokens_only_dict,
+            timestamps,
+            patch_size,
+            input_res,
+        )
+        tokens_dict.update(original_masks_dict)
+
+        # TODO: token exit config isn't really meant to be used here but is no-op so leaving it in
+        tokens_dict, register_tokens = self.apply_unpooled_attn(
+            tokens_dict,
+            pre_pooled_modality_to_dims_dict,
+            exit_ids_seq,
+            exited_tokens,
+            always_pass_none_mask_to_transformer,
+        )
+        # update the tokens_dict with the original masks
+        tokens_dict.update(original_masks_dict)
+        logger.info(f"tokens_dict keys: {tokens_dict.keys()}")
+        # Dropping decode only modalities
+        spatial_tokens, spatial_masks = self.stack_spatial_modalities_and_masks(
+            tokens_dict
+        )
+
+        tokens_dict = self.apply_attn_pooling(spatial_tokens, spatial_masks)
+        pooled_dims = tokens_dict["modality_pooled_tokens"].shape
+        original_pooled_masks = tokens_dict["modality_pooled_masks"]
+        tokens, mask = self.collapse_and_combine_hwtc_pooled_tokens(tokens_dict)
+        bool_mask = mask == MaskValue.ONLINE_ENCODER.value
+
+        tokens, indices, new_mask, seq_lengths, max_seqlen = self.remove_masked_tokens(
+            tokens, bool_mask
+        )
+        if exit_ids_seq is not None:
+            exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
+                exit_ids_seq, bool_mask
+            )
+            # still linear projections
+            exited_tokens, _, _, _, _ = self.remove_masked_tokens(
+                exited_tokens, bool_mask
+            )
+        cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
+
+        attn_mask = self.get_attn_or_none_mask(
+            new_mask, always_pass_none_mask_to_transformer
+        )
+
+        # Add register tokens before post-modality pooling attention layers
+        if self.has_register_tokens and register_tokens is not None:
+            tokens, attn_mask = self.add_register_tokens_and_masks(
+                tokens, attn_mask, register_tokens
+            )
+
+        # Apply attn with varying encoder depths
+        for i_blk, blk in enumerate(self.blocks):
+            if i_blk < self.num_pre_modality_pooling_layers:
+                # skip the pre-modality pooling layer attention blocks
+                continue
+            logger.debug(f"i_blk post-modality pooling: {i_blk}")
+            # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
+            if (exit_ids_seq is not None) and (i_blk > 0):
+                # this should only ever be called by the target encoder,
+                # in a torch.no_grad context
+                assert exited_tokens is not None
+                # If a token should exit, then we update the exit token with the current token at the same position
+                exited_tokens = torch.where(
+                    condition=(exit_ids_seq == i_blk),
+                    input=tokens,
+                    other=exited_tokens,
+                )
+            # we take the inverse of the mask because a value
+            # of True indicates the value *should* take part in
+            # attention
+            # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
+            tokens = blk(
+                x=tokens,
+                cu_seqlens=cu_seqlens,
+                max_seqlen=max_seqlen,
+                # we will have to specify k and q lens for cross attention
+                attn_mask=attn_mask,
+            )
+
+        token_norm_stats = None
+        if self.has_register_tokens and register_tokens is not None:
+            tokens, register_tokens = self.pop_register_tokens(tokens)
+            token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
 
         if exit_ids_seq is not None:
             # this should only ever be called by the target encoder,
@@ -1565,12 +587,12 @@ class Encoder(FlexiHeliosBase):
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
         tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
-        tokens_per_modality_dict = self.split_and_expand_per_modality(
-            tokens, modalities_to_dims_dict
+        out_dict = {}
+        out_dict["modality_pooled_tokens"] = self.reshape_pooled_tokens(
+            tokens, pooled_dims
         )
-        # merge original masks and the processed tokens
-        tokens_per_modality_dict.update(original_masks_dict)
-        return tokens_per_modality_dict, token_norm_stats
+        out_dict["modality_pooled_masks"] = original_pooled_masks
+        return out_dict, token_norm_stats
 
     def forward(
         self,
@@ -1594,10 +616,11 @@ class Encoder(FlexiHeliosBase):
         """
         # TODO: Add step to validate the exit config is valid
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
+        tokenized_output = TokensAndMasks(**patchified_tokens_and_masks)
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
-            patchified_tokens_and_masks, token_norm_stats = self.apply_attn(
+            pooled_tokens_and_masks, token_norm_stats = self.apply_attn(
                 x=patchified_tokens_and_masks,
                 timestamps=x.timestamps,
                 patch_size=patch_size,
@@ -1606,261 +629,79 @@ class Encoder(FlexiHeliosBase):
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         else:
-            token_norm_stats = {}
-        output = TokensAndMasks(**patchified_tokens_and_masks)
-        # TODO: we should probably switch this to a dict
-        output_dict = {
-            "tokens_and_masks": output,
-            "project_aggregated": self.project_and_aggregate(output),
+            pooled_tokens_and_masks = {}
+            token_norm_stats = None
+
+        output_dict: dict[str, Any] = {
+            "tokens_and_masks": tokenized_output,
         }
-        if token_norm_stats:
+        if pooled_tokens_and_masks:
+            output_dict["project_aggregated"] = self.project_and_aggregate(
+                pooled_tokens_and_masks["modality_pooled_tokens"]
+            )
+            output_dict["pooled_tokens_and_masks"] = pooled_tokens_and_masks
+        else:
+            output_dict["project_aggregated"] = self.project_and_aggregate(
+                tokenized_output
+            )
+        if token_norm_stats is not None:
             output_dict["token_norm_stats"] = token_norm_stats
+
         return output_dict
 
-    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
-        """Apply FSDP to the model."""
-        super().apply_fsdp(**fsdp_kwargs)
-        # Don't Shard the small layers
-        # fully_shard(self.patch_embeddings, **fsdp_kwargs)
-        # register_fsdp_forward_method(self.patch_embeddings, "forward")
-        # fully_shard(self.project_and_aggregate, **fsdp_kwargs)
-        # register_fsdp_forward_method(self.project_and_aggregate, "forward")
-        fully_shard(self, **fsdp_kwargs)
+
+@dataclass
+class EncoderEarlyAttnPoolConfig(EncoderConfig):
+    """Configuration for the EncoderAttnPool."""
+
+    dims_to_pool: DimsToPool = DimsToPool.MODALITY
+    num_queries: int = 1
+    attn_pool_mlp_ratio: float | None = None
+    num_pre_modality_pooling_layers: int = 0
+    use_mlp: bool = False
+    num_attn_pool_heads: int | None = None
+    pooling_attn_dim: int | None = None
+
+    def build(self) -> "EncodeEarlyAttnPool":
+        """Build the encoder."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        # supported_modality_names is replaced by supported_modalities
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"Encoder kwargs: {kwargs}")
+        return EncodeEarlyAttnPool(**kwargs)
 
 
-class PredictorBase(FlexiHeliosBase):
-    """Predictor module that generates predictions from encoded tokens."""
-
-    cross_attn = True
+class PooledModalityPredictor(PredictorBase):
+    """Predictor that pools the tokens across modalities."""
 
     def __init__(
         self,
-        supported_modalities: list[ModalitySpec],
-        encoder_embedding_size: int = 128,
-        decoder_embedding_size: int = 128,
-        depth: int = 2,
-        mlp_ratio: float = 2.0,
-        num_heads: int = 8,
-        max_sequence_length: int = 24,
-        drop_path: float = 0.0,
-        learnable_channel_embeddings: bool = True,
-        random_channel_embeddings: bool = False,
-        output_embedding_size: int | None = None,
-        use_flash_attn: bool = False,
-        qk_norm: bool = False,
-    ):
-        """Initialize the predictor.
+        include_encoder_encodings: bool = True,
+        dims_to_pool: str = "modality",
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the PooledModalityPredictor."""
+        super().__init__(*args, **kwargs)
+        self.include_encoder_encodings = include_encoder_encodings
+        self.dims_to_pool = dims_to_pool
+        if self.use_flash_attn:
+            raise NotImplementedError("Flash attn not implemented")
 
-        Args:
-            supported_modalities: modalities this model instantiation supports
-            encoder_embedding_size: Size of encoder embeddings
-            decoder_embedding_size: Size of decoder embeddings
-            depth: Number of transformer layers
-            mlp_ratio: Ratio for MLP hidden dimension
-            num_heads: Number of attention heads
-            max_sequence_length: Maximum sequence length
-            drop_path: Drop path rate
-            learnable_channel_embeddings: Whether to use learnable channel embeddings
-            random_channel_embeddings: Whether to randomly initialize channel embeddings
-            output_embedding_size: Size of output embeddings
-            use_flash_attn: Whether to use flash attention
-            qk_norm: Whether to apply normalization to Q and K in attention
-        """
-        super().__init__(
-            embedding_size=decoder_embedding_size,
-            depth=depth,
-            mlp_ratio=mlp_ratio,
-            num_heads=num_heads,
-            max_sequence_length=max_sequence_length,
-            drop_path=drop_path,
-            learnable_channel_embeddings=learnable_channel_embeddings,
-            random_channel_embeddings=random_channel_embeddings,
-            supported_modalities=supported_modalities,
-            use_flash_attn=use_flash_attn,
-            qk_norm=qk_norm,
-        )
-        self.learnable_channel_embeddings = learnable_channel_embeddings
-        self.random_channel_embeddings = random_channel_embeddings
-        self.encoder_embedding_size = encoder_embedding_size
-        self.encoder_to_decoder_embed = nn.Linear(
-            encoder_embedding_size, decoder_embedding_size, bias=True
-        )
-        if output_embedding_size is None:
-            output_embedding_size = encoder_embedding_size
-        self.output_embedding_size = output_embedding_size
-        self.to_output_embed = nn.Linear(
-            decoder_embedding_size, output_embedding_size, bias=True
-        )
-        # THIS is the learnable mask token
-        self.mask_token = nn.Parameter(torch.zeros(decoder_embedding_size))
-
-        self.input_norm = nn.LayerNorm(encoder_embedding_size)
-        self.norm = nn.LayerNorm(decoder_embedding_size)
-        self.apply(self._init_weights)
-
-    def add_masks(self, x: dict[str, Tensor]) -> dict[str, Tensor]:
-        """Replace tokens that should be decoded (MaskValue.DECODER_ONLY) with the learnable mask token.
-
-        in a dimension-agnostic way using einops. We assume the final dimension of each token tensor
-        is the embedding dimension matching self.mask_token's size.
-        """
-        output_dict = {}
-        available_modalities = return_modalities_from_dict(x)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
-        )
-        for modality in modalities_to_process:
-            x_modality = x[modality]
-            mask_name = MaskedHeliosSample.get_masked_modality_name(modality)
-            mask_modality = x[mask_name]
-            # A boolean mask: True where tokens must be replaced by the mask token
-            kept_mask = mask_modality == MaskValue.DECODER.value
-
-            # Build the einops pattern and dimension dict
-            spatial_dims = x_modality.shape[
-                :-1
-            ]  # all dimensions except the last (embedding)
-            pattern_input, dim_dict = self._construct_einops_pattern(spatial_dims)
-
-            mask_token_broadcasted = repeat(self.mask_token, pattern_input, **dim_dict)
-
-            # Where kept_mask is True, use the broadcasted mask token
-            x_modality = torch.where(
-                kept_mask.unsqueeze(-1).bool(), mask_token_broadcasted, x_modality
+    def _which_encodings_to_use(self) -> dict[str, bool]:
+        # TODO: Not great probably should jsut compute bools that we pass instead of this
+        if self.dims_to_pool == DimsToPool.MODALITY:
+            return {"use_modality_encodings": False, "use_temporal_encodings": True}
+        elif self.dims_to_pool == DimsToPool.TEMPORAL:
+            return {"use_modality_encodings": True, "use_temporal_encodings": False}
+        elif self.dims_to_pool == DimsToPool.MODALITY_TEMPORAL:
+            return {"use_modality_encodings": False, "use_temporal_encodings": False}
+        else:
+            raise NotImplementedError(
+                f"Dims to pool {self.dims_to_pool} not implemented"
             )
-
-            output_dict[modality] = x_modality
-
-        return output_dict
-
-    # TODO: GIVE more explicit function names
-    @staticmethod
-    def split_x_y(tokens: Tensor, mask: Tensor) -> tuple[Tensor, ...]:
-        """Splits tokens into three groups based on mask values.
-
-        This function:
-        1. Sorts tokens according to the mask and gathers them in order.
-        2. Chooses tokens to be decoded (x) based on the mask value DECODER.
-        3. Chooses tokens to be used as context (y) based on the mask value ONLINE_ENCODER.
-        4. Identifies missing tokens (z) based on the mask value MISSING.
-        5. Returns boolean masks for x, y, and z along with indices to revert to the original ordering.
-
-        Args:
-            tokens: Tokens to split of shape [B, T, D].
-            mask: Mask of shape [B, T].
-
-        Returns:
-            tokens_to_decode: Tokens to be decoded of shape [B, X_len, D].
-            unmasked_tokens: Tokens to be used as context of shape [B, Y_len, D].
-            tokens_to_decode_mask: Binary mask for x tokens of shape [B, X_len].
-            unmasked_tokens_mask: Binary mask for y tokens of shape [B, Y_len].
-            indices: Indices for restoring the original token ordering of shape [B, T].
-            seqlens_tokens_to_decode: Sequence lengths of tokens to decode of shape [B].
-            seqlens_unmasked_tokens: Sequence lengths of unmasked tokens of shape [B].
-            max_length_of_decoded_tokens: Maximum length of decoded tokens of shape [1].
-            max_length_of_unmasked_tokens: Maximum length of unmasked tokens of shape [1].
-        """
-        # Set Missing Masks to Target Encoder ONLY so that we can have all unused tokens in the middle
-        org_mask_dtype = mask.dtype
-        missing_mask = mask == MaskValue.MISSING.value
-        mask[missing_mask] = MaskValue.TARGET_ENCODER_ONLY.value
-
-        # Sort tokens by mask value (descending order)
-        sorted_mask, indices = torch.sort(
-            mask.int(), dim=1, descending=True, stable=True
-        )
-        tokens = tokens.gather(1, indices[:, :, None].expand_as(tokens))
-
-        # Create binary masks for Encoder and Decoder
-        binarized_decoder_mask = sorted_mask == MaskValue.DECODER.value
-        binarized_online_encoder_mask = sorted_mask == MaskValue.ONLINE_ENCODER.value
-
-        seqlens_unmasked_tokens = binarized_online_encoder_mask.sum(dim=-1)
-        max_length_of_unmasked_tokens = seqlens_unmasked_tokens.max()
-        seqlens_tokens_to_decode = binarized_decoder_mask.sum(dim=-1)
-        max_length_of_decoded_tokens = seqlens_tokens_to_decode.max()
-
-        # the y mask is going to be used to determine which of the y values take. True values
-        # take part in the attention (we don't take the inverse here, unlike in the decoder)
-        tokens_to_decode = tokens[:, :max_length_of_decoded_tokens]
-        tokens_to_decode_mask = binarized_decoder_mask[
-            :, :max_length_of_decoded_tokens
-        ].to(org_mask_dtype)
-
-        unmasked_tokens = tokens[:, -max_length_of_unmasked_tokens:]
-        # the x_mask is just going to be used in the reconstruction, to know which
-        # x tokens to add back into the token list. TODO is this even necessary? it could
-        # get padded with noise tokens since we don't care about reconstruction at all
-        # for a whole bunch of tokens
-        unmasked_tokens_mask = binarized_online_encoder_mask[
-            :, -max_length_of_unmasked_tokens:
-        ].to(org_mask_dtype)
-
-        return (
-            tokens_to_decode,
-            unmasked_tokens,
-            tokens_to_decode_mask,
-            unmasked_tokens_mask,
-            indices,
-            seqlens_tokens_to_decode,
-            seqlens_unmasked_tokens,
-            max_length_of_decoded_tokens,
-            max_length_of_unmasked_tokens,
-        )
-
-    @staticmethod
-    def combine_x_y(
-        tokens_to_decode: Tensor,
-        unmasked_tokens: Tensor,
-        tokens_to_decode_mask: Tensor,
-        unmasked_tokens_mask: Tensor,
-        indices: Tensor,
-    ) -> Tensor:
-        """Reintegrate the separated token sequences into their original order.
-
-        The token masks zero out positions which are not used/needed,
-        and the final scatter step re-applies the original ordering tracked in 'indices'.
-
-        Args:
-            tokens_to_decode: Key/value tokens of shape [B, X_len, D].
-            unmasked_tokens: Query tokens of shape [B, Y_len, D].
-            tokens_to_decode_mask: Binary mask for tokens to decode of shape [B, X_len].
-            unmasked_tokens_mask: Binary mask for unmasked tokens of shape [B, Y_len].
-            indices: Indices for restoring the original token ordering of shape [B, T].
-
-        Returns:
-            A merged tokens tensor of shape [B, T, D] with all tokens in their
-            original positions.
-        """
-        # Get dimensions
-        B, T = indices.shape[0], indices.shape[1]
-        D = tokens_to_decode.shape[-1]
-        tokens = torch.zeros(
-            (B, T, D), dtype=tokens_to_decode.dtype, device=tokens_to_decode.device
-        )
-        tokens[:, -unmasked_tokens.shape[1] :] = (
-            unmasked_tokens * unmasked_tokens_mask.unsqueeze(-1)
-        )
-        tokens[:, : tokens_to_decode.shape[1]] += (
-            tokens_to_decode * tokens_to_decode_mask.unsqueeze(-1)
-        )
-        tokens = tokens.scatter(1, indices[:, :, None].expand_as(tokens), tokens)
-        return tokens
-
-    def is_any_data_to_be_decoded(self, modality_mask: Tensor) -> bool:
-        """Check if any data is to be decoded for a given modality."""
-        return (MaskValue.DECODER.value == modality_mask).any()
-
-    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
-        """Apply FSDP to the model."""
-        super().apply_fsdp(**fsdp_kwargs)
-        fully_shard(self, **fsdp_kwargs)
-
-
-class Predictor(PredictorBase):
-    """Predictor module that generates predictions from encoded tokens."""
-
-    cross_attn = True
 
     def apply_attn(
         self,
@@ -1868,8 +709,10 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int,
+        pooled_tokens_and_masks: dict[str, Tensor],
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
+        logger.warning("Calling apply_attn for PooledModalityPredictor")
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -1877,6 +720,39 @@ class Predictor(PredictorBase):
             tokens_only_dict, timestamps, patch_size, input_res
         )
         tokens_dict.update(original_masks_dict)
+
+        pooled_tokens = pooled_tokens_and_masks["modality_pooled_tokens"]
+        if self.include_encoder_encodings:
+            encoding_kwargs = self._which_encodings_to_use()
+            logger.info(f"encoding_kwargs: {encoding_kwargs}")
+            pooled_tokens = self.composite_encodings._apply_encodings_per_modality(
+                Modality.SENTINEL2_L2A.name,
+                pooled_tokens,
+                timestamps,
+                patch_size,
+                input_res,
+                **encoding_kwargs,
+            )
+        pooled_tokens = rearrange(pooled_tokens, "b ... d -> b (...) d")
+        pooled_attn_mask = rearrange(
+            pooled_tokens_and_masks["modality_pooled_masks"], "b ... -> b (...)"
+        )
+
+        (
+            _,
+            pooled_tokens,
+            _,
+            pooled_attn_mask,
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) = self.split_x_y(pooled_tokens, pooled_attn_mask)
+
+        # I need to do a step where I basically split the pooled tokens up so that I have an instance wide
+        # collapsed mask of these
+
         all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
         # X contains the tokens to decode, Y contains the tokens to attend to for context
         (
@@ -1892,47 +768,17 @@ class Predictor(PredictorBase):
         ) = self.split_x_y(all_tokens, mask)
         # Pack x tokens
         if self.use_flash_attn:
-            og_shape_tokens_to_decode = tokens_to_decode.shape
-            tokens_to_decode = self.pack_tokens(
-                tokens_to_decode, tokens_to_decode_mask.bool()
-            )
-            og_shape_unmasked_tokens = unmasked_tokens.shape
-            unmasked_tokens = self.pack_tokens(
-                unmasked_tokens, unmasked_tokens_mask.bool()
-            )
-            cu_seqlens_tokens_to_decode = get_cumulative_sequence_lengths(
-                seqlens_tokens_to_decode
-            )
-            cu_seqlens_unmasked_tokens = get_cumulative_sequence_lengths(
-                seqlens_unmasked_tokens
-            )
-        else:
-            cu_seqlens_tokens_to_decode = None
-            cu_seqlens_unmasked_tokens = None
+            raise NotImplementedError("Flash attn not implemented")
 
         for blk in self.blocks:
             # note that we are not taking the inverse of the mask, since split_x_y gives us
             # true values for values we want to take part in attention
             tokens_to_decode = blk(
                 x=tokens_to_decode,
-                y=unmasked_tokens,
+                y=pooled_tokens,
                 attn_mask=(
-                    unmasked_tokens_mask.bool() if not self.use_flash_attn else None
+                    pooled_attn_mask.bool() if not self.use_flash_attn else None
                 ),  # only for flash attn though this should not be left in
-                cu_seqlens_q=cu_seqlens_tokens_to_decode,
-                cu_seqlens_k=cu_seqlens_unmasked_tokens,
-                max_seqlen_q=max_length_of_tokens_to_decode,
-                max_seqlen_k=max_length_of_unmasked_tokens,
-            )
-
-        if self.use_flash_attn:
-            tokens_to_decode = self.unpack_tokens(
-                tokens_to_decode,
-                tokens_to_decode_mask.bool(),
-                og_shape_tokens_to_decode,
-            )
-            unmasked_tokens = self.unpack_tokens(
-                unmasked_tokens, unmasked_tokens_mask.bool(), og_shape_unmasked_tokens
             )
 
         x = self.combine_x_y(
@@ -1951,6 +797,7 @@ class Predictor(PredictorBase):
     def forward(
         self,
         x: TokensAndMasks,
+        pooled_tokens_and_masks: dict[str, Tensor],
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
@@ -1958,37 +805,40 @@ class Predictor(PredictorBase):
         """Generate predictions from encoded token representations.
 
         Args:
-            x: TokensAndMasks containing the encoded tokens to make predictions from
+            x: TokensAndMasks containing the masks to use to make decodings.
+                These tokens are discarded in this function - only the masks are used
+            pooled_tokens_and_masks: Dictionary containing the pooled tokens and their masks
             timestamps: Timestamps of the tokens
             patch_size: Patch size of the tokens
             input_res: Input resolution of the tokens
-
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
         """
-        decoder_emedded_dict = x.as_dict(return_none=False)
         # Apply Input Norms and encoder to decoder embeds to each modality
         available_modalities = x.modalities
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
-        for modality in modalities_to_process:
-            x_modality = getattr(x, modality)
-            # Although, we do not account for missing tokens both proj and normalize are on token dimension so there is no mixing with real tokens
-            x_modality = self.input_norm(x_modality)
-            x_modality = self.encoder_to_decoder_embed(x_modality)
-            masked_modality_name = x.get_masked_modality_name(modality)
-            decoder_emedded_dict[modality] = x_modality
-            decoder_emedded_dict[masked_modality_name] = getattr(
-                x, masked_modality_name
-            )
 
+        # Apply input norma nd projection on pooled tokens
+        pooled_tokens = pooled_tokens_and_masks["modality_pooled_tokens"]
+        pooled_tokens = self.input_norm(pooled_tokens)
+        pooled_tokens = self.encoder_to_decoder_embed(pooled_tokens)
+        pooled_tokens_and_masks["modality_pooled_tokens"] = pooled_tokens
+
+        # Prepare the Learnable Masked Outputs on the original Unpooled Tokens
+        decoder_emedded_dict = x.as_dict(return_none=False)
         tokens_only_dict = self.add_masks(decoder_emedded_dict)
         decoder_emedded_dict.update(tokens_only_dict)
         tokens_and_masks = self.apply_attn(
-            decoder_emedded_dict, timestamps, patch_size, input_res
+            decoder_emedded_dict,
+            timestamps,
+            patch_size,
+            input_res,
+            pooled_tokens_and_masks=pooled_tokens_and_masks,
         )
-        # TODO: Factor this out into a more readable function
+
+        # Project and Normalize Output Tokens
         output_dict = {}
         available_modalities = return_modalities_from_dict(tokens_and_masks)
         modalities_to_process = get_modalities_to_process(
@@ -2012,87 +862,13 @@ class Predictor(PredictorBase):
 
 
 @dataclass
-class EncoderConfig(Config):
-    """Configuration for the Encoder."""
+class PooledModalityPredictorConfig(PredictorConfig):
+    """Configuration for the PooledModalityPredictor."""
 
-    supported_modality_names: list[str]
+    include_encoder_encodings: bool = True
+    dims_to_pool: DimsToPool = DimsToPool.MODALITY
 
-    embedding_size: int = 16
-    # This is the base patch size for the patch embedder
-    max_patch_size: int = 8
-    min_patch_size: int = 1
-    num_heads: int = 2
-    mlp_ratio: float = 1.0
-    depth: int = 2
-    drop_path: float = 0.1
-    max_sequence_length: int = 12
-    num_register_tokens: int = 0
-    learnable_channel_embeddings: bool = True
-    random_channel_embeddings: bool = False
-    num_projection_layers: int = 1
-    aggregate_then_project: bool = True
-    use_flash_attn: bool = False
-    frozen_patch_embeddings: bool = False
-    qk_norm: bool = False
-
-    def validate(self) -> None:
-        """Validate the configuration."""
-        if len(self.supported_modalities) == 0:
-            raise ValueError("At least one modality must be added!")
-        else:
-            for modality in self.supported_modalities:
-                if modality not in Modality.values():
-                    raise ValueError(f"Modality {modality} is not supported")
-
-    @property
-    def supported_modalities(self) -> list[ModalitySpec]:
-        """Get the supported modalities."""
-        return get_modality_specs_from_names(self.supported_modality_names)
-
-    def build(self) -> "Encoder":
-        """Build the encoder."""
-        self.validate()
-        kwargs = self.as_dict(exclude_none=True, recurse=False)
-        # supported_modality_names is replaced by supported_modalities
-        kwargs.pop("supported_modality_names")
-        kwargs["supported_modalities"] = self.supported_modalities
-        logger.info(f"Encoder kwargs: {kwargs}")
-        return Encoder(**kwargs)
-
-
-@dataclass
-class PredictorConfig(Config):
-    """Configuration for the Predictor."""
-
-    supported_modality_names: list[str]
-    encoder_embedding_size: int = 16
-    decoder_embedding_size: int = 16
-    depth: int = 2
-    mlp_ratio: float = 1.0
-    num_heads: int = 2
-    max_sequence_length: int = 12
-    drop_path: float = 0.0
-    learnable_channel_embeddings: bool = True
-    random_channel_embeddings: bool = False
-    output_embedding_size: int | None = None
-    use_flash_attn: bool = False
-    qk_norm: bool = False
-
-    def validate(self) -> None:
-        """Validate the configuration."""
-        if len(self.supported_modalities) == 0:
-            raise ValueError("At least one modality must be added!")
-        else:
-            for modality in self.supported_modalities:
-                if modality not in Modality.values():
-                    raise ValueError(f"Modality {modality} is not supported")
-
-    @property
-    def supported_modalities(self) -> list[ModalitySpec]:
-        """Get the supported modalities."""
-        return get_modality_specs_from_names(self.supported_modality_names)
-
-    def build(self) -> "PredictorBase":
+    def build(self) -> "PooledModalityPredictor":
         """Build the predictor."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
@@ -2100,4 +876,4 @@ class PredictorConfig(Config):
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Predictor kwargs: {kwargs}")
-        return Predictor(**kwargs)
+        return PooledModalityPredictor(**kwargs)
