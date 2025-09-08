@@ -69,6 +69,7 @@ SUPERVISORY_MODALITIES = {
     Modality.CDL.name: 0.1,
     Modality.LATLON.name: 0.1,
     Modality.WRI_CANOPY_HEIGHT_MAP.name: 0.1,
+    Modality.WORLDPOP.name: 0.1,
 }
 
 
@@ -93,6 +94,7 @@ def my_build_common_components(
         Modality.WORLDCEREAL.name,
         Modality.CDL.name,
         Modality.WRI_CANOPY_HEIGHT_MAP.name,
+        Modality.WORLDPOP.name,
     ]
     return config
 
@@ -190,7 +192,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         # we can have a much higher token budget because
         # all the supervisory modalities won't be passed through
         # the encoder.
-        token_budget=2000,
+        token_budget=2250,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(5, 13)),
         min_patch_size=MIN_PATCH_SIZE,
