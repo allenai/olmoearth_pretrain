@@ -68,7 +68,7 @@ SUPERVISORY_MODALITIES = {
     Modality.WORLDCEREAL.name: 0.1,
     Modality.CDL.name: 0.1,
     Modality.LATLON.name: 0.1,
-    # Modality.WRI_CANOPY_HEIGHT_MAP.name: 0.1,
+    Modality.WRI_CANOPY_HEIGHT_MAP.name: 0.1,
 }
 
 
@@ -92,7 +92,7 @@ def my_build_common_components(
         Modality.GSE.name,
         Modality.WORLDCEREAL.name,
         Modality.CDL.name,
-        # Modality.WRI_CANOPY_HEIGHT_MAP.name,
+        Modality.WRI_CANOPY_HEIGHT_MAP.name,
     ]
     return config
 
@@ -190,7 +190,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         # we can have a much higher token budget because
         # all the supervisory modalities won't be passed through
         # the encoder.
-        token_budget=1750,
+        token_budget=2000,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(5, 13)),
         min_patch_size=MIN_PATCH_SIZE,
@@ -205,14 +205,9 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
     dataset_configs = [
         # osm_sampling
         HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover_worldpop_wri_canopy_height_map/1141152",
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
             training_modalities=common.training_modalities,
-        ),
-        # presto sampling
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover/469728",
-            training_modalities=common.training_modalities,
-        ),
+        )
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
