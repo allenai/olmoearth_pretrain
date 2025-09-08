@@ -5,6 +5,7 @@ import logging
 import os
 import time
 from logging import getLogger
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -12,6 +13,7 @@ import torch
 import wandb
 from olmo_core.config import Config
 from olmo_core.distributed.checkpoint import load_model_and_optim_state
+from olmo_core.train.callbacks import ProfilerCallback
 
 from helios.data.constants import BASE_GSD, Modality
 from helios.inference_benchmarking import constants
@@ -103,6 +105,28 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
     else:
         dtype = torch.float32
 
+    # Initialize profiler callback
+    profiler = ProfilerCallback(
+        skip_first=0,  # Don't skip any steps
+        wait=0,  # Start profiling immediately
+        warmup=5,  # Warmup for 5 steps (matches your current warmup)
+        active=3,  # Profile for 10 steps
+        repeat=1,  # Only one cycle
+        enabled=False,
+    )
+
+    # Set up a mock trainer object for the profiler
+    class MockTrainer:
+        def __init__(self, device):
+            self.device = device
+            self.work_dir = Path("./test_profiler")  # Will be set later
+
+    profiler.trainer = MockTrainer(device)
+
+    # Initialize profiler
+    if profiler.enabled:
+        profiler.pre_train()
+
     # track squarekm per second for every batch size and report the highest batch size
     squarekm_per_second_per_batch_size = {}
     for idx, batch_size in enumerate(run_params.batch_sizes):
@@ -182,10 +206,11 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
         tokens_processed_per_batch: list[int] = []
         time_taken_per_batch: list[float] = []
         # log that the data is prepared
-        logger.info("Data prepared, starting benchmark")
-        torch.cuda.set_sync_debug_mode("warn")
+        logger.info("Data prepared, starting warmup")
+        # torch.cuda.set_sync_debug_mode("warn")
         # Run 5 forward passes as warmup
         for _ in range(5):
+            torch.compiler.cudagraph_mark_step_begin()
             with torch.inference_mode():
                 if run_params.bf16:
                     with torch.amp.autocast(
@@ -198,6 +223,9 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
                     results = model.forward(
                         masked_sample, patch_size=run_params.patch_size
                     )
+            # # Call profiler step during warmup
+            # profiler.pre_load_batch()
+        logger.info("Warmup complete, starting benchmark")
         num_forward_passes = 0
         if device.type == "cuda":
             torch.cuda.synchronize()
@@ -211,6 +239,7 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
             batch_start = time.monotonic()
 
             results: TokensAndMasks
+            torch.compiler.cudagraph_mark_step_begin()
             with torch.inference_mode():
                 if run_params.bf16:
                     with torch.amp.autocast(
@@ -226,6 +255,11 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
                     )
             time_taken_per_batch.append(time.monotonic() - batch_start)
             num_forward_passes += 1
+
+            # Call profiler step for each forward pass
+            if profiler.enabled:
+                profiler.pre_load_batch()
+
             num_s1_tokens = calculate_num_token_embeddings(results.sentinel1)
             num_s2_tokens = calculate_num_token_embeddings(results.sentinel2_l2a)
             num_landsat_tokens = calculate_num_token_embeddings(results.landsat)
@@ -236,7 +270,7 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
             torch.cuda.synchronize()
         overall_time_taken = time.monotonic() - overall_start_time
         logger.info(
-            f"Overall time taken: {overall_time_taken} sum of time taken per batch: {sum(time_taken_per_batch)}"
+            f"Overall time taken: {overall_time_taken} sum of time taken per batch: {sum(time_taken_per_batch)} num batches: {len(time_taken_per_batch)}"
         )
         metrics_to_submit = {
             constants.PER_BATCH_TOKEN_RATE_METRIC: wandb.Histogram(
@@ -249,19 +283,19 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
             ),
             constants.MEAN_BATCH_TOKEN_RATE_METRIC: sum(tokens_processed_per_batch)
             / sum(time_taken_per_batch),
-            constants.MEAN_BATCH_TIME_METRIC: sum(time_taken_per_batch)
+            constants.MEAN_BATCH_TIME_METRIC: overall_time_taken
             / len(time_taken_per_batch),
             constants.NUM_TOKENS_PER_BATCH_METRIC: sum(tokens_processed_per_batch)
             / len(tokens_processed_per_batch),
         }
         num_batches = len(time_taken_per_batch)  # or use num_forward_passes
         num_centroids = num_batches * batch_size
-        centroids_per_second = num_centroids / sum(time_taken_per_batch)
+        centroids_per_second = num_centroids / overall_time_taken
         tile_km2 = (
             run_params.image_size * BASE_GSD / 1000.0
         ) ** 2  # m -> km, then square
         area_processed_km2 = batch_size * tile_km2 * num_batches
-        square_km_per_second = area_processed_km2 / sum(time_taken_per_batch)
+        square_km_per_second = area_processed_km2 / overall_time_taken
         squarekm_per_second_per_batch_size[batch_size] = square_km_per_second
         metrics_to_submit[constants.SQUARE_KM_PER_SECOND_METRIC] = square_km_per_second
         metrics_to_submit[constants.PIXELS_PER_SECOND_METRIC] = centroids_per_second
@@ -283,6 +317,10 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
     logger.info(
         f"Highest square km per second: {squarekm_per_second_per_batch_size[highest_batch_size]}"
     )
+
+    # Clean up profiler
+    if hasattr(profiler, "_exit_stack") and profiler._exit_stack and profiler.enabled:
+        profiler._exit_stack.close()
 
 
 class Metrics:

@@ -447,6 +447,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             else:
                 should_embed = (token_mask == MaskValue.ONLINE_ENCODER.value).any()
             if should_embed:
+                # TODO: Add fallback to old version
                 buffer_name = self._get_buffer_name(modality, idx)
                 patchified_data = torch.index_select(
                     modality_data, -1, getattr(self, buffer_name)
@@ -471,6 +472,10 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
     def is_any_data_seen_by_encoder(modality_mask: Tensor) -> bool:
         """Check if any data is seen by the encoder."""
         return (MaskValue.ONLINE_ENCODER.value == modality_mask).any()
+
+    def apply_compile(self) -> None:
+        """Apply torch.compile to the model."""
+        self.compile(dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
 
     def forward(
         self,
@@ -794,7 +799,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         Returns:
             Tensor with encodings applied based on modality type
         """
-        logger.info(
+        logger.debug(
             f"use_modality_encodings: {use_modality_encodings}, use_temporal_encodings: {use_temporal_encodings}"
         )
         # TODO: Improve this implementation it is quite bad
@@ -1448,6 +1453,7 @@ class Encoder(FlexiHeliosBase):
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
+
             tokens = blk(
                 x=tokens,
                 cu_seqlens=cu_seqlens,
@@ -1541,6 +1547,16 @@ class Encoder(FlexiHeliosBase):
         # fully_shard(self.project_and_aggregate, **fsdp_kwargs)
         # register_fsdp_forward_method(self.project_and_aggregate, "forward")
         fully_shard(self, **fsdp_kwargs)
+
+    def apply_compile(self) -> None:
+        """Apply torch.compile to the model."""
+        # self.compile(mode="max-autotune", dynamic=False, fullgraph=True)
+        logger.info("Compiling blocks")
+        # torch.compile(self.blocks, dynamic=False, mode="max-autotune", fullgraph=True)
+        # individual block compile is still a lot slower
+        for block in self.blocks:
+            block.apply_compile()
+        # torch.compile(self.patch_embeddings, dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
 
 
 class PredictorBase(FlexiHeliosBase):
