@@ -15,7 +15,6 @@ from torch.distributed.fsdp import fully_shard
 from helios.data.constants import BASE_GSD, Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.nn.attention import Block
-from einops import reduce
 from helios.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -202,6 +201,7 @@ class TokensAndMasks(NamedTuple):
             concat_features: Whether to concatenate the features instead of averaging them, only enabled for spatial pooling as of now,
             requires no masked out tokens
         """
+        # TODO: Clean up this messy un readable code
         if concat_features and spatial_pooling:
             spatial_stacked_features = []
             for attr_name in self.modalities:
@@ -222,6 +222,7 @@ class TokensAndMasks(NamedTuple):
             # Concatenate along the band sets dimension instead of stacking
             spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
             # flatten the last 3 dimensions
+            # THis is not doing anything
             return rearrange(spatial_stacked_features, "b h w c d-> b h w c d")
         if concat_features:
             raise ValueError("concat_features is not supported for non-spatial pooling")
@@ -304,15 +305,9 @@ class ProjectAndAggregate(nn.Module):
         This can be applied either before or after pooling the tokens.
         """
         if self.aggregate_then_project:
-            # HACK: This is a hack to get the pooled tokens for contrastive learning
-            if isinstance(x, dict):
-                tokens = x["modality_pooled_tokens"]
-                # Take mean in every dim except first and last to get a B, D tensor use einops reduce
-                pooled_for_contrastive = reduce(tokens, "b ... d -> b d", "mean")
-            else:
-                pooled_for_contrastive = x.pool_unmasked_tokens(
-                    PoolingType.MEAN, spatial_pooling=False
-                )
+            pooled_for_contrastive = x.pool_unmasked_tokens(
+                PoolingType.MEAN, spatial_pooling=False
+            )
             return self.projection(pooled_for_contrastive)
         else:
             decoder_emedded_dict = x._asdict()
@@ -992,7 +987,8 @@ class FlexiHeliosBase(nn.Module):
         return tokens, masks
 
     def stack_spatial_modalities_and_masks(
-        self, tokens_dict: dict[str, Tensor],
+        self,
+        tokens_dict: dict[str, Tensor],
     ) -> Tensor:
         """Stack the spatial modalities together."""
         available_modalities = return_modalities_from_dict(tokens_dict)
@@ -1199,7 +1195,9 @@ class Encoder(FlexiHeliosBase):
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
         if self.has_register_tokens:
-            self.register_tokens = nn.Parameter(torch.zeros(num_register_tokens, embedding_size))
+            self.register_tokens = nn.Parameter(
+                torch.zeros(num_register_tokens, embedding_size)
+            )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
@@ -1360,7 +1358,9 @@ class Encoder(FlexiHeliosBase):
         else:
             return new_mask
 
-    def get_token_norm_stats(self, tokens: Tensor, register_tokens: Tensor) -> dict[str, float]:
+    def get_token_norm_stats(
+        self, tokens: Tensor, register_tokens: Tensor
+    ) -> dict[str, float]:
         """Get the token norm stats."""
         # Compute norms for register tokens: [batch_size, num_register_tokens]
         register_tokens_norms = torch.norm(register_tokens, dim=2)
@@ -1375,7 +1375,12 @@ class Encoder(FlexiHeliosBase):
         nonreg_tokens_norms = torch.norm(tokens, dim=2)
         nonreg_norms_flat = nonreg_tokens_norms.flatten()
         percentiles = [25.0, 75.0, 90.0, 95.0, 99.0]
-        nonreg_percentiles = torch.quantile(nonreg_norms_flat.float(), torch.tensor([p / 100.0 for p in percentiles], device=nonreg_norms_flat.device)).tolist()
+        nonreg_percentiles = torch.quantile(
+            nonreg_norms_flat.float(),
+            torch.tensor(
+                [p / 100.0 for p in percentiles], device=nonreg_norms_flat.device
+            ),
+        ).tolist()
         nonreg_stats = {
             "nonregister_mean": nonreg_norms_flat.mean().item(),
             "nonregister_min": nonreg_norms_flat.min().item(),
@@ -1452,7 +1457,12 @@ class Encoder(FlexiHeliosBase):
             # Update attention mask to include register tokens (they should participate in attention)
             if attn_mask is not None:
                 # Create mask for register tokens (all True - they should participate in attention)
-                reg_mask = torch.ones(batch_size, self.num_register_tokens, dtype=attn_mask.dtype, device=attn_mask.device)
+                reg_mask = torch.ones(
+                    batch_size,
+                    self.num_register_tokens,
+                    dtype=attn_mask.dtype,
+                    device=attn_mask.device,
+                )
                 attn_mask = torch.cat([reg_mask, attn_mask], dim=1)
 
         # Apply attn with varying encoder depths
@@ -1483,8 +1493,8 @@ class Encoder(FlexiHeliosBase):
         # Remove register tokens after attention layers
         if self.has_register_tokens:
             # Separate register tokens and non-register tokens
-            register_tokens = tokens[:, :self.num_register_tokens, :]
-            tokens = tokens[:, self.num_register_tokens:, :]
+            register_tokens = tokens[:, : self.num_register_tokens, :]
+            tokens = tokens[:, self.num_register_tokens :, :]
 
             token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
 
@@ -1969,7 +1979,7 @@ class EncoderConfig(Config):
     depth: int = 2
     drop_path: float = 0.1
     max_sequence_length: int = 12
-    num_register_tokens: int = 0,
+    num_register_tokens: int = (0,)
     learnable_channel_embeddings: bool = True
     random_channel_embeddings: bool = False
     num_projection_layers: int = 1

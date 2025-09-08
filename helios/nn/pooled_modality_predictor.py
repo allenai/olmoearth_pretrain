@@ -69,7 +69,9 @@ class AttnPool(nn.Module):
         self.gate_temperature: float = gate_temperature
         self.use_mlp = use_mlp
 
-        self.query_tokens: nn.Parameter = nn.Parameter(torch.empty(num_queries, self.attn_dim))
+        self.query_tokens: nn.Parameter = nn.Parameter(
+            torch.empty(num_queries, self.attn_dim)
+        )
 
         # shared KV projection
         self.kv: nn.Linear = nn.Linear(in_dim, self.attn_dim * 2)
@@ -80,7 +82,11 @@ class AttnPool(nn.Module):
         hidden_dim = hidden_dim or in_dim
         self.out_layer: Mlp = Mlp(self.attn_dim, hidden_dim)
         self.out_norm = nn.LayerNorm(self.attn_dim)
-        self.out_proj = nn.Linear(self.attn_dim, in_dim) if in_dim != self.attn_dim else nn.Identity()
+        self.out_proj = (
+            nn.Linear(self.attn_dim, in_dim)
+            if in_dim != self.attn_dim
+            else nn.Identity()
+        )
 
         # gating over k query outputs (maps D -> 1 per query)
         self.gate: nn.Linear | None = (
@@ -413,7 +419,12 @@ class EncodeEarlyAttnPool(Encoder):
             # Update attention mask to include register tokens (they should participate in attention)
             if attn_mask is not None:
                 # Create mask for register tokens (all True - they should participate in attention)
-                reg_mask = torch.ones(batch_size, self.num_register_tokens, dtype=attn_mask.dtype, device=attn_mask.device)
+                reg_mask = torch.ones(
+                    batch_size,
+                    self.num_register_tokens,
+                    dtype=attn_mask.dtype,
+                    device=attn_mask.device,
+                )
                 attn_mask = torch.cat([reg_mask, attn_mask], dim=1)
 
         # Apply attn with varying encoder depths
@@ -447,8 +458,8 @@ class EncodeEarlyAttnPool(Encoder):
         # Remove register tokens after attention layers
         if self.has_register_tokens:
             # Separate register tokens and non-register tokens
-            register_tokens = tokens[:, :self.num_register_tokens, :]
-            tokens = tokens[:, self.num_register_tokens:, :]
+            register_tokens = tokens[:, : self.num_register_tokens, :]
+            tokens = tokens[:, self.num_register_tokens :, :]
 
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
@@ -547,7 +558,12 @@ class EncodeEarlyAttnPool(Encoder):
             # Update attention mask to include register tokens (they should participate in attention)
             if attn_mask is not None:
                 # Create mask for register tokens (all True - they should participate in attention)
-                reg_mask = torch.ones(batch_size, self.num_register_tokens, dtype=attn_mask.dtype, device=attn_mask.device)
+                reg_mask = torch.ones(
+                    batch_size,
+                    self.num_register_tokens,
+                    dtype=attn_mask.dtype,
+                    device=attn_mask.device,
+                )
                 attn_mask = torch.cat([reg_mask, attn_mask], dim=1)
 
         # Apply attn with varying encoder depths
@@ -583,8 +599,8 @@ class EncodeEarlyAttnPool(Encoder):
         token_norm_stats = None
         if self.has_register_tokens and register_tokens is not None:
             # Separate register tokens and non-register tokens
-            register_tokens = tokens[:, :self.num_register_tokens, :]
-            tokens = tokens[:, self.num_register_tokens:, :]
+            register_tokens = tokens[:, : self.num_register_tokens, :]
+            tokens = tokens[:, self.num_register_tokens :, :]
             token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
 
         if exit_ids_seq is not None:
@@ -653,10 +669,14 @@ class EncodeEarlyAttnPool(Encoder):
             "tokens_and_masks": tokenized_output,
         }
         if pooled_tokens_and_masks:
-            output_dict["project_aggregated"] = self.project_and_aggregate(pooled_tokens_and_masks)
+            output_dict["project_aggregated"] = self.project_and_aggregate(
+                pooled_tokens_and_masks["modality_pooled_tokens"]
+            )
             output_dict["pooled_tokens_and_masks"] = pooled_tokens_and_masks
         else:
-            output_dict["project_aggregated"] = self.project_and_aggregate(tokenized_output)
+            output_dict["project_aggregated"] = self.project_and_aggregate(
+                tokenized_output
+            )
         if token_norm_stats is not None:
             output_dict["token_norm_stats"] = token_norm_stats
 
