@@ -228,6 +228,9 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                     )
 
                 if self.contrastive_loss is not None:
+                    # log the shape of pooled a and b
+                    logger.info(f"pooled a shape: {pooled_a.shape}")
+                    logger.info(f"pooled b shape: {pooled_b.shape}")
                     contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
                     loss += contrastive_loss
                     total_batch_con += (
@@ -275,9 +278,13 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, latent_projected_and_pooled, reconstructed, token_norm_stats = self.model(
-                batch, patch_size
-            )
+            (
+                latent,
+                decoded,
+                latent_projected_and_pooled,
+                reconstructed,
+                token_norm_stats,
+            ) = self.model(batch, patch_size)
             if token_norm_stats is not None:
                 logger.warning(f"Token norm stats: {token_norm_stats}")
                 # record the token norm stats

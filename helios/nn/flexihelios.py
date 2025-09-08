@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Any, NamedTuple
 
 import torch
-from einops import rearrange, repeat
+from einops import rearrange, reduce, repeat
 from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
@@ -299,17 +299,25 @@ class ProjectAndAggregate(nn.Module):
         self.projection = nn.Sequential(*projections)
         self.aggregate_then_project = aggregate_then_project
 
-    def forward(self, x: TokensAndMasks) -> torch.Tensor:
-        """Apply a (non)linear projection to an input TokensAndMasks.
-
-        This can be applied either before or after pooling the tokens.
-        """
-        if self.aggregate_then_project:
+    def apply_aggregate_then_project(
+        self, x: TokensAndMasks | torch.Tensor
+    ) -> torch.Tensor:
+        """Apply the aggregate operation to the input."""
+        if isinstance(x, TokensAndMasks):
             pooled_for_contrastive = x.pool_unmasked_tokens(
                 PoolingType.MEAN, spatial_pooling=False
             )
-            return self.projection(pooled_for_contrastive)
+        elif isinstance(x, torch.Tensor):
+            pooled_for_contrastive = reduce(x, "b ... d -> b  d", "mean")
         else:
+            raise ValueError(f"Invalid input type: {type(x)}")
+        return self.projection(pooled_for_contrastive)
+
+    def apply_project_then_aggregate(
+        self, x: TokensAndMasks | torch.Tensor
+    ) -> torch.Tensor:
+        """Apply the project operation to the input then aggregate."""
+        if isinstance(x, TokensAndMasks):
             decoder_emedded_dict = x._asdict()
             for modality in x.modalities:
                 x_modality = getattr(x, modality)
@@ -321,9 +329,26 @@ class ProjectAndAggregate(nn.Module):
                     x, masked_modality_name
                 )
             x_projected = TokensAndMasks(**decoder_emedded_dict)
-            return x_projected.pool_unmasked_tokens(
+            projected_pooled = x_projected.pool_unmasked_tokens(
                 PoolingType.MEAN, spatial_pooling=False
             )
+        elif isinstance(x, torch.Tensor):
+            x_projected = self.projection(x)
+            projected_pooled = reduce(x_projected, "b ... d -> b  d", "mean")
+        else:
+            raise ValueError(f"Invalid input type: {type(x)}")
+        return projected_pooled
+
+    def forward(self, x: TokensAndMasks | torch.Tensor) -> torch.Tensor:
+        """Apply a (non)linear projection to an input TokensAndMasks.
+
+        This can be applied either before or after pooling the tokens.
+        """
+        return (
+            self.apply_aggregate_then_project(x)
+            if self.aggregate_then_project
+            else self.apply_project_then_aggregate(x)
+        )
 
 
 class FlexiHeliosPatchEmbeddings(nn.Module):
