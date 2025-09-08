@@ -1388,6 +1388,34 @@ class Encoder(FlexiHeliosBase):
         else:
             return new_mask
 
+    def add_register_tokens_and_masks(
+        self, tokens: Tensor, attn_mask: Tensor | None
+    ) -> tuple[Tensor, Tensor | None]:
+        "Concatenate register tokens to the tokens."
+        batch_size = tokens.shape[0]
+        # Expand register tokens to match batch size: [num_register_tokens, embedding_size] -> [batch_size, num_register_tokens, embedding_size]
+        reg_tokens = self.register_tokens.unsqueeze(0).expand(batch_size, -1, -1)
+        # Concatenate register tokens at the beginning: [batch_size, seq_len, embedding_size] -> [batch_size, num_register_tokens + seq_len, embedding_size]
+        tokens = torch.cat([reg_tokens, tokens], dim=1)
+        if attn_mask is not None:
+            # Create mask for register tokens (all True - they should participate in attention)
+            reg_mask = torch.ones(
+                batch_size,
+                self.num_register_tokens,
+                dtype=attn_mask.dtype,
+                device=attn_mask.device,
+            )
+            attn_mask = torch.cat([reg_mask, attn_mask], dim=1)
+        else:
+            reg_mask = None
+        return tokens, attn_mask
+
+    def pop_register_tokens(self, tokens: Tensor) -> tuple[Tensor, Tensor]:
+        """Pop the register tokens from the tokens."""
+        register_tokens = tokens[:, : self.num_register_tokens, :]
+        tokens = tokens[:, self.num_register_tokens :, :]
+        return tokens, register_tokens
+
     def get_token_norm_stats(
         self, tokens: Tensor, register_tokens: Tensor
     ) -> dict[str, float]:
@@ -1477,23 +1505,8 @@ class Encoder(FlexiHeliosBase):
             new_mask, always_pass_none_mask_to_transformer
         )
 
-        # Add register tokens before attention layers
         if self.has_register_tokens:
-            batch_size = tokens.shape[0]
-            # Expand register tokens to match batch size: [num_register_tokens, embedding_size] -> [batch_size, num_register_tokens, embedding_size]
-            reg_tokens = self.register_tokens.unsqueeze(0).expand(batch_size, -1, -1)
-            # Concatenate register tokens at the beginning: [batch_size, seq_len, embedding_size] -> [batch_size, num_register_tokens + seq_len, embedding_size]
-            tokens = torch.cat([reg_tokens, tokens], dim=1)
-            # Update attention mask to include register tokens (they should participate in attention)
-            if attn_mask is not None:
-                # Create mask for register tokens (all True - they should participate in attention)
-                reg_mask = torch.ones(
-                    batch_size,
-                    self.num_register_tokens,
-                    dtype=attn_mask.dtype,
-                    device=attn_mask.device,
-                )
-                attn_mask = torch.cat([reg_mask, attn_mask], dim=1)
+            tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
 
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
@@ -1520,12 +1533,8 @@ class Encoder(FlexiHeliosBase):
                 attn_mask=attn_mask,
             )
 
-        # Remove register tokens after attention layers
         if self.has_register_tokens:
-            # Separate register tokens and non-register tokens
-            register_tokens = tokens[:, : self.num_register_tokens, :]
-            tokens = tokens[:, self.num_register_tokens :, :]
-
+            tokens, register_tokens = self.pop_register_tokens(tokens)
             token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
         else:
             token_norm_stats = None

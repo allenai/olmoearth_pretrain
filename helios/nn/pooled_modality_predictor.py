@@ -407,21 +407,7 @@ class EncodeEarlyAttnPool(Encoder):
         # Add register tokens before attention layers
         register_tokens = None
         if self.has_register_tokens:
-            batch_size = tokens.shape[0]
-            # Expand register tokens to match batch size: [num_register_tokens, embedding_size] -> [batch_size, num_register_tokens, embedding_size]
-            reg_tokens = self.register_tokens.unsqueeze(0).expand(batch_size, -1, -1)
-            # Concatenate register tokens at the beginning: [batch_size, seq_len, embedding_size] -> [batch_size, num_register_tokens + seq_len, embedding_size]
-            tokens = torch.cat([reg_tokens, tokens], dim=1)
-            # Update attention mask to include register tokens (they should participate in attention)
-            if attn_mask is not None:
-                # Create mask for register tokens (all True - they should participate in attention)
-                reg_mask = torch.ones(
-                    batch_size,
-                    self.num_register_tokens,
-                    dtype=attn_mask.dtype,
-                    device=attn_mask.device,
-                )
-                attn_mask = torch.cat([reg_mask, attn_mask], dim=1)
+            tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
 
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
@@ -453,9 +439,7 @@ class EncodeEarlyAttnPool(Encoder):
 
         # Remove register tokens after attention layers
         if self.has_register_tokens:
-            # Separate register tokens and non-register tokens
-            register_tokens = tokens[:, : self.num_register_tokens, :]
-            tokens = tokens[:, self.num_register_tokens :, :]
+            tokens, register_tokens = self.pop_register_tokens(tokens)
 
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
@@ -548,19 +532,7 @@ class EncodeEarlyAttnPool(Encoder):
 
         # Add register tokens before post-modality pooling attention layers
         if self.has_register_tokens and register_tokens is not None:
-            batch_size = tokens.shape[0]
-            # Concatenate register tokens at the beginning: [batch_size, seq_len, embedding_size] -> [batch_size, num_register_tokens + seq_len, embedding_size]
-            tokens = torch.cat([register_tokens, tokens], dim=1)
-            # Update attention mask to include register tokens (they should participate in attention)
-            if attn_mask is not None:
-                # Create mask for register tokens (all True - they should participate in attention)
-                reg_mask = torch.ones(
-                    batch_size,
-                    self.num_register_tokens,
-                    dtype=attn_mask.dtype,
-                    device=attn_mask.device,
-                )
-                attn_mask = torch.cat([reg_mask, attn_mask], dim=1)
+            tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
 
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
@@ -591,12 +563,9 @@ class EncodeEarlyAttnPool(Encoder):
                 attn_mask=attn_mask,
             )
 
-        # Remove register tokens after post-modality pooling attention layers
         token_norm_stats = None
         if self.has_register_tokens and register_tokens is not None:
-            # Separate register tokens and non-register tokens
-            register_tokens = tokens[:, : self.num_register_tokens, :]
-            tokens = tokens[:, self.num_register_tokens :, :]
+            tokens, register_tokens = self.pop_register_tokens(tokens)
             token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
 
         if exit_ids_seq is not None:
