@@ -1082,7 +1082,7 @@ class SpatialAttnProbe(nn.Module):
         else:
             output_dict = {}
             for probe_name, probe in self.probes.items():
-                modality = Modality.get(probe_name.split("_")[0])
+                modality = Modality.get("_".join(probe_name.split("_")[:-1]))
                 if modality.is_spatial:
                     probe_output = probe(x)  # B, Ph, PW, T, H * W * len(bandsets)
                     num_classes = probe_output.shape[-1] // (self.max_patch_size**2)
