@@ -36,6 +36,7 @@ class AttentionMode(Enum):
     SPATIAL = 1
     TEMPORAL = 2
     WINDOWED = 3
+    MODALITY = 4
 
 
 class STBase(nn.Module):
@@ -120,7 +121,7 @@ class STBase(nn.Module):
 
     def collapse_and_combine(
         self, x: dict[str, Tensor], mode: AttentionMode, block_idx: int
-    ) -> tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, list[tuple[str, int, int]]]:
         """Collapse the tokens and masks into two tensors.
 
         Args:
@@ -136,6 +137,8 @@ class STBase(nn.Module):
             return self.collapse_and_combine_temporal(x)
         elif mode == AttentionMode.WINDOWED:
             return self.collapse_and_combine_windowed(x, block_idx)
+        elif mode == AttentionMode.MODALITY:
+            return self.collapse_and_combine_modality(x)
         # Should not be possible.
         assert False
 
@@ -412,6 +415,43 @@ class STBase(nn.Module):
         )
         return tokens_tensor, masks_tensor
 
+    def collapse_and_combine_modality(
+        self, x: dict[str, Tensor]
+    ) -> tuple[Tensor, Tensor, list[tuple[str, int, int]]]:
+        """Collapse tokens/masks per modality for per-modality self-attn.
+
+        Returns:
+            tokens_tensor: [(sum over modalities) * B, T_mod, D]
+            masks_tensor: same leading shape
+            batch_slices: list of (modality_name, start_idx, end_idx) on batch axis
+        """
+        tokens_rows, masks_rows = [], []
+        batch_slices: list[tuple[str, int, int]] = []
+
+        available_modalities = return_modalities_from_dict(x)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+
+        b_start = 0
+        for modality in modalities_to_process:
+            masked_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            x_mod = x[modality]  # [B, ..., D]
+            m_mod = x[masked_name]  # [B, ...]
+            # TODO: this is fine with only spatiotemporal modalities
+            # but may need further adjustment, ie repeat for spatial-only modalities
+            flat_tokens = rearrange(x_mod, "b ... d -> b (...) d")
+            flat_masks = rearrange(m_mod, "b ... -> b (...)")
+            tokens_rows.append(flat_tokens)
+            masks_rows.append(flat_masks)
+            b_end = b_start + flat_tokens.shape[0]
+            batch_slices.append((modality, b_start, b_end))
+            b_start = b_end
+
+        tokens_tensor = torch.cat(tokens_rows, dim=0)  # stack along batch
+        masks_tensor = torch.cat(masks_rows, dim=0)
+        return tokens_tensor, masks_tensor, batch_slices
+
     @staticmethod
     def _construct_einops_pattern(
         spatial_dims: tuple[int, ...],
@@ -458,6 +498,7 @@ class STBase(nn.Module):
         modalities_to_dims_dict: dict[str, tuple],
         mode: AttentionMode,
         block_idx: int,
+        modality_batch_slices: list[tuple[str, int, int]] | None = None,
     ) -> dict[str, Tensor]:
         """Split and expand the tokens per modality."""
         if mode == AttentionMode.FULL:
@@ -474,6 +515,11 @@ class STBase(nn.Module):
             assert self.windowed_attention_size is not None
             return self.split_and_expand_per_modality_windowed(
                 x, modalities_to_dims_dict, self.windowed_attention_size, block_idx
+            )
+        elif mode == AttentionMode.MODALITY:
+            assert modality_batch_slices is not None
+            return self.split_and_expand_per_modality_modality(
+                x, modalities_to_dims_dict, modality_batch_slices
             )
         # Should not be possible.
         assert False
@@ -692,6 +738,34 @@ class STBase(nn.Module):
             tokens_only_dict[modality] = x_modality
 
         assert tokens_reshaped == x.shape[1]
+        return tokens_only_dict
+
+    @staticmethod
+    def split_and_expand_per_modality_modality(
+        x: Tensor,
+        modalities_to_dims_dict: dict[str, tuple],
+        batch_slices: list[tuple[str, int, int]],
+    ) -> dict[str, Tensor]:
+        """Invert collapse_and_combine_modality."""
+        tokens_only_dict: dict[str, Tensor] = {}
+        for modality, b_start, b_end in batch_slices:
+            dims = modalities_to_dims_dict[modality]  # e.g. [B, H, W, T, B_S, D]
+            bsz = dims[0]
+            middle_dims = dims[1:-1]
+            d = dims[-1]
+            x_slice = x[b_start:b_end]  # [B, T_mod, D]
+            # sanity
+            assert x_slice.shape[0] == bsz, "batch split mismatch for modality"
+
+            # T_mod must match product of middle dims
+            expected_T = 1
+            for s in middle_dims:
+                expected_T *= s
+            assert x_slice.shape[1] == expected_T, "token count mismatch in expand"
+
+            x_modality = x_slice.view(bsz, *middle_dims, d)
+            tokens_only_dict[modality] = x_modality
+
         return tokens_only_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
@@ -1024,7 +1098,14 @@ class STEncoder(STBase):
                 attention_mode = AttentionMode.SPATIAL
 
             logger.debug(f"Layer {i_blk} applying attention mode {attention_mode}")
-            x, mask = self.collapse_and_combine(x, attention_mode, i_blk)
+
+            ret = self.collapse_and_combine(x, attention_mode, i_blk)
+            if attention_mode == AttentionMode.MODALITY:
+                x, mask, modality_batch_slices = ret  # type: ignore
+            else:
+                x, mask = ret  # type: ignore
+
+            # x, mask = self.collapse_and_combine(x, attention_mode, i_blk)
             bool_mask = mask == MaskValue.ONLINE_ENCODER.value
             tokens, indices, new_mask = self.remove_masked_tokens(x, bool_mask)
 
@@ -1061,7 +1142,11 @@ class STEncoder(STBase):
 
             tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
             x = self.split_and_expand_per_modality(
-                tokens, modalities_to_dims_dict, attention_mode, i_blk
+                tokens,
+                modalities_to_dims_dict,
+                attention_mode,
+                i_blk,
+                modality_batch_slices,
             )
             x.update(original_masks_dict)
 
@@ -1367,9 +1452,13 @@ class STPredictor(STBase):
             else:
                 attention_mode = AttentionMode.SPATIAL
 
-            x, mask = self.collapse_and_combine(x, attention_mode, i_blk)
-            x, y, x_mask, y_mask, indices = self.split_x_y(x, mask)
+            ret = self.collapse_and_combine(x, attention_mode, i_blk)
+            if attention_mode == AttentionMode.MODALITY:
+                x, mask, modality_batch_slices = ret  # type: ignore
+            else:
+                x, mask = ret  # type: ignore
 
+            x, y, x_mask, y_mask, indices = self.split_x_y(x, mask)
             # note that we are not taking the inverse of the mask, since split_x_y gives us
             # true values for values we want to take part in attention
             x = blk(x=x, y=y, attn_mask=y_mask.bool())
@@ -1382,7 +1471,7 @@ class STPredictor(STBase):
                 indices=indices,
             )
             x = self.split_and_expand_per_modality(
-                x, modalities_to_dims_dict, attention_mode, i_blk
+                x, modalities_to_dims_dict, attention_mode, i_blk, modality_batch_slices
             )
             x.update(original_masks_dict)
 
