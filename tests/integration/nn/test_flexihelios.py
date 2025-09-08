@@ -239,7 +239,7 @@ class TestEncoder:
         input_res = 10
 
         for always_pass_none_mask_to_transformer in [True, False]:
-            output = encoder.apply_attn(
+            output, _ = encoder.apply_attn(
                 x=x,
                 timestamps=timestamps,
                 patch_size=patch_size,

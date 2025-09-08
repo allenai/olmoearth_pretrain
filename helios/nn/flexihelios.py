@@ -1391,7 +1391,7 @@ class Encoder(FlexiHeliosBase):
     def add_register_tokens_and_masks(
         self, tokens: Tensor, attn_mask: Tensor | None
     ) -> tuple[Tensor, Tensor | None]:
-        "Concatenate register tokens to the tokens."
+        """Concatenate register tokens to the tokens."""
         batch_size = tokens.shape[0]
         # Expand register tokens to match batch size: [num_register_tokens, embedding_size] -> [batch_size, num_register_tokens, embedding_size]
         reg_tokens = self.register_tokens.unsqueeze(0).expand(batch_size, -1, -1)
