@@ -1389,12 +1389,18 @@ class Encoder(FlexiHeliosBase):
             return new_mask
 
     def add_register_tokens_and_masks(
-        self, tokens: Tensor, attn_mask: Tensor | None
+        self,
+        tokens: Tensor,
+        attn_mask: Tensor | None,
+        processed_register_tokens: Tensor | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Concatenate register tokens to the tokens."""
         batch_size = tokens.shape[0]
         # Expand register tokens to match batch size: [num_register_tokens, embedding_size] -> [batch_size, num_register_tokens, embedding_size]
-        reg_tokens = self.register_tokens.unsqueeze(0).expand(batch_size, -1, -1)
+        if processed_register_tokens is None:
+            reg_tokens = self.register_tokens.unsqueeze(0).expand(batch_size, -1, -1)
+        else:
+            reg_tokens = processed_register_tokens
         # Concatenate register tokens at the beginning: [batch_size, seq_len, embedding_size] -> [batch_size, num_register_tokens + seq_len, embedding_size]
         tokens = torch.cat([reg_tokens, tokens], dim=1)
         if attn_mask is not None:

@@ -8,7 +8,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, repeat
 from torch import Tensor
 
 from helios.data.constants import BASE_GSD, Modality
@@ -259,7 +259,10 @@ class EncodeEarlyAttnPool(Encoder):
         )
 
     def apply_attn_pooling(
-        self, spatial_tokens: torch.Tensor, spatial_masks: torch.Tensor
+        self,
+        spatial_tokens: torch.Tensor,
+        spatial_masks: torch.Tensor,
+        register_tokens: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Attentive pool the tokens across the dimensions specified in self.dims_to_pool."""
         (
@@ -273,13 +276,26 @@ class EncodeEarlyAttnPool(Encoder):
             expand_kwargs,
         ) = self._get_reduce_and_expand_args(spatial_tokens.shape)
         # Here is where I pick which dimensions to collapse out of modality, time, and space
+        spatial_tokens_shape = spatial_tokens.shape
+        # Hack: this needs to be dynamic based on the dims to pool
+        num_tokens_per_batch = (
+            spatial_tokens_shape[1] * spatial_tokens_shape[2] * spatial_tokens_shape[3]
+        )
         spatial_tokens = rearrange(spatial_tokens, f"b h w t m d -> {reduction_args}")
 
         spatial_masks = rearrange(spatial_masks, f"b h w t m -> {reduction_mask_args}")
         # print the unique values of the masks
         pooled_attn_mask = spatial_masks == MaskValue.ONLINE_ENCODER.value
+        # we would just need to add the register tokens here so that we can use them for the attention pool
+        # repeat each register token such that it is repeated for everything in the collapsed dimensions
+        register_tokens = repeat(
+            register_tokens, "b n d -> b c n d", c=num_tokens_per_batch
+        )
+        register_tokens = rearrange(register_tokens, "b c n d -> (b c) n d")
+        spatial_tokens, pooled_attn_mask = self.add_register_tokens_and_masks(
+            spatial_tokens, pooled_attn_mask, register_tokens
+        )
         pooled_tokens = self.attn_pool(spatial_tokens, pooled_attn_mask)
-        logger.info(f"shape of pooled tokens: {pooled_tokens.shape}")
         pooled_tokens = rearrange(
             pooled_tokens, f"{pre_expand_args} -> {expand_args}", **expand_kwargs
         )
@@ -506,8 +522,11 @@ class EncodeEarlyAttnPool(Encoder):
         spatial_tokens, spatial_masks = self.stack_spatial_modalities_and_masks(
             tokens_dict
         )
-
-        tokens_dict = self.apply_attn_pooling(spatial_tokens, spatial_masks)
+        # log shape of register tokens
+        logger.info(f"shape of register tokens: {register_tokens.shape}")
+        tokens_dict = self.apply_attn_pooling(
+            spatial_tokens, spatial_masks, register_tokens
+        )
         pooled_dims = tokens_dict["modality_pooled_tokens"].shape
         original_pooled_masks = tokens_dict["modality_pooled_masks"]
         tokens, mask = self.collapse_and_combine_hwtc_pooled_tokens(tokens_dict)
@@ -532,7 +551,9 @@ class EncodeEarlyAttnPool(Encoder):
 
         # Add register tokens before post-modality pooling attention layers
         if self.has_register_tokens and register_tokens is not None:
-            tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
+            tokens, attn_mask = self.add_register_tokens_and_masks(
+                tokens, attn_mask, register_tokens
+            )
 
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
