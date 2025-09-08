@@ -228,9 +228,6 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                     )
 
                 if self.contrastive_loss is not None:
-                    # log the shape of pooled a and b
-                    logger.info(f"pooled a shape: {pooled_a.shape}")
-                    logger.info(f"pooled b shape: {pooled_b.shape}")
                     contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
                     loss += contrastive_loss
                     total_batch_con += (
