@@ -342,6 +342,15 @@ class HeliosDataLoader(DataLoaderBase):
                 (standard_hw, standard_hw, 1, Modality.CDL.num_bands), dtype=np.float32
             )
             output_dict["cdl"] = mock_cdl
+        if Modality.WORLDCEREAL.name in self.dataset.training_modalities:
+            # assume already normalized
+            mock_worldcereal = rng.integers(
+                low=0,
+                high=1,
+                size=(standard_hw, standard_hw, 1, Modality.WORLDCEREAL.num_bands),
+                endpoint=True,
+            ).astype(np.float32)
+            output_dict["worldcereal"] = mock_worldcereal
         if Modality.WORLDPOP.name in self.dataset.training_modalities:
             mock_worldpop = rng.random(
                 (standard_hw, standard_hw, 1, Modality.WORLDPOP.num_bands),

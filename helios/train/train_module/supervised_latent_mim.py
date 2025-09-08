@@ -6,18 +6,19 @@ from typing import Any
 
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
+from einops import rearrange
 from olmo_core.distributed.parallel import DataParallelConfig
-from olmo_core.distributed.utils import get_local_rank, get_local_tensor
+from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
+from torch.nn import functional as F
 
-from helios.data.constants import Modality
+from helios.data.constants import MISSING_VALUE, Modality
 from helios.data.dataset import HeliosSample
 from helios.data.transform import TransformConfig
 from helios.nn.flexihelios import TokensAndMasks
 from helios.nn.latent_mim import LatentMIM
-from helios.nn.utils import unpack_encoder_output
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskedHeliosSample, MaskingConfig
 from helios.train.train_module.train_module import (
@@ -30,7 +31,7 @@ logger = getLogger(__name__)
 
 
 @dataclass
-class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
+class SupervisedLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     """A configuration class for building :class:`LatentMIMTrainModule` instances.
 
     Args:
@@ -52,11 +53,22 @@ class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
 
+    # very hand wavy - it seems like the GSE loss quickly reduces to ~10% of the other losses, so
+    # we weigh it more.
+    supervisory_modalities_weights: dict[str, float] | None = field(
+        default_factory=lambda: {
+            Modality.WORLDCOVER.name: 0.1,
+            Modality.OPENSTREETMAP_RASTER.name: 0.1,
+            Modality.GSE.name: 1.0,
+        }
+    )
+    compute_accuracies: bool = False
+
     def build(
         self,
         model: LatentMIM,
         device: torch.device | None = None,
-    ) -> "LatentMIMTrainModule":
+    ) -> "SupervisedLatentMIMTrainModuleConfig":
         """Build the corresponding :class:`LatentMIMTrainModule`.
 
         Args:
@@ -64,14 +76,14 @@ class LatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
             device: The device to train on.
         """
         kwargs = self.prepare_kwargs()
-        return LatentMIMTrainModule(
+        return SupervisedLatentMIMTrainModule(
             model=model,
             device=device,
             **kwargs,
         )
 
 
-class LatentMIMTrainModule(HeliosTrainModule):
+class SupervisedLatentMIMTrainModule(HeliosTrainModule):
     """A :class:`TrainModule`.
 
     Initialize the training module.
@@ -95,7 +107,19 @@ class LatentMIMTrainModule(HeliosTrainModule):
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
         token_exit_cfg: The token exit configuration for the model.
+        supervisory_modalities_weights: bandsets which should only be used for supervision and
+            their weights
+        compute_accuracies: Whether to compute accuracies too
+        find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
     """
+
+    # other modalities are regressions and will use an L2 loss
+    CLASSIFICATION_MODALITIES = [
+        Modality.WORLDCOVER.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+        Modality.CDL.name,
+        Modality.WORLDCEREAL.name,
+    ]
 
     def __init__(
         self,
@@ -118,6 +142,10 @@ class LatentMIMTrainModule(HeliosTrainModule):
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
         ema_decay: tuple[float, float] = (0.996, 1.0),
         regularizer_config: LossConfig | None = None,
+        supervisory_modalities_weights: dict[str, float] = {
+            Modality.WORLDCOVER.name: 0.1
+        },
+        compute_accuracies: bool = False,
         find_unused_parameters: bool = True,
     ):
         """Initialize the training module.
@@ -143,6 +171,9 @@ class LatentMIMTrainModule(HeliosTrainModule):
             token_exit_cfg: The token exit configuration for the model.
             mae_loss_config: Optional loss config for masked auto-encoding.
             regularizer_config: An optional regularizer configuration for the model.
+            supervisory_modalities_weights: bandsets which should only be used for supervision and
+                their weights
+            compute_accuracies: Whether to compute accuracies too
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
         """
         super().__init__(
@@ -177,9 +208,120 @@ class LatentMIMTrainModule(HeliosTrainModule):
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
+        self.compute_accuracies = compute_accuracies
+        self.supervisory_modalities_weights = supervisory_modalities_weights
+
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
+
+    @staticmethod
+    def accuracy_score(pred: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Compute accuracy score with missing values."""
+        if pred.shape[-1] > 1:
+            argmax_pred = pred.argmax(dim=-1)
+        else:
+            argmax_pred = F.sigmoid(pred) >= 0.5
+        matches = argmax_pred == targets
+        return sum(matches.flatten()) / len(matches.flatten())
+
+    @classmethod
+    def supervisory_losses(
+        cls,
+        supervisory_modalities: dict[str, torch.Tensor],
+        probe_outputs: dict[str, torch.Tensor],
+        compute_accuracies: bool,
+        supervisory_modalities_weights: dict[str, float],
+    ) -> tuple[torch.Tensor | None, dict[str, torch.Tensor]]:
+        """Compute the supervisory losses."""
+        loss_to_return: torch.Tensor | None = None
+        accuracies_to_return: dict[str, torch.Tensor] = {}
+        # TODO: this is required; is it okay to be a normal dict key?
+        if "mask" not in probe_outputs:
+            raise ValueError("mask not in probe_outputs")
+        spatial_mask = probe_outputs["mask"]
+        for modality, modality_tensor in supervisory_modalities.items():
+            modality_spec = Modality.get(modality)
+            if modality in cls.CLASSIFICATION_MODALITIES:
+                if modality != Modality.WORLDCEREAL.name:
+                    loss_fn = torch.nn.CrossEntropyLoss()
+                else:
+                    loss_fn = torch.nn.BCEWithLogitsLoss()
+            else:
+                loss_fn = torch.nn.MSELoss()
+            for idx, bands in enumerate(modality_spec.bandsets_as_indices()):
+                probe_output = probe_outputs[
+                    f"{modality}_{idx}"
+                ]  # B, H, W, T, Bandsets or 11 if its worldcover
+                modality_bandset = modality_tensor[:, :, :, 0, bands].to(
+                    device=probe_output.device
+                )
+                if probe_output.shape[-3] != modality_bandset.shape[-2]:
+                    # this is in case patch_size < max_patch_size
+                    probe_output = rearrange(
+                        F.interpolate(
+                            rearrange(probe_output, "b h w c -> b c h w"),
+                            size=(
+                                modality_bandset.shape[-3],
+                                modality_bandset.shape[-2],
+                            ),
+                            mode="bilinear",
+                            align_corners=True,
+                        ),
+                        "b c h w -> b h w c",
+                    )
+
+                if modality in cls.CLASSIFICATION_MODALITIES:
+                    if modality != Modality.WORLDCEREAL.name:
+                        if len(bands) > 1:
+                            # then we need to turn it into indices
+                            modality_bandset = torch.argmax(
+                                modality_bandset, dim=-1, keepdim=True
+                            )
+                        modality_bandset = modality_bandset.long()
+                else:
+                    modality_bandset = modality_bandset.to(dtype=probe_output.dtype)
+                # filter out missing values from the targets
+                # keep the final dimension, which will be 1 for categorical inputs
+                flat_modality_bandset = modality_bandset.flatten(end_dim=-2)
+                target_mask = torch.logical_and(
+                    spatial_mask.flatten(),
+                    (flat_modality_bandset[..., 0] != MISSING_VALUE),
+                )
+                filtered_modality_bandset = flat_modality_bandset[target_mask, :]
+                filtered_preds = probe_output.flatten(end_dim=-2)[target_mask, :]
+
+                if modality in cls.CLASSIFICATION_MODALITIES:
+                    if modality != Modality.WORLDCEREAL.name:
+                        filtered_modality_bandset = filtered_modality_bandset[..., 0]
+                modality_loss = loss_fn(
+                    filtered_preds,
+                    filtered_modality_bandset,
+                )
+
+                if torch.isnan(modality_loss).any():
+                    logger.warning(f"NaN in unsupervised loss for {modality}")
+                    continue
+                if loss_to_return is None:
+                    loss_to_return = (
+                        modality_loss * supervisory_modalities_weights[modality]
+                    )
+                else:
+                    loss_to_return += (
+                        modality_loss * supervisory_modalities_weights[modality]
+                    )
+                if compute_accuracies:
+                    if modality in cls.CLASSIFICATION_MODALITIES:
+                        batch_acc = get_local_tensor(
+                            cls.accuracy_score(
+                                filtered_preds,
+                                filtered_modality_bandset,
+                            ).detach()
+                        )
+                    else:
+                        batch_acc = get_local_tensor(modality_loss).detach()
+                    accuracies_to_return[f"{modality}_{idx}"] = batch_acc
+        return loss_to_return, accuracies_to_return
 
     def train_batch(
         self, batch: tuple[int, HeliosSample], dry_run: bool = False
@@ -196,28 +338,41 @@ class LatentMIMTrainModule(HeliosTrainModule):
 
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
-        if not dry_run:
-            self.update_target_encoder()
+        self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
+        total_batch_sup = torch.zeros([], device=self.device)
+        if self.compute_accuracies:
+            total_batch_acc = {}
+            for modality in self.supervisory_modalities_weights.keys():
+                for idx in range(len(Modality.get(modality).band_sets)):
+                    total_batch_acc[f"{modality}_{idx}"] = torch.zeros(
+                        [], device=self.device
+                    )
+        else:
+            total_batch_acc = None
         patch_size, batch_data = batch
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
         num_microbatches = len(microbatches)
         for microbatch_idx, microbatch in enumerate(microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
-                print(
-                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size} on rank {get_local_rank()}\n"
+                logger.info(
+                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
+                microbatch, supervisory_modalities = microbatch.pop(
+                    list(self.supervisory_modalities_weights.keys())
+                )
+                # TODO - mark supervisory bandsets as missing, and store the original mask
                 microbatch = self.transform.apply(microbatch).to_device(self.device)
                 masked_batch = self.masking_strategy.apply_mask(
                     microbatch, patch_size=patch_size
                 )
                 # Run Encoder and decoder on the augmented input
-                loss, latent, decoded, target_output = self.model_forward(
-                    masked_batch, patch_size, self.token_exit_cfg
+                loss, latent, decoded, target_output, probe_outputs = (
+                    self.model_forward(masked_batch, patch_size, self.token_exit_cfg)
                 )
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
@@ -225,6 +380,23 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     total_batch_reg += (
                         get_local_tensor(reg_term.detach()) / num_microbatches
                     )
+
+                batch_sup, batch_acc = self.supervisory_losses(
+                    supervisory_modalities,
+                    probe_outputs,
+                    self.compute_accuracies,
+                    self.supervisory_modalities_weights,
+                )
+                if batch_sup is not None:
+                    loss += batch_sup
+                    total_batch_sup += batch_sup
+                for key, val in batch_acc.items():
+                    # len(batch_acc) is only > 0 if compute_accuracies is true,
+                    # in which case the total_batch_acc should have been
+                    # created. This keeps mypy happy.
+                    assert total_batch_acc is not None
+                    total_batch_acc[key] += val
+
                 # Scale loss by number of microbatches
                 loss = loss / num_microbatches
 
@@ -236,39 +408,64 @@ class LatentMIMTrainModule(HeliosTrainModule):
                     logger.warning(
                         f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
                     )
-                    print(f"rank {get_local_rank()} has nan or inf")
+                    del latent, decoded, target_output
+                    break
 
+                del latent, decoded, target_output
                 loss.backward()
-
-        if dry_run:
-            return
 
         self.trainer.record_metric(
             f"train/{self.total_loss_name}",
             total_batch_loss,
             ReduceType.mean,
         )
+        self.trainer.record_metric(
+            f"train/supervisory_loss_{'_'.join(self.supervisory_modalities_weights.keys())}",
+            total_batch_sup / num_microbatches,
+            ReduceType.mean,
+        )
+        if total_batch_acc is not None:
+            for modality_idx, modality_accuracy in total_batch_acc.items():
+                self.trainer.record_metric(
+                    f"train/supervisory_accuracy_{modality_idx}",
+                    # scale by number of microbatches
+                    modality_accuracy / num_microbatches,
+                    ReduceType.mean,
+                )
         self.log_regularization(total_batch_reg)
+
+        if dry_run:
+            return
 
         del batch, batch_data  # In case this helps with memory utilization.
         del masked_batch
-        del latent, decoded, target_output
 
     def model_forward(
         self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
-    ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
+    ) -> tuple[
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        dict[str, torch.Tensor],
+    ]:
         """Run a forward pass."""
         with self._model_forward_context():
             output = self.model(batch, patch_size)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
-                output_dict = self.model.target_encoder.forward(
+                target_output = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
-                )
-                target_output, _, _ = unpack_encoder_output(output_dict)
+                )["tokens_and_masks"]
             loss = self.loss_fn(output.decoded, target_output)
             if self.mae_loss is not None:
                 loss += self.mae_loss.compute(output.reconstructed, batch)
-            return loss, output.latent, output.decoded, target_output
+            return (
+                loss,
+                output.latent,
+                output.decoded,
+                target_output,
+                output.probe_outputs,
+            )

@@ -2,7 +2,7 @@
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, NamedTuple
 
@@ -12,7 +12,13 @@ from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
 
-from helios.data.constants import BASE_GSD, Modality, ModalitySpec
+from helios.data.constants import (
+    BASE_GSD,
+    NUM_CDL_CLASSES,
+    NUM_WORLDCOVER_CLASSES,
+    Modality,
+    ModalitySpec,
+)
 from helios.dataset.utils import get_modality_specs_from_names
 from helios.nn.attention import Block
 from helios.nn.encodings import (
@@ -112,6 +118,38 @@ class TokensAndMasks(NamedTuple):
                     return getattr(self, modality).device
             raise ValueError("No data to get device from")
 
+    @property
+    def b(self) -> int:
+        """Batch size."""
+        if self.sentinel2_l2a is not None:
+            return self.sentinel2_l2a.shape[0]
+        else:
+            # look for any other modality that is not None
+            for modality in self._fields:
+                if getattr(self, modality) is not None:
+                    return getattr(self, modality).shape[0]
+            raise ValueError("No data to get bach size from")
+
+    @property
+    def h_at_10(self) -> int:
+        """Height of 10m products."""
+        if self.sentinel2_l2a is not None:
+            return self.sentinel2_l2a.shape[1]
+        else:
+            # look for any other modality that is not None
+            for modality in self._fields:
+                if modality not in [
+                    "naip",
+                    "naip_mask",
+                    "latlon",
+                    "latlon_mask",
+                    "landsat",
+                    "landsat_mask",
+                ]:
+                    if getattr(self, modality) is not None:
+                        return getattr(self, modality).shape[0]
+            raise ValueError("No data to get bach size from")
+
     # TODO: It seems like we want a lot of our named tuples to have this functionality so we should probably create a utility base class for the named tuples and double subclass
     @classmethod
     def get_masked_modality_name(cls, modality: str) -> str:
@@ -125,13 +163,13 @@ class TokensAndMasks(NamedTuple):
             Dictionary representation of the namedtuple.
         """
         return_dict = {}
-        for field in self._fields:
-            val = getattr(self, field)
+        for field_name in self._fields:
+            val = getattr(self, field_name)
             if return_none:
-                return_dict[field] = val
+                return_dict[field_name] = val
             else:
                 if val is not None:
-                    return_dict[field] = val
+                    return_dict[field_name] = val
         return return_dict
 
     @property
@@ -270,6 +308,83 @@ class TokensAndMasks(NamedTuple):
                 return spatial_average_t.mean(dim=-1)
             else:
                 return spatial_average_t.max(dim=-1).values
+
+    def concat_spatial_dims(self) -> tuple[Tensor, Tensor]:
+        """Concat spatial dims."""
+        spatial_tokens = []
+        spatial_mask = []
+        for attr_name in self.modalities:
+            if Modality.get(attr_name).is_spatial:
+                mask_attr_name = self.get_masked_modality_name(attr_name)
+                masked_attr = getattr(self, mask_attr_name)
+                if masked_attr is None:
+                    continue
+                attr = getattr(self, attr_name)
+                # collapse the time and band set dimensions
+                spatial_mask.append(
+                    rearrange(masked_attr, "b h w t b_s -> b h w (t b_s)")
+                )  # b h w t b_s
+                spatial_tokens.append(
+                    rearrange(attr, "b h w t b_s d -> b h w (t b_s) d")
+                )  # b h w t b_s d
+        return torch.concat(spatial_tokens, dim=-2), torch.concat(spatial_mask, dim=-1)
+
+    def spatial_pool_with_mask(
+        self, pooling_type: PoolingType = PoolingType.MAX
+    ) -> tuple[Tensor, Tensor]:
+        """Like pool_unmasked_tokens(..., spatial_pooling=True) but supports mixed masking per modality.
+
+        To support this, this function also returns a mask describing which spatial locations have tokens.
+
+        Returns:
+        output: tensor of shape [B, P_W, P_H, D]
+        mask: tensor of shape [B, P_W, P_H] describing which elements in output contain tokens.
+            1s indicate the token is present, 0s indicate it is missing.
+        """
+        spatial_tokens = []
+        spatial_mask = []
+        for attr_name in self.modalities:
+            if Modality.get(attr_name).is_spatial:
+                mask_attr_name = self.get_masked_modality_name(attr_name)
+                masked_attr = getattr(self, mask_attr_name)
+                if masked_attr is None:
+                    continue
+                attr = getattr(self, attr_name)
+                # collapse the time and band set dimensions
+                spatial_mask.append(
+                    rearrange(masked_attr, "b ph pw t ba -> b ph pw (t ba)")
+                )
+                spatial_tokens.append(
+                    rearrange(attr, "b ph pw t ba d -> b ph pw (t ba) d")
+                )
+
+        spatial_mask_t = (
+            torch.concat(spatial_mask, dim=-1) == MaskValue.ONLINE_ENCODER.value
+        )
+        mask_to_return = spatial_mask_t.max(dim=-1).values
+        spatial_tokens_t = torch.concat(spatial_tokens, dim=-2)
+        expanded_mask = repeat(
+            spatial_mask_t,
+            "b ph pw ba -> b ph pw ba d",
+            d=spatial_tokens_t.shape[-1],
+        )
+        if pooling_type == PoolingType.MAX:
+            fill_value = spatial_tokens_t.min() - 1
+
+            spatial_tokens_t = (spatial_tokens_t * expanded_mask) + (
+                ~expanded_mask * fill_value
+            )
+            return spatial_tokens_t.max(dim=-2).values, mask_to_return
+        else:
+            zeroed_spatial_tokens = spatial_tokens_t * expanded_mask
+            num_tokens_per_spatial_patch = repeat(
+                torch.clip(spatial_mask_t.sum(-1), min=1),
+                "b ph pw -> b ph pw d",
+                d=zeroed_spatial_tokens.shape[-1],
+            )
+            return zeroed_spatial_tokens.sum(
+                dim=-2
+            ) / num_tokens_per_spatial_patch, mask_to_return
 
 
 class ProjectAndAggregate(nn.Module):
@@ -884,6 +999,182 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         return output_dict
 
 
+class SpatialAttnProbe(nn.Module):
+    """Spatial Attn Probe."""
+
+    def __init__(
+        self,
+        embedding_size: int,
+        max_patch_size: int,
+        mlp_ratio: float,
+        num_heads: int | None = None,
+        use_spatial_attn: bool = False,
+        probe_modalities: list[str] | None = None,
+        probe_dims: list[int] = [],
+        shared_linear_layer_dims: list[int] = [],
+        num_queries: int = 1,
+        gate_temperature: int = 1,
+        norm_layer: nn.Module = nn.LayerNorm,
+    ) -> None:
+        """Spatial Attn Probe."""
+        super().__init__()
+        self.norm_layer = norm_layer(embedding_size)
+        self.embedding_size = embedding_size
+        self.max_patch_size = max_patch_size
+        self.mask_token = nn.Parameter(torch.zeros(embedding_size))
+        self.gates = None
+        if use_spatial_attn:
+            self.gates = nn.Linear(in_features=embedding_size, out_features=1)
+
+        self.shared_linear_layers: nn.Module | None = None
+        if len(shared_linear_layer_dims) > 0:
+            shared_linear_layer_dims.append(self.embedding_size)
+            shared_layers: list[nn.Module] = []
+            for i in range(len(shared_linear_layer_dims) - 1):
+                shared_layers.extend(
+                    [
+                        nn.Linear(
+                            shared_linear_layer_dims[i], shared_linear_layer_dims[i + 1]
+                        ),
+                        nn.GELU(),
+                    ]
+                )
+            self.shared_linear_layers = nn.Sequential(*shared_layers)
+
+        if probe_modalities is not None:
+            probes: dict[str, nn.Module] = {}
+            # TODO - right now this assumes a resolution factor of 1. Needs to be fixed to handle (e.g.) NAIP
+            output_hw = self.max_patch_size**2
+            for modality_name in probe_modalities:
+                modality = Modality.get(modality_name)
+                if modality_name == Modality.WORLDCOVER.name:
+                    multiplier = NUM_WORLDCOVER_CLASSES
+                elif modality_name == Modality.CDL.name:
+                    multiplier = NUM_CDL_CLASSES
+                else:
+                    multiplier = 1
+                if modality.is_spatial:
+                    multiplier *= output_hw
+                for idx, band_set in enumerate(modality.band_sets):
+                    probe_dims = [self.embedding_size] + probe_dims
+                    layers: list[nn.Module] = []
+                    for i in range(len(probe_dims) - 1):
+                        layers.extend(
+                            [nn.Linear(probe_dims[i], probe_dims[i + 1]), nn.GELU()]
+                        )
+                    layers.append(
+                        nn.Linear(
+                            probe_dims[-1],
+                            len(band_set.bands) * multiplier,
+                        )
+                    )
+                    probes[f"{modality_name}_{idx}"] = nn.Sequential(*layers)
+            self.probes = nn.ModuleDict(probes)
+        else:
+            self.probes = {}
+
+    def apply_probes(
+        self, x: torch.Tensor, x_pooled: torch.Tensor, h_w: int
+    ) -> dict[str, torch.Tensor]:
+        """Apply linear probes for supervised learning."""
+        if len(self.probes) == 0:
+            return {}
+        else:
+            output_dict = {}
+            for probe_name, probe in self.probes.items():
+                modality = Modality.get("_".join(probe_name.split("_")[:-1]))
+                if modality.is_spatial:
+                    probe_output = probe(x)  # B, Ph, PW, T, H * W * len(bandsets)
+                    num_classes = probe_output.shape[-1] // (self.max_patch_size**2)
+                    probe_output = rearrange(
+                        probe_output,
+                        "b (h w) (c i j) -> b (h i) (w j) c",
+                        h=h_w,
+                        w=h_w,
+                        i=self.max_patch_size,
+                        j=self.max_patch_size,
+                        c=num_classes,
+                    )
+                else:
+                    probe_output = probe(x_pooled)
+                output_dict[probe_name] = probe_output
+            return output_dict
+
+    @staticmethod
+    def calculate_gsd_ratio(input_res: float, patch_size: int) -> float:
+        """Calculate the Ground Sample Distance ratio."""
+        return input_res * patch_size / BASE_GSD
+
+    def forward(
+        self, x: TokensAndMasks, patch_size: int, input_res: int
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None, torch.Tensor | None]:
+        """Forward."""
+        if len(self.probes) == 0:
+            return {}, None, None
+
+        if self.gates is not None:
+            spatial_tokens, numerical_spatial_mask = x.concat_spatial_dims()
+            spatial_masks = numerical_spatial_mask == MaskValue.ONLINE_ENCODER.value
+            # Here is where I pick which dimensions to collapse out of modality, time, and space
+            B, H, W, _, D = spatial_tokens.shape
+            spatial_tokens = rearrange(spatial_tokens, "b h w tm d -> (b h w) tm d")
+            spatial_masks = rearrange(spatial_masks, "b h w tm -> (b h w) tm")
+            # print the unique values of the masks
+            logger.info(f"unique values of the masks: {torch.unique(spatial_masks)}")
+            # Do I potentially need to filter out tokens that have no online marked modalities? Maybe not because we will just disgard those
+            logger.info(
+                f"shape of spatial tokens before pooling: {spatial_tokens.shape}"
+            )
+            weights = self.gates(spatial_tokens)
+            # this ensures the missing tokens are ignored in the softmax
+            weights = weights.masked_fill(
+                ~repeat(spatial_masks, "b tm -> b tm d", d=D),
+                torch.finfo(weights.dtype).min,
+            )
+            weights = torch.softmax(weights, dim=-1)
+            spatial_tokens = (weights * spatial_tokens).sum(1)
+            spatial_tokens = rearrange(
+                spatial_tokens, "(b h w) d -> b (h w) d", b=B, h=H, w=W
+            )
+            spatial_masks = rearrange(
+                # max because if any is true, then we take
+                # the spatial patch as existing
+                torch.max(spatial_masks, dim=-1).values,
+                "(b h w) -> b h w",
+                b=B,
+                h=H,
+                w=W,
+            )
+        else:
+            spatial_tokens, spatial_masks = x.spatial_pool_with_mask()
+            B, H, W, D = spatial_tokens.shape
+            spatial_tokens = rearrange(spatial_tokens, "b h w d -> b (h w) d")
+        if self.shared_linear_layers is not None:
+            spatial_tokens = self.shared_linear_layers(spatial_tokens)
+
+        tokens_to_pool = spatial_tokens.masked_fill(
+            repeat(rearrange(spatial_masks, "b h w -> b (h w)"), "b t -> b t d", d=D),
+            0,
+        )
+        num_encoded_tokens = spatial_masks.sum(-1).sum(-1)
+        if (num_encoded_tokens == 0).any():
+            raise ValueError(
+                f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
+            )
+        tokens_pooled = tokens_to_pool.sum(dim=1) / repeat(
+            num_encoded_tokens, "b -> b d", d=D
+        )
+
+        probe_outputs = self.apply_probes(spatial_tokens, tokens_pooled, h_w=x.h_at_10)
+        spatial_tokens = rearrange(
+            spatial_tokens, "b (h w) d -> b h w d", h=x.h_at_10, w=x.h_at_10
+        )
+        probe_outputs["mask"] = repeat(
+            spatial_masks, "b h w -> b (h p1) (w p2)", p1=patch_size, p2=patch_size
+        )
+        return probe_outputs, spatial_tokens, tokens_pooled
+
+
 class FlexiHeliosBase(nn.Module):
     """FlexiHeliosBase is a base class for FlexiHelios models."""
 
@@ -1146,7 +1437,13 @@ class Encoder(FlexiHeliosBase):
         aggregate_then_project: bool = True,
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
+        probe_modalities: list[str] | None = None,
+        probe_dims: list[int] = [],
+        shared_linear_layer_dims: list[int] = [],
+        num_queries: int = 1,
+        gate_temperature: int = 1,
         qk_norm: bool = False,
+        use_spatial_attn: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1169,7 +1466,16 @@ class Encoder(FlexiHeliosBase):
             use_flash_attn: Whether to use flash attention
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
+            probe_modalities: a list of modalities for which we will output linear probe predictions
+                per spatial patch.
+            probe_dims: the hidden dimensions to use for the probe. If an empty list is passed,
+                only a linear layer is applied
+            shared_linear_layer_dims: hidden dimensions to use for the shared MLPs before the linear
+                probe. If an empy list is passed, no MLP is applied.
             qk_norm: Whether to apply normalization to Q and K in attention
+            use_spatial_attn: whether to use spatial attn or just take spatial means
+            num_queries: number of queries in spatial attention
+            gate_temperature: gate temperature when combining queries in spatial attention
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1197,12 +1503,25 @@ class Encoder(FlexiHeliosBase):
             num_layers=num_projection_layers,
             aggregate_then_project=aggregate_then_project,
         )
+        self.projection_layer = nn.Linear(embedding_size, embedding_size)
         self.norm = nn.LayerNorm(self.embedding_size)
         self.apply(self._init_weights)
 
         if frozen_patch_embeddings:
             for p in self.patch_embeddings.parameters():
                 p.requires_grad = False
+        self.probe_with_attn = SpatialAttnProbe(
+            embedding_size=embedding_size,
+            max_patch_size=max_patch_size,
+            mlp_ratio=mlp_ratio,
+            probe_modalities=probe_modalities,
+            use_spatial_attn=use_spatial_attn,
+            num_heads=num_heads,
+            probe_dims=probe_dims,
+            shared_linear_layer_dims=shared_linear_layer_dims,
+            num_queries=num_queries,
+            gate_temperature=gate_temperature,
+        )
 
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
@@ -1474,12 +1793,19 @@ class Encoder(FlexiHeliosBase):
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        # TODO: we should probably switch this to a dict
-        output_dict = {
+        probe_output, spatial_queries, meaned_tokens = self.probe_with_attn(
+            output, patch_size, input_res
+        )
+        if meaned_tokens is None:
+            meaned_tokens = self.project_and_aggregate(output)
+        else:
+            meaned_tokens = self.projection_layer(meaned_tokens)
+        return {
             "tokens_and_masks": output,
-            "project_aggregated": self.project_and_aggregate(output),
+            "project_aggregated": meaned_tokens,
+            "probe_output": probe_output,
+            "spatial_queries": spatial_queries,
         }
-        return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
@@ -1895,7 +2221,13 @@ class EncoderConfig(Config):
     aggregate_then_project: bool = True
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
+    probe_modalities: list[str] | None = None
+    probe_dims: list[int] = field(default_factory=lambda: [])
+    shared_linear_layer_dims: list[int] = field(default_factory=lambda: [])
     qk_norm: bool = False
+    use_spatial_attn: bool = False
+    gate_temperature: float = 1.0
+    num_queries: int = 1
 
     def validate(self) -> None:
         """Validate the configuration."""

@@ -6,13 +6,11 @@ from enum import StrEnum
 from typing import Any
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
 
 from helios.data.constants import BASE_GSD, Modality
-from helios.nn.attention import Mlp
+from helios.nn.attention import AttnPool
 from helios.nn.flexihelios import (
     Encoder,
     EncoderConfig,
@@ -36,124 +34,6 @@ class DimsToPool(StrEnum):
     SPATIAL = "spatial"
     MODALITY_TEMPORAL = "modality_temporal"  # 3
     ALL = "all"  # 4
-
-
-class AttnPool(nn.Module):
-    """Multi-query attention pooling with gated averaging.
-
-    Args:
-        in_dim (int): token dim (must be divisible by 64; head_dim=64).
-        hidden_dim (int): MLP hidden/out dim (defaults to in_dim unless mlp_ratio provided).
-        mlp_ratio (float|None): if set, hidden_dim := int(in_dim * mlp_ratio)
-        num_queries (int): number of learned queries per (t,s) group.
-        gate_temperature (float): temperature for softmax gating (>0).
-    """
-
-    def __init__(
-        self,
-        in_dim: int,
-        hidden_dim: int | None = None,
-        mlp_ratio: float | None = None,
-        num_queries: int = 1,
-        gate_temperature: float = 1.0,
-    ) -> None:
-        """Initialize the Attn pooling layer."""
-        super().__init__()
-        assert in_dim % 64 == 0, "in_dim must be divisible by 64"
-        self.num_heads: int = in_dim // 64
-        self.num_queries: int = num_queries
-        self.gate_temperature: float = gate_temperature
-
-        # k learned queries (k, D)
-        self.query_tokens: nn.Parameter = nn.Parameter(torch.empty(num_queries, in_dim))
-
-        # shared KV projection
-        self.kv: nn.Linear = nn.Linear(in_dim, in_dim * 2)
-
-        # output MLP (+ optional expansion via mlp_ratio)
-        if mlp_ratio is not None:
-            hidden_dim = int(in_dim * mlp_ratio)
-        hidden_dim = hidden_dim or in_dim
-        self.out_layer: Mlp = Mlp(in_dim, hidden_dim)
-        self.out_norm = nn.LayerNorm(in_dim)
-
-        # gating over k query outputs (maps D -> 1 per query)
-        self.gate: nn.Linear | None = (
-            nn.Linear(in_dim, 1, bias=False) if num_queries > 1 else None
-        )
-
-        self.init_weights()
-
-    def init_weights(self) -> None:
-        """Initialize weights for the probe."""
-        nn.init.trunc_normal_(self.query_tokens, std=0.02)
-        nn.init.trunc_normal_(self.kv.weight, std=0.02)
-        nn.init.zeros_(self.kv.bias)
-
-        nn.init.zeros_(self.kv.bias)
-        if self.gate is not None:
-            nn.init.zeros_(self.gate.weight)  # start near uniform mix
-
-    def forward(
-        self, feat_tokens: torch.Tensor, mask: torch.Tensor | None
-    ) -> torch.Tensor:
-        """Apply attention pooling to the tokens."""
-        Bc, N, D = feat_tokens.shape
-        H = self.num_heads
-        Dh = D // H
-
-        # queries: [B*, k, D] -> [B*, H, k, Dh]
-        q = (
-            self.query_tokens[None, :, :]
-            .expand(Bc, -1, -1)
-            .reshape(Bc, self.num_queries, H, Dh)
-        )
-        q = rearrange(q, "b k h d -> b h k d")
-
-        # K/V: [B*, N, D] -> [2, B*, H, N, Dh]
-        feat_tokens = feat_tokens.to(self.kv.weight.dtype)
-        kv = self.kv(feat_tokens).reshape(Bc, N, 2, H, Dh)
-        kv = rearrange(kv, "b n two h d -> two b h n d")
-        k, v = torch.unbind(kv, dim=0)  # [B*, H, N, Dh] each
-
-        # mask -> [B*, H, k, N] (broadcastable is fine, but expand for clarity)
-        attn_mask = None
-        if mask is not None:
-            m = mask[:, None, None, :]  # [B*,1,1,N]
-            attn_mask = m.expand(Bc, H, self.num_queries, N)
-
-        # H100 chunking on batch axis
-        max_size = 63488
-        x_chunks = []
-        for i in range(0, Bc, max_size):
-            q_chunk = q[i : i + max_size, ...]
-            k_chunk = k[i : i + max_size, ...]
-            v_chunk = v[i : i + max_size, ...]
-            m_chunk = (
-                attn_mask[i : i + max_size, ...] if attn_mask is not None else None
-            )
-            # SDPA expects [B,H,Q,D] x [B,H,K,D] -> [B,H,Q,D]
-            x_chunk = F.scaled_dot_product_attention(
-                q_chunk, k_chunk, v_chunk, attn_mask=m_chunk
-            )
-            x_chunks.append(x_chunk)
-
-        # [B*, H, k, Dh] -> [B*, k, D]
-        x = torch.cat(x_chunks, dim=0)
-        o = rearrange(x, "b h k d -> b k (h d)")
-
-        # gated average across k, or pass-through if k=1
-        if self.num_queries > 1 and self.gate is not None:
-            o_for_gate = F.layer_norm(o, (D,))  # normalize only for gating
-            logits = self.gate(o_for_gate).squeeze(-1)  # [B*, k]
-            w = torch.softmax(logits, dim=1)
-            z = (w.unsqueeze(-1) * o).sum(dim=1)  # mix the *unnormalized* values
-        else:
-            z = o.squeeze(1)
-
-        # MLP + LN head
-        z = self.out_norm(self.out_layer(z))
-        return z
 
 
 class EncodeEarlyAttnPool(Encoder):

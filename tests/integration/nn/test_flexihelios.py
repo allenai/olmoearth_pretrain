@@ -200,6 +200,7 @@ class TestEncoder:
             drop_path=0.1,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
+            probe_dims=[2048],
         )
 
     def test_apply_attn(
@@ -360,6 +361,7 @@ class TestEncoder:
                     "pos_embed",
                     "month_embed",
                     "composite_encodings.per_modality_channel_embeddings.latlon",
+                    "probe_with_attn",
                 ]
             ):
                 assert param.grad is not None, name
@@ -460,6 +462,7 @@ class TestEncoder:
                         "pos_embed",
                         "month_embed",
                         "composite_encodings.per_modality_channel_embeddings.latlon",
+                        "probe_with_attn",
                     ]
                 )
                 or ("block" in name)
@@ -561,6 +564,7 @@ class TestEncoder:
                         "composite_encodings.per_modality_channel_embeddings.latlon",
                         "patch_embeddings.per_modality_embeddings.latlon",
                         "project_and_aggregate",
+                        "probe_with_attn",
                     ]
                 )
                 or ("block" in name)
@@ -675,6 +679,7 @@ class TestPredictor:
                     "pos_embed",
                     "month_embed",
                     "composite_encodings.per_modality_channel_embeddings.latlon",
+                    "probe_with_attn",
                 ]
             ):
                 assert param.grad is not None, name
@@ -766,6 +771,7 @@ class TestPredictor:
                     "month_embed",
                     "composite_encodings.per_modality_channel_embeddings.latlon",
                     "project_and_aggregate",
+                    "probe_with_attn",
                 ]
             ):
                 assert param.grad is not None, name
@@ -887,6 +893,7 @@ def test_end_to_end_with_exit_config(
                 "month_embed",
                 "composite_encodings.per_modality_channel_embeddings.latlon",
                 "project_and_aggregate",
+                "probe_with_attn",
             ]
         ):
             assert param.grad is not None, name

@@ -84,20 +84,30 @@ class HeliosEvalWrapper(EvalWrapper):
 
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         """Forward pass through the model produces the embedding specified by initialization."""
+        outputs = self.model(masked_helios_sample, patch_size=self.patch_size)
         if not self.use_pooled_tokens:
-            batch_embeddings: TokensAndMasks = self.model(
-                masked_helios_sample, patch_size=self.patch_size
-            )["tokens_and_masks"]  # (bsz, dim)
-            # Concat features across modalities in space averaged across time
-            batch_embeddings = batch_embeddings.pool_unmasked_tokens(
-                self.pooling_type,
-                spatial_pooling=self.spatial_pool,
-                concat_features=self.concat_features,
-            )
+            probe_outputs = outputs.get("probe_output", {})
+            if len(probe_outputs) == 0:
+                # not in supervised mode, so the spatial_attn_embeddings aren't learned
+                batch_embeddings: TokensAndMasks = outputs[
+                    "tokens_and_masks"
+                ]  # (bsz, dim)
+                # Concat features across modalities in space averaged across time
+                batch_embeddings = batch_embeddings.pool_unmasked_tokens(
+                    self.pooling_type,
+                    spatial_pooling=self.spatial_pool,
+                    concat_features=self.concat_features,
+                )
+            else:
+                spatial_attn_embeddings = outputs["spatial_queries"]
+                if self.spatial_pool:
+                    # spatial_attn_embeddings has shape [B, H, W, D]. This is what
+                    # we return for the spatial pool
+                    return spatial_attn_embeddings
+                else:
+                    return torch.mean(spatial_attn_embeddings, dim=[1, 2])
         else:
-            pooled_tokens_dict = self.model(
-                masked_helios_sample, patch_size=self.patch_size
-            )["pooled_tokens_and_masks"]
+            pooled_tokens_dict = outputs["pooled_tokens_and_masks"]
             pooled_tokens = pooled_tokens_dict["modality_pooled_tokens"]
             # spatial pool is true means we want to keep the spatial dimensions
             # so here we just need to pool across time

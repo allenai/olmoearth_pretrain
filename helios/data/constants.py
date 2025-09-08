@@ -23,6 +23,11 @@ MISSING_VALUE = -99999
 # Default maximum sequence length.
 MAX_SEQUENCE_LENGTH = 12
 
+# 11 + 1, since we treat the missing class (0) as its own class
+NUM_WORLDCOVER_CLASSES = 12
+# there are less but this avoids us needing to remap
+NUM_CDL_CLASSES = 255
+
 # Resolution of the input data in meters
 BASE_GSD = 10
 # Default nodata value for Sentinel-1 data.

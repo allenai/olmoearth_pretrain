@@ -86,7 +86,7 @@ def test_latentmim_with_loss(
     )
     latentmim = LatentMIM(encoder, predictor)
 
-    _, output, _, _ = latentmim.forward(x, patch_size)
+    _, output, _, _, _ = latentmim.forward(x, patch_size)
     output = predictor.forward(output, x.timestamps, patch_size, input_res=1)
     patched_H = H // patch_size
     patched_W = W // patch_size
@@ -160,6 +160,7 @@ def test_latentmim_with_loss(
                 "patch_embeddings.per_modality_embeddings.latlon",
                 "patch_embeddings.per_modality_embeddings.worldcover",
                 "project_and_aggregate",
+                "probe_with_attn",
             ]
         ):
             assert param.grad is not None, name

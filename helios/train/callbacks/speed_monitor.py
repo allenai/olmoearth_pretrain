@@ -13,6 +13,12 @@ from helios.train.train_module.contrastive_latentmim import (
 from helios.train.train_module.galileo import GalileoTrainModule
 from helios.train.train_module.latent_mim import LatentMIMTrainModule
 from helios.train.train_module.mae import MAETrainModule
+from helios.train.train_module.supervised_contrastive_latentmim import (
+    SupervisedContrastiveLatentMIMTrainModule,
+)
+from helios.train.train_module.supervised_latent_mim import (
+    SupervisedLatentMIMTrainModule,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +39,11 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
         self._token_budget = self.trainer.data_loader.token_budget
         if isinstance(
             train_module,
-            MAETrainModule | LatentMIMTrainModule | ContrastiveLatentMIMTrainModule,
+            MAETrainModule
+            | LatentMIMTrainModule
+            | ContrastiveLatentMIMTrainModule
+            | SupervisedLatentMIMTrainModule
+            | SupervisedContrastiveLatentMIMTrainModule,
         ):
             # Unwrap if the model is in DDP
             self._encoder_ratio = train_module.masking_strategy.encode_ratio
