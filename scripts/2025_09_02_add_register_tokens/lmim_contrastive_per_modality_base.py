@@ -8,6 +8,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
+from olmo_core.optim.config import OptimGroupOverride
 from olmo_core.optim.scheduler import ConstantWithWarmup
 from olmo_core.train.callbacks import (
     BeakerCallback,
@@ -70,10 +71,10 @@ def my_build_common_components(
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
-        Modality.WORLDCOVER.name,
+        # Modality.WORLDCOVER.name,
         # Modality.LATLON.name,
-        Modality.SRTM.name,
-        Modality.OPENSTREETMAP_RASTER.name,
+        # Modality.SRTM.name,
+        # Modality.OPENSTREETMAP_RASTER.name,
         # Modality.ERA5_10.name,
     ]
     return config
@@ -92,7 +93,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,
-        num_register_tokens=2,
+        num_register_tokens=4,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -115,7 +116,17 @@ def build_train_module_config(
 ) -> ContrastiveLatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
+        optim_config=AdamWConfig(
+            lr=0.0001,
+            weight_decay=0.02,
+            fused=True,
+            group_overrides=[
+                OptimGroupOverride(
+                    params=["decoder.*"],
+                    opts={"weight_decay": 0.2},
+                )
+            ],
+        ),
         rank_microbatch_size=64,
         masking_config=MaskingConfig(
             strategy_config={
