@@ -94,7 +94,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
         fuse_using_cross_attn=False,
-        layer_attention_modes=["FULL"] * model_size["encoder_depth"],
+        layer_attention_modes=["MODALITY"] * model_size["encoder_depth"],
         # layer_attention_modes=["MODALITY"] * 6
         # + ["FULL"] * (model_size["encoder_depth"] - 6),
         # layer_attention_modes=["MODALITY", "MODALITY", "FULL"] * 4,
