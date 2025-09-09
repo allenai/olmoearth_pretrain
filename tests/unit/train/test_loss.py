@@ -53,7 +53,7 @@ def test_modality_batch_patch_discrimination_loss() -> None:
     loss = ModalityBatchPatchDiscriminationLoss(
         batch_loss=True, bandset_loss=True, modality_loss=True
     )
-    loss_value = loss.compute(preds, targets)
+    loss_value = loss.compute(preds, targets, torch.tensor([1 / 0.07]))
     # not very good! since they are all the same
     # predictions and values
     assert loss_value > 0.5

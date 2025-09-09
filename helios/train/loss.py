@@ -135,7 +135,6 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
 
     def __init__(
         self,
-        tau: float = 1,
         label_smoothing: float = 0,
         prediction_norm: float | None = None,
         target_norm: float | None = None,
@@ -155,7 +154,6 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
 
         Args:
             alpha: scalar multiple for norm
-            tau: the softmax temperature
             label_smoothing: label smoothing [0,1], 0=none, 1=too much
             prediction_norm: norm for predictions,
             target_norm: norm for targets,
@@ -171,7 +169,6 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             spatial_loss: bool = False
             time_loss: bool = False
         """
-        self.tau = tau
         self.label_smoothing = label_smoothing
         self.weight = weight
         self.prediction_norm = prediction_norm
@@ -192,7 +189,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
     ) -> Tensor:
         preds_flat = rearrange(preds, "b ... d -> b (...) d")
         targs_flat = rearrange(targs, "b ... d -> b (...) d")
-        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
+        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) * self.logit_scale
         if self.decode_only:
             score_mask = (
                 (masks != MaskValue.DECODER.value)
@@ -207,7 +204,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             label.repeat(score.shape[0]),
             reduction="none",
             label_smoothing=self.label_smoothing,
-        )[masks.flatten() == MaskValue.DECODER.value] * (self.tau * 2)
+        )[masks.flatten() == MaskValue.DECODER.value]
         return loss
 
     def _calculate_batch_loss(
@@ -216,7 +213,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         preds_flat = rearrange(preds, "b ... d -> (...) b d")
         targs_flat = rearrange(targs, "b ... d -> (...) b d")
         masks_flat = rearrange(masks, "b ... -> (...) b")
-        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
+        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) * self.logit_scale
         if self.decode_only:
             score_mask = (
                 (masks_flat != MaskValue.DECODER.value).unsqueeze(1).expand_as(score)
@@ -228,7 +225,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             label.repeat(score.shape[0]),
             reduction="none",
             label_smoothing=self.label_smoothing,
-        )[masks_flat.flatten() == MaskValue.DECODER.value] * (self.tau * 2)
+        )[masks_flat.flatten() == MaskValue.DECODER.value]
         return loss
 
     def _calculate_bandset_loss(
@@ -238,7 +235,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         preds_flat = rearrange(preds, "b ... bs d -> (b bs) (...) d")
         targs_flat = rearrange(targs, "b ... bs d -> (b bs) (...) d")
         masks_flat = rearrange(masks, "b ... bs -> (b bs) (...)")
-        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
+        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) * self.logit_scale
         if self.decode_only:
             score_mask = (
                 (masks_flat != MaskValue.DECODER.value)
@@ -254,7 +251,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             label.repeat(score.shape[0]),
             reduction="none",
             label_smoothing=self.label_smoothing,
-        )[masks_flat.flatten() == MaskValue.DECODER.value] * (self.tau * 2)
+        )[masks_flat.flatten() == MaskValue.DECODER.value]
         return loss
 
     def _calculate_spatial_loss(
@@ -264,7 +261,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         preds_flat = rearrange(preds, "b ph pw t bs d -> (b t) (ph pw bs) d")
         targs_flat = rearrange(targs, "b ph pw t bs d -> (b t) (ph pw bs) d")
         masks_flat = rearrange(masks, "b ph pw t bs   -> (b t) (ph pw bs)")
-        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
+        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) * self.logit_scale
         if self.decode_only:
             score_mask = (
                 (masks_flat != MaskValue.DECODER.value)
@@ -279,7 +276,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             label.repeat(score.shape[0]),
             reduction="none",
             label_smoothing=self.label_smoothing,
-        )[masks_flat.flatten() == MaskValue.DECODER.value] * (self.tau * 2)
+        )[masks_flat.flatten() == MaskValue.DECODER.value]
         return loss
 
     def _calculate_time_loss(
@@ -289,7 +286,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         preds_flat = rearrange(preds, "b ph pw t bs d -> (b ph pw) (t bs) d")
         targs_flat = rearrange(targs, "b ph pw t bs d -> (b ph pw) (t bs) d")
         masks_flat = rearrange(masks, "b ph pw t bs   -> (b ph pw) (t bs)")
-        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) / self.tau
+        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) * self.logit_scale
         if self.decode_only:
             score_mask = (
                 (masks_flat != MaskValue.DECODER.value)
@@ -304,23 +301,29 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             label.repeat(score.shape[0]),
             reduction="none",
             label_smoothing=self.label_smoothing,
-        )[masks_flat.flatten() == MaskValue.DECODER.value] * (self.tau * 2)
+        )[masks_flat.flatten() == MaskValue.DECODER.value]
         return loss
 
     def compute(
-        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+        self,
+        predictions: TokensAndMasks,
+        targets: TokensAndMasks,
+        logit_scale: Tensor = None,
+        **kwargs: Any,
     ) -> Tensor:
         """Compute patch discrimination loss between predictions and targets.
 
         Args:
             predictions: Model predictions.
             targets: Ground truth targets.
+            logit_scale: scalar for logit.
             **kwargs: Additional keyword arguments.
 
         Returns:
             The computed loss value.
         """
         # sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
+        self.logit_scale = logit_scale
         losses = []
         for modality_name in predictions.modalities:
             preds = getattr(predictions, modality_name)

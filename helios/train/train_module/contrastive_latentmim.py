@@ -162,9 +162,9 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
-    def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
+    def loss_fn(self, pred: Any, targets: Any, **kwargs: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
-        return self.base_loss.compute(pred, targets)
+        return self.base_loss.compute(pred, targets, **kwargs)
 
     def train_batch(
         self, batch: tuple[int, HeliosSample], dry_run: bool = False
@@ -286,7 +286,9 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
-            loss = self.loss_fn(decoded, target_output)
+            loss = self.loss_fn(
+                decoded, target_output, logit_scale=self.model.logit_scale.exp()
+            )
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output, latent_projected_and_pooled
