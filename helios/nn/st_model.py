@@ -1150,7 +1150,7 @@ class STEncoder(STBase):
             tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
             if attention_mode == AttentionMode.MODALITY:
                 x = self.split_and_expand_per_modality(
-                    x,
+                    tokens,
                     modalities_to_dims_dict,
                     attention_mode,
                     i_blk,
@@ -1158,7 +1158,7 @@ class STEncoder(STBase):
                 )
             else:
                 x = self.split_and_expand_per_modality(
-                    x, modalities_to_dims_dict, attention_mode, i_blk
+                    tokens, modalities_to_dims_dict, attention_mode, i_blk
                 )
             x.update(original_masks_dict)
 

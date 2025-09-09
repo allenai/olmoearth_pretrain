@@ -122,7 +122,7 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        rank_microbatch_size=64,
+        rank_microbatch_size=32,
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "modality_cross_random",
@@ -156,7 +156,7 @@ def build_train_module_config(
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
-            param_dtype=DType.float32,
+            param_dtype=DType.bfloat16,
             reduce_dtype=DType.float32,
         ),
     )
@@ -168,7 +168,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
     return HeliosDataLoaderConfig(
         num_workers=16,
-        global_batch_size=512,
+        global_batch_size=128,
         token_budget=1500,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(5, 13)),  # try only temporal tokens
