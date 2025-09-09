@@ -107,7 +107,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         num_heads=model_size["decoder_num_heads"],
         max_sequence_length=12,
         supported_modality_names=common.training_modalities,
-        layer_attention_modes=["FULL"] * model_size["decoder_depth"],
+        layer_attention_modes=["MODALITY"] * model_size["decoder_depth"],
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
