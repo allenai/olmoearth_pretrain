@@ -1113,7 +1113,6 @@ class STEncoder(STBase):
             else:
                 x, mask = ret  # type: ignore
 
-            # x, mask = self.collapse_and_combine(x, attention_mode, i_blk)
             bool_mask = mask == MaskValue.ONLINE_ENCODER.value
             tokens, indices, new_mask = self.remove_masked_tokens(x, bool_mask)
 

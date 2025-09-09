@@ -93,7 +93,8 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         mlp_ratio=model_size["mlp_ratio"],
         drop_path=0.1,
         max_sequence_length=12,
-        layer_attention_modes=["MODALITY"] * model_size["encoder_depth"],
+        fuse_using_cross_attn=False,
+        layer_attention_modes=["FULL"] * model_size["encoder_depth"],
         # layer_attention_modes=["MODALITY"] * 6
         # + ["FULL"] * (model_size["encoder_depth"] - 6),
         # layer_attention_modes=["MODALITY", "MODALITY", "FULL"] * 4,
@@ -106,7 +107,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         num_heads=model_size["decoder_num_heads"],
         max_sequence_length=12,
         supported_modality_names=common.training_modalities,
-        layer_attention_modes=["MODALITY"] * model_size["decoder_depth"],
+        layer_attention_modes=["FULL"] * model_size["decoder_depth"],
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
@@ -121,7 +122,7 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
-        rank_microbatch_size=64,
+        rank_microbatch_size=32,
         masking_config=MaskingConfig(
             strategy_config={
                 "type": "modality_cross_random",
@@ -167,7 +168,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
 
     return HeliosDataLoaderConfig(
         num_workers=16,
-        global_batch_size=512,
+        global_batch_size=128,
         token_budget=1500,
         prefetch_factor=4,
         sampled_hw_p_list=list(range(5, 13)),  # try only temporal tokens
