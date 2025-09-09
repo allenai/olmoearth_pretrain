@@ -93,7 +93,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         mlp_ratio=model_size["mlp_ratio"],
         drop_path=0.1,
         max_sequence_length=12,
-        layer_attention_modes=["FULL"] * model_size["encoder_depth"],
+        layer_attention_modes=["MODALITY"] * model_size["encoder_depth"],
     )
     decoder_config = STPredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
