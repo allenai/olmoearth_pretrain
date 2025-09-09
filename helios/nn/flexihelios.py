@@ -1652,15 +1652,16 @@ class Encoder(FlexiHeliosBase):
             )
         else:
             token_norm_stats = {}
+        if self.use_class_token:
+            class_token = patchified_tokens_and_masks.pop("class_token", None)
+        else:
+            class_token = None
         output = TokensAndMasks(**patchified_tokens_and_masks)
         # TODO: we should probably switch this to a dict
-        if self.use_class_token:
-            instance_latent = self.project_and_aggregate(
-                patchified_tokens_and_masks["class_token"]
-            )
+        if self.use_class_token and class_token is not None:
+            instance_latent = self.project_and_aggregate(class_token)
         else:
             instance_latent = self.project_and_aggregate(output)
-
         output_dict = {
             "tokens_and_masks": output,
             "project_aggregated": instance_latent,
