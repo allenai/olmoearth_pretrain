@@ -93,10 +93,10 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         mlp_ratio=model_size["mlp_ratio"],
         drop_path=0.1,
         max_sequence_length=12,
-        # layer_attention_modes=["MODALITY"] * model_size["encoder_depth"],
+        layer_attention_modes=["MODALITY"] * model_size["encoder_depth"],
         # layer_attention_modes=["MODALITY"] * 6
         # + ["FULL"] * (model_size["encoder_depth"] - 6),
-        layer_attention_modes=["MODALITY", "MODALITY", "FULL"] * 4,
+        # layer_attention_modes=["MODALITY", "MODALITY", "FULL"] * 4,
     )
     decoder_config = STPredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -106,7 +106,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         num_heads=model_size["decoder_num_heads"],
         max_sequence_length=12,
         supported_modality_names=common.training_modalities,
-        layer_attention_modes=["FULL"] * model_size["decoder_depth"],
+        layer_attention_modes=["MODALITY"] * model_size["decoder_depth"],
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
