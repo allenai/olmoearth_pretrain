@@ -339,7 +339,10 @@ class ProjectAndAggregate(nn.Module):
             )
         elif isinstance(x, torch.Tensor):
             x_projected = self.projection(x)
-            projected_pooled = reduce(x_projected, "b ... d -> b  d", "mean")
+            if x_projected.ndim == 2:
+                projected_pooled = x_projected
+            else:
+                projected_pooled = reduce(x_projected, "b ... d -> b  d", "mean")
         else:
             raise ValueError(f"Invalid input type: {type(x)}")
         return projected_pooled
@@ -1177,6 +1180,7 @@ class Encoder(FlexiHeliosBase):
         supported_modalities: list[ModalitySpec],
         max_sequence_length: int,
         num_register_tokens: int = 0,
+        use_class_token: bool = False,
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         num_projection_layers: int = 1,
@@ -1198,6 +1202,7 @@ class Encoder(FlexiHeliosBase):
             supported_modalities: list documenting modalities used in a given model instantiation
             max_sequence_length: Maximum sequence length
             num_register_tokens: Number of register tokens to use
+            use_class_token: Whether to use a class token
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             num_projection_layers: The number of layers to use in the projection. If >1, then
@@ -1222,6 +1227,9 @@ class Encoder(FlexiHeliosBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
         )
+        self.use_class_token = use_class_token
+        if self.use_class_token:
+            self.class_token = nn.Parameter(torch.zeros(embedding_size))
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
         if self.has_register_tokens:
@@ -1249,10 +1257,18 @@ class Encoder(FlexiHeliosBase):
                 p.requires_grad = False
         if self.has_register_tokens:
             self._init_register_tokens()
+        if self.use_class_token:
+            self._init_class_token()
 
     def _init_register_tokens(self) -> None:
         """Initialize the register tokens."""
+        # arbitrary choice of initialization
         nn.init.xavier_uniform_(self.register_tokens)
+
+    def _init_class_token(self) -> None:
+        """Initialize the class token."""
+        # arbitrary choice of initialization
+        nn.init.normal_(self.class_token, std=0.02)
 
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
@@ -1416,10 +1432,34 @@ class Encoder(FlexiHeliosBase):
             reg_mask = None
         return tokens, attn_mask
 
+    def add_class_token_and_masks(
+        self, tokens: Tensor, attn_mask: Tensor | None
+    ) -> tuple[Tensor, Tensor | None]:
+        """Concatenate class token to the tokens."""
+        batch_size = tokens.shape[0]
+        class_token = self.class_token.unsqueeze(0).expand(batch_size, -1, -1)
+        tokens = torch.cat([class_token, tokens], dim=1)
+        if attn_mask is not None:
+            class_mask = torch.ones(
+                batch_size, 1, dtype=attn_mask.dtype, device=attn_mask.device
+            )
+            attn_mask = torch.cat([class_mask, attn_mask], dim=1)
+        return tokens, attn_mask
+
+    def pop_class_token(self, tokens: Tensor) -> tuple[Tensor, Tensor]:
+        """Pop the class token from the tokens."""
+        class_token = tokens[:, :1, :]
+        tokens = tokens[:, 1:, :]
+        return tokens, class_token
+
     def pop_register_tokens(self, tokens: Tensor) -> tuple[Tensor, Tensor]:
         """Pop the register tokens from the tokens."""
-        register_tokens = tokens[:, : self.num_register_tokens, :]
-        tokens = tokens[:, self.num_register_tokens :, :]
+        # Hacky assume that the class token is already popped
+        start_index = 0
+        register_tokens = tokens[
+            :, start_index : start_index + self.num_register_tokens, :
+        ]
+        tokens = tokens[:, start_index + self.num_register_tokens :, :]
         return tokens, register_tokens
 
     def get_token_norm_stats(
@@ -1513,7 +1553,8 @@ class Encoder(FlexiHeliosBase):
 
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
-
+        if self.use_class_token:
+            tokens, attn_mask = self.add_class_token_and_masks(tokens, attn_mask)
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -1538,13 +1579,13 @@ class Encoder(FlexiHeliosBase):
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
             )
-
+        if self.use_class_token:
+            tokens, class_token = self.pop_class_token(tokens)
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
             token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
         else:
             token_norm_stats = None
-
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
 
@@ -1562,6 +1603,8 @@ class Encoder(FlexiHeliosBase):
         # we apply the norm before we add the removed tokens,
         # so that the norm is only computed against "real" tokens
         tokens = self.norm(tokens)
+        if self.use_class_token:
+            self.norm(class_token)
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
         tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
@@ -1570,6 +1613,8 @@ class Encoder(FlexiHeliosBase):
         )
         # merge original masks and the processed tokens
         tokens_per_modality_dict.update(original_masks_dict)
+        if self.use_class_token:
+            tokens_per_modality_dict["class_token"] = class_token
         return tokens_per_modality_dict, token_norm_stats
 
     def forward(
@@ -1609,9 +1654,16 @@ class Encoder(FlexiHeliosBase):
             token_norm_stats = {}
         output = TokensAndMasks(**patchified_tokens_and_masks)
         # TODO: we should probably switch this to a dict
+        if self.use_class_token:
+            instance_latent = self.project_and_aggregate(
+                patchified_tokens_and_masks["class_token"]
+            )
+        else:
+            instance_latent = self.project_and_aggregate(output)
+
         output_dict = {
             "tokens_and_masks": output,
-            "project_aggregated": self.project_and_aggregate(output),
+            "project_aggregated": instance_latent,
         }
         if token_norm_stats:
             output_dict["token_norm_stats"] = token_norm_stats
@@ -2027,6 +2079,7 @@ class EncoderConfig(Config):
     drop_path: float = 0.1
     max_sequence_length: int = 12
     num_register_tokens: int = 0
+    use_class_token: bool = False
     learnable_channel_embeddings: bool = True
     random_channel_embeddings: bool = False
     num_projection_layers: int = 1
