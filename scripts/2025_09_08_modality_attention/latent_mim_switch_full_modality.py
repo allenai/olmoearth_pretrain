@@ -87,13 +87,13 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     encoder_config = STEncoderConfig(
         supported_modality_names=common.training_modalities,
         embedding_size=model_size["encoder_embedding_size"],
-        max_patch_size=model_size["encoder_num_heads"],
+        max_patch_size=MAX_PATCH_SIZE,
         num_heads=model_size["encoder_num_heads"],
         depth=model_size["encoder_depth"],
         mlp_ratio=model_size["mlp_ratio"],
         drop_path=0.1,
         max_sequence_length=12,
-        layer_attention_modes=["MODALITY"] * model_size["encoder_depth"],
+        layer_attention_modes=["FULL"] * model_size["encoder_depth"],
     )
     decoder_config = STPredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -103,7 +103,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         num_heads=model_size["decoder_num_heads"],
         max_sequence_length=12,
         supported_modality_names=common.training_modalities,
-        layer_attention_modes=["MODALITY"] * model_size["decoder_depth"],
+        layer_attention_modes=["FULL"] * model_size["decoder_depth"],
     )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
@@ -152,7 +152,7 @@ def build_train_module_config(
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
-            param_dtype=DType.bfloat16,
+            param_dtype=DType.float32,
             reduce_dtype=DType.float32,
         ),
     )

@@ -10,7 +10,7 @@ import torch
 from einops import rearrange, repeat
 from olmo_core.config import Config
 from torch import Tensor, nn
-from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
+from torch.distributed.fsdp import fully_shard
 
 from helios.data.constants import Modality, ModalitySpec
 from helios.dataset.utils import get_modality_specs_from_names
@@ -439,9 +439,9 @@ class STBase(nn.Module):
             x_mod = x[modality]  # [B, ..., D]
             m_mod = x[masked_name]  # [B, ...]
             # TODO: this is fine with only spatiotemporal modalities
-            # but may need further adjustment, ie repeat for spatial-only modalities
-            flat_tokens = rearrange(x_mod, "b ... d -> b (...) d")
-            flat_masks = rearrange(m_mod, "b ... -> b (...)")
+            # but will need further adjustment, ie repeat for spatial-only modalities
+            flat_tokens = rearrange(x_mod, "b ... b_s d -> (b b_s) (...) d")
+            flat_masks = rearrange(m_mod, "b ... b_s -> (b b_s) (...)")
             tokens_rows.append(flat_tokens)
             masks_rows.append(flat_masks)
             b_end = b_start + flat_tokens.shape[0]
@@ -749,21 +749,29 @@ class STBase(nn.Module):
         """Invert collapse_and_combine_modality."""
         tokens_only_dict: dict[str, Tensor] = {}
         for modality, b_start, b_end in batch_slices:
-            dims = modalities_to_dims_dict[modality]  # e.g. [B, H, W, T, B_S, D]
-            bsz = dims[0]
-            middle_dims = dims[1:-1]
-            d = dims[-1]
-            x_slice = x[b_start:b_end]  # [B, T_mod, D]
-            # sanity
-            assert x_slice.shape[0] == bsz, "batch split mismatch for modality"
+            dims = modalities_to_dims_dict[modality]  # e.g. [b, h, w, t, b_s, d]
+            b, d = dims[0], dims[-1]
+            b_s = dims[-2]
+            middle_wo_bs = dims[1:-2]
 
-            # T_mod must match product of middle dims
+            x_slice = x[b_start:b_end]  # [(b*b_s), T_mod, d]
+            assert x_slice.shape[0] == b * b_s, "batch split mismatch for modality"
+
+            # T_mod must equal product of the middle dims that were flattened into tokens
             expected_T = 1
-            for s in middle_dims:
+            for s in middle_wo_bs:
                 expected_T *= s
             assert x_slice.shape[1] == expected_T, "token count mismatch in expand"
 
-            x_modality = x_slice.view(bsz, *middle_dims, d)
+            # Reshape back:
+            # [(b*b_s), T_mod, d] -> [b, b_s, T_mod, d] -> [b, *middle_wo_bs, b_s, d]
+            x_slice = x_slice.contiguous().view(b, b_s, expected_T, d)
+            if len(middle_wo_bs) > 0:
+                x_modality = x_slice.view(b, *middle_wo_bs, b_s, d)
+            else:
+                # no spatial/temporal dims; just [b, b_s, d]
+                x_modality = x_slice.view(b, b_s, d)
+
             tokens_only_dict[modality] = x_modality
 
         return tokens_only_dict
@@ -1141,13 +1149,18 @@ class STEncoder(STBase):
                 tokens = self.copy_first_unmasked_token(tokens, new_mask)
 
             tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
-            x = self.split_and_expand_per_modality(
-                tokens,
-                modalities_to_dims_dict,
-                attention_mode,
-                i_blk,
-                modality_batch_slices,
-            )
+            if attention_mode == AttentionMode.MODALITY:
+                x = self.split_and_expand_per_modality(
+                    x,
+                    modalities_to_dims_dict,
+                    attention_mode,
+                    i_blk,
+                    modality_batch_slices,
+                )
+            else:
+                x = self.split_and_expand_per_modality(
+                    x, modalities_to_dims_dict, attention_mode, i_blk
+                )
             x.update(original_masks_dict)
 
         if exit_ids_seq is not None:
@@ -1173,7 +1186,7 @@ class STEncoder(STBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
-    ) -> tuple[TokensAndMasks, Tensor]:
+    ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
         Args:
@@ -1198,13 +1211,18 @@ class STEncoder(STBase):
                 token_exit_cfg=token_exit_cfg,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        return output, self.project_and_aggregate(output)
+        # TODO: we should probably switch this to a dict
+        output_dict = {
+            "tokens_and_masks": output,
+            "project_aggregated": self.project_and_aggregate(output),
+        }
+        return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         super().apply_fsdp(**fsdp_kwargs)
-        fully_shard(self.patch_embeddings, **fsdp_kwargs)
-        register_fsdp_forward_method(self.patch_embeddings, "forward")
+        # fully_shard(self.patch_embeddings, **fsdp_kwargs)
+        # register_fsdp_forward_method(self.patch_embeddings, "forward")
         fully_shard(self, **fsdp_kwargs)
 
 
@@ -1470,9 +1488,18 @@ class STPredictor(STBase):
                 unmasked_tokens_mask=y_mask,
                 indices=indices,
             )
-            x = self.split_and_expand_per_modality(
-                x, modalities_to_dims_dict, attention_mode, i_blk, modality_batch_slices
-            )
+            if attention_mode == AttentionMode.MODALITY:
+                x = self.split_and_expand_per_modality(
+                    x,
+                    modalities_to_dims_dict,
+                    attention_mode,
+                    i_blk,
+                    modality_batch_slices,
+                )
+            else:
+                x = self.split_and_expand_per_modality(
+                    x, modalities_to_dims_dict, attention_mode, i_blk
+                )
             x.update(original_masks_dict)
 
         return x
