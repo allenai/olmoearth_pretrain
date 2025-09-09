@@ -101,6 +101,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         regularizer_config: LossConfig | None = None,
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
+        log_detailed_grad_norms: bool = False,
     ):
         """Initialize the training module.
 
@@ -143,6 +144,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
             find_unused_parameters=find_unused_parameters,
+            log_detailed_grad_norms=log_detailed_grad_norms,
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg = token_exit_cfg

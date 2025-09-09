@@ -83,6 +83,7 @@ class HeliosTrainModuleConfig(Config):
     state_dict_save_opts: dict[str, Any] | None = None
     state_dict_load_opts: dict[str, Any] | None = None
     regularizer_config: LossConfig | None = None
+    log_detailed_grad_norms: bool = False
 
     def prepare_kwargs(self) -> dict[str, Any]:
         """Prepare the kwargs for the train module."""
@@ -159,6 +160,7 @@ class HeliosTrainModule(TrainModule):
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
+        log_detailed_grad_norms: bool = False,
     ):
         """Initialize the training module.
 
@@ -262,6 +264,7 @@ class HeliosTrainModule(TrainModule):
         self.state_dict_load_opts = state_dict_load_opts or dist_cp_sd.StateDictOptions(
             flatten_optimizer_state_dict=True, strict=True
         )
+        self.log_detailed_grad_norms = log_detailed_grad_norms
 
     @property
     def dp_process_group(self) -> dist.ProcessGroup | None:
@@ -464,16 +467,43 @@ class HeliosTrainModule(TrainModule):
         norm_type: float = 2.0,
         foreach: bool | None = None,
     ) -> torch.Tensor:
-        """Clip the gradients."""
-        # Pipeline parallel grad clipping required nightly torch
-        # return torch.nn.utils.clip_grad_norm_(
-        #     self.model.parameters(), max_grad_norm, norm_type=norm_type, foreach=foreach
-        # )
-        parameters = [p for p in self.model.parameters()]
+        """Clip the gradients and log grad norms per layer group."""
+        # Collect parameters and their names for logging
+        named_parameters = list(self.model.named_parameters())
+        parameters = [p for n, p in named_parameters]
         grads = [p.grad for p in parameters if p.grad is not None]
+
+        # Calculate total grad norm
         total_norm = nn.utils.get_total_norm(
             grads, norm_type=norm_type, error_if_nonfinite=False, foreach=foreach
         )
+        if self.log_detailed_grad_norms:
+            # Calculate and log grad norm for each top-level module (layer group)
+            grad_norms_by_layer = {}
+            for name, param in named_parameters:
+                if param.grad is not None:
+                    # Get the top-level module name (e.g., "encoder", "decoder", etc.)
+                    top_level = name.split(".")[0]
+                    grad_norms_by_layer.setdefault(top_level, []).append(param.grad)
+
+            for layer, grads in grad_norms_by_layer.items():
+                if grads:
+                    layer_norm = nn.utils.get_total_norm(
+                        grads,
+                        norm_type=norm_type,
+                        error_if_nonfinite=False,
+                        foreach=foreach,
+                    )
+                    self.trainer.record_metric(
+                        f"grad_norm/{layer}",
+                        layer_norm.item()
+                        if hasattr(layer_norm, "item")
+                        else layer_norm,
+                        reduce_type=None,
+                    )
+
+            # Calculate per-layer grad norms for encoder and decoder components
+            self._log_detailed_grad_norms(named_parameters, norm_type, foreach)
 
         # If total_norm is a DTensor, the placements must be `torch.distributed._tensor.ops.math_ops._NormPartial`.
         # We can simply reduce the DTensor to get the total norm in this tensor's process group
@@ -557,3 +587,89 @@ class HeliosTrainModule(TrainModule):
                     )
             else:
                 self.trainer.record_metric(f"{key}", value, reduce_type=reduce_type)
+
+    def _log_detailed_grad_norms(
+        self,
+        named_parameters: list[tuple[str, torch.Tensor]],
+        norm_type: float = 2.0,
+        foreach: bool | None = None,
+    ) -> None:
+        """Log detailed gradient norms for each layer and component of encoder and decoder."""
+        # Group parameters by component and layer
+        encoder_components = {}
+        decoder_components = {}
+
+        for name, param in named_parameters:
+            if param.grad is None:
+                continue
+
+            parts = name.split(".")
+            if len(parts) < 2:
+                continue
+
+            # Check if it's encoder or decoder
+            if parts[0] == "encoder":
+                if len(parts) >= 3 and parts[1] == "blocks":
+                    # This is a transformer block: encoder.blocks.{layer_idx}.{component}
+                    if len(parts) >= 4:
+                        layer_idx = parts[2]
+                        component = parts[3]
+                        key = f"layer_{layer_idx}_{component}"
+                        encoder_components.setdefault(key, []).append(param.grad)
+                elif len(parts) >= 2:
+                    # Other encoder components like patch_embeddings, norm, etc.
+                    component = parts[1]
+                    encoder_components.setdefault(f"other_{component}", []).append(
+                        param.grad
+                    )
+
+            elif parts[0] == "decoder":
+                if len(parts) >= 3 and parts[1] == "blocks":
+                    # This is a transformer block: decoder.blocks.{layer_idx}.{component}
+                    if len(parts) >= 4:
+                        layer_idx = parts[2]
+                        component = parts[3]
+                        key = f"layer_{layer_idx}_{component}"
+                        decoder_components.setdefault(key, []).append(param.grad)
+                elif len(parts) >= 2:
+                    # Other decoder components like encoder_to_decoder_embed, etc.
+                    component = parts[1]
+                    decoder_components.setdefault(f"other_{component}", []).append(
+                        param.grad
+                    )
+
+        # Log encoder component grad norms using record_metric
+        for component, grads in encoder_components.items():
+            if grads:
+                component_norm = nn.utils.get_total_norm(
+                    grads,
+                    norm_type=norm_type,
+                    error_if_nonfinite=False,
+                    foreach=foreach,
+                )
+                norm_value = (
+                    component_norm.item()
+                    if hasattr(component_norm, "item")
+                    else component_norm
+                )
+                self.trainer.record_metric(
+                    f"grad_norm/encoder/{component}", norm_value, reduce_type=None
+                )
+
+        # Log decoder component grad norms using record_metric
+        for component, grads in decoder_components.items():
+            if grads:
+                component_norm = nn.utils.get_total_norm(
+                    grads,
+                    norm_type=norm_type,
+                    error_if_nonfinite=False,
+                    foreach=foreach,
+                )
+                norm_value = (
+                    component_norm.item()
+                    if hasattr(component_norm, "item")
+                    else component_norm
+                )
+                self.trainer.record_metric(
+                    f"grad_norm/decoder/{component}", norm_value, reduce_type=None
+                )

@@ -72,11 +72,7 @@ def my_build_common_components(
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
         # Modality.WORLDCOVER.name,
-<<<<<<< HEAD
         # Modality.LATLON.name,
-=======
-        # # Modality.LATLON.name,
->>>>>>> 6dbee772fc48399f0aa4b612d976855ed5f62e7c
         # Modality.SRTM.name,
         # Modality.OPENSTREETMAP_RASTER.name,
         # Modality.ERA5_10.name,
