@@ -98,7 +98,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         # layer_attention_modes=["MODALITY"] * model_size["encoder_depth"],
         # layer_attention_modes=["MODALITY"] * 6
         # + ["FULL"] * (model_size["encoder_depth"] - 6),
-        layer_attention_modes=["MODALITY", "FULL"] * 6,
+        layer_attention_modes=["MODALITY", "MODALITY", "MODALITY", "FULL"] * 3,
     )
     decoder_config = STPredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
