@@ -99,10 +99,10 @@ class GeobenchDataset(Dataset):
         assert split in ["train", "valid", "test"]
 
         self.tiles_per_img = 1
-        if dataset in ["m-SA-crop-type", "m-cashew-plant"]:
-            # for cashew plant and SA crop type
-            # images are 256x256, we want 128x128
-            self.tiles_per_img = 4
+        # if dataset in ["m-SA-crop-type", "m-cashew-plant"]:
+        #     # for cashew plant and SA crop type
+        #     # images are 256x256, we want 128x128
+        #     self.tiles_per_img = 4
 
         self.split = split
         self.partition = partition
