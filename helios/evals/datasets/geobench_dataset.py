@@ -1,6 +1,7 @@
 """GeoBench datasets, returning data in the Helios format."""
 
 import logging
+import math
 import os
 from pathlib import Path
 from types import MethodType
@@ -97,6 +98,12 @@ class GeobenchDataset(Dataset):
             )
         assert split in ["train", "valid", "test"]
 
+        self.tiles_per_img = 1
+        if dataset in ["m-SA-crop-type", "m-cashew-plant"]:
+            # for cashew plant and SA crop type
+            # images are 256x256, we want 128x128
+            self.tiles_per_img = 4
+
         self.split = split
         self.partition = partition
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
@@ -150,7 +157,7 @@ class GeobenchDataset(Dataset):
             imputed_band_info,
             all_bands=GEOBENCH_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES,
         )
-        self.active_indices = range(int(len(self.dataset)))
+        self.active_indices = range(int(len(self.dataset) * self.tiles_per_img))
         self.norm_method = norm_method
         self.visualize_samples = visualize_samples
 
@@ -227,6 +234,38 @@ class GeobenchDataset(Dataset):
         )
 
         x = np.stack(x_list, axis=2)  # (h, w, 13)
+
+        # check if label is an object or a number
+        if not (isinstance(label, int) or isinstance(label, list)):
+            label = label.data
+            # label is a memoryview object, convert it to a list, and then to a numpy array
+            label = np.array(list(label))
+
+        target = torch.tensor(label, dtype=torch.long)
+
+        if self.tiles_per_img > 1:
+            # for cashew plant and SA crop type
+            h = x.shape[1]
+            subtiles_per_dim = int(math.sqrt(self.tiles_per_img))
+            assert h % subtiles_per_dim == 0
+            pixels_per_dim = h // subtiles_per_dim
+            subtile_idx = idx % self.tiles_per_img
+
+            row_idx = subtile_idx // subtiles_per_dim
+            col_idx = subtile_idx % subtiles_per_dim
+
+            x = x[
+                row_idx * pixels_per_dim : (row_idx + 1) * pixels_per_dim,
+                col_idx * pixels_per_dim : (col_idx + 1) * pixels_per_dim,
+                :,
+            ]
+            if len(target.shape) == 2:
+                # make sure the target has a h, w (i.e. is segmentation)
+                target = target[
+                    row_idx * pixels_per_dim : (row_idx + 1) * pixels_per_dim,
+                    col_idx * pixels_per_dim : (col_idx + 1) * pixels_per_dim,
+                ]
+
         if self.visualize_samples:
             self.visualize_sample_bands(x, f"./visualizations/sample_{idx}")
         if self.is_landsat:
@@ -249,13 +288,6 @@ class GeobenchDataset(Dataset):
                     x, self.mean, self.std, self.min, self.max, self.norm_method
                 )
             )
-        # check if label is an object or a number
-        if not (isinstance(label, int) or isinstance(label, list)):
-            label = label.data
-            # label is a memoryview object, convert it to a list, and then to a numpy array
-            label = np.array(list(label))
-
-        target = torch.tensor(label, dtype=torch.long)
 
         sample_dict = {}
         if self.is_landsat:
