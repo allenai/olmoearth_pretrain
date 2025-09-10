@@ -6,14 +6,16 @@ import os
 import time
 from logging import getLogger
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import torch
 import wandb
 from olmo_core.config import Config
 from olmo_core.distributed.checkpoint import load_model_and_optim_state
-from olmo_core.train.callbacks import ProfilerCallback
+from olmo_core.io import copy_file, file_exists, join_path
+from olmo_core.train.callbacks import ProfilerCallback, WandBCallback
+from olmo_core.train.trainer import PathOrStr
+from olmo_core.utils import prepare_cli_environment, seed_all
 
 from helios.data.constants import BASE_GSD, Modality
 from helios.inference_benchmarking import constants
@@ -40,6 +42,31 @@ NUM_LANDSAT_BANDS = Modality.LANDSAT.num_bands
 NUM_SQUARE_KM_LAND_IN_WORLD = 149_000_000
 
 logger = getLogger(__name__)
+
+
+class MinimalTrainer:
+    """Minimal trainer that only has the persist_working_file method so we can use the callbacks without the full trainer."""
+
+    def __init__(
+        self, device: torch.device, work_dir: Path, save_folder: Path | None = None
+    ):
+        self.device = device
+        self.work_dir = work_dir  # Will be set later
+        if save_folder is None:
+            self.save_folder = work_dir
+        else:
+            self.save_folder = save_folder
+
+    def persist_working_file(self, name: PathOrStr) -> PathOrStr:
+        if Path(name).is_relative_to(self.work_dir):
+            name = Path(name).relative_to(self.work_dir)
+        source = join_path(self.work_dir, name)
+        target = join_path(self.save_folder, name)
+        if source != target:
+            copy_file(source, target, save_overwrite=self.save_overwrite)
+        elif not file_exists(source):
+            raise FileNotFoundError(source)
+        return target
 
 
 class Helios(torch.nn.Module):
@@ -93,7 +120,8 @@ class Helios(torch.nn.Module):
         )["tokens_and_masks"]
 
 
-def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None:
+# Maybe this should be a class
+def run_benchmarking(model: Helios, run_params: RunParams, work_dir: Path) -> None:
     """Runs the benchmarking code.
 
     Requires an instance of the Helios wrapper, a wandb metrics instance, and run params.
@@ -104,43 +132,54 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
         dtype = torch.bfloat16
     else:
         dtype = torch.float32
-
-    # Initialize profiler callback
-    profiler = ProfilerCallback(
-        skip_first=0,  # Don't skip any steps
-        wait=0,  # Start profiling immediately
-        warmup=5,  # Warmup for 5 steps (matches your current warmup)
-        active=3,  # Profile for 10 steps
-        repeat=1,  # Only one cycle
-        enabled=False,
-    )
-
-    # Set up a mock trainer object for the profiler
-    class MockTrainer:
-        def __init__(self, device):
-            self.device = device
-            self.work_dir = Path("./test_profiler")  # Will be set later
-
-    profiler.trainer = MockTrainer(device)
-
-    # Initialize profiler
-    if profiler.enabled:
-        profiler.pre_train()
-
     # track squarekm per second for every batch size and report the highest batch size
     squarekm_per_second_per_batch_size = {}
     for idx, batch_size in enumerate(run_params.batch_sizes):
-        if run_params.use_s1:
-            # dims: (B, H, W, T, len(S1_BANDS)]
-            s1_tensor = torch.rand(
-                batch_size,
-                run_params.image_size,
-                run_params.image_size,
-                run_params.num_timesteps,
-                NUM_S1_BANDS,
-                device=device,
-                dtype=dtype,
+        callbacks = []
+        # insantiate callbacks
+        if run_params.profiler_enabled:
+            profiler = ProfilerCallback(
+                skip_first=0,  # Don't skip any steps
+                wait=0,  # Start profiling immediately
+                warmup=5,  # Warmup for 5 steps (matches your current warmup)
+                active=3,  # Profile for 10 steps
+                repeat=1,  # Only one cycle
             )
+            # Set up a mock trainer object for the profiler
+
+            profiler.trainer = MinimalTrainer(device, work_dir)
+
+            callbacks.append(profiler)
+
+        if run_params.wandb_enabled:
+            project = os.getenv(constants.PARAM_KEYS["project"], constants.PROJECT_NAME)
+            owner = os.getenv(constants.PARAM_KEYS["owner"], constants.ENTITY_NAME)
+            name = os.getenv(constants.PARAM_KEYS["name"], "new3_benhcmark_test")
+            # Hack update name with the batch size
+            name = f"{name}_bs{batch_size}"
+            wandb_callback = WandBCallback(
+                project=project,
+                entity=owner,
+                name=name,
+            )
+            wandb_callback.trainer = MinimalTrainer(device, work_dir)
+            callbacks.append(wandb_callback)
+
+        # Initialize profiler
+        for callback in callbacks:
+            callback.pre_train()
+
+            if run_params.use_s1:
+                # dims: (B, H, W, T, len(S1_BANDS)]
+                s1_tensor = torch.rand(
+                    batch_size,
+                    run_params.image_size,
+                    run_params.image_size,
+                    run_params.num_timesteps,
+                    NUM_S1_BANDS,
+                    device=device,
+                    dtype=dtype,
+                )
         else:
             s1_tensor = None
 
@@ -207,10 +246,9 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
         time_taken_per_batch: list[float] = []
         # log that the data is prepared
         logger.info("Data prepared, starting warmup")
-        # torch.cuda.set_sync_debug_mode("warn")
+        torch.cuda.set_sync_debug_mode("warn")
         # Run 5 forward passes as warmup
         for _ in range(5):
-            torch.compiler.cudagraph_mark_step_begin()
             with torch.inference_mode():
                 if run_params.bf16:
                     with torch.amp.autocast(
@@ -223,10 +261,9 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
                     results = model.forward(
                         masked_sample, patch_size=run_params.patch_size
                     )
-            # # Call profiler step during warmup
-            # profiler.pre_load_batch()
+
         logger.info("Warmup complete, starting benchmark")
-        num_forward_passes = 0
+        # TODO: Do cuda event timing
         if device.type == "cuda":
             torch.cuda.synchronize()
         overall_start_time = time.monotonic()
@@ -253,12 +290,12 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
                     results = model.forward(
                         masked_sample, patch_size=run_params.patch_size
                     )
+            # seperately time batches outside the larger loop
             time_taken_per_batch.append(time.monotonic() - batch_start)
-            num_forward_passes += 1
 
             # Call profiler step for each forward pass
-            if profiler.enabled:
-                profiler.pre_load_batch()
+            for callback in callbacks:
+                callback.pre_load_batch()
 
             num_s1_tokens = calculate_num_token_embeddings(results.sentinel1)
             num_s2_tokens = calculate_num_token_embeddings(results.sentinel2_l2a)
@@ -282,13 +319,13 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
                 )
             ),
             constants.MEAN_BATCH_TOKEN_RATE_METRIC: sum(tokens_processed_per_batch)
-            / sum(time_taken_per_batch),
+            / overall_time_taken,
             constants.MEAN_BATCH_TIME_METRIC: overall_time_taken
             / len(time_taken_per_batch),
             constants.NUM_TOKENS_PER_BATCH_METRIC: sum(tokens_processed_per_batch)
             / len(tokens_processed_per_batch),
         }
-        num_batches = len(time_taken_per_batch)  # or use num_forward_passes
+        num_batches = len(time_taken_per_batch)
         num_centroids = num_batches * batch_size
         centroids_per_second = num_centroids / overall_time_taken
         tile_km2 = (
@@ -303,9 +340,14 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
             NUM_SQUARE_KM_LAND_IN_WORLD / square_km_per_second / 3600.0
         )
         metrics_to_submit[constants.OVERALL_TIME_TAKEN_METRIC] = overall_time_taken
-        # For N timesteps that number is what we care about
-        print(f"Metrics for {batch_size} were: {metrics_to_submit}")
-        metrics.log(metrics_to_submit, step=idx)
+
+        logger.info(f"Metrics for {batch_size} were: {metrics_to_submit}")
+        # TODO: If different configurations are different runs how can we do them back to back?
+        for callback in callbacks:
+            callback.log_metrics(step=idx, metrics=metrics_to_submit)
+        for callback in callbacks:
+            callback.post_train()
+
     logger.info(
         f"Square km per second per batch size: {squarekm_per_second_per_batch_size}"
     )
@@ -318,21 +360,6 @@ def run_benchmarking(model: Helios, metrics: Any, run_params: RunParams) -> None
         f"Highest square km per second: {squarekm_per_second_per_batch_size[highest_batch_size]}"
     )
 
-    # Clean up profiler
-    if hasattr(profiler, "_exit_stack") and profiler._exit_stack and profiler.enabled:
-        profiler._exit_stack.close()
-
-
-class Metrics:
-    """Simple metrics logger that stores logs per step, but does not submit to wandb."""
-
-    def __init__(self):
-        self.logged = []
-
-    def log(self, metrics: dict, step: int = None):
-        entry = {"step": step, "metrics": metrics}
-        self.logged.append(entry)
-
 
 def calculate_num_token_embeddings(t: torch.Tensor | None) -> int:
     """Determines how many tokens are represented in the given tensor."""
@@ -343,13 +370,10 @@ def calculate_num_token_embeddings(t: torch.Tensor | None) -> int:
     return 0
 
 
-# Make this whole thing omega config based
+# Make sure there is a natural logging and wandb setup here
 if __name__ == "__main__":
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    prepare_cli_environment()
+    seed_all(42)
 
     os.environ[constants.PARAM_KEYS["checkpoint_path"]] = constants.BASE_PATH
     # set benchmark interval to 15 seconds
@@ -359,14 +383,15 @@ if __name__ == "__main__":
     os.environ[constants.PARAM_KEYS["patch_size"]] = "2"
     os.environ[constants.PARAM_KEYS["image_size"]] = "4"
     os.environ[constants.PARAM_KEYS["num_timesteps"]] = "12"
-    os.environ[constants.PARAM_KEYS["batch_sizes"]] = "4096"
+    os.environ[constants.PARAM_KEYS["batch_sizes"]] = "128, 1024, 2048, 4096"
+    os.environ["profiler_enabled"] = "0"
+    os.environ["wandb_enabled"] = "1"
     # make sure bfloat16 is on
     os.environ[constants.PARAM_KEYS["bf16"]] = "1"
+    work_dir = Path("./test_work_dir")
+    work_dir.mkdir(exist_ok=True)
     checkpoint_path = os.getenv(constants.PARAM_KEYS["checkpoint_path"], "/artifacts")
     run_params = RunParams.from_env_vars()
-    project = os.getenv(constants.PARAM_KEYS["project"], constants.PROJECT_NAME)
-    owner = os.getenv(constants.PARAM_KEYS["owner"], constants.ENTITY_NAME)
-    name = os.getenv(constants.PARAM_KEYS["name"], "test")
 
     # print("Initializing wandb...")
     # wandb_dir = "/wandb"
@@ -377,6 +402,7 @@ if __name__ == "__main__":
     #     entity=owner,
     #     name=name,
     # )
+    # Make the model size more configurable via cli
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
     training_modalities = [
         Modality.SENTINEL2_L2A.name,
@@ -403,14 +429,13 @@ if __name__ == "__main__":
         encoder_config=encoder_config,
         decoder_config=decoder_config,
     )
-    metrics = Metrics()
     try:
         logger.info("Loading model...")
         model = Helios(model_config=model_config)
         if torch.cuda.is_available():
             model.to("cuda:0")
             logger.info("helios loaded and on gpu")
-        run_benchmarking(model, metrics, run_params)
+        run_benchmarking(model, run_params, work_dir)
 
     except Exception as e:
         import traceback

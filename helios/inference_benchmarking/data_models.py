@@ -23,6 +23,8 @@ class RunParams:
     bf16: bool = False
     benchmark_interval_s: int = 180
     min_batches_per_interval: int = 10
+    profiler_enabled: bool = False
+    wandb_enabled: bool = False
 
     @property
     def run_name(self) -> str:
@@ -41,6 +43,8 @@ class RunParams:
                     f"ps{self.patch_size}",
                     f"ts{self.num_timesteps}",
                     f"bs{'_'.join([str(bs) for bs in self.batch_sizes])}",
+                    "prof" if self.profiler_enabled else None,
+                    "wandb" if self.wandb_enabled else None,
                 ]
                 if item is not None
             ]
@@ -52,7 +56,7 @@ class RunParams:
         Object can be recreated from these subsequently.
         """
         keys = constants.PARAM_KEYS
-        return {
+        env_vars = {
             keys["checkpoint_path"]: os.path.join(
                 "/artifacts", constants.MODEL_SIZE_MAP[self.model_size]
             ),
@@ -70,6 +74,10 @@ class RunParams:
             keys["min_batches_per_interval"]: str(self.min_batches_per_interval),
             keys["name"]: self.run_name,
         }
+        # Add the two new params
+        env_vars["profiler_enabled"] = str(int(self.profiler_enabled))
+        env_vars["wandb_enabled"] = str(int(self.wandb_enabled))
+        return env_vars
 
     @staticmethod
     def from_env_vars() -> "RunParams":
@@ -89,6 +97,8 @@ class RunParams:
         bf16 = True if os.getenv(keys["bf16"], "0") == "1" else False
         benchmark_interval_s = int(os.getenv(keys["benchmark_interval_s"], "180"))
         min_batches_per_interval = int(os.getenv(keys["min_batches_per_interval"], 10))
+        profiler_enabled = True if os.getenv("profiler_enabled", "0") == "1" else False
+        wandb_enabled = True if os.getenv("wandb_enabled", "0") == "1" else False
 
         return RunParams(
             model_size=model_size,
@@ -103,6 +113,8 @@ class RunParams:
             bf16=bf16,
             benchmark_interval_s=benchmark_interval_s,
             min_batches_per_interval=min_batches_per_interval,
+            profiler_enabled=profiler_enabled,
+            wandb_enabled=wandb_enabled,
         )
 
     @staticmethod
@@ -120,6 +132,8 @@ class RunParams:
         use_s2 = "_s2_" in name
         use_landsat = "_ls_" in name
         bf16 = "_bf16_" in name
+        profiler_enabled = "_prof_" in name or "_prof" in name
+        wandb_enabled = "_wandb_" in name or "_wandb" in name
 
         for item in split_name:
             if item.startswith("is"):
@@ -143,4 +157,6 @@ class RunParams:
             batch_sizes=batch_sizes,
             gpu_type=gpu_type,
             bf16=bf16,
+            profiler_enabled=profiler_enabled,
+            wandb_enabled=wandb_enabled,
         )
