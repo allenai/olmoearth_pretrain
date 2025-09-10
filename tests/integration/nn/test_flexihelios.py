@@ -623,10 +623,10 @@ class TestEncoder:
         input_res = 1
         task_emb = torch.randn(B, task_d)  # (batch, task_dim)
 
-        out, _ = encoder.forward(
+        out = encoder.forward(
             x, patch_size, input_res, token_exit_cfg=None, task_emb=task_emb
         )
-        loss = out.sentinel2_l2a.sum()  # type: ignore
+        loss = out["tokens_and_masks"].sentinel2_l2a.sum()  # type: ignore
         loss.backward()
 
         for m in encoder.modules():
