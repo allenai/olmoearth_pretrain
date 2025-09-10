@@ -139,6 +139,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         prediction_norm: float | None = None,
         target_norm: float | None = None,
         modality_loss: bool = True,
+        reverse_modality_loss: bool = False,
         batch_loss: bool = False,
         bandset_loss: bool = False,
         weight: float = 1.0,
@@ -158,6 +159,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
             prediction_norm: norm for predictions,
             target_norm: norm for targets,
             modality_loss: calculate loss across each modality
+            reverse_modality_loss: calculate loss across each modality
             batch_loss: caluclate loss across batches
             bandset_loss: caluclate loss across bandset
             weight: the weight to apply to this loss
@@ -174,6 +176,7 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         self.prediction_norm = prediction_norm
         self.target_norm = target_norm
         self.modality_loss = modality_loss
+        self.reverse_modality_loss = reverse_modality_loss
         self.batch_loss = batch_loss
         self.bandset_loss = bandset_loss
         self.norm_lambda = norm_lambda
@@ -190,6 +193,29 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
         preds_flat = rearrange(preds, "b ... d -> b (...) d")
         targs_flat = rearrange(targs, "b ... d -> b (...) d")
         score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) * self.logit_scale
+        if self.decode_only:
+            score_mask = (
+                (masks != MaskValue.DECODER.value)
+                .flatten(start_dim=1)
+                .unsqueeze(1)
+                .expand_as(score)
+            )
+            score[score_mask] = torch.finfo(score.dtype).min
+        label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
+        loss = F.cross_entropy(
+            score.flatten(0, 1),
+            label.repeat(score.shape[0]),
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )[masks.flatten() == MaskValue.DECODER.value]
+        return loss
+
+    def _calculate_reverse_modality_loss(
+        self, preds: Tensor, targs: Tensor, masks: Tensor
+    ) -> Tensor:
+        preds_flat = rearrange(preds, "b ... d -> b (...) d")
+        targs_flat = rearrange(targs, "b ... d -> b (...) d")
+        score = torch.einsum("bxd,byd->bxy", targs_flat, preds_flat) * self.logit_scale
         if self.decode_only:
             score_mask = (
                 (masks != MaskValue.DECODER.value)
@@ -343,6 +369,11 @@ class ModalityBatchPatchDiscriminationLoss(Loss):
 
             if self.modality_loss:
                 losses.append(self._calculate_modality_loss(preds, targs, masks))
+
+            if self.reverse_modality_loss:
+                losses.append(
+                    self._calculate_reverse_modality_loss(preds, targs, masks)
+                )
 
             if self.batch_loss:
                 losses.append(self._calculate_batch_loss(preds, targs, masks))
