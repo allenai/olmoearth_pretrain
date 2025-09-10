@@ -2,7 +2,8 @@ python scripts/2025_09_10_phase1/script.py launch base_default ai2/ceres-cirrasc
 python scripts/2025_09_10_phase1/script.py launch base_contrastive0.05 ai2/ceres-cirrascale --train_module.contrastive_config.loss_config.weight=0.05
 python scripts/2025_09_10_phase1/script.py launch base_lr2e-4 ai2/ceres-cirrascale --train_module.optim_config.lr=0.0002
 python scripts/2025_09_10_phase1/script.py launch base_encode0.25 ai2/ceres-cirrascale --train_module.masking_config.strategy_config.encode_ratio=0.25 --train_module.masking_config.strategy_config.decode_ratio=0.75
-python scripts/2025_09_10_phase1/script.py launch base_encode0.75 ai2/ceres-cirrascale --train_module.masking_config.strategy_config.encode_ratio=0.75 --train_module.masking_config.strategy_config.decode_ratio=0.25 --launch.clusters='[ai2/ceres-cirrascale,ai2/jupiter-cirrascale-2]'
+# Encode ratio 0.75 needs smaller microbatch size.
+python scripts/2025_09_10_phase1/script.py launch base_encode0.75 ai2/ceres-cirrascale --train_module.masking_config.strategy_config.encode_ratio=0.75 --train_module.masking_config.strategy_config.decode_ratio=0.25 --train_module.rank_microbatch_size=32 --launch.clusters='[ai2/ceres-cirrascale,ai2/jupiter-cirrascale-2]'
 python scripts/2025_09_10_phase1/script.py launch base_hw1-12 ai2/ceres-cirrascale --data_loader.sampled_hw_p_list='[1,2,3,4,5,6,7,8,9,10,11,12]' --launch.clusters='[ai2/ceres-cirrascale,ai2/jupiter-cirrascale-2]'
 python scripts/2025_09_10_phase1/script.py launch base_budget2250 ai2/ceres-cirrascale --data_loader.token_budget=2250 --launch.clusters='[ai2/ceres-cirrascale,ai2/jupiter-cirrascale-2]'
 python scripts/2025_09_10_phase1/script_chm.py launch base_add_chm ai2/ceres-cirrascale --launch.clusters='[ai2/ceres-cirrascale,ai2/jupiter-cirrascale-2]' --data_loader.token_budget=1700

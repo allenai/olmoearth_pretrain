@@ -71,6 +71,7 @@ def my_build_train_module_config(
             ],
         }
     )
+    return train_module_config
 
 
 if __name__ == "__main__":
