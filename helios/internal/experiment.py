@@ -60,7 +60,6 @@ class CommonComponents(Config):
     save_folder: str
     launch: HeliosBeakerLaunchConfig
     training_modalities: list[str]
-    dataset_percentage: float = 1.0  # TO make it easier to overide for concat dataset
     nccl_debug: bool = False
     # callbacks: dict[str, Callback]
 

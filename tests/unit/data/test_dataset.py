@@ -233,3 +233,70 @@ class TestHeliosDataset:
         assert len(cropped_timestamps) == 9
         assert len(cropped_missing_timesteps_masks[Modality.SENTINEL2_L2A.name]) == 9
         assert len(cropped_missing_timesteps_masks[Modality.LANDSAT.name]) == 9
+
+    def test_prepare_and_filter_sample_indices_by_dataset_percentage(
+        self, setup_h5py_dir_20_samples: UPath
+    ) -> None:
+        """Test the prepare and filter sample indices by dataset percentage."""
+        same_seed = 42
+        dataset1 = HeliosDataset(
+            h5py_dir=setup_h5py_dir_20_samples,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,
+            dataset_percentage=0.5,
+            seed=same_seed,
+        )
+        dataset1.prepare()
+        assert len(dataset1) == 10
+        assert dataset1.sample_indices is not None
+        assert len(dataset1.sample_indices) == 10
+
+        dataset2 = HeliosDataset(
+            h5py_dir=setup_h5py_dir_20_samples,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,
+            dataset_percentage=0.5,
+            seed=same_seed,
+        )
+        dataset2.prepare()
+        assert len(dataset2) == 10
+        assert dataset2.sample_indices is not None
+        assert len(dataset2.sample_indices) == 10
+
+        assert np.array_equal(dataset1.sample_indices, dataset2.sample_indices)
+
+    def test_prepare_and_filter_sample_indices_by_dataset_percentage_different_seed(
+        self, setup_h5py_dir_20_samples: UPath
+    ) -> None:
+        """Test the prepare and filter sample indices by dataset percentage with different seed."""
+        seed1 = 43
+        dataset1 = HeliosDataset(
+            h5py_dir=setup_h5py_dir_20_samples,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,
+            dataset_percentage=0.7,
+            seed=seed1,
+        )
+        dataset1.prepare()
+        assert len(dataset1) == 14
+        assert dataset1.sample_indices is not None
+        assert len(dataset1.sample_indices) == 14
+
+        seed2 = 44
+        dataset2 = HeliosDataset(
+            h5py_dir=setup_h5py_dir_20_samples,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,
+            dataset_percentage=0.7,
+            seed=seed2,
+        )
+        dataset2.prepare()
+        assert len(dataset2) == 14
+        assert dataset2.sample_indices is not None
+        assert len(dataset2.sample_indices) == 14
+
+        assert not np.array_equal(dataset1.sample_indices, dataset2.sample_indices)

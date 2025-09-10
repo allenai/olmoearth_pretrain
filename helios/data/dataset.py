@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 import torch
 from olmo_core.config import Config
+from olmo_core.data.utils import get_rng
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
 from torch.utils.data import Dataset
@@ -571,6 +572,7 @@ class HeliosDataset(Dataset):
         cache_dir: UPath | None = None,
         samples_per_sec: float | None = None,
         dataset_percentage: float = 1.0,
+        seed: int = 0,
         apply_cutmix: bool = False,
     ):
         """Initialize the dataset.
@@ -594,6 +596,7 @@ class HeliosDataset(Dataset):
                 throttling only applies when reading from the h5py_dir, not the
                 cache_dir (if set).
             dataset_percentage: The percentage of the dataset to use.
+            seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
 
         Returns:
@@ -611,6 +614,7 @@ class HeliosDataset(Dataset):
         self.dtype = dtype
         self.normalize = normalize
         self.dataset_percentage = dataset_percentage
+        self.seed = seed
         if self.normalize:
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
@@ -720,6 +724,23 @@ class HeliosDataset(Dataset):
             f"Filtered {len(no_spacetime_varying_indices)} samples to {self.sample_indices.shape} samples"
         )
 
+    def _filter_sample_indices_by_dataset_percentage(self) -> None:
+        """Filter the sample indices for dataset percentage."""
+        assert self.sample_indices is not None, (
+            "Sample indices must be set before filtering by dataset percentage"
+        )
+        if self.dataset_percentage < 1.0:
+            rng = get_rng(self.seed)
+            num_samples = len(self.sample_indices)
+            self.sample_indices = rng.choice(
+                self.sample_indices,
+                size=int(len(self.sample_indices) * self.dataset_percentage),
+                replace=False,
+            )
+            logger.info(
+                f"Picked {len(self.sample_indices)} samples from {num_samples} samples"
+            )
+
     def prepare(self) -> None:
         """Prepare the dataset.
 
@@ -735,16 +756,7 @@ class HeliosDataset(Dataset):
         self.latlon_distribution = self.get_geographic_distribution()
         self.sample_indices = np.arange(num_samples)
         self._filter_sample_indices_for_training()
-        # randomly pick dataset percentage fraction of the sample indices
-        if self.dataset_percentage < 1.0:
-            self.sample_indices = np.random.choice(
-                self.sample_indices,
-                size=int(len(self.sample_indices) * self.dataset_percentage),
-                replace=False,
-            )
-            logger.info(
-                f"Picked {len(self.sample_indices)} samples from {num_samples} samples"
-            )
+        self._filter_sample_indices_by_dataset_percentage()
         self.latlon_distribution = self.latlon_distribution[self.sample_indices]
 
     def get_geographic_distribution(self) -> np.ndarray:
@@ -1030,6 +1042,7 @@ class HeliosDatasetConfig(Config):
     cache_dir: str | None = None
     samples_per_sec: float | None = None
     dataset_percentage: float = 1.0
+    seed: int = 0
     apply_cutmix: bool = False
 
     def get_numpy_dtype(self) -> np.dtype:

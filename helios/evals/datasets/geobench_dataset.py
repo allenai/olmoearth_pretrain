@@ -146,7 +146,7 @@ class GeobenchDataset(Dataset):
             config.imputes,
             all_bands=GEOBENCH_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES,
         )
-        self.mean, self.std = self._get_norm_stats(
+        self.mean, self.std, self.min, self.max = self._get_norm_stats(
             imputed_band_info,
             all_bands=GEOBENCH_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES,
         )
@@ -161,19 +161,26 @@ class GeobenchDataset(Dataset):
         if self.multiply_by_10_000:
             self.mean = self.mean * 10_000
             self.std = self.std * 10_000
+            self.min = self.min * 10_000
+            self.max = self.max * 10_000
 
     @staticmethod
     def _get_norm_stats(
         imputed_band_info: dict[str, Stats],
         all_bands: list[str],
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         means = []
         stds = []
+        mins = []
+        maxs = []
         for band_name in all_bands:
             assert band_name in imputed_band_info, f"{band_name} not found in band_info"
-            means.append(imputed_band_info[band_name].mean)  # type: ignore
-            stds.append(imputed_band_info[band_name].std)  # type: ignore
-        return np.array(means), np.array(stds)
+            stats = imputed_band_info[band_name]
+            means.append(stats.mean)  # type: ignore
+            stds.append(stats.std)  # type: ignore
+            mins.append(stats.min)  # type: ignore
+            maxs.append(stats.max)  # type: ignore
+        return np.array(means), np.array(stds), np.array(mins), np.array(maxs)
 
     @staticmethod
     def _impute_bands(
@@ -234,7 +241,14 @@ class GeobenchDataset(Dataset):
             x = x * 10_000
         # Normalize using the downstream task's normalization stats
         if not self.norm_stats_from_pretrained:
-            x = torch.tensor(normalize_bands(x, self.mean, self.std, self.norm_method))
+            # log the shape of x
+            # logger.info(f"x shape: {x.shape}")
+            # keep a running min and max per channel in self.min_val and self.max_val
+            x = torch.tensor(
+                normalize_bands(
+                    x, self.mean, self.std, self.min, self.max, self.norm_method
+                )
+            )
         # check if label is an object or a number
         if not (isinstance(label, int) or isinstance(label, list)):
             label = label.data

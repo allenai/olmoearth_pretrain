@@ -10,7 +10,8 @@ from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
-from helios.evals.models import PanopticonConfig
+from helios.evals.models import DINOv3Config
+from helios.evals.models.dinov3.dinov3 import DinoV3Models
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.loss import LossConfig
@@ -25,7 +26,9 @@ MIN_PATCH_SIZE = 1
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
-    model_config = PanopticonConfig()
+    model_config = DINOv3Config(
+        apply_normalization=True, model_name=DinoV3Models.LARGE_SATELLITE
+    )
     return model_config
 
 
@@ -34,9 +37,9 @@ def build_train_module_config(
 ) -> LatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     scheduler = WSD(
-        warmup=8000,
         decay_steps=0,
         decay_fraction=None,
+        warmup_steps=0,
     )
     return LatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
@@ -73,7 +76,7 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     # things should be set during building
 
     return HeliosDataLoaderConfig(
-        num_workers=16,
+        num_workers=0,
         global_batch_size=512,
         token_budget=1500,
         prefetch_factor=4,
@@ -92,6 +95,7 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928",
             training_modalities=common.training_modalities,
+            dataset_percentage=common.dataset_percentage,
         ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)

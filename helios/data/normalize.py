@@ -3,12 +3,33 @@
 import json
 import logging
 from enum import Enum
+from importlib.resources import files
 
 import numpy as np
 
 from helios.data.constants import ModalitySpec
 
 logger = logging.getLogger(__name__)
+
+
+def load_predefined_config() -> dict[str, dict[str, dict[str, float]]]:
+    """Load the predefined config.
+
+    The normalization config maps from modality -> band name to a dictionary with min
+    and max keys.
+    """
+    with (files("helios.data.norm_configs") / "predefined.json").open() as f:
+        return json.load(f)
+
+
+def load_computed_config() -> dict[str, dict]:
+    """Load the computed config.
+
+    The normalization config maps from modality -> band name to a dictionary with mean
+    and std keys.
+    """
+    with (files("helios.data.norm_configs") / "computed.json").open() as f:
+        return json.load(f)
 
 
 class Strategy(Enum):
@@ -44,21 +65,11 @@ class Normalizer:
     def _load_config(self) -> dict:
         """Load the appropriate config based on the modality strategy."""
         if self.strategy == Strategy.PREDEFINED:
-            return self._load_predefined_config()
+            return load_predefined_config()
         elif self.strategy == Strategy.COMPUTED:
-            return self._load_computed_config()
+            return load_computed_config()
         else:
             raise ValueError(f"Invalid strategy: {self.strategy}")
-
-    def _load_predefined_config(self) -> dict:
-        """Load the predefined config."""
-        with open("data/norm_configs/predefined.json") as f:
-            return json.load(f)
-
-    def _load_computed_config(self) -> dict:
-        """Load the computed config."""
-        with open("data/norm_configs/computed.json") as f:
-            return json.load(f)
 
     def _normalize_predefined(
         self, modality: ModalitySpec, data: np.ndarray
