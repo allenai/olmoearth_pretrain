@@ -198,9 +198,6 @@ class MaskedHeliosSample(NamedTuple):
             )
             present_mask = (mask != MaskValue.MISSING.value).any(dim=(1, 2, 4))
             # get shape of mask
-            logger.info(
-                f"Present mask shape for modality {modality}: {present_mask.shape}"
-            )
             present_mask = present_mask.unsqueeze(1)
             logger.info(f"Per modality present masks shape: {present_mask.shape}")
             per_modality_present_masks.append(present_mask)
@@ -1148,7 +1145,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 timestep_with_at_least_one_modality_mask[sample_idx]
             )
             idxs_of_timesteps_with_at_least_one_modality = torch.argwhere(
-                timestep_with_at_least_one_modality_mask_sample).flatten()
+                timestep_with_at_least_one_modality_mask_sample
+            ).flatten()
 
             logger.info(
                 f"Idxs of timesteps with at least one modality for sample {sample_idx}: {idxs_of_timesteps_with_at_least_one_modality.shape} {idxs_of_timesteps_with_at_least_one_modality}"
@@ -1191,17 +1189,23 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     end_idx = num_timesteps
 
                 # check if the start and stop idxs leave any valid timestamps based ont the idxs_of_timesteps_with_at_least_one_modality
-                valid_idxs = idxs_of_timesteps_with_at_least_one_modality[(idxs_of_timesteps_with_at_least_one_modality >= start_idx) & (idxs_of_timesteps_with_at_least_one_modality < end_idx)]
+                valid_idxs = idxs_of_timesteps_with_at_least_one_modality[
+                    (idxs_of_timesteps_with_at_least_one_modality >= start_idx)
+                    & (idxs_of_timesteps_with_at_least_one_modality < end_idx)
+                ]
                 logger.info(f"Valid idxs: {valid_idxs.shape} {valid_idxs}")
                 if valid_idxs.shape[0] == 0:
-                    logger.info(f"No valid timestamps found for choice {choice}, reverting to none")
+                    logger.info(
+                        f"No valid timestamps found for choice {choice}, reverting to none"
+                    )
                     # revert to none
                     choice = "none"
 
-
                 # apply choice
                 if choice != "none":
-                    sample_modality_mask[..., start_idx:end_idx, :] = MaskValue.DECODER.value
+                    sample_modality_mask[..., start_idx:end_idx, :] = (
+                        MaskValue.DECODER.value
+                    )
 
                 # Re apply the missing mask
                 sample_modality_mask = torch.where(
