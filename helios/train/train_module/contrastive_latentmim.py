@@ -286,9 +286,8 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
-            loss = self.loss_fn(
-                decoded, target_output, logit_scale=self.model.logit_scale.exp()
-            )
+            logit_scale = self.model.logit_scale.clamp(max=4.6)
+            loss = self.loss_fn(decoded, target_output, logit_scale=logit_scale.exp())
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output, latent_projected_and_pooled
