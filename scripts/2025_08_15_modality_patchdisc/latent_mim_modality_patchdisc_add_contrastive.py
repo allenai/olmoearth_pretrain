@@ -70,11 +70,11 @@ def my_build_common_components(
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
-        # Modality.WORLDCOVER.name,
+        Modality.WORLDCOVER.name,
         # Modality.LATLON.name,
-        # Modality.SRTM.name,
-        # Modality.OPENSTREETMAP_RASTER.name,
-        # Modality.ERA5_10.name,
+        Modality.SRTM.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+        Modality.ERA5_10.name,
     ]
     return config
 
@@ -122,6 +122,11 @@ def build_train_module_config(
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
+                "only_decode_modalities": [
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                ],
             }
         ),
         loss_config=LossConfig(
@@ -204,7 +209,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2025_07_21_era5_experiments"
+    WANDB_PROJECT = "2025_08_23_smaller_models"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -224,6 +229,40 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.steps(4000),
+        ),
+        "m_forestnet": DownstreamTaskConfig(
+            dataset="m-forestnet",
+            embedding_batch_size=128,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            eval_interval=Duration.epochs(4000),
+        ),
+        "m_bigearthnet": DownstreamTaskConfig(
+            dataset="m-bigearthnet",
+            embedding_batch_size=64,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(4000),
+        ),
+        "m_so2sat": DownstreamTaskConfig(
+            dataset="m-so2sat",
+            embedding_batch_size=128,
+            num_workers=4,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.epochs(4000),
+        ),
+        "m_cashew_plant": DownstreamTaskConfig(
+            dataset="m-cashew-plant",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=False,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(4000),
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
