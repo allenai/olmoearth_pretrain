@@ -180,6 +180,39 @@ class MaskedHeliosSample(NamedTuple):
         """
         return cls(**dict)
 
+    @property
+    def timesteps_with_at_least_one_modality(self) -> torch.Tensor:
+        """Get timesteps with at least one modality present."""
+        per_modality_present_masks = []
+        for modality in self.modalities:
+            if modality == "timestamps":
+                continue
+            modality_spec = Modality.get(modality)
+            if not modality_spec.is_multitemporal:
+                continue
+            mask_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            mask = getattr(self, mask_name)
+            # Get all timestamps that are present for all samples for the given modality
+            logger.info(
+                f"Mask shape for determining which timestamps appear for modality {modality}: {mask.shape}"
+            )
+            present_mask = (mask != MaskValue.MISSING.value).any(dim=(1, 2, 4))
+            # get shape of mask
+            logger.info(
+                f"Present mask shape for modality {modality}: {present_mask.shape}"
+            )
+            present_mask = present_mask.unsqueeze(1)
+            logger.info(f"Per modality present masks shape: {present_mask.shape}")
+            per_modality_present_masks.append(present_mask)
+
+        at_least_one_modality_present_timestep_mask = (
+            torch.stack(per_modality_present_masks, dim=1).any(dim=1).squeeze(1)
+        )
+        logger.info(
+            f"At least one modality present timestep mask shape: {at_least_one_modality_present_timestep_mask.shape}"
+        )
+        return at_least_one_modality_present_timestep_mask
+
 
 class MaskingStrategy:
     """Abstract base class for masking strategies.
@@ -801,6 +834,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
         only_decode_modalities: list[str] = [],
+        timestep_supression: bool = False,
     ) -> None:
         """Initialize the masking strategy.
 
@@ -839,6 +873,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self.min_decoded_bandsets = min_decoded_bandsets
         self.max_decoded_bandsets = max_decoded_bandsets
         self.only_decode_modalities = only_decode_modalities
+        self.timestep_supression = timestep_supression
 
     def get_sample_present_modalities_bandsets(
         self, batch: MaskedHeliosSample
@@ -1098,6 +1133,94 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         masked_batch = MaskedHeliosSample(**masked_batch_dict)
         return masked_batch
 
+    def apply_timestep_supression(
+        self, masked_batch: MaskedHeliosSample
+    ) -> MaskedHeliosSample:
+        """Apply timestep suppression to the input data."""
+        # Either supress the encoding of the first third, the last third, or the middle third, or none of them
+        timestep_with_at_least_one_modality_mask = (
+            masked_batch.timesteps_with_at_least_one_modality
+        )
+        masked_batch_dict = masked_batch.as_dict(return_none=False)
+        modality_masks_dict = {}
+        for sample_idx in range(masked_batch.timestamps.shape[0]):
+            timestep_with_at_least_one_modality_mask_sample = (
+                timestep_with_at_least_one_modality_mask[sample_idx]
+            )
+            idxs_of_timesteps_with_at_least_one_modality = torch.argwhere(
+                timestep_with_at_least_one_modality_mask_sample).flatten()
+
+            logger.info(
+                f"Idxs of timesteps with at least one modality for sample {sample_idx}: {idxs_of_timesteps_with_at_least_one_modality.shape} {idxs_of_timesteps_with_at_least_one_modality}"
+            )
+            choices = np.array(["first_third", "last_third", "middle_third", "none"])
+            num_timesteps = idxs_of_timesteps_with_at_least_one_modality.shape[0]
+            if num_timesteps < 3:
+                choice = "none"
+            else:
+                choice = np.random.choice(choices)
+            logger.info(f"Applying timestep suppression: {choice}")
+            for modality in masked_batch.modalities:
+                if modality == "timestamps":
+                    continue
+                masked_modality_name = MaskedHeliosSample.get_masked_modality_name(
+                    modality
+                )
+                modality_spec = Modality.get(modality)
+                if not modality_spec.is_multitemporal:
+                    continue
+                sample_modality_mask = masked_batch_dict[masked_modality_name][
+                    sample_idx
+                ]
+                sample_missing_mask = sample_modality_mask == MaskValue.MISSING.value
+                # figure out which timesteps are present
+                num_timesteps = sample_modality_mask.shape[-2]
+                logger.info(f"Modality {modality} has {num_timesteps} timesteps")
+                # based on the present timestep idxs we need to ensure that at least one stays present
+                if choice == "first_third":
+                    start_idx = 0
+                    end_idx = num_timesteps // 3
+                elif choice == "last_third":
+                    start_idx = num_timesteps // 3
+                    end_idx = 2 * num_timesteps // 3
+                elif choice == "middle_third":
+                    start_idx = num_timesteps // 3
+                    end_idx = 2 * num_timesteps // 3
+                elif choice == "none":
+                    start_idx = 0
+                    end_idx = num_timesteps
+
+                # check if the start and stop idxs leave any valid timestamps based ont the idxs_of_timesteps_with_at_least_one_modality
+                valid_idxs = idxs_of_timesteps_with_at_least_one_modality[(idxs_of_timesteps_with_at_least_one_modality >= start_idx) & (idxs_of_timesteps_with_at_least_one_modality < end_idx)]
+                logger.info(f"Valid idxs: {valid_idxs.shape} {valid_idxs}")
+                if valid_idxs.shape[0] == 0:
+                    logger.info(f"No valid timestamps found for choice {choice}, reverting to none")
+                    # revert to none
+                    choice = "none"
+
+
+                # apply choice
+                if choice != "none":
+                    sample_modality_mask[..., start_idx:end_idx, :] = MaskValue.DECODER.value
+
+                # Re apply the missing mask
+                sample_modality_mask = torch.where(
+                    sample_missing_mask, MaskValue.MISSING.value, sample_modality_mask
+                )
+
+                if masked_modality_name not in modality_masks_dict:
+                    modality_masks_dict[masked_modality_name] = []
+                modality_masks_dict[masked_modality_name].append(sample_modality_mask)
+
+        for masked_modality_name, modality_masks in modality_masks_dict.items():
+            modality_masks_stacked = torch.stack(modality_masks, dim=0)
+            # modality mask stacked
+            logger.info(f"Modality masks stacked shape: {modality_masks_stacked.shape}")
+            masked_batch_dict[masked_modality_name] = modality_masks_stacked
+
+        masked_batch = MaskedHeliosSample(**masked_batch_dict)
+        return masked_batch
+
     def apply_mask(
         self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
     ) -> MaskedHeliosSample:
@@ -1112,6 +1235,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         masked_sample = self.apply_bandset_mask_rules(
             masked_sample, encoded_decoded_bandsets, present_modalities_bandsets
         )
+        if self.timestep_supression:
+            masked_sample = self.apply_timestep_supression(masked_sample)
         return masked_sample
 
 
@@ -1323,6 +1448,7 @@ class ModalityCrossRandomMaskingStrategy(ModalityCrossMaskingStrategy):
         min_decoded_bandsets: int | None = None,
         max_decoded_bandsets: int | None = None,
         only_decode_modalities: list[str] = [],
+        timestep_supression: bool = False,
     ) -> None:
         """Initialize the masking strategy."""
         random_strategy = RandomMaskingStrategy(encode_ratio, decode_ratio)
@@ -1336,6 +1462,7 @@ class ModalityCrossRandomMaskingStrategy(ModalityCrossMaskingStrategy):
             min_decoded_bandsets=min_decoded_bandsets,
             max_decoded_bandsets=max_decoded_bandsets,
             only_decode_modalities=only_decode_modalities,
+            timestep_supression=timestep_supression,
         )
 
 
