@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - henryh/per-modality-with-pooling
   pull_request:
     branches:
       - main
