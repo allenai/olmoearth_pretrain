@@ -134,8 +134,11 @@ def build_train_module_config(
                 "type": "modality_patch_discrimination_new",
                 "tau": 0.1,
                 "modality_weights": {
+                    Modality.SENTINEL2_L2A.name: 1.0,
+                    Modality.SENTINEL1.name: 1.0,
+                    Modality.LANDSAT.name: 1.0,
                     Modality.OPENSTREETMAP_RASTER.name: 0.4,
-                    Modality.WORLDCOVER.name: 0.4,
+                    Modality.WORLDCOVER.name: 1.0,
                     Modality.SRTM.name: 0.2,
                 },
             }
