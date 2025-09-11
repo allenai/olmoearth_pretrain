@@ -1015,15 +1015,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             modality_spec = Modality.get(modality)
             modality_mask = masked_batch_dict[masked_modality_name]
             num_bandsets = modality_mask.shape[-1]
-            # Trying variation where we decode everything for decode only modalities
-            if modality in self.only_decode_modalities:
-                not_missing_mask = modality_mask != MaskValue.MISSING.value
-                modality_mask = torch.where(
-                    not_missing_mask,
-                    MaskValue.DECODER.value,
-                    modality_mask,
-                )
-                continue
 
             for sample_idx in range(masked_batch.timestamps.shape[0]):
                 encoded_bandset_idxs, decoded_bandset_idxs = encoded_decoded_bandsets[
