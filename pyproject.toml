@@ -30,7 +30,7 @@ dataset_creation = { file = ["requirements_dataset_creation.txt"] }
 dev = { file = ["requirements-dev.txt"] }
 eval = { file = ["requirements-eval.txt"] }
 beaker = { file = ["requirements-beaker.txt"] }
-all = { file = ["requirements.txt", "requirements-dev.txt", "requirements-eval.txt"] }
+all = { file = ["requirements.txt", "requirements-dev.txt", "requirements-eval.txt", "requirements-beaker.txt"] }
 
 [tool.setuptools.package-data]
 "helios.data.norm_configs" = ["*.json"]
