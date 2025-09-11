@@ -4,27 +4,30 @@ import os
 import re
 from dataclasses import dataclass
 
+from olmo_core.config import Config
+
 from helios.inference_benchmarking import constants
 
 
 @dataclass
-class RunParams:
+class RunParams(Config):
     """Defines the parameters for a throughput run."""
 
-    model_size: str
-    use_s1: bool
-    use_s2: bool
-    use_landsat: bool
-    image_size: int
-    patch_size: int
-    num_timesteps: int
-    batch_sizes: list[int]
-    gpu_type: str = "cpu"
-    bf16: bool = False
+    # TODO: Add a named constant for the default model size
+    model_size: str = "base"
+    use_s1: bool = False
+    use_s2: bool = True
+    use_landsat: bool = False
+    image_size: int = 64
+    patch_size: int = 4
+    num_timesteps: int = 12
+    batch_size: int = 128
+    gpu_type: str = "cuda"
+    bf16: bool = True
     benchmark_interval_s: int = 180
     min_batches_per_interval: int = 10
     profiler_enabled: bool = False
-    wandb_enabled: bool = False
+    wandb_enabled: bool = True
 
     @property
     def run_name(self) -> str:
@@ -42,9 +45,7 @@ class RunParams:
                     f"is{self.image_size}",
                     f"ps{self.patch_size}",
                     f"ts{self.num_timesteps}",
-                    f"bs{'_'.join([str(bs) for bs in self.batch_sizes])}",
-                    "prof" if self.profiler_enabled else None,
-                    "wandb" if self.wandb_enabled else None,
+                    f"bs{self.batch_size}",
                 ]
                 if item is not None
             ]
@@ -116,11 +117,6 @@ class RunParams:
             profiler_enabled=profiler_enabled,
             wandb_enabled=wandb_enabled,
         )
-
-    @staticmethod
-    def from_config(config: dict) -> "RunParams":
-        """Recreate an instance of 'RunParams' from a config dict."""
-        return RunParams(**config)
 
     @staticmethod
     def from_run_name(name: str) -> "RunParams":

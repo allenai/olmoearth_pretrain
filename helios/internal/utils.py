@@ -39,6 +39,15 @@ def build_token_exit_config(
 
 
 MODEL_SIZE_ARGS = {
+    "nano": {
+        "decoder_depth": 4,
+        "encoder_embedding_size": 128,
+        "decoder_embedding_size": 128,
+        "encoder_depth": 4,
+        "encoder_num_heads": 8,
+        "decoder_num_heads": 8,
+        "mlp_ratio": 4.0,
+    },
     "tiny": {
         "decoder_depth": 12,
         "encoder_embedding_size": 192,
@@ -46,6 +55,15 @@ MODEL_SIZE_ARGS = {
         "encoder_depth": 12,
         "encoder_num_heads": 3,
         "decoder_num_heads": 3,
+        "mlp_ratio": 4.0,
+    },
+    "tiny_more_heads": {
+        "decoder_depth": 12,
+        "encoder_embedding_size": 192,
+        "decoder_embedding_size": 192,
+        "encoder_depth": 12,
+        "encoder_num_heads": 8,
+        "decoder_num_heads": 8,
         "mlp_ratio": 4.0,
     },
     "base": {

@@ -49,7 +49,7 @@ SQUARE_KM_PER_SECOND_METRIC = "square_km_per_second"  # nosec
 HRS_TO_PROCESS_ALL_LAND_METRIC = "hrs_to_process_all_land"  # nosec
 OVERALL_TIME_TAKEN_METRIC = "overall_time_taken"  # nosec
 PIXELS_PER_SECOND_METRIC = "pixels_per_second"  # nosec
-
+OOM_OCCURRED_METRIC = "oom_occurred"  # nosec 1 if OOM occurred, 0 if not
 
 PARAM_KEYS = dict(
     model_size="MODEL_SIZE",

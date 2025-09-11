@@ -1,11 +1,13 @@
 """Script for performing an inference throughput benchmarking run."""
 
 import json
-import logging
 import os
+import sys
 import time
+from dataclasses import dataclass, field
 from logging import getLogger
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -29,11 +31,6 @@ from helios.nn.flexihelios import (
 )
 from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.masking import MaskedHeliosSample, MaskValue
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
 
 NUM_S1_BANDS = Modality.SENTINEL1.num_bands
 NUM_S2_BANDS = Modality.SENTINEL2.num_bands
@@ -104,6 +101,7 @@ class Helios(torch.nn.Module):
 
         self.model: Encoder = model
         self.model.eval()
+        # probably want to add a flag for this
         self.model.apply_compile()
 
     def forward(
@@ -120,21 +118,142 @@ class Helios(torch.nn.Module):
         )["tokens_and_masks"]
 
 
-# Maybe this should be a class
-def run_benchmarking(model: Helios, run_params: RunParams, work_dir: Path) -> None:
-    """Runs the benchmarking code.
+@dataclass
+class ThroughputBenchmarkRunnerConfig(Config):
+    """Defines the configuration for a throughput benchmarking run."""
 
-    Requires an instance of the Helios wrapper, a wandb metrics instance, and run params.
-    """
-    device = next(model.parameters()).device
+    sweep_dict: dict[str, Any]  # dict of run params to sweep over
+    training_modalities: list[str] = field(
+        default_factory=lambda: [
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ]
+    )
+    work_dir: Path = Path("./test_work_dir")
+    default_run_params: RunParams = field(default_factory=RunParams)
+    save_folder: Path | None = None
 
-    if run_params.bf16:
-        dtype = torch.bfloat16
-    else:
-        dtype = torch.float32
-    # track squarekm per second for every batch size and report the highest batch size
-    squarekm_per_second_per_batch_size = {}
-    for idx, batch_size in enumerate(run_params.batch_sizes):
+    def build(self) -> "ThroughputBenchmarkRunner":
+        """Builds a throughput benchmarking runner."""
+        kwargs = self.as_dict()
+        return ThroughputBenchmarkRunner(**kwargs)
+
+
+def calculate_num_token_embeddings(t: torch.Tensor | None) -> int:
+    """Determines how many tokens are represented in the given tensor."""
+    if t is not None:
+        batch_size, p_height, p_width, timestamps, bandsets, _ = tuple(t.shape)
+        return batch_size * p_height * p_width * timestamps * bandsets
+
+    return 0
+
+
+class ThroughputBenchmarkRunner:
+    """Runner for a throughput benchmarking run."""
+
+    def __init__(
+        self,
+        default_run_params: RunParams,
+        training_modalities: list[str],
+        work_dir: Path,
+        save_folder: Path | None = None,
+        sweep_dict: dict[str, str] = {},
+    ):
+        self.default_run_params = default_run_params
+        self.training_modalities = training_modalities
+        self.work_dir = work_dir
+        self.work_dir.mkdir(exist_ok=True)
+        self.save_folder = save_folder
+        self.sweep_dict = sweep_dict
+
+    def build_model(self, run_params: RunParams) -> Helios:
+        # Make the model size more configurable via cli
+        model_size = MODEL_SIZE_ARGS[run_params.model_size]
+        training_modalities = self.training_modalities
+        encoder_config = EncoderConfig(
+            embedding_size=model_size["encoder_embedding_size"],
+            num_heads=model_size["encoder_num_heads"],
+            depth=model_size["encoder_depth"],
+            mlp_ratio=model_size["mlp_ratio"],
+            supported_modality_names=training_modalities,
+        )
+        decoder_config = PredictorConfig(
+            encoder_embedding_size=model_size["encoder_embedding_size"],
+            decoder_embedding_size=model_size["decoder_embedding_size"],
+            depth=model_size["decoder_depth"],
+            mlp_ratio=model_size["mlp_ratio"],
+            num_heads=model_size["decoder_num_heads"],
+            supported_modality_names=training_modalities,
+            max_sequence_length=12,
+        )
+        model_config = LatentMIMConfig(
+            encoder_config=encoder_config,
+            decoder_config=decoder_config,
+        )
+        model = Helios(model_config=model_config)
+        return model
+
+    def build_sweep_run_params(self) -> list[RunParams]:
+        """Builds a list of run parameters based on the sweep dictionary."""
+        run_params_list = []
+        for key, value in self.sweep_dict.items():
+            for v in value:
+                # Merge the sweep parameter with default_run_params
+                run_params_list.append(self.default_run_params.replace(**{key: v}))
+        # Add the default run params
+        run_params_list.append(self.default_run_params)
+        return run_params_list
+
+    def run_benchmarking_sweep(self, run_params_list: list[RunParams]) -> None:
+        """Runs the benchmarking code for a list of run parameters."""
+        import traceback
+
+        squarekm_per_second_per_batch_size = {}
+        for run_params in run_params_list:
+            try:
+                logger.info(f"Running benchmarking for {run_params}")
+                square_km_per_second = self.run_benchmarking(run_params)
+            except Exception as e:
+                tb = traceback.format_exc(limit=2)
+                logger.error(
+                    f"Error running benchmarking for {run_params}: {e}\nTraceback (most recent calls):\n{tb}"
+                )
+                continue
+            squarekm_per_second_per_batch_size[run_params.batch_size] = (
+                square_km_per_second
+            )
+
+        logger.info(
+            f"Square km per second per batch size: {squarekm_per_second_per_batch_size}"
+        )
+        # which batch size has the highest square km per second
+        highest_batch_size = max(
+            squarekm_per_second_per_batch_size,
+            key=squarekm_per_second_per_batch_size.get,
+        )
+        logger.info(f"Highest batch size: {highest_batch_size}")
+        logger.info(
+            f"Highest square km per second: {squarekm_per_second_per_batch_size[highest_batch_size]}"
+        )
+
+    def run_benchmarking(self, run_params: RunParams) -> None:
+        """Runs the benchmarking code.
+
+        Requires an instance of the Helios wrapper, a wandb metrics instance, and run params.
+        """
+        model = self.build_model(run_params)
+        if torch.cuda.is_available() and run_params.gpu_type == "cuda":
+            logger.info("helios loaded and on gpu")
+            model.to(run_params.gpu_type)
+        device = next(model.parameters()).device
+        batch_size = run_params.batch_size
+        idx = 0
+
+        if run_params.bf16:
+            dtype = torch.bfloat16
+        else:
+            dtype = torch.float32
         callbacks = []
         # insantiate callbacks
         if run_params.profiler_enabled:
@@ -147,22 +266,22 @@ def run_benchmarking(model: Helios, run_params: RunParams, work_dir: Path) -> No
             )
             # Set up a mock trainer object for the profiler
 
-            profiler.trainer = MinimalTrainer(device, work_dir)
+            profiler.trainer = MinimalTrainer(device, self.work_dir)
 
             callbacks.append(profiler)
 
         if run_params.wandb_enabled:
             project = os.getenv(constants.PARAM_KEYS["project"], constants.PROJECT_NAME)
             owner = os.getenv(constants.PARAM_KEYS["owner"], constants.ENTITY_NAME)
-            name = os.getenv(constants.PARAM_KEYS["name"], "new3_benhcmark_test")
+            name = run_params.run_name
             # Hack update name with the batch size
-            name = f"{name}_bs{batch_size}"
+            name = run_params.run_name
             wandb_callback = WandBCallback(
                 project=project,
                 entity=owner,
                 name=name,
             )
-            wandb_callback.trainer = MinimalTrainer(device, work_dir)
+            wandb_callback.trainer = MinimalTrainer(device, self.work_dir)
             callbacks.append(wandb_callback)
 
         # Initialize profiler
@@ -248,19 +367,37 @@ def run_benchmarking(model: Helios, run_params: RunParams, work_dir: Path) -> No
         logger.info("Data prepared, starting warmup")
         torch.cuda.set_sync_debug_mode("warn")
         # Run 5 forward passes as warmup
+        oom_occurred = False
         for _ in range(5):
-            with torch.inference_mode():
-                if run_params.bf16:
-                    with torch.amp.autocast(
-                        device_type=device.type, dtype=torch.bfloat16
-                    ):
+            try:
+                with torch.inference_mode():
+                    if run_params.bf16:
+                        with torch.amp.autocast(
+                            device_type=device.type, dtype=torch.bfloat16
+                        ):
+                            results = model.forward(
+                                masked_sample, patch_size=run_params.patch_size
+                            )
+                    else:
                         results = model.forward(
                             masked_sample, patch_size=run_params.patch_size
                         )
-                else:
-                    results = model.forward(
-                        masked_sample, patch_size=run_params.patch_size
-                    )
+            except torch.cuda.OutOfMemoryError as e:
+                logger.error(f"CUDA OOM during warmup: {e}")
+                oom_occurred = True
+                break
+
+        if oom_occurred:
+            logger.info("CUDA OOM occurred during warmup, skipping benchmark")
+            # Log OOM status to wandb
+            metrics_to_submit = {
+                constants.OOM_OCCURRED_METRIC: 1,
+            }
+            for callback in callbacks:
+                callback.log_metrics(step=0, metrics=metrics_to_submit)
+            for callback in callbacks:
+                callback.post_train()
+            return 0.0
 
         logger.info("Warmup complete, starting benchmark")
         # TODO: Do cuda event timing
@@ -276,7 +413,6 @@ def run_benchmarking(model: Helios, run_params: RunParams, work_dir: Path) -> No
             batch_start = time.monotonic()
 
             results: TokensAndMasks
-            torch.compiler.cudagraph_mark_step_begin()
             with torch.inference_mode():
                 if run_params.bf16:
                     with torch.amp.autocast(
@@ -333,7 +469,6 @@ def run_benchmarking(model: Helios, run_params: RunParams, work_dir: Path) -> No
         ) ** 2  # m -> km, then square
         area_processed_km2 = batch_size * tile_km2 * num_batches
         square_km_per_second = area_processed_km2 / overall_time_taken
-        squarekm_per_second_per_batch_size[batch_size] = square_km_per_second
         metrics_to_submit[constants.SQUARE_KM_PER_SECOND_METRIC] = square_km_per_second
         metrics_to_submit[constants.PIXELS_PER_SECOND_METRIC] = centroids_per_second
         metrics_to_submit[constants.HRS_TO_PROCESS_ALL_LAND_METRIC] = (
@@ -348,101 +483,85 @@ def run_benchmarking(model: Helios, run_params: RunParams, work_dir: Path) -> No
         for callback in callbacks:
             callback.post_train()
 
-    logger.info(
-        f"Square km per second per batch size: {squarekm_per_second_per_batch_size}"
-    )
-    # which batch size has the highest square km per second
-    highest_batch_size = max(
-        squarekm_per_second_per_batch_size, key=squarekm_per_second_per_batch_size.get
-    )
-    logger.info(f"Highest batch size: {highest_batch_size}")
-    logger.info(
-        f"Highest square km per second: {squarekm_per_second_per_batch_size[highest_batch_size]}"
-    )
+        return square_km_per_second
+
+    def run(self) -> None:
+        """Runs the throughput benchmarking."""
+        run_params_list = self.build_sweep_run_params()
+        logger.info(
+            f"Running {len(run_params_list)} benchmarking runs sweeping over {self.sweep_dict}"
+        )
+        self.run_benchmarking_sweep(run_params_list)
 
 
-def calculate_num_token_embeddings(t: torch.Tensor | None) -> int:
-    """Determines how many tokens are represented in the given tensor."""
-    if t is not None:
-        batch_size, p_height, p_width, timestamps, bandsets, _ = tuple(t.shape)
-        return batch_size * p_height * p_width * timestamps * bandsets
+# a bunch of different Sweep dicts that we could use
+sweep_batch_sizes = {
+    "batch_size": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192],
+}
+sweep_image_sizes = {
+    "image_size": [1, 2, 4, 8, 16, 32, 64, 128],
+}
+sweep_patch_sizes = {"patch_size": [1, 2, 4, 8]}
+sweep_num_timesteps = {"num_timesteps": [1, 2, 4, 6, 8, 12]}
+sweep_use_s1 = {"use_s1": [True, False]}
+sweep_use_s2 = {"use_s2": [True, False]}
+sweep_use_landsat = {"use_landsat": [True, False]}
+sweep_bf16 = {"bf16": [True, False]}
+sweep_model_size = {"model_size": ["nano", "tiny", "base", "large"]}
 
-    return 0
+
+SWEEPS = {
+    "batch": sweep_batch_sizes,
+    "image": sweep_image_sizes,
+    "patch": sweep_patch_sizes,
+    "time": sweep_num_timesteps,
+    "use_s1": sweep_use_s1,
+    "use_s2": sweep_use_s2,
+    "use_landsat": sweep_use_landsat,
+    "bf16": sweep_bf16,
+    "model_size": sweep_model_size,
+    "all": sweep_batch_sizes
+    | sweep_image_sizes
+    | sweep_patch_sizes
+    | sweep_num_timesteps
+    | sweep_use_s1
+    | sweep_use_s2
+    | sweep_use_landsat
+    | sweep_bf16
+    | sweep_model_size,
+}
 
 
-# Make sure there is a natural logging and wandb setup here
-if __name__ == "__main__":
+def main():
+    """Main entry point for the throughput benchmarking script."""
     prepare_cli_environment()
     seed_all(42)
+    logger.info(f"Running throughput benchmarking with command {sys.argv}")
+    if len(sys.argv) < 3:
+        logger.error(
+            f"Usage: python run_throughput_benchmark.py <sweep_key> <overrides> got{sys.argv}"
+        )
+        sys.exit(1)
+    script, sweep_key, *overrides = sys.argv
 
-    os.environ[constants.PARAM_KEYS["checkpoint_path"]] = constants.BASE_PATH
-    # set benchmark interval to 15 seconds
-    os.environ[constants.PARAM_KEYS["benchmark_interval_s"]] = "15"
-    # use S2 set to true
-    os.environ[constants.PARAM_KEYS["use_s2"]] = "1"
-    os.environ[constants.PARAM_KEYS["patch_size"]] = "2"
-    os.environ[constants.PARAM_KEYS["image_size"]] = "4"
-    os.environ[constants.PARAM_KEYS["num_timesteps"]] = "12"
-    os.environ[constants.PARAM_KEYS["batch_sizes"]] = "128, 1024, 2048, 4096"
-    os.environ["profiler_enabled"] = "0"
-    os.environ["wandb_enabled"] = "1"
-    # make sure bfloat16 is on
-    os.environ[constants.PARAM_KEYS["bf16"]] = "1"
-    work_dir = Path("./test_work_dir")
-    work_dir.mkdir(exist_ok=True)
-    checkpoint_path = os.getenv(constants.PARAM_KEYS["checkpoint_path"], "/artifacts")
-    run_params = RunParams.from_env_vars()
+    # allow a string of sweep keys separated by commas
+    sweep_keys = sweep_key.split(",")
+    if not all(sweep_key in SWEEPS.keys() for sweep_key in sweep_keys):
+        logger.error(
+            f"Invalid sweep keys: {sweep_keys} expected one of {SWEEPS.keys()}"
+        )
+        sys.exit(1)
 
-    # print("Initializing wandb...")
-    # wandb_dir = "/wandb"
-    # os.makedirs(wandb_dir, exist_ok=True)
-    # metrics = wandb.init(
-    #     dir=wandb_dir,
-    #     project=project,
-    #     entity=owner,
-    #     name=name,
-    # )
-    # Make the model size more configurable via cli
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-    training_modalities = [
-        Modality.SENTINEL2_L2A.name,
-        Modality.SENTINEL1.name,
-        Modality.LANDSAT.name,
-    ]
-    encoder_config = EncoderConfig(
-        embedding_size=model_size["encoder_embedding_size"],
-        num_heads=model_size["encoder_num_heads"],
-        depth=model_size["encoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        supported_modality_names=training_modalities,
-    )
-    decoder_config = PredictorConfig(
-        encoder_embedding_size=model_size["encoder_embedding_size"],
-        decoder_embedding_size=model_size["decoder_embedding_size"],
-        depth=model_size["decoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        num_heads=model_size["decoder_num_heads"],
-        supported_modality_names=training_modalities,
-        max_sequence_length=12,
-    )
-    model_config = LatentMIMConfig(
-        encoder_config=encoder_config,
-        decoder_config=decoder_config,
-    )
-    try:
-        logger.info("Loading model...")
-        model = Helios(model_config=model_config)
-        if torch.cuda.is_available():
-            model.to("cuda:0")
-            logger.info("helios loaded and on gpu")
-        run_benchmarking(model, run_params, work_dir)
+    sweep_dict = {}
+    for sweep_key in sweep_keys:
+        sweep_dict.update(SWEEPS[sweep_key])
 
-    except Exception as e:
-        import traceback
+    runner_config = ThroughputBenchmarkRunnerConfig(sweep_dict=sweep_dict)
+    runner_config = runner_config.merge(overrides)
+    logger.info(f"Runner config: {runner_config}")
+    runner = runner_config.build()
+    runner.run()
 
-        traceback.print_exc()
-        wandb.finish(exit_code=1, quiet=True)
-        raise e
 
-    else:
-        wandb.finish(exit_code=0, quiet=True)
+if __name__ == "__main__":
+    main()
