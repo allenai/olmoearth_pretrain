@@ -45,7 +45,6 @@ def my_build_common_components(
         Modality.WORLDCOVER.name,
         Modality.SRTM.name,
         Modality.OPENSTREETMAP_RASTER.name,
-        Modality.ERA5_10.name,
         Modality.WRI_CANOPY_HEIGHT_MAP.name,
         Modality.CDL.name,
         Modality.WORLDCEREAL.name,
