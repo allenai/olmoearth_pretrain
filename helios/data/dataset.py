@@ -6,6 +6,7 @@ import shutil
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from math import floor
 from typing import Any, NamedTuple, cast
 
@@ -30,7 +31,7 @@ from helios.data.constants import (
     Modality,
     ModalitySpec,
 )
-from helios.data.normalize import Normalizer, Strategy
+from helios.data.normalize import NormalizerConfig, Strategy
 from helios.dataset.convert_to_h5py import ConvertToH5py
 from helios.types import ArrayTensor
 
@@ -569,6 +570,9 @@ class HeliosDataset(Dataset):
         dtype: np.dtype,
         max_sequence_length: int = MAX_SEQUENCE_LENGTH,
         normalize: bool = True,
+        normalizer_config: (
+            NormalizerConfig | None
+        ) = None,  # we will build this on init to load the normalizer
         cache_dir: UPath | None = None,
         samples_per_sec: float | None = None,
         dataset_percentage: float = 1.0,
@@ -591,6 +595,7 @@ class HeliosDataset(Dataset):
             max_sequence_length: The maximum sequence length that we pad all time dimensions to.
             normalize: If True, apply normalization to the data, if False, do not apply
                 normalization.
+            normalizer_config: The config for the normalizer.
             cache_dir: optional local directory to cache the H5 files.
             samples_per_sec: throttle to reading this many samples per second. This
                 throttling only applies when reading from the h5py_dir, not the
@@ -615,9 +620,10 @@ class HeliosDataset(Dataset):
         self.normalize = normalize
         self.dataset_percentage = dataset_percentage
         self.seed = seed
-        if self.normalize:
-            self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
-            self.normalizer_computed = Normalizer(Strategy.COMPUTED)
+        # predefined doesnt support all modalities so we have to be able to fall back
+        if self.normalize and normalizer_config is not None:
+            self.normalizer = normalizer_config.build()
+
         self.max_sequence_length = max_sequence_length
 
         if samples_per_sec is None:
@@ -779,11 +785,12 @@ class HeliosDataset(Dataset):
     def normalize_image(self, modality: ModalitySpec, image: np.ndarray) -> np.ndarray:
         """Normalize the image."""
         # Try computed strategy first, if it fails, try predefined strategy
-        # TODO: we can also make modality norm strategy configurable later
         try:
-            return self.normalizer_computed.normalize(modality, image)
+            return self.normalizer.normalize(modality, image)
         except Exception:
-            return self.normalizer_predefined.normalize(modality, image)
+            return self.normalizer.normalize(
+                modality, image, strategy=Strategy.PREDEFINED
+            )
 
     def _fill_missing_timesteps(
         self,
@@ -1037,6 +1044,9 @@ class HeliosDatasetConfig(Config):
 
     h5py_dir: str
     training_modalities: list[str]
+    normalizer_config: NormalizerConfig = dataclass_field(
+        default_factory=NormalizerConfig
+    )
     dtype: str = "float32"
     normalize: bool = True
     cache_dir: str | None = None
