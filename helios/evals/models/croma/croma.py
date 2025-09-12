@@ -41,8 +41,8 @@ HELIOS_SENTINEL2_BANDS = [
 ]
 
 
-class Chroma(nn.Module):
-    """Class containing the Chroma model that can ingest MaskedHeliosSample objects."""
+class Croma(nn.Module):
+    """Class containing the Croma model that can ingest MaskedHeliosSample objects."""
 
     patch_size: int = 8
     supported_modalities: list[str] = [
@@ -53,9 +53,9 @@ class Chroma(nn.Module):
     def __init__(
         self,
         size: str = "base",
-        load_directory: str = "/weka/dfive-default/helios/models/chroma",
+        load_directory: str = "/weka/dfive-default/helios/models/croma",
     ):
-        """Initialize the Chroma wrapper.
+        """Initialize the Croma wrapper.
 
         Args:
             size: The model size
@@ -136,7 +136,7 @@ class Chroma(nn.Module):
 
             # Process the modality data
             processed_data = self._process_modality_data(data, modality)
-            chroma_modality = (
+            croma_modality = (
                 "optical_images"
                 if modality == Modality.SENTINEL2_L2A.name
                 else "SAR_images"
@@ -145,7 +145,7 @@ class Chroma(nn.Module):
                 # start the list if it doesn't exist
                 if i not in input_data_timesteps:
                     input_data_timesteps[i] = {}
-                input_data_timesteps[i][chroma_modality] = data_i
+                input_data_timesteps[i][croma_modality] = data_i
 
         if not input_data_timesteps:
             raise ValueError("No valid modalities found for processing")
@@ -156,7 +156,7 @@ class Chroma(nn.Module):
         masked_helios_sample: MaskedHeliosSample,
         pooling: PoolingType = PoolingType.MEAN,
     ) -> torch.Tensor:
-        """Forward pass through chroma model."""
+        """Forward pass through croma model."""
         # Configure model modality
         if MaskedHeliosSample.sentinel2_l2a is not None:
             if MaskedHeliosSample.sentinel1 is not None:
@@ -188,15 +188,15 @@ class Chroma(nn.Module):
 
 
 @dataclass
-class ChromaConfig(Config):
-    """olmo_core style config for ChromaWrapper."""
+class CromaConfig(Config):
+    """olmo_core style config for CromaWrapper."""
 
     size: str = "base"
-    load_directory: str = "/weka/dfive-default/helios/models/chroma"
+    load_directory: str = "/weka/dfive-default/helios/models/croma"
 
-    def build(self) -> Chroma:
-        """Build the Chroma model."""
-        return Chroma(
+    def build(self) -> Croma:
+        """Build the Croma model."""
+        return Croma(
             size=self.size,
             load_directory=self.load_directory,
         )

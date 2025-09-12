@@ -1,6 +1,6 @@
 """Models for evals."""
 
-from helios.evals.models.croma import Croma, CromaConfig
+from helios.evals.models.croma.croma import Croma, CromaConfig
 from helios.evals.models.dinov2.dinov2 import DINOv2, DINOv2Config
 from helios.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
 from helios.evals.models.galileo import GalileoConfig, GalileoWrapper
