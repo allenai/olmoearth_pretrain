@@ -238,6 +238,26 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
 
+                if loss_val > 100:
+                    logger.warning(f"Loss is too high: {loss_val}")
+                    # log all the inputs and outputs including the masked batch
+                    logger.warning(f"masked_batch_a: {masked_batch_a}")
+                    logger.warning(f"masked_batch_b: {masked_batch_b}")
+                    logger.warning(f"patch_size: {patch_size}")
+                    logger.info(f"latent_a: {latent_a}")
+                    logger.warning(f"latent_b: {latent_b}")
+                    logger.warning(f"decoded_a: {decoded_a}")
+                    logger.warning(f"decoded_b: {decoded_b}")
+                    logger.warning(f"target_output_a: {target_output_a}")
+                    logger.info(f"target_output_b: {target_output_b}")
+                    logger.warning(f"pooled_a: {pooled_a}")
+                    logger.warning(f"pooled_b: {pooled_b}")
+                    logger.warning(f"loss: {loss}")
+                    logger.warning(f"loss_val: {loss_val}")
+                    logger.warning(f"total_batch_loss: {total_batch_loss}")
+                    logger.warning(f"total_batch_reg: {total_batch_reg}")
+                    logger.warning(f"total_batch_con: {total_batch_con}")
+
                 # Skip bad batches
                 if torch.isnan(loss).any() or torch.isinf(loss).any():
                     logger.warning(
