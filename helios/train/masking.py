@@ -899,7 +899,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 decoded_bandset_idxs = (
                     set()
                     if present_modalities_bandsets_for_sample[1][0]
-                    in self.only_decode_modalities
+                    in self.only_encode_modalities
                     else set([present_modalities_bandsets_for_sample[1]])
                 )
             # If there are more than two modalities, we randomly select some to encode and the rest to decode
@@ -997,7 +997,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         e.g in time masking, static in time data is randomly masked but we want that data to be either used to predict temporally masked data or
         predicted from temporal data.
         """
-        return False
+        return not modality_spec.is_spatial
 
     def apply_bandset_mask_rules(
         self,
