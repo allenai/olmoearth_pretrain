@@ -274,7 +274,13 @@ class ModalityPatchDiscriminationLossNew(Loss):
 
     name = "ModalityPatchDisc"
 
-    def __init__(self, tau: float = 0.1, pred2unit: bool = False, weight: float = 1.0):
+    def __init__(
+        self,
+        tau: float = 0.1,
+        pred2unit: bool = False,
+        weight: float = 1.0,
+        modality_weights: dict[str, float] = None,
+    ):
         """Initialize patch discrimination loss.
 
         Args:
@@ -288,6 +294,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
         self.tau = tau
         self.pred2unit = pred2unit
         self.weight = weight
+        self.modality_weights = modality_weights
 
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
@@ -309,8 +316,8 @@ class ModalityPatchDiscriminationLossNew(Loss):
 
         # Accumulate to the total loss
         total_loss = 0
-        for all_preds, all_masks, all_targets in zip(
-            modality_preds, modality_masks, modality_targets
+        for all_preds, all_masks, all_targets, modality in zip(
+            modality_preds, modality_masks, modality_targets, targets.modalities
         ):
             # Samples may have different number of tokens
             # TODO: Skip unqueeze and the for loop when mask_other_samples is True
@@ -354,6 +361,8 @@ class ModalityPatchDiscriminationLossNew(Loss):
                 # logger.warning("No decoded values for this modality")
                 continue
             loss = torch.stack(losses).mean()
+            if self.modality_weights is not None:
+                loss = loss * self.modality_weights[modality]
             total_loss += loss
 
         return self.weight * total_loss
