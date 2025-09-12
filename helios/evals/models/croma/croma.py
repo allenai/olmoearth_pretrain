@@ -45,6 +45,7 @@ class Croma(nn.Module):
     """Class containing the Croma model that can ingest MaskedHeliosSample objects."""
 
     patch_size: int = 8
+    image_resolution: int = 120
     supported_modalities: list[str] = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
@@ -72,7 +73,7 @@ class Croma(nn.Module):
             pretrained_path=str(load_path),
             size=size,
             modality="both",
-            image_resolution=120,
+            image_resolution=self.image_resolution,
         )
 
     def _process_modality_data(
@@ -101,9 +102,7 @@ class Croma(nn.Module):
                 data_i = data_i[:, HELIOS_SENTINEL2_BANDS, :, :]
 
             new_height = (
-                self.model.patch_size
-                if original_height == 1
-                else self.model.image_resolution
+                self.model.patch_size if original_height == 1 else self.image_resolution
             )
 
             data_i = F.interpolate(
@@ -155,11 +154,13 @@ class Croma(nn.Module):
         self,
         masked_helios_sample: MaskedHeliosSample,
         pooling: PoolingType = PoolingType.MEAN,
+        spatial_pool: bool = False,
     ) -> torch.Tensor:
         """Forward pass through croma model."""
         # Configure model modality
-        if MaskedHeliosSample.sentinel2_l2a is not None:
-            if MaskedHeliosSample.sentinel1 is not None:
+
+        if masked_helios_sample.sentinel2_l2a is not None:
+            if masked_helios_sample.sentinel1 is not None:
                 self.model.modality = "both"
             else:
                 self.model.modality = "optical"
@@ -178,6 +179,9 @@ class Croma(nn.Module):
         output_key = output_keys[self.model.modality]
         for data in per_timestep_inputs:
             timestep_output = self.model(**data)[output_key]
+            if spatial_pool:
+                # TODO: maybe right?
+                timestep_output = timestep_output.mean(dim=1)
             output_features.append(timestep_output.unsqueeze(0))
         # stack in the timestep dimension and take the mean or maybe the max?
         if pooling == PoolingType.MEAN:
