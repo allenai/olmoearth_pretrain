@@ -8,7 +8,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import ConstantWithWarmup
+from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -113,7 +113,7 @@ def build_train_module_config(
 ) -> ContrastiveLatentMIMTrainModuleConfig:
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        optim_config=AdamWConfig(lr=0.0004, weight_decay=0.03, fused=False),
         rank_microbatch_size=64,
         masking_config=MaskingConfig(
             strategy_config={
@@ -142,7 +142,7 @@ def build_train_module_config(
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        scheduler=ConstantWithWarmup(warmup_steps=8000),
+        scheduler=CosWithWarmup(warmup_steps=8000, warmup_min_lr=0.00004),
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
@@ -180,10 +180,10 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         #     h5py_dir="/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_era5_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover/469728",
         #     training_modalities=common.training_modalities,
         # ),
-        HeliosDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1291656",
-            training_modalities=common.training_modalities,
-        ),
+        # HeliosDatasetConfig(
+        #     h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1291656",
+        #     training_modalities=common.training_modalities,
+        # ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
 
