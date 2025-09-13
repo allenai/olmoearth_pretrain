@@ -360,7 +360,9 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             ):
                 buffer_name = self._get_buffer_name(modality, idx)
                 banset_indices_tensor = torch.tensor(bandset_indices, dtype=torch.long)
-                self.register_buffer(buffer_name, banset_indices_tensor)
+                self.register_buffer(
+                    buffer_name, banset_indices_tensor, persistent=False
+                )
 
         # Create a dictionary of per modality index tensors to do  index select with registered buffer
 
