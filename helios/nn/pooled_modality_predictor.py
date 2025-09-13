@@ -52,30 +52,41 @@ class AttnPool(nn.Module):
     def __init__(
         self,
         in_dim: int,
+        attn_dim: int | None = None,
         hidden_dim: int | None = None,
         mlp_ratio: float | None = None,
         num_queries: int = 1,
+        num_heads: int | None = None,
         gate_temperature: float = 1.0,
+        use_mlp: bool = False,
     ) -> None:
         """Initialize the Attn pooling layer."""
         super().__init__()
         assert in_dim % 64 == 0, "in_dim must be divisible by 64"
-        self.num_heads: int = in_dim // 64
+        self.attn_dim = attn_dim or in_dim
+        self.num_heads: int = num_heads or self.attn_dim // 64
         self.num_queries: int = num_queries
         self.gate_temperature: float = gate_temperature
+        self.use_mlp = use_mlp
 
-        # k learned queries (k, D)
-        self.query_tokens: nn.Parameter = nn.Parameter(torch.empty(num_queries, in_dim))
+        self.query_tokens: nn.Parameter = nn.Parameter(
+            torch.empty(num_queries, self.attn_dim)
+        )
 
         # shared KV projection
-        self.kv: nn.Linear = nn.Linear(in_dim, in_dim * 2)
+        self.kv: nn.Linear = nn.Linear(in_dim, self.attn_dim * 2)
 
         # output MLP (+ optional expansion via mlp_ratio)
         if mlp_ratio is not None:
             hidden_dim = int(in_dim * mlp_ratio)
         hidden_dim = hidden_dim or in_dim
-        self.out_layer: Mlp = Mlp(in_dim, hidden_dim)
-        self.out_norm = nn.LayerNorm(in_dim)
+        self.out_layer: Mlp = Mlp(self.attn_dim, hidden_dim)
+        self.out_norm = nn.LayerNorm(self.attn_dim)
+        self.out_proj = (
+            nn.Linear(self.attn_dim, in_dim)
+            if in_dim != self.attn_dim
+            else nn.Identity()
+        )
 
         # gating over k query outputs (maps D -> 1 per query)
         self.gate: nn.Linear | None = (
@@ -98,8 +109,9 @@ class AttnPool(nn.Module):
         self, feat_tokens: torch.Tensor, mask: torch.Tensor | None
     ) -> torch.Tensor:
         """Apply attention pooling to the tokens."""
-        Bc, N, D = feat_tokens.shape
+        Bc, N, _ = feat_tokens.shape
         H = self.num_heads
+        D = self.attn_dim
         Dh = D // H
 
         # queries: [B*, k, D] -> [B*, H, k, Dh]
@@ -152,8 +164,9 @@ class AttnPool(nn.Module):
             z = o.squeeze(1)
 
         # MLP + LN head
-        z = self.out_norm(self.out_layer(z))
-        return z
+        if self.use_mlp:
+            z = self.out_norm(self.out_layer(z))
+        return self.out_proj(z)
 
 
 class EncodeEarlyAttnPool(Encoder):
@@ -162,19 +175,24 @@ class EncodeEarlyAttnPool(Encoder):
     def __init__(
         self,
         dims_to_pool: str,
+        pooling_attn_dim: int | None = None,
         attn_pool_mlp_ratio: float | None = None,
         num_queries: int = 1,
+        use_mlp: bool = False,
         num_pre_modality_pooling_layers: int = 0,
+        num_attn_pool_heads: int | None = None,
         *args: Any,
         **kwargs: Any,
     ) -> None:
         """Initialize the EncodeEarlyAttnPool."""
         super().__init__(*args, **kwargs)
         self.attn_pool = AttnPool(
-            self.embedding_size,
-            self.embedding_size,
+            in_dim=self.embedding_size,
+            attn_dim=pooling_attn_dim,
             mlp_ratio=attn_pool_mlp_ratio,
             num_queries=num_queries,
+            use_mlp=use_mlp,
+            num_heads=num_attn_pool_heads,
         )
         self.num_pre_modality_pooling_layers = num_pre_modality_pooling_layers
 
@@ -259,10 +277,7 @@ class EncodeEarlyAttnPool(Encoder):
 
         spatial_masks = rearrange(spatial_masks, f"b h w t m -> {reduction_mask_args}")
         # print the unique values of the masks
-        logger.info(f"unique values of the masks: {torch.unique(spatial_masks)}")
         pooled_attn_mask = spatial_masks == MaskValue.ONLINE_ENCODER.value
-        # Do I potentially need to filter out tokens that have no online marked modalities? Maybe not because we will just disgard those
-        logger.info(f"shape of spatial tokens before pooling: {spatial_tokens.shape}")
         pooled_tokens = self.attn_pool(spatial_tokens, pooled_attn_mask)
         logger.info(f"shape of pooled tokens: {pooled_tokens.shape}")
         pooled_tokens = rearrange(
@@ -362,7 +377,7 @@ class EncodeEarlyAttnPool(Encoder):
         exit_ids_seq: Tensor | None = None,
         exited_tokens: Tensor | None = None,
         always_pass_none_mask_to_transformer: bool = False,
-    ) -> dict[str, Tensor]:
+    ) -> tuple[dict[str, Tensor], Tensor | None]:
         """Apply the attention to the tokens and masks."""
         tokens, mask = self.collapse_and_combine_hwtc(tokens_and_masks_dict)
 
@@ -388,6 +403,12 @@ class EncodeEarlyAttnPool(Encoder):
         attn_mask = self.get_attn_or_none_mask(
             new_mask, always_pass_none_mask_to_transformer
         )
+
+        # Add register tokens before attention layers
+        register_tokens = None
+        if self.has_register_tokens:
+            tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
+
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             if i_blk == self.num_pre_modality_pooling_layers:
@@ -416,6 +437,10 @@ class EncodeEarlyAttnPool(Encoder):
                 attn_mask=attn_mask,
             )
 
+        # Remove register tokens after attention layers
+        if self.has_register_tokens:
+            tokens, register_tokens = self.pop_register_tokens(tokens)
+
         if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
 
@@ -436,7 +461,8 @@ class EncodeEarlyAttnPool(Encoder):
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
         )
-        return tokens_per_modality_dict
+        # Return both the tokens per modality and the register tokens for pooled attention
+        return tokens_per_modality_dict, register_tokens
 
     def apply_attn(
         self,
@@ -446,7 +472,7 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         always_pass_none_mask_to_transformer: bool = False,
-    ) -> dict[str, Tensor]:
+    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
@@ -466,7 +492,7 @@ class EncodeEarlyAttnPool(Encoder):
         tokens_dict.update(original_masks_dict)
 
         # TODO: token exit config isn't really meant to be used here but is no-op so leaving it in
-        tokens_dict = self.apply_unpooled_attn(
+        tokens_dict, register_tokens = self.apply_unpooled_attn(
             tokens_dict,
             pre_pooled_modality_to_dims_dict,
             exit_ids_seq,
@@ -476,6 +502,7 @@ class EncodeEarlyAttnPool(Encoder):
         # update the tokens_dict with the original masks
         tokens_dict.update(original_masks_dict)
         logger.info(f"tokens_dict keys: {tokens_dict.keys()}")
+        # Dropping decode only modalities
         spatial_tokens, spatial_masks = self.stack_spatial_modalities_and_masks(
             tokens_dict
         )
@@ -502,6 +529,13 @@ class EncodeEarlyAttnPool(Encoder):
         attn_mask = self.get_attn_or_none_mask(
             new_mask, always_pass_none_mask_to_transformer
         )
+
+        # Add register tokens before post-modality pooling attention layers
+        if self.has_register_tokens and register_tokens is not None:
+            tokens, attn_mask = self.add_register_tokens_and_masks(
+                tokens, attn_mask, register_tokens
+            )
+
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             if i_blk < self.num_pre_modality_pooling_layers:
@@ -531,6 +565,11 @@ class EncodeEarlyAttnPool(Encoder):
                 attn_mask=attn_mask,
             )
 
+        token_norm_stats = None
+        if self.has_register_tokens and register_tokens is not None:
+            tokens, register_tokens = self.pop_register_tokens(tokens)
+            token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
+
         if exit_ids_seq is not None:
             # this should only ever be called by the target encoder,
             # in a torch.no_grad context
@@ -553,7 +592,7 @@ class EncodeEarlyAttnPool(Encoder):
             tokens, pooled_dims
         )
         out_dict["modality_pooled_masks"] = original_pooled_masks
-        return out_dict
+        return out_dict, token_norm_stats
 
     def forward(
         self,
@@ -581,7 +620,7 @@ class EncodeEarlyAttnPool(Encoder):
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
-            pooled_tokens_and_masks = self.apply_attn(
+            pooled_tokens_and_masks, token_norm_stats = self.apply_attn(
                 x=patchified_tokens_and_masks,
                 timestamps=x.timestamps,
                 patch_size=patch_size,
@@ -591,13 +630,22 @@ class EncodeEarlyAttnPool(Encoder):
             )
         else:
             pooled_tokens_and_masks = {}
+            token_norm_stats = None
 
         output_dict: dict[str, Any] = {
             "tokens_and_masks": tokenized_output,
-            "project_aggregated": self.project_and_aggregate(tokenized_output),
         }
         if pooled_tokens_and_masks:
+            output_dict["project_aggregated"] = self.project_and_aggregate(
+                pooled_tokens_and_masks["modality_pooled_tokens"]
+            )
             output_dict["pooled_tokens_and_masks"] = pooled_tokens_and_masks
+        else:
+            output_dict["project_aggregated"] = self.project_and_aggregate(
+                tokenized_output
+            )
+        if token_norm_stats is not None:
+            output_dict["token_norm_stats"] = token_norm_stats
 
         return output_dict
 
@@ -610,6 +658,9 @@ class EncoderEarlyAttnPoolConfig(EncoderConfig):
     num_queries: int = 1
     attn_pool_mlp_ratio: float | None = None
     num_pre_modality_pooling_layers: int = 0
+    use_mlp: bool = False
+    num_attn_pool_heads: int | None = None
+    pooling_attn_dim: int | None = None
 
     def build(self) -> "EncodeEarlyAttnPool":
         """Build the encoder."""
