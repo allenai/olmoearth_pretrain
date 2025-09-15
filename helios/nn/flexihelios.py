@@ -1511,7 +1511,7 @@ class Encoder(FlexiHeliosBase):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
-            always_pass_none_mask_to_transformer: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
+            always_pass_none_mask_to_transformer: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
