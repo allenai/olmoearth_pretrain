@@ -85,6 +85,7 @@ def main(
         # Select and order columns for final output, add OOM_OCCURRED_METRIC if it exists
         columns = [
             PARAM_KEYS["gpu_type"],
+            constants.GPU_NAME_METRIC,
             PARAM_KEYS["model_size"],
             PARAM_KEYS["bf16"],
             PARAM_KEYS["image_size"],

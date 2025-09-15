@@ -487,6 +487,11 @@ class ThroughputBenchmarkRunner:
         square_km_per_second = area_processed_km2 / overall_time_taken
         metrics_to_submit[constants.SQUARE_KM_PER_SECOND_METRIC] = square_km_per_second
         metrics_to_submit[constants.PIXELS_PER_SECOND_METRIC] = centroids_per_second
+        try:
+            gpu_name = torch.cuda.get_device_name(device)
+            metrics_to_submit[constants.GPU_NAME_METRIC] = gpu_name
+        except Exception as e:
+            logger.error(f"Error getting GPU name: {e}")
 
         logger.info(f"Metrics for {batch_size} were: {metrics_to_submit}")
         # TODO: If different configurations are different runs how can we do them back to back?
