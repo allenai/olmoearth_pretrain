@@ -130,7 +130,7 @@ class ThroughputBenchmarkRunnerConfig(Config):
             sweep_dict: dict[str, Any] = {}
             for sweep_key in self.sweep_keys:
                 sweep_dict[sweep_key] = constants.SWEEPS[sweep_key]
-            self.sweep_dict = sweep_dict
+            sweep_dict = sweep_dict
 
         return ThroughputBenchmarkRunner(
             default_run_params=self.default_run_params,
@@ -138,7 +138,7 @@ class ThroughputBenchmarkRunnerConfig(Config):
             training_modalities=self.training_modalities,
             work_dir=self.work_dir,
             save_folder=self.save_folder,
-            sweep_dict=self.sweep_dict,
+            sweep_dict=sweep_dict,
             cross_product_sweep=self.cross_product_sweep,
         )
 

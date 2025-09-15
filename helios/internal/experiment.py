@@ -171,7 +171,7 @@ def build_config(
 def build_benchmark_config(
     common: CommonComponents,
     inference_benchmarking_config_builder: Callable[
-        [CommonComponents], ThroughputBenchmarkRunnerConfig
+        [], ThroughputBenchmarkRunnerConfig
     ],
     overrides: list[str],
 ) -> BenchmarkExperimentConfig:
@@ -376,7 +376,7 @@ def main(
         Callable[[CommonComponents], HeliosVisualizeConfig] | None
     ) = None,
     inference_benchmarking_config_builder: (
-        Callable[[CommonComponents], ThroughputBenchmarkRunnerConfig] | None
+        Callable[[], ThroughputBenchmarkRunnerConfig] | None
     ) = None,
 ) -> None:
     """Main entry point for Helios experiments.
