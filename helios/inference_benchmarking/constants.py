@@ -3,7 +3,6 @@
 # BEAKER-LAND
 BEAKER_BUDGET = "ai2/es-platform"
 BEAKER_WORKSPACE = "ai2/earth-systems"
-BEAKER_IMAGE_NAME = "chrisw/helios-inf-throughput-flashattn-no-mask-2024-04-21_01"
 WEKA_BUCKET = "dfive-default"
 BEAKER_TASK_PRIORITY = "normal"
 BEAKER_GPU_TO_CLUSTER_MAP = {

@@ -44,7 +44,6 @@ if __name__ == "__main__":
     )
     # Parse all unknown args as overrides
     args, overrides = parser.parse_known_args()
-    args = parser.parse_args()
 
     command = [
         "python",
@@ -58,6 +57,7 @@ if __name__ == "__main__":
         tasks=[
             TaskSpec(
                 name="benchmark",
+                description=f"Benchmarking with sweep keys {args.sweep_keys} and overrides {overrides}",
                 replicas=1,
                 context=TaskContext(
                     priority=Priority(constants.BEAKER_TASK_PRIORITY),
@@ -90,5 +90,5 @@ if __name__ == "__main__":
             )
         ],
     )
-    experiment = b.experiment.create(name="benchmark", spec=experiment_spec)
+    experiment = b.experiment.create(spec=experiment_spec)
     print(f"Experiment created: {experiment.id}: {b.experiment.url(experiment)}")

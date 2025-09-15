@@ -74,32 +74,16 @@ class Helios(torch.nn.Module):
     """Thin wrapper around Helios checkpoint that loads just the encoder."""
 
     def __init__(
-        self, checkpoint_path: str | None = None, model_config: Config | None = None
+        self, model_config: Config | None = None
     ):
         """Loads the checkpoint, keeps only the encoder."""
         super().__init__()
 
-        # TODO: Need to create a new checkpoint with the buffers
-        # Load the model config and initialize it.
-        # We avoid loading the train module here because it depends on running within
-        # olmo_core.
-        if checkpoint_path is not None:
-            with open(f"{checkpoint_path}/config.json") as f:
-                config_dict = json.load(f)
-                model_config = Config.from_dict(config_dict["model"])
-        elif model_config is not None:
-            logger.info("Using provided model config")
-            model_config = model_config
-        else:
-            raise ValueError("Either checkpoint_path or model_config must be provided")
 
         # We only want the encoder, as the rest of the network will throw off
         # memory and latency estimates
         model = model_config.build()
 
-        if checkpoint_path is not None:
-            train_module_dir = f"{checkpoint_path}/model_and_optim"
-            load_model_and_optim_state(train_module_dir, model)
 
         model = getattr(model, "encoder")
 
@@ -509,40 +493,36 @@ class ThroughputBenchmarkRunner:
         self.run_benchmarking_sweep(run_params_list)
 
 
-def main() -> None:
-    """Main entry point for the throughput benchmarking script."""
-    prepare_cli_environment()
-    seed_all(42)
-    logger.info(f"Running throughput benchmarking with command {sys.argv}")
-    if len(sys.argv) < 2:
-        logger.error(
-            f"Usage: python run_throughput_benchmark.py <sweep_key> <overrides> got{sys.argv}"
-        )
-        sys.exit(1)
-    script, sweep_key, *overrides = sys.argv
+# def main() -> None:
+#     """Main entry point for the throughput benchmarking script."""
+#     prepare_cli_environment()
+#     seed_all(42)
+#     logger.info(f"Running throughput benchmarking with command {sys.argv}")
+#     if len(sys.argv) < 2:
+#         logger.error(
+#             f"Usage: python run_throughput_benchmark.py <sweep_key> <overrides> got{sys.argv}"
+#         )
+#         sys.exit(1)
+#     script, sweep_key, *overrides = sys.argv
 
-    # log what we are running
-    logger.info(
-        f"Running throughput benchmarking with command {script} {sweep_key} {overrides}"
-    )
+#     # log what we are running
+#     logger.info(
+#         f"Running throughput benchmarking with command {script} {sweep_key} {overrides}"
+#     )
 
-    # allow a string of sweep keys separated by commas
-    sweep_keys = sweep_key.split(",")
-    if not all(sweep_key in constants.SWEEPS.keys() for sweep_key in sweep_keys):
-        logger.error(
-            f"Invalid sweep keys: {sweep_keys} expected one of {constants.SWEEPS.keys()}"
-        )
-        sys.exit(1)
+#     # allow a string of sweep keys separated by commas
+#     sweep_keys = sweep_key.split(",")
+#     if not all(sweep_key in constants.SWEEPS.keys() for sweep_key in sweep_keys):
+#         logger.error(
+#             f"Invalid sweep keys: {sweep_keys} expected one of {constants.SWEEPS.keys()}"
+#         )
+#         sys.exit(1)
 
-    sweep_dict: dict[str, Any] = {}
-    for sweep_key in sweep_keys:
-        sweep_dict.update(constants.SWEEPS[sweep_key])  # type: ignore
-    runner_config = ThroughputBenchmarkRunnerConfig(sweep_dict=sweep_dict)
-    runner_config = runner_config.merge(overrides)
-    logger.info(f"Runner config: {runner_config}")
-    runner = runner_config.build()
-    runner.run()
-
-
-if __name__ == "__main__":
-    main()
+#     sweep_dict: dict[str, Any] = {}
+#     for sweep_key in sweep_keys:
+#         sweep_dict.update(constants.SWEEPS[sweep_key])  # type: ignore
+#     runner_config = ThroughputBenchmarkRunnerConfig(sweep_dict=sweep_dict)
+#     runner_config = runner_config.merge(overrides)
+#     logger.info(f"Runner config: {runner_config}")
+#     runner = runner_config.build()
+#     runner.run()

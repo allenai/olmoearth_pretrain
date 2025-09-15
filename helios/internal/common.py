@@ -197,6 +197,9 @@ def build_common_components(
     if cmd == SubCmd.launch_prep:
         cmd_to_launch = SubCmd.prep
 
+    if cmd == SubCmd.launch_benchmark:
+        cmd_to_launch = SubCmd.benchmark
+
     # Extract nccl_debug from overrides if present
     nccl_debug = False
     for override in overrides:
