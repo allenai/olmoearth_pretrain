@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast, Any
+from typing import cast
 
 import numpy as np
 from beaker import ExperimentSpec
@@ -26,7 +26,6 @@ from helios.data.visualize import visualize_sample
 from helios.inference_benchmarking.run_throughput_benchmark import (
     ThroughputBenchmarkRunnerConfig,
 )
-from helios.inference_benchmarking import constants
 from helios.train.train_module.train_module import HeliosTrainModuleConfig
 
 logger = logging.getLogger(__name__)
@@ -432,7 +431,6 @@ If running command on a local machine ie from a session, you can use the [b]loca
         assert dataloader_config_builder is not None
         assert trainer_config_builder is not None
         assert train_module_config_builder is not None
-        assert visualize_config_builder is not None
         config = build_config(
             common=common,
             model_config_builder=model_config_builder,

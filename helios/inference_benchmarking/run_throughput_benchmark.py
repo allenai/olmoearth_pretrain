@@ -1,9 +1,7 @@
 """Script for performing an inference throughput benchmarking run."""
 
 import itertools
-import json
 import os
-import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -15,11 +13,9 @@ import numpy as np
 import torch
 import wandb
 from olmo_core.config import Config
-from olmo_core.distributed.checkpoint import load_model_and_optim_state
 from olmo_core.io import copy_file, file_exists, join_path
 from olmo_core.train.callbacks import ProfilerCallback, WandBCallback
 from olmo_core.train.trainer import PathOrStr
-from olmo_core.utils import prepare_cli_environment, seed_all
 
 from helios.data.constants import BASE_GSD, Modality
 from helios.inference_benchmarking import constants
@@ -73,7 +69,7 @@ class MinimalTrainer:
 class Helios(torch.nn.Module):
     """Thin wrapper around Helios checkpoint that loads just the encoder."""
 
-    def __init__(self, model_config: Config | None = None):
+    def __init__(self, model_config: Config) -> None:
         """Loads the checkpoint, keeps only the encoder."""
         super().__init__()
 
@@ -405,6 +401,7 @@ class ThroughputBenchmarkRunner:
                 callback.log_metrics(step=0, metrics=metrics_oom_occurred)
             for callback in callbacks:
                 callback.post_train()
+            return
 
         logger.info("Warmup complete, starting benchmark")
         # TODO: Do cuda event timing

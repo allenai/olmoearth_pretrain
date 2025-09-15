@@ -1,11 +1,11 @@
 """Script to run locally to launch throughput benchmarking task in Beaker."""
 
+from helios.inference_benchmarking.constants import SWEEPS
 from helios.inference_benchmarking.run_throughput_benchmark import (
     ThroughputBenchmarkRunnerConfig,
 )
-from helios.inference_benchmarking.constants import SWEEPS
-from helios.internal.experiment import main
 from helios.internal.common import build_common_components
+from helios.internal.experiment import main
 
 
 def inference_benchmarking_config_builder() -> ThroughputBenchmarkRunnerConfig:
