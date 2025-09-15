@@ -126,10 +126,11 @@ class ThroughputBenchmarkRunnerConfig(Config):
             raise ValueError("Either sweep_dict or sweep_keys must be set")
         if self.sweep_dict is not None and self.sweep_keys is not None:
             raise ValueError("Only one of sweep_dict or sweep_keys can be set")
-        if self.sweep_dict is None:
-            self.sweep_dict = {}
+        if self.sweep_dict is None and self.sweep_keys is not None:
+            sweep_dict: dict[str, Any] = {}
             for sweep_key in self.sweep_keys:
-                self.sweep_dict[sweep_key] = constants.SWEEPS[sweep_key]
+                sweep_dict[sweep_key] = constants.SWEEPS[sweep_key]
+            self.sweep_dict = sweep_dict
 
         return ThroughputBenchmarkRunner(
             default_run_params=self.default_run_params,
@@ -161,7 +162,7 @@ class ThroughputBenchmarkRunner:
         training_modalities: list[str],
         work_dir: Path,
         save_folder: Path | None = None,
-        sweep_dict: dict[str, str] = {},
+        sweep_dict: dict[str, Any] = {},
         cross_product_sweep: bool = False,
     ):
         """Initializes the throughput benchmarking runner."""
