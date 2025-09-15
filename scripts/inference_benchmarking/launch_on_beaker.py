@@ -11,7 +11,7 @@ from helios.internal.common import build_common_components
 def inference_benchmarking_config_builder() -> ThroughputBenchmarkRunnerConfig:
     """Build the inference benchmarking configuration."""
     return ThroughputBenchmarkRunnerConfig(
-        sweep_dict=SWEEPS["batch_size"],
+        sweep_dict=SWEEPS["batch"],
     )
 
 

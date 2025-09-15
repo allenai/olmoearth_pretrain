@@ -109,8 +109,7 @@ class BenchmarkExperimentConfig(Config):
     """Configuration for a throughput benchmarking run."""
 
     launch: HeliosBeakerLaunchConfig
-    inference_benchmarking_config: ThroughputBenchmarkRunnerConfig
-    sweep_keys: list[str]
+    benchmark: ThroughputBenchmarkRunnerConfig
 
 
 def split_common_overrides(overrides: list[str]) -> tuple[list[str], list[str]]:
@@ -181,7 +180,7 @@ def build_benchmark_config(
     inference_benchmarking_config = inference_benchmarking_config_builder()
     config = BenchmarkExperimentConfig(
         launch=common.launch,
-        inference_benchmarking_config=inference_benchmarking_config,
+        benchmark=inference_benchmarking_config,
     )
     config = config.merge(overrides)
     logger.info("Benchmark config: %s", config)
@@ -190,11 +189,7 @@ def build_benchmark_config(
 
 def benchmark(config: BenchmarkExperimentConfig) -> None:
     """Benchmark an experiment."""
-    sweep_dict: dict[str, Any] = {}
-    for sweep_key in config.sweep_keys:
-        sweep_dict.update(constants.SWEEPS[sweep_key])  # type: ignore
-    runner_config = ThroughputBenchmarkRunnerConfig(sweep_dict=sweep_dict)
-    runner = runner_config.build()
+    runner = config.benchmark.build()
     runner.run()
 
 

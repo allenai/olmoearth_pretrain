@@ -73,17 +73,13 @@ class MinimalTrainer:
 class Helios(torch.nn.Module):
     """Thin wrapper around Helios checkpoint that loads just the encoder."""
 
-    def __init__(
-        self, model_config: Config | None = None
-    ):
+    def __init__(self, model_config: Config | None = None):
         """Loads the checkpoint, keeps only the encoder."""
         super().__init__()
-
 
         # We only want the encoder, as the rest of the network will throw off
         # memory and latency estimates
         model = model_config.build()
-
 
         model = getattr(model, "encoder")
 
@@ -110,7 +106,8 @@ class Helios(torch.nn.Module):
 class ThroughputBenchmarkRunnerConfig(Config):
     """Defines the configuration for a throughput benchmarking run."""
 
-    sweep_dict: dict[str, Any]  # dict of run params to sweep over
+    sweep_dict: dict[str, Any] | None = None  # dict of run params to sweep over
+    sweep_keys: list[str] | None = None
     sweep_group_name: str | None = None
     training_modalities: list[str] = field(
         default_factory=lambda: [
@@ -128,6 +125,15 @@ class ThroughputBenchmarkRunnerConfig(Config):
         """Builds a throughput benchmarking runner."""
         if self.default_run_params is None:
             self.default_run_params = RunParams()
+
+        if self.sweep_dict is None and self.sweep_keys is None:
+            raise ValueError("Either sweep_dict or sweep_keys must be set")
+        if self.sweep_dict is not None and self.sweep_keys is not None:
+            raise ValueError("Only one of sweep_dict or sweep_keys can be set")
+        if self.sweep_dict is None:
+            self.sweep_dict = {}
+            for sweep_key in self.sweep_keys:
+                self.sweep_dict[sweep_key] = constants.SWEEPS[sweep_key]
 
         return ThroughputBenchmarkRunner(
             default_run_params=self.default_run_params,
