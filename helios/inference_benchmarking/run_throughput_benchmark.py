@@ -49,6 +49,7 @@ class MinimalTrainer:
     def __init__(
         self, device: torch.device, work_dir: Path, save_folder: Path | None = None
     ):
+        """Initializes the minimal trainer."""
         self.device = device
         self.work_dir = work_dir  # Will be set later
         if save_folder is None:
@@ -57,12 +58,13 @@ class MinimalTrainer:
             self.save_folder = save_folder
 
     def persist_working_file(self, name: PathOrStr) -> PathOrStr:
+        """Persists a working file."""
         if Path(name).is_relative_to(self.work_dir):
             name = Path(name).relative_to(self.work_dir)
         source = join_path(self.work_dir, name)
         target = join_path(self.save_folder, name)
         if source != target:
-            copy_file(source, target, save_overwrite=self.save_overwrite)
+            copy_file(source, target)
         elif not file_exists(source):
             raise FileNotFoundError(source)
         return target
@@ -176,6 +178,7 @@ class ThroughputBenchmarkRunner:
         sweep_dict: dict[str, str] = {},
         cross_product_sweep: bool = False,
     ):
+        """Initializes the throughput benchmarking runner."""
         self.default_run_params = default_run_params
         self.sweep_group_name = sweep_group_name
         self.training_modalities = training_modalities
@@ -188,22 +191,22 @@ class ThroughputBenchmarkRunner:
         self.sweep_name = "_".join(sweep_dict.keys()) + "-" + uuid_str
 
     def build_model(self, run_params: RunParams) -> Helios:
-        # Make the model size more configurable via cli
+        """Builds a model based on the run parameters."""
         model_size = MODEL_SIZE_ARGS[run_params.model_size]
         training_modalities = self.training_modalities
         encoder_config = EncoderConfig(
-            embedding_size=model_size["encoder_embedding_size"],
-            num_heads=model_size["encoder_num_heads"],
-            depth=model_size["encoder_depth"],
-            mlp_ratio=model_size["mlp_ratio"],
+            embedding_size=int(model_size["encoder_embedding_size"]),
+            num_heads=int(model_size["encoder_num_heads"]),
+            depth=int(model_size["encoder_depth"]),
+            mlp_ratio=float(model_size["mlp_ratio"]),
             supported_modality_names=training_modalities,
         )
         decoder_config = PredictorConfig(
-            encoder_embedding_size=model_size["encoder_embedding_size"],
-            decoder_embedding_size=model_size["decoder_embedding_size"],
-            depth=model_size["decoder_depth"],
-            mlp_ratio=model_size["mlp_ratio"],
-            num_heads=model_size["decoder_num_heads"],
+            encoder_embedding_size=int(model_size["encoder_embedding_size"]),
+            decoder_embedding_size=int(model_size["decoder_embedding_size"]),
+            depth=int(model_size["decoder_depth"]),
+            mlp_ratio=float(model_size["mlp_ratio"]),
+            num_heads=int(model_size["decoder_num_heads"]),
             supported_modality_names=training_modalities,
             max_sequence_length=12,
         )
@@ -216,7 +219,7 @@ class ThroughputBenchmarkRunner:
 
     def build_sweep_run_params(self) -> list[RunParams]:
         """Builds a list of run parameters based on the sweep dictionary."""
-        run_params_list = []
+        run_params_list: list[RunParams] = []
         if self.cross_product_sweep:
             # take a cross product of the sweep dictionary
             sweep_dict_keys = list(self.sweep_dict.keys())
@@ -240,36 +243,13 @@ class ThroughputBenchmarkRunner:
 
     def run_benchmarking_sweep(self, run_params_list: list[RunParams]) -> None:
         """Runs the benchmarking code for a list of run parameters."""
-        import traceback
-
-        squarekm_per_second_per_batch_size = {}
         for run_params in run_params_list:
             try:
                 logger.info(f"Running benchmarking for {run_params}")
-                square_km_per_second = self.run_benchmarking(run_params)
+                self.run_benchmarking(run_params)
             except Exception as e:
-                tb = traceback.format_exc(limit=2)
-                logger.error(
-                    f"Error running benchmarking for {run_params}: {e}\nTraceback (most recent calls):\n{tb}"
-                )
+                logger.error(f"Error running benchmarking for {run_params}: {e}")
                 continue
-            squarekm_per_second_per_batch_size[run_params.batch_size] = (
-                square_km_per_second
-            )
-
-        logger.info(
-            f"Square km per second per batch size: {squarekm_per_second_per_batch_size}"
-        )
-        # which batch size has the highest square km per second
-        highest_batch_size = max(
-            squarekm_per_second_per_batch_size,
-            key=squarekm_per_second_per_batch_size.get,
-        )
-        logger.info(f"Highest batch size: {highest_batch_size}")
-        logger.info(
-            f"Highest square km per second: {squarekm_per_second_per_batch_size[highest_batch_size]}"
-        )
-        return squarekm_per_second_per_batch_size[highest_batch_size]
 
     def run_benchmarking(self, run_params: RunParams) -> None:
         """Runs the benchmarking code.
@@ -428,14 +408,13 @@ class ThroughputBenchmarkRunner:
         if oom_occurred:
             logger.info("CUDA OOM occurred during warmup, skipping benchmark")
             # Log OOM status to wandb
-            metrics_to_submit = {
+            metrics_oom_occurred: dict[str, Any] = {
                 constants.OOM_OCCURRED_METRIC: 1,
             }
             for callback in callbacks:
-                callback.log_metrics(step=0, metrics=metrics_to_submit)
+                callback.log_metrics(step=0, metrics=metrics_oom_occurred)
             for callback in callbacks:
                 callback.post_train()
-            return 0.0
 
         logger.info("Warmup complete, starting benchmark")
         # TODO: Do cuda event timing
@@ -450,7 +429,6 @@ class ThroughputBenchmarkRunner:
         ) < run_params.min_batches_per_interval:
             batch_start = time.monotonic()
 
-            results: TokensAndMasks
             with torch.inference_mode():
                 if run_params.bf16:
                     with torch.amp.autocast(
@@ -483,7 +461,7 @@ class ThroughputBenchmarkRunner:
         logger.info(
             f"Overall time taken: {overall_time_taken} sum of time taken per batch: {sum(time_taken_per_batch)} num batches: {len(time_taken_per_batch)}"
         )
-        metrics_to_submit = {
+        metrics_to_submit: dict[str, Any] = {
             constants.PER_BATCH_TOKEN_RATE_METRIC: wandb.Histogram(
                 np.array(
                     [
@@ -516,8 +494,6 @@ class ThroughputBenchmarkRunner:
             callback.log_metrics(step=idx, metrics=metrics_to_submit)
         for callback in callbacks:
             callback.post_train()
-
-        return square_km_per_second
 
     def run(self) -> None:
         """Runs the throughput benchmarking."""
@@ -566,7 +542,7 @@ SWEEPS = {
 }
 
 
-def main():
+def main() -> None:
     """Main entry point for the throughput benchmarking script."""
     prepare_cli_environment()
     seed_all(42)
@@ -591,10 +567,9 @@ def main():
         )
         sys.exit(1)
 
-    sweep_dict = {}
+    sweep_dict: dict[str, Any] = {}
     for sweep_key in sweep_keys:
-        sweep_dict.update(SWEEPS[sweep_key])
-
+        sweep_dict.update(SWEEPS[sweep_key])  # type: ignore
     runner_config = ThroughputBenchmarkRunnerConfig(sweep_dict=sweep_dict)
     runner_config = runner_config.merge(overrides)
     logger.info(f"Runner config: {runner_config}")
