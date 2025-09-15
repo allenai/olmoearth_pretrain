@@ -185,7 +185,7 @@ class ThroughputBenchmarkRunner:
         self.sweep_dict = sweep_dict
         self.cross_product_sweep = cross_product_sweep
         uuid_str = str(uuid.uuid4())[:6]
-        self.sweep_name = ",".join(sweep_dict.keys()).join(uuid_str)
+        self.sweep_name = "_".join(sweep_dict.keys()) + "-" + uuid_str
 
     def build_model(self, run_params: RunParams) -> Helios:
         # Make the model size more configurable via cli
@@ -387,8 +387,6 @@ class ThroughputBenchmarkRunner:
                 )
             return None
 
-        # log the s2 tensor shape
-        logger.info(f"S2 tensor shape: {s2_tensor.shape}")
         masked_sample = MaskedHeliosSample(
             timestamps=timestamps,
             sentinel2_l2a=s2_tensor,

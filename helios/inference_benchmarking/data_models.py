@@ -58,9 +58,6 @@ class RunParams(Config):
         """
         keys = constants.PARAM_KEYS
         env_vars = {
-            keys["checkpoint_path"]: os.path.join(
-                "/artifacts", constants.MODEL_SIZE_MAP[self.model_size]
-            ),
             keys["model_size"]: self.model_size,
             keys["use_s1"]: str(int(self.use_s1)),
             keys["use_s2"]: str(int(self.use_s2)),
@@ -68,7 +65,7 @@ class RunParams(Config):
             keys["image_size"]: str(self.image_size),
             keys["patch_size"]: str(self.patch_size),
             keys["num_timesteps"]: str(self.num_timesteps),
-            keys["batch_sizes"]: ",".join([str(bs) for bs in self.batch_sizes]),
+            keys["batch_size"]: str(self.batch_size),
             keys["gpu_type"]: self.gpu_type,
             keys["bf16"]: str(int(self.bf16)),
             keys["benchmark_interval_s"]: str(self.benchmark_interval_s),
