@@ -509,44 +509,6 @@ class ThroughputBenchmarkRunner:
         self.run_benchmarking_sweep(run_params_list)
 
 
-# a bunch of different Sweep dicts that we could use
-sweep_batch_sizes = {
-    "batch_size": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192],
-}
-sweep_image_sizes = {
-    "image_size": [1, 2, 4, 8, 16, 32, 64, 128],
-}
-sweep_patch_sizes = {"patch_size": [1, 2, 4, 8]}
-sweep_num_timesteps = {"num_timesteps": [1, 2, 4, 6, 8, 12]}
-sweep_use_s1 = {"use_s1": [True, False]}
-sweep_use_s2 = {"use_s2": [True, False]}
-sweep_use_landsat = {"use_landsat": [True, False]}
-sweep_bf16 = {"bf16": [True, False]}
-sweep_model_size = {"model_size": ["nano", "tiny", "base", "large"]}
-
-
-SWEEPS = {
-    "batch": sweep_batch_sizes,
-    "image": sweep_image_sizes,
-    "patch": sweep_patch_sizes,
-    "time": sweep_num_timesteps,
-    "use_s1": sweep_use_s1,
-    "use_s2": sweep_use_s2,
-    "use_landsat": sweep_use_landsat,
-    "bf16": sweep_bf16,
-    "model_size": sweep_model_size,
-    "all": sweep_batch_sizes
-    | sweep_image_sizes
-    | sweep_patch_sizes
-    | sweep_num_timesteps
-    | sweep_use_s1
-    | sweep_use_s2
-    | sweep_use_landsat
-    | sweep_bf16
-    | sweep_model_size,
-}
-
-
 def main() -> None:
     """Main entry point for the throughput benchmarking script."""
     prepare_cli_environment()
@@ -566,15 +528,15 @@ def main() -> None:
 
     # allow a string of sweep keys separated by commas
     sweep_keys = sweep_key.split(",")
-    if not all(sweep_key in SWEEPS.keys() for sweep_key in sweep_keys):
+    if not all(sweep_key in constants.SWEEPS.keys() for sweep_key in sweep_keys):
         logger.error(
-            f"Invalid sweep keys: {sweep_keys} expected one of {SWEEPS.keys()}"
+            f"Invalid sweep keys: {sweep_keys} expected one of {constants.SWEEPS.keys()}"
         )
         sys.exit(1)
 
     sweep_dict: dict[str, Any] = {}
     for sweep_key in sweep_keys:
-        sweep_dict.update(SWEEPS[sweep_key])  # type: ignore
+        sweep_dict.update(constants.SWEEPS[sweep_key])  # type: ignore
     runner_config = ThroughputBenchmarkRunnerConfig(sweep_dict=sweep_dict)
     runner_config = runner_config.merge(overrides)
     logger.info(f"Runner config: {runner_config}")

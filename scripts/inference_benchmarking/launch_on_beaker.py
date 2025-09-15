@@ -30,10 +30,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # make optional cluster key arg
     parser.add_argument(
-        "--cluster_gpu_key",
+        "--cluster",
         type=str,
-        required=False,
-        default=None,
+        required=True,
         help=f"Cluster gpu to use for the benchmark, one of {constants.BEAKER_GPU_TO_CLUSTER_MAP.keys()}",
     )
     parser.add_argument(
@@ -47,10 +46,14 @@ if __name__ == "__main__":
     args, overrides = parser.parse_known_args()
     args = parser.parse_args()
 
-    if args.cluster_gpu_key is None:
-        raise ValueError("Cluster gpu key is required")
+    command = [
+        "python",
+        "helios/inference_benchmarking/run_throughput_benchmark.py",
+        args.sweep_keys,
+        *overrides,
+    ]
 
-    ExperimentSpec(
+    experiment_spec = ExperimentSpec(
         budget=constants.BEAKER_BUDGET,
         tasks=[
             TaskSpec(
@@ -67,12 +70,7 @@ if __name__ == "__main__":
                     )
                 ],
                 image=ImageSource(beaker=constants.BEAKER_IMAGE_NAME),
-                command=[
-                    "python",
-                    "helios/inference_benchmarking/run_throughput_benchmark.py",
-                    args.sweep_keys,
-                    *args.overrides,
-                ],
+                command=command,
                 env_vars=[
                     EnvVar(
                         name=constants.PARAM_KEYS["project"],
@@ -87,10 +85,10 @@ if __name__ == "__main__":
                     ),
                 ],
                 resources=TaskResources(gpu_count=1),
-                constraints=Constraints(
-                    cluster=constants.BEAKER_GPU_TO_CLUSTER_MAP[args.cluster_gpu_key]
-                ),
+                constraints=Constraints(cluster=[args.cluster]),
                 result=ResultSpec(path="/noop-results"),
             )
         ],
     )
+    experiment = b.experiment.create(name="benchmark", spec=experiment_spec)
+    print(f"Experiment created: {experiment.id}: {b.experiment.url(experiment)}")
