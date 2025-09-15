@@ -1,94 +1,22 @@
 """Script to run locally to launch throughput benchmarking task in Beaker."""
 
-import argparse
-from logging import getLogger
-
-from beaker import (
-    Beaker,
-    Constraints,
-    DataMount,
-    DataSource,
-    EnvVar,
-    ExperimentSpec,
-    ImageSource,
-    Priority,
-    ResultSpec,
-    TaskContext,
-    TaskResources,
-    TaskSpec,
+from helios.inference_benchmarking.run_throughput_benchmark import (
+    ThroughputBenchmarkRunnerConfig,
 )
+from helios.inference_benchmarking.constants import SWEEPS
+from helios.internal.experiment import main
+from helios.internal.common import build_common_components
 
-from helios.inference_benchmarking import constants
 
-logger = getLogger(__name__)
+def inference_benchmarking_config_builder() -> ThroughputBenchmarkRunnerConfig:
+    """Build the inference benchmarking configuration."""
+    return ThroughputBenchmarkRunnerConfig(
+        sweep_dict=SWEEPS["batch_size"],
+    )
 
 
 if __name__ == "__main__":
-    b = Beaker.from_env(default_workspace=constants.BEAKER_WORKSPACE)
-    account = b.account.whoami()
-
-    parser = argparse.ArgumentParser()
-    # make optional cluster key arg
-    parser.add_argument(
-        "--cluster",
-        type=str,
-        required=True,
-        help=f"Cluster gpu to use for the benchmark, one of {constants.BEAKER_GPU_TO_CLUSTER_MAP.keys()}",
+    main(
+        common_components_builder=build_common_components,
+        inference_benchmarking_config_builder=inference_benchmarking_config_builder,
     )
-    parser.add_argument(
-        "--sweep_keys",
-        type=str,
-        required=False,
-        default="batch,image,patch,model_size",
-        help=f"Sweep keys to use for the benchmark, one of {constants.SWEEPS.keys()}",
-    )
-    # Parse all unknown args as overrides
-    args, overrides = parser.parse_known_args()
-
-    command = [
-        "python",
-        "helios/inference_benchmarking/run_throughput_benchmark.py",
-        args.sweep_keys,
-        *overrides,
-    ]
-
-    experiment_spec = ExperimentSpec(
-        budget=constants.BEAKER_BUDGET,
-        tasks=[
-            TaskSpec(
-                name="benchmark",
-                description=f"Benchmarking with sweep keys {args.sweep_keys} and overrides {overrides}",
-                replicas=1,
-                context=TaskContext(
-                    priority=Priority(constants.BEAKER_TASK_PRIORITY),
-                    preemptible=True,
-                ),
-                datasets=[
-                    DataMount(
-                        mount_path=constants.ARTIFACTS_DIR,
-                        source=DataSource(weka=constants.WEKA_BUCKET),
-                    )
-                ],
-                image=ImageSource(beaker=constants.BEAKER_IMAGE_NAME),
-                command=command,
-                env_vars=[
-                    EnvVar(
-                        name=constants.PARAM_KEYS["project"],
-                        value=constants.PROJECT_NAME,
-                    ),
-                    EnvVar(
-                        name=constants.PARAM_KEYS["owner"],
-                        value=constants.ENTITY_NAME,
-                    ),
-                    EnvVar(
-                        name="WANDB_API_KEY", secret=f"{account.name}_WANDB_API_KEY"
-                    ),
-                ],
-                resources=TaskResources(gpu_count=1),
-                constraints=Constraints(cluster=[args.cluster]),
-                result=ResultSpec(path="/noop-results"),
-            )
-        ],
-    )
-    experiment = b.experiment.create(spec=experiment_spec)
-    print(f"Experiment created: {experiment.id}: {b.experiment.url(experiment)}")

@@ -491,38 +491,3 @@ class ThroughputBenchmarkRunner:
             f"Running {len(run_params_list)} benchmarking runs sweeping over {self.sweep_dict}"
         )
         self.run_benchmarking_sweep(run_params_list)
-
-
-# def main() -> None:
-#     """Main entry point for the throughput benchmarking script."""
-#     prepare_cli_environment()
-#     seed_all(42)
-#     logger.info(f"Running throughput benchmarking with command {sys.argv}")
-#     if len(sys.argv) < 2:
-#         logger.error(
-#             f"Usage: python run_throughput_benchmark.py <sweep_key> <overrides> got{sys.argv}"
-#         )
-#         sys.exit(1)
-#     script, sweep_key, *overrides = sys.argv
-
-#     # log what we are running
-#     logger.info(
-#         f"Running throughput benchmarking with command {script} {sweep_key} {overrides}"
-#     )
-
-#     # allow a string of sweep keys separated by commas
-#     sweep_keys = sweep_key.split(",")
-#     if not all(sweep_key in constants.SWEEPS.keys() for sweep_key in sweep_keys):
-#         logger.error(
-#             f"Invalid sweep keys: {sweep_keys} expected one of {constants.SWEEPS.keys()}"
-#         )
-#         sys.exit(1)
-
-#     sweep_dict: dict[str, Any] = {}
-#     for sweep_key in sweep_keys:
-#         sweep_dict.update(constants.SWEEPS[sweep_key])  # type: ignore
-#     runner_config = ThroughputBenchmarkRunnerConfig(sweep_dict=sweep_dict)
-#     runner_config = runner_config.merge(overrides)
-#     logger.info(f"Runner config: {runner_config}")
-#     runner = runner_config.build()
-#     runner.run()
