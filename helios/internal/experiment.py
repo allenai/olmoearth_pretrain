@@ -178,12 +178,13 @@ def build_benchmark_config(
     overrides: list[str],
 ) -> BenchmarkExperimentConfig:
     """Build a throughput benchmarking configuration."""
-    inference_benchmarking_config = inference_benchmarking_config_builder(common)
+    inference_benchmarking_config = inference_benchmarking_config_builder()
     config = BenchmarkExperimentConfig(
         launch=common.launch,
         inference_benchmarking_config=inference_benchmarking_config,
     )
     config = config.merge(overrides)
+    logger.info("Benchmark config: %s", config)
     return config
 
 
