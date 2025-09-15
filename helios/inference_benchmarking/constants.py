@@ -25,19 +25,6 @@ BEAKER_GPU_TO_CLUSTER_MAP = {
 PROJECT_NAME = "inference-throughput-no-mask"
 ENTITY_NAME = "eai-ai2"
 
-# representative model weights at each size, predictions not important for benchmark, only computation itself
-NANO_PATH = ""
-TINY_PATH = ""
-BASE_PATH = "/weka/dfive-default/helios/checkpoints/henryh/new_latent_mim_cross_random_contrastive_per-modality_0.01/step420000"
-LARGE_PATH = ""
-
-MODEL_SIZE_MAP = {
-    "NANO": NANO_PATH,
-    "TINY": TINY_PATH,
-    "BASE": BASE_PATH,
-    "LARGE": LARGE_PATH,
-}
-
 ARTIFACTS_DIR = "/artifacts"
 
 # METRICS
@@ -46,8 +33,6 @@ MEAN_BATCH_TOKEN_RATE_METRIC = "mean_batch_token_rate"  # nosec
 MEAN_BATCH_TIME_METRIC = "mean_batch_time"  # nosec
 NUM_TOKENS_PER_BATCH_METRIC = "num_tokens_per_batch"  # nosec
 SQUARE_KM_PER_SECOND_METRIC = "square_km_per_second"  # nosec
-HRS_TO_PROCESS_ALL_LAND_METRIC = "hrs_to_process_all_land"  # nosec
-OVERALL_TIME_TAKEN_METRIC = "overall_time_taken"  # nosec
 PIXELS_PER_SECOND_METRIC = "pixels_per_second"  # nosec
 OOM_OCCURRED_METRIC = "oom_occurred"  # nosec 1 if OOM occurred, 0 if not
 
@@ -70,5 +55,3 @@ PARAM_KEYS = dict(
     owner="OWNER",
     name="NAME",
 )
-
-# set PARAN kets

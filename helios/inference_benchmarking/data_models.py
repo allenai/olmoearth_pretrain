@@ -91,9 +91,7 @@ class RunParams(Config):
         image_size = int(os.getenv(keys["image_size"], "1"))
         patch_size = int(os.getenv(keys["patch_size"], "1"))
         num_timesteps = int(os.getenv(keys["num_timesteps"], "1"))
-        batch_sizes = [
-            int(b) for b in os.getenv(keys["batch_sizes"], "1,").split(",") if b
-        ]
+        batch_size = int(os.getenv(keys["batch_size"], "1"))
         gpu_type = os.getenv(keys["gpu_type"], "cpu")
         bf16 = True if os.getenv(keys["bf16"], "0") == "1" else False
         benchmark_interval_s = int(os.getenv(keys["benchmark_interval_s"], "180"))
@@ -109,7 +107,7 @@ class RunParams(Config):
             image_size=image_size,
             patch_size=patch_size,
             num_timesteps=num_timesteps,
-            batch_sizes=batch_sizes,
+            batch_size=batch_size,
             gpu_type=gpu_type,
             bf16=bf16,
             benchmark_interval_s=benchmark_interval_s,
@@ -131,6 +129,14 @@ class RunParams(Config):
         profiler_enabled = "_prof_" in name or "_prof" in name
         wandb_enabled = "_wandb_" in name or "_wandb" in name
 
+        # Initialize with default values
+        image_size = 64
+        patch_size = 4
+        num_timesteps = 12
+        batch_size = 128
+        benchmark_interval_s = 180
+        min_batches_per_interval = 10
+
         for item in split_name:
             if item.startswith("is"):
                 image_size = int(item.replace("is", ""))
@@ -139,8 +145,10 @@ class RunParams(Config):
             if item.startswith("ts"):
                 num_timesteps = int(item.replace("ts", ""))
 
-        batch_size_raw = re.findall(r"bs((?:\d+_)*\d+)", name)[0]
-        batch_sizes = [int(bs) for bs in batch_size_raw.split("_")]
+        # Fix the batch size parsing
+        batch_size_matches = re.findall(r"bs(\d+)", name)
+        if batch_size_matches:
+            batch_size = int(batch_size_matches[0])
 
         return RunParams(
             model_size=model_size,
@@ -150,9 +158,11 @@ class RunParams(Config):
             image_size=image_size,
             patch_size=patch_size,
             num_timesteps=num_timesteps,
-            batch_sizes=batch_sizes,
+            batch_size=batch_size,
             gpu_type=gpu_type,
             bf16=bf16,
+            benchmark_interval_s=benchmark_interval_s,
+            min_batches_per_interval=min_batches_per_interval,
             profiler_enabled=profiler_enabled,
             wandb_enabled=wandb_enabled,
         )

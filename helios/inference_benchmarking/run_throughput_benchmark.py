@@ -1,9 +1,11 @@
 """Script for performing an inference throughput benchmarking run."""
 
+import itertools
 import json
 import os
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from logging import getLogger
 from pathlib import Path
@@ -123,6 +125,7 @@ class ThroughputBenchmarkRunnerConfig(Config):
     """Defines the configuration for a throughput benchmarking run."""
 
     sweep_dict: dict[str, Any]  # dict of run params to sweep over
+    sweep_group_name: str | None = None
     training_modalities: list[str] = field(
         default_factory=lambda: [
             Modality.SENTINEL2_L2A.name,
@@ -131,13 +134,24 @@ class ThroughputBenchmarkRunnerConfig(Config):
         ]
     )
     work_dir: Path = Path("./test_work_dir")
-    default_run_params: RunParams = field(default_factory=RunParams)
+    default_run_params: RunParams | None = None
     save_folder: Path | None = None
+    cross_product_sweep: bool = False
 
     def build(self) -> "ThroughputBenchmarkRunner":
         """Builds a throughput benchmarking runner."""
-        kwargs = self.as_dict()
-        return ThroughputBenchmarkRunner(**kwargs)
+        if self.default_run_params is None:
+            self.default_run_params = RunParams()
+
+        return ThroughputBenchmarkRunner(
+            default_run_params=self.default_run_params,
+            sweep_group_name=self.sweep_group_name,
+            training_modalities=self.training_modalities,
+            work_dir=self.work_dir,
+            save_folder=self.save_folder,
+            sweep_dict=self.sweep_dict,
+            cross_product_sweep=self.cross_product_sweep,
+        )
 
 
 def calculate_num_token_embeddings(t: torch.Tensor | None) -> int:
@@ -155,17 +169,23 @@ class ThroughputBenchmarkRunner:
     def __init__(
         self,
         default_run_params: RunParams,
+        sweep_group_name: str | None,
         training_modalities: list[str],
         work_dir: Path,
         save_folder: Path | None = None,
         sweep_dict: dict[str, str] = {},
+        cross_product_sweep: bool = False,
     ):
         self.default_run_params = default_run_params
+        self.sweep_group_name = sweep_group_name
         self.training_modalities = training_modalities
         self.work_dir = work_dir
         self.work_dir.mkdir(exist_ok=True)
         self.save_folder = save_folder
         self.sweep_dict = sweep_dict
+        self.cross_product_sweep = cross_product_sweep
+        uuid_str = str(uuid.uuid4())[:6]
+        self.sweep_name = ",".join(sweep_dict.keys()).join(uuid_str)
 
     def build_model(self, run_params: RunParams) -> Helios:
         # Make the model size more configurable via cli
@@ -197,10 +217,23 @@ class ThroughputBenchmarkRunner:
     def build_sweep_run_params(self) -> list[RunParams]:
         """Builds a list of run parameters based on the sweep dictionary."""
         run_params_list = []
-        for key, value in self.sweep_dict.items():
-            for v in value:
-                # Merge the sweep parameter with default_run_params
-                run_params_list.append(self.default_run_params.replace(**{key: v}))
+        if self.cross_product_sweep:
+            # take a cross product of the sweep dictionary
+            sweep_dict_keys = list(self.sweep_dict.keys())
+            # for every different combination of the sweep dictionary, build a run params
+            for combination in itertools.product(
+                *[self.sweep_dict[key] for key in sweep_dict_keys]
+            ):
+                run_params_list.append(
+                    self.default_run_params.replace(
+                        **dict(zip(sweep_dict_keys, combination))
+                    )
+                )
+        else:
+            for key, value in self.sweep_dict.items():
+                for v in value:
+                    # Merge the sweep parameter with default_run_params
+                    run_params_list.append(self.default_run_params.replace(**{key: v}))
         # Add the default run params
         run_params_list.append(self.default_run_params)
         return run_params_list
@@ -236,6 +269,7 @@ class ThroughputBenchmarkRunner:
         logger.info(
             f"Highest square km per second: {squarekm_per_second_per_batch_size[highest_batch_size]}"
         )
+        return squarekm_per_second_per_batch_size[highest_batch_size]
 
     def run_benchmarking(self, run_params: RunParams) -> None:
         """Runs the benchmarking code.
@@ -273,13 +307,19 @@ class ThroughputBenchmarkRunner:
         if run_params.wandb_enabled:
             project = os.getenv(constants.PARAM_KEYS["project"], constants.PROJECT_NAME)
             owner = os.getenv(constants.PARAM_KEYS["owner"], constants.ENTITY_NAME)
+            # add a uuid to the name
             name = run_params.run_name
-            # Hack update name with the batch size
-            name = run_params.run_name
+            name = f"{run_params.run_name}-{self.sweep_name}"
+            if self.sweep_group_name is not None:
+                group = self.sweep_group_name
+            else:
+                group = None
             wandb_callback = WandBCallback(
                 project=project,
                 entity=owner,
                 name=name,
+                group=group,
+                config=run_params.as_dict(),
             )
             wandb_callback.trainer = MinimalTrainer(device, self.work_dir)
             callbacks.append(wandb_callback)
@@ -471,10 +511,6 @@ class ThroughputBenchmarkRunner:
         square_km_per_second = area_processed_km2 / overall_time_taken
         metrics_to_submit[constants.SQUARE_KM_PER_SECOND_METRIC] = square_km_per_second
         metrics_to_submit[constants.PIXELS_PER_SECOND_METRIC] = centroids_per_second
-        metrics_to_submit[constants.HRS_TO_PROCESS_ALL_LAND_METRIC] = (
-            NUM_SQUARE_KM_LAND_IN_WORLD / square_km_per_second / 3600.0
-        )
-        metrics_to_submit[constants.OVERALL_TIME_TAKEN_METRIC] = overall_time_taken
 
         logger.info(f"Metrics for {batch_size} were: {metrics_to_submit}")
         # TODO: If different configurations are different runs how can we do them back to back?
@@ -537,12 +573,17 @@ def main():
     prepare_cli_environment()
     seed_all(42)
     logger.info(f"Running throughput benchmarking with command {sys.argv}")
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 2:
         logger.error(
             f"Usage: python run_throughput_benchmark.py <sweep_key> <overrides> got{sys.argv}"
         )
         sys.exit(1)
     script, sweep_key, *overrides = sys.argv
+
+    # log what we are running
+    logger.info(
+        f"Running throughput benchmarking with command {script} {sweep_key} {overrides}"
+    )
 
     # allow a string of sweep keys separated by commas
     sweep_keys = sweep_key.split(",")

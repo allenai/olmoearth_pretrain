@@ -1,5 +1,7 @@
 """Script to run locally to launch throughput benchmarking task in Beaker."""
 
+from logging import getLogger
+
 from beaker import (
     Beaker,
     Constraints,
@@ -17,6 +19,8 @@ from beaker import (
 
 from helios.inference_benchmarking import constants
 from helios.inference_benchmarking.data_models import RunParams
+
+logger = getLogger(__name__)
 
 # Change this to control your sweep
 configs = [
