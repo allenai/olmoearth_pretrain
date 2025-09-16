@@ -113,6 +113,20 @@ def get_panopticon_args() -> str:
     return panopticon_args
 
 
+def get_terramind_args() -> str:
+    """Get the terramind arguments."""
+    terramind_args = dataset_args
+    # To use terramind pretrained normalizer we want to leave normalization to the terramind wrapper
+    terramind_args = dataset_args
+    terramind_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return terramind_args
+
+
 def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     """Get the galileo arguments."""
     galileo_args = dataset_args
@@ -181,6 +195,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_panopticon_args()
     elif args.galileo:
         return get_galileo_args()
+    elif args.terramind:
+        return get_terramind_args()
     return ""
 
 
