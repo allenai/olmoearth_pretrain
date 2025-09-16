@@ -95,10 +95,10 @@ class Terramind(nn.Module):
         Modality.SENTINEL1.name,
     ]
     current_modalities: list[str] = []
-    model: nn.Module = None
     tm_modalities = {
         Modality.SENTINEL2_L2A.name: "S2L2A",
         Modality.SENTINEL1.name: "S1RTC",
+        Modality.SENTINEL2.name: "S2L1C",
     }
     h_modalities = {v: k for k, v in tm_modalities.items()}
 
@@ -113,10 +113,11 @@ class Terramind(nn.Module):
                 PRETRAINED_BANDS[modality][band][1]
                 for band in PRETRAINED_BANDS[modality]
             ]
-            h_mod = self.h_modalities[modality]
-            self.stats[h_mod] = {}
-            self.stats[h_mod]["means"] = means
-            self.stats[h_mod]["stds"] = stds
+            if modality in self.h_modalities:
+                h_mod = self.h_modalities[modality]
+                self.stats[h_mod] = {}
+                self.stats[h_mod]["means"] = means
+                self.stats[h_mod]["stds"] = stds
 
     def _check_modalities(self, modalities: list[str]) -> bool:
         return set(modalities) == set(self.current_modalities)
@@ -140,8 +141,10 @@ class Terramind(nn.Module):
         size: str = "base",
     ) -> None:
         """Initialize terramind model."""
+        super().__init__()
         self.size = size
         self._prepare_stats()
+        self._init_model(self.size, self.supported_modalities)
 
     def _process_modality_data(
         self, data: torch.Tensor, modality: str
@@ -229,7 +232,8 @@ class Terramind(nn.Module):
 
         modalities = masked_helios_sample.modalities
         if not self._check_modalities(modalities):
-            self._init_model(self.size, modalities)
+            # self._init_model(self.size, modalities)
+            pass
 
         # Prepare input
         per_timestep_inputs = self.prepare_input(masked_helios_sample)

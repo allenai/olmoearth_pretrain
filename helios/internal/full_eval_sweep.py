@@ -275,6 +275,8 @@ def _get_module_path(args: argparse.Namespace) -> str:
         return get_launch_script_path("dino_v3")
     elif args.panopticon:
         return get_launch_script_path("panopticon")
+    elif args.terramind:
+        return get_launch_script_path("terramind")
     elif args.galileo:
         return get_launch_script_path("galileo")
     else:
@@ -375,6 +377,11 @@ def main() -> None:
         "--panopticon",
         action="store_true",
         help="If set, use the panopticon normalization settings",
+    )
+    parser.add_argument(
+        "--terramind",
+        action="store_true",
+        help="If set, nothing really happens idk",
     )
     parser.add_argument(
         "--galileo",
