@@ -1,35 +1,39 @@
 """Terramind models."""
 
-from enum import Enum
-from typing import Any
+import logging
+import math
+from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 from einops import rearrange
-from rslearn.train.transforms.transform import Transform
+from olmo_core.config import Config
 from terratorch.registry import BACKBONE_REGISTRY
+from torch import nn
 
+from helios.data.constants import Modality
+from helios.nn.flexihelios import PoolingType
+from helios.train.masking import MaskedHeliosSample
 
-# TerraMind v1 provides two sizes: base and large
-class TerramindSize(str, Enum):
-    """Size of the Terramind model."""
+logger = logging.getLogger(__name__)
 
-    BASE = "base"
-    LARGE = "large"
-
-
-# Default patch size for Terramind
-PATCH_SIZE = 16
-
-# Modalities supported by Terramind
-# S2L1C: Sentinel-2 Level 1C (Top-of-atmosphere reflectance), range: 1000 – 11000 DN
-# S2L2A: Sentinel-2 Level 2A (Bottom-of-atmosphere reflectance), range: 1000 – 11000 DN
-# S1GRD: Sentinel-1 GRD (Calibrated SAR backscatter), range: -50 – +10 dB
-# S1RTC: Sentinel-1 RTC (Radiometrically terrain corrected), range: -50 – +10 dB
-# RGB: Processed RGB images based on S2L2A, range: 0-255
-# DEM: Digital Elevation Model (Copernicus DEM, 30m), range: -400 – 8800 meters
-
-# More details in the TerraMesh paper: https://arxiv.org/pdf/2504.11172v1
-TERRAMIND_MODALITIES = ["S2L1C", "S2L2A", "S1GRD", "S1RTC", "RGB", "DEM"]
+HELIOS_SENTINEL2_BANDS = [
+    Modality.SENTINEL2_L2A.band_order.index(b)
+    for b in [
+        "B01",
+        "B02",
+        "B03",
+        "B04",
+        "B05",
+        "B06",
+        "B07",
+        "B08",
+        "B8A",
+        "B09",
+        "B11",
+        "B12",
+    ]
+]
 
 # TerraMind band orders and standardization values
 PRETRAINED_BANDS = {
@@ -81,138 +85,185 @@ PRETRAINED_BANDS = {
 }
 
 
-class Terramind(torch.nn.Module):
-    """Terramind backbones."""
+class Terramind(nn.Module):
+    """Helios wrapper for Terramind."""
 
-    def __init__(
-        self,
-        model_size: TerramindSize,
-        modalities: list[str] = ["S2L2A"],
-    ) -> None:
-        """Initialize the Terramind model.
+    patch_size: int = 16
+    image_resolution: int = 224
+    supported_modalities: list[str] = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+    ]
+    current_modalities: list[str] = []
+    model: nn.Module = None
+    tm_modalities = {
+        Modality.SENTINEL2_L2A.name: "S2L2A",
+        Modality.SENTINEL1.name: "S1RTC",
+    }
+    h_modalities = {v: k for k, v in tm_modalities.items()}
 
-        Args:
-            model_size: The size of the Terramind model.
-            modalities: The modalities to use.
-        """
-        super().__init__()
+    def _prepare_stats(self) -> None:
+        self.stats: dict = {}
+        for modality in PRETRAINED_BANDS:
+            means = [
+                PRETRAINED_BANDS[modality][band][0]
+                for band in PRETRAINED_BANDS[modality]
+            ]
+            stds = [
+                PRETRAINED_BANDS[modality][band][1]
+                for band in PRETRAINED_BANDS[modality]
+            ]
+            h_mod = self.h_modalities[modality]
+            self.stats[h_mod] = {}
+            self.stats[h_mod]["means"] = means
+            self.stats[h_mod]["stds"] = stds
 
-        # Check if all modalities are valid
-        for modality in modalities:
-            if modality not in TERRAMIND_MODALITIES:
-                raise ValueError(f"Invalid modality: {modality}")
+    def _check_modalities(self, modalities: list[str]) -> bool:
+        return set(modalities) == set(self.current_modalities)
 
-        if model_size == TerramindSize.BASE:
+    def _init_model(self, size: str, supported_modalities: list[str]) -> None:
+        modalities = [self.tm_modalities[m] for m in supported_modalities]
+        if size == "base":
             self.model = BACKBONE_REGISTRY.build(
                 "terramind_v1_base", modalities=modalities, pretrained=True
             )
-        elif model_size == TerramindSize.LARGE:
+        elif size == "large":
             self.model = BACKBONE_REGISTRY.build(
                 "terramind_v1_large", modalities=modalities, pretrained=True
             )
         else:
-            raise ValueError(f"Invalid model size: {model_size}")
+            raise ValueError(f"Invalid model size: {size}")
+        self.current_modalities = supported_modalities
 
-        self.model_size = model_size
-        self.modalities = modalities
+    def __init__(
+        self,
+        size: str = "base",
+    ) -> None:
+        """Initialize terramind model."""
+        self.size = size
+        self._prepare_stats()
 
-    def forward(self, inputs: list[dict[str, Any]]) -> list[torch.Tensor]:
-        """Forward pass for the Terramind model.
-
-        Args:
-            inputs: input dicts that must include modalities as keys which are defined in the self.modalities list
-
-        Returns:
-            List[torch.Tensor]: Single-scale feature tensors from the encoder.
-        """
-        model_inputs = {}
-        for modality in self.modalities:
-            # We assume the all the inputs include the same modalities
-            if modality not in inputs[0]:
-                continue
-            cur = torch.stack([inp[modality] for inp in inputs], dim=0)  # (B, C, H, W)
-            model_inputs[modality] = cur
-
-        # By default, the patch embeddings are averaged over all modalities to reduce output tokens
-        # The output is a list of tensors (B, N, D) from each layer of the transformer
-        # We only get the last layer's output
-        image_features = self.model(model_inputs)[-1]
-        batch_size, num_patches, _ = image_features.shape
-        height, width = int(num_patches**0.5), int(num_patches**0.5)
-        return [rearrange(image_features, "b (h w) d -> b d h w", h=height, w=width)]
-
-    def get_backbone_channels(self) -> list:
-        """Returns the output channels of this model when used as a backbone.
-
-        The output channels is a list of (patch_size, depth) that corresponds
-        to the feature maps that the backbone returns.
-
-        Returns:
-            the output channels of the backbone as a list of (patch_size, depth) tuples.
-        """
-        if self.model_size == TerramindSize.BASE:
-            depth = 768
-        elif self.model_size == TerramindSize.LARGE:
-            depth = 1024
-        else:
-            raise ValueError(f"Invalid model size: {self.model_size}")
-        return [(PATCH_SIZE, depth)]
-
-
-class TerramindNormalize(Transform):
-    """Normalize inputs using Terramind normalization.
-
-    It will apply normalization to the modalities that are specified in the model configuration.
-    """
-
-    def __init__(self) -> None:
-        """Initialize a new TerramindNormalize."""
-        super().__init__()
-
-    def apply_image(
-        self, image: torch.Tensor, means: list[float], stds: list[float]
-    ) -> torch.Tensor:
-        """Normalize the specified image with Terramind normalization.
+    def _process_modality_data(
+        self, data: torch.Tensor, modality: str
+    ) -> list[torch.Tensor]:
+        """Process individual modality data.
 
         Args:
-            image: the image to normalize.
-            means: the means to use for the normalization.
-            stds: the standard deviations to use for the normalization.
-
+            data: Input tensor of shape [B, H, W, T, C]
+            modality: What modality data is
         Returns:
-            The normalized image.
+            list of tensors of shape [B, C, H, W]
         """
-        images = image.float()  # (C, H, W)
-        if images.shape[0] % len(means) != 0:
-            raise ValueError(
-                f"the number of image channels {images.shape[0]} is not multiple of expected number of bands {len(means)}"
+        # Rearrange from "b h w t c -> b (c t) h w" for DinoV2/Panopticon format
+        t_dim = data.shape[3]
+
+        # Get original dimensions
+        original_height = data.shape[2]
+        data_list = []
+
+        for i in range(t_dim):
+            data_i = rearrange(data[:, :, :, i, :], "b h w c -> b c h w")
+
+            # Rearrange sen2 data
+            if modality == "sentinel2_l2a":
+                data_i = data_i[:, HELIOS_SENTINEL2_BANDS, :, :]
+
+            # Normalize
+            for j in range(data_i.shape[1]):
+                data_i[:, j, :, :] = (
+                    data_i[:, j, :, :] - self.stats[modality]["means"][j]
+                ) / self.stats[modality]["stds"][j]
+
+            new_height = (
+                self.model.patch_size if original_height == 1 else self.image_resolution
             )
-        for i in range(images.shape[0]):
-            band_idx = i % len(means)
-            images[i] = (images[i] - means[band_idx]) / stds[band_idx]
-        return images
+
+            data_i = F.interpolate(
+                data_i,
+                size=(new_height, new_height),
+                mode="bilinear",
+                align_corners=False,
+            )
+            data_list.append(data_i)
+        return data_list
+
+    def prepare_input(
+        self,
+        masked_helios_sample: MaskedHeliosSample,
+    ) -> list[dict[str, torch.Tensor]]:
+        """Prepare input for the Terramind model from MaskedHeliosSample."""
+        input_data_timesteps: dict[int, dict[str, torch.Tensor]] = {}
+        for modality in masked_helios_sample.modalities:
+            if modality not in self.supported_modalities:
+                logger.warning(
+                    f"Skipping modality {modality} as it is not in the supported modalities list {self.supported_modalities}"
+                )
+                continue
+
+            data = getattr(masked_helios_sample, modality)
+
+            if data is None:
+                continue
+
+            # Process the modality data
+            processed_data = self._process_modality_data(data, modality)
+            terramind_modality = self.tm_modalities[modality]
+            for i, data_i in enumerate(processed_data):
+                # start the list if it doesn't exist
+                if i not in input_data_timesteps:
+                    input_data_timesteps[i] = {}
+                input_data_timesteps[i][terramind_modality] = data_i
+
+        if not input_data_timesteps:
+            raise ValueError("No valid modalities found for processing")
+        return [input_data_timesteps[i] for i in sorted(input_data_timesteps.keys())]
 
     def forward(
-        self, input_dict: dict[str, Any], target_dict: dict[str, Any]
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Normalize the specified image with Terramind normalization.
+        self,
+        masked_helios_sample: MaskedHeliosSample,
+        pooling: PoolingType = PoolingType.MEAN,
+        spatial_pool: bool = False,
+    ) -> torch.Tensor:
+        """Forward pass through terramind model."""
+        # Configure model modality
 
-        Args:
-            input_dict: the input dictionary.
-            target_dict: the target dictionary.
+        modalities = masked_helios_sample.modalities
+        if not self._check_modalities(modalities):
+            self._init_model(self.size, modalities)
 
-        Returns:
-            normalized (input_dicts, target_dicts) tuple
-        """
-        for modality in TERRAMIND_MODALITIES:
-            if modality not in input_dict:
-                continue
-            band_info = PRETRAINED_BANDS[modality]
-            means = [band_info[band][0] for band in band_info]
-            stds = [band_info[band][1] for band in band_info]
-            input_dict[modality] = self.apply_image(
-                input_dict[modality],
-                means,
-                stds,
-            )
-        return input_dict, target_dict
+        # Prepare input
+        per_timestep_inputs = self.prepare_input(masked_helios_sample)
+
+        output_features = []
+
+        for data in per_timestep_inputs:
+            timestep_output = self.model(data)[-1]
+            if not spatial_pool:
+                # TODO: maybe right?
+                print("Spatial pooling")
+                timestep_output = timestep_output.mean(dim=1)
+            else:
+                side = math.isqrt(timestep_output.shape[1])
+                timestep_output = rearrange(
+                    timestep_output, "b (h w) c -> b h w c", h=side, w=side
+                )
+            output_features.append(timestep_output.unsqueeze(0))
+        # stack in the timestep dimension and take the mean or maybe the max?
+        if pooling == PoolingType.MEAN:
+            output_features = torch.cat(output_features, dim=0).mean(dim=0)
+        elif pooling == PoolingType.MAX:
+            output_features = torch.max(torch.cat(output_features, dim=0), dim=0)[0]
+        return output_features
+
+
+@dataclass
+class TerramindConfig(Config):
+    """olmo_core style config for Terramind."""
+
+    size: str = "base"
+
+    def build(self) -> Terramind:
+        """Build the Terramind model."""
+        return Terramind(
+            size=self.size,
+        )
