@@ -337,7 +337,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
                     continue
                 # a hack to deal with ERA5 tokens, it ranges from 1 to 12
                 # we don't want to contrastive on only a few tokens
-                if c < 6:
+                if c < 3:
                     continue
                 pred_sample = pred[:, start:end, :]
                 target_sample = target[:, start:end, :]
