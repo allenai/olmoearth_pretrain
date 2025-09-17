@@ -47,12 +47,18 @@ class Satlas(nn.Module):
         Modality.LANDSAT.name,
     ]
 
-    def __init__(self, load_directory: str, size: str = "base") -> None:
+    def __init__(
+        self,
+        load_directory: str,
+        size: str = "base",
+        use_pretrained_normalizer: bool = True,
+    ) -> None:
         """Initialize the Satlas wrapper.
 
         Args:
             size: The model size
             load_directory: The directory to load from
+            use_pretrained_normalizer: Whether or not to apply satlas pretraining normalization
         """
         super().__init__()
         self.satlas: satlaspretrain_models.Model | None = None
@@ -62,6 +68,7 @@ class Satlas(nn.Module):
         self.init_modality: str | None = None
 
         self.image_resolution = 512
+        self.use_pretrained_normalizer = use_pretrained_normalizer
 
     def _initialize_model(self, modality: str, multitemporal: bool) -> None:
         # check init modality to see if we need to reinitialize the model
@@ -77,6 +84,18 @@ class Satlas(nn.Module):
             num_categories=None,
             weights=weights,
         )
+
+    @staticmethod
+    def normalize(image: torch.Tensor, modality: str) -> torch.Tensor:
+        """https://github.com/allenai/satlas/blob/main/Normalization.md."""
+        if modality == Modality.SENTINEL2_L2A.name:
+            return torch.clip(image / 8160, 0, 1)
+        elif modality == Modality.LANDSAT.name:
+            image = torch.clip((image - 4000) / 16320, 0, 1)
+        elif modality == Modality.SENTINEL1:
+            image = torch.clip(image / 255, 0, 1)
+        else:
+            raise ValueError(f"Unexpected modality {modality}")
 
     def _process_modality_data(
         self, data: torch.Tensor, modality: str
@@ -110,6 +129,8 @@ class Satlas(nn.Module):
                 mode="bilinear",
                 align_corners=False,
             )
+            if self.use_pretrained_normalizer:
+                data_i = self.normalize(data_i, modality)
             data_list.append(data_i)
 
         return data_list
