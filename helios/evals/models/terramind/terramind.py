@@ -139,12 +139,14 @@ class Terramind(nn.Module):
     def __init__(
         self,
         size: str = "base",
+        use_pretrained_normalizer: bool = True,
     ) -> None:
         """Initialize terramind model."""
         super().__init__()
         self.size = size
         self._prepare_stats()
         self._init_model(self.size, self.supported_modalities)
+        self.use_pretrained_normalizer = use_pretrained_normalizer
 
     def _process_modality_data(
         self, data: torch.Tensor, modality: str
@@ -171,14 +173,15 @@ class Terramind(nn.Module):
             if modality == "sentinel2_l2a":
                 data_i = data_i[:, HELIOS_SENTINEL2_BANDS, :, :]
 
-            # Normalize
-            for j in range(data_i.shape[1]):
-                data_i[:, j, :, :] = (
-                    data_i[:, j, :, :] - self.stats[modality]["means"][j]
-                ) / self.stats[modality]["stds"][j]
+            if self.use_pretrained_normalizer:
+                # Normalize
+                for j in range(data_i.shape[1]):
+                    data_i[:, j, :, :] = (
+                        data_i[:, j, :, :] - self.stats[modality]["means"][j]
+                    ) / self.stats[modality]["stds"][j]
 
             new_height = (
-                self.model.patch_size if original_height == 1 else self.image_resolution
+                self.patch_size if original_height == 1 else self.image_resolution
             )
 
             data_i = F.interpolate(
@@ -244,7 +247,6 @@ class Terramind(nn.Module):
             timestep_output = self.model(data)[-1]
             if not spatial_pool:
                 # TODO: maybe right?
-                print("Spatial pooling")
                 timestep_output = timestep_output.mean(dim=1)
             else:
                 side = math.isqrt(timestep_output.shape[1])
@@ -265,9 +267,11 @@ class TerramindConfig(Config):
     """olmo_core style config for Terramind."""
 
     size: str = "base"
+    use_pretrained_normalizer: bool = True
 
     def build(self) -> Terramind:
         """Build the Terramind model."""
         return Terramind(
             size=self.size,
+            use_pretrained_normalizer=self.use_pretrained_normalizer,
         )

@@ -113,17 +113,23 @@ def get_panopticon_args() -> str:
     return panopticon_args
 
 
-def get_terramind_args() -> str:
+def get_terramind_args(pretrained_normalizer: bool = True) -> str:
     """Get the terramind arguments."""
     terramind_args = dataset_args
-    # To use terramind pretrained normalizer we want to leave normalization to the terramind wrapper
-    terramind_args = dataset_args
-    terramind_args += " " + " ".join(
-        [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-            for task_name in EVAL_TASKS.keys()
-        ]
-    )
+    if pretrained_normalizer:
+        # To use terramind pretrained normalizer we want to leave normalization to the terramind wrapper
+        terramind_args = dataset_args
+        terramind_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        terramind_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        # IF we use dataset stats we want to turn off the pretrained normalizer
+        terramind_args += " " + "--model.use_pretrained_normalizer=False"
     return terramind_args
 
 
@@ -207,6 +213,11 @@ def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
             return get_galileo_args(pretrained_normalizer=False)
         elif norm_mode == "pre_trained":
             return get_galileo_args(pretrained_normalizer=True)
+    elif args.terramind:
+        if norm_mode == "dataset":
+            return get_terramind_args(pretrained_normalizer=False)
+        elif norm_mode == "pre_trained":
+            return get_terramind_args(pretrained_normalizer=True)
     else:
         if norm_mode == "dataset":
             return dataset_args
@@ -233,7 +244,12 @@ def _build_default_command(
     )
     run_name = f"{base_run_name}_defaults"
 
+    # Add model-specific args
     cmd_args = _get_model_specific_args(args)
+
+    # Add normalization-specific args
+    cmd_args += _get_normalization_args(args, norm_mode)
+
     module_path = (
         args.module_path if args.module_path is not None else _get_module_path(args)
     )
