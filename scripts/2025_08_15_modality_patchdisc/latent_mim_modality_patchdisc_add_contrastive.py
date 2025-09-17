@@ -122,13 +122,14 @@ def build_train_module_config(
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
-                "only_encode_modalities": [
-                    Modality.ERA5_10.name,
-                ],
+                # "only_encode_modalities": [
+                #     Modality.ERA5_10.name,
+                # ],
                 "only_decode_modalities": [
                     Modality.OPENSTREETMAP_RASTER.name,
                     Modality.WORLDCOVER.name,
                     Modality.SRTM.name,
+                    Modality.ERA5_10.name,
                 ],
             }
         ),
