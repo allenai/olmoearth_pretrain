@@ -765,7 +765,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         Returns:
             Tensor with encodings applied based on modality type
         """
-        logger.info(
+        logger.debug(
             f"use_modality_encodings: {use_modality_encodings}, use_temporal_encodings: {use_temporal_encodings}"
         )
         # TODO: Improve this implementation it is quite bad
