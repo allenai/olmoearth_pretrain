@@ -30,7 +30,7 @@ HELIOS_TO_SATLAS = {
     ],
     # Our Landsat models input 11 bands, B1-B11 in order, of Landsat-8 and Landsat-9 images.
     Modality.LANDSAT.name: [
-        Modality.SENTINEL1.band_order.index(b)
+        Modality.LANDSAT.band_order.index(b)
         for b in ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9", "B10", "B11"]
     ],
 }
@@ -91,9 +91,9 @@ class Satlas(nn.Module):
         if modality == Modality.SENTINEL2_L2A.name:
             return torch.clip(image / 8160, 0, 1)
         elif modality == Modality.LANDSAT.name:
-            image = torch.clip((image - 4000) / 16320, 0, 1)
-        elif modality == Modality.SENTINEL1:
-            image = torch.clip(image / 255, 0, 1)
+            return torch.clip((image - 4000) / 16320, 0, 1)
+        elif modality == Modality.SENTINEL1.name:
+            return torch.clip(image / 255, 0, 1)
         else:
             raise ValueError(f"Unexpected modality {modality}")
 
