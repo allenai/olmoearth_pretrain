@@ -11,6 +11,7 @@ numpy
 pandas>=2.2 # Force this higher than 1.x
 rasterio
 shapely>=2 # temporary hack to force shapely 2.x
+terratorch
 torch>=2.7
 torchvision
 universal_pathlib>=0.2.5
