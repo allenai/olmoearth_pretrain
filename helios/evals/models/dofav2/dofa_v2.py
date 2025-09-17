@@ -10,9 +10,9 @@ from olmo_core.config import Config
 from logging import getLogger
 
 from helios.train.masking import MaskedHeliosSample
-from helios.helios.data.constants import Modality
-from helios.helios.nn.flexihelios import PoolingType
-from helios.helios.evals.models.utils import make_resize_transform
+from helios.data.constants import Modality
+from helios.nn.flexihelios import PoolingType
+from helios.evals.models.utils import make_resize_transform
 
 logger = getLogger(__name__)
 
@@ -161,7 +161,7 @@ class DOFAv2(nn.Module):
             logger.warning(
                 f"Skipping modality {modality} as it is not in the supported modalities list {self.supported_modalities}"
             )
-            continue  # Skip non-rgb modalities
+            raise ValueError(f"Unsupported modality: {modality}")
 
         data = getattr(masked_helios_sample, modality)
 

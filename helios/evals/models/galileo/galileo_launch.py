@@ -16,7 +16,6 @@ from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
-from helios.evals.models.utils import 
 
 logger = logging.getLogger(__name__)
 
