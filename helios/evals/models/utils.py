@@ -1,5 +1,6 @@
-"""Trying to prototype fitting everything into olmo core."""
+"""Utils for models."""
 
+from torchvision import transforms
 import logging
 
 from olmo_core.optim import AdamWConfig
@@ -10,25 +11,20 @@ from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
-from helios.evals.models import GalileoConfig
 from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig
-from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
-from helios.evals.models.utils import 
 
-logger = logging.getLogger(__name__)
+def make_resize_transform(resize_size: int) -> transforms.Resize:
+    """Make resize transform for dinov3."""
+    resize = transforms.Resize((resize_size, resize_size), antialias=True)
+    return resize
 
+
+# Shared default launch components that are disregarded when we run evals
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
-
-
-def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """Build the model config for an experiment."""
-    model_config = GalileoConfig()
-    return model_config
-
 
 def build_train_module_config(
     common: CommonComponents,

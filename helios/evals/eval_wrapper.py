@@ -190,6 +190,13 @@ class DINOv3EvalWrapper(EvalWrapper):
             )
         return batch_embeddings
 
+class DOFAv2EvalWrapper(EvalWrapper):
+    """Wrapper for DOFAv2 models."""
+
+    def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        # Need to implement correct feature getting for both segmentation and classification based tasks
+        return self.model(masked_helios_sample, pooling=self.pooling_type)
 
 def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     """Factory function to get the appropriate eval wrapper for a given model.

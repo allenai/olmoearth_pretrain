@@ -1,21 +1,31 @@
 """Models for evals."""
 
 from helios.evals.models.dinov2.dinov2 import DINOv2, DINOv2Config
+from enum import StrEnum
 from helios.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
 from helios.evals.models.galileo import GalileoConfig, GalileoWrapper
 from helios.evals.models.panopticon.panopticon import Panopticon, PanopticonConfig
+from helios.evals.models.dofav2.dofa_v2 import DOFAv2, DOFAv2Config
 
+class BaselineModel(StrEnum):
+    DINOv2 = "dino_v2"
+    DINOv3 = "dino_v3"
+    Galileo = "galileo"
+    Panopticon = "panopticon"
+    DOFAv2 = "dofa_v2"
 
 def get_launch_script_path(model_name: str) -> str:
     """Get the launch script path for a model."""
-    if model_name == "dino_v2":
+    if model_name == BaselineModel.DINOv2:
         return "helios/evals/models/dinov2/dinov2_launch.py"
-    elif model_name == "dino_v3":
+    elif model_name == BaselineModel.DINOv3:
         return "helios/evals/models/dinov3/dinov3_launch.py"
-    elif model_name == "galileo":
+    elif model_name == BaselineModel.Galileo:
         return "helios/evals/models/galileo/galileo_launch.py"
-    elif model_name == "panopticon":
+    elif model_name == BaselineModel.Panopticon:
         return "helios/evals/models/panopticon/panopticon_launch.py"
+    elif model_name == BaselineModel.DOFAv2:
+        return "helios/evals/models/dofav2/dofa_v2_launch.py"
     else:
         raise ValueError(f"Invalid model name: {model_name}")
 
@@ -30,4 +40,6 @@ __all__ = [
     "GalileoConfig",
     "DINOv3",
     "DINOv3Config",
+    "DOFAv2",
+    "DOFAv2Config",
 ]
