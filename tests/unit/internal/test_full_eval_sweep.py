@@ -37,6 +37,7 @@ def base_args() -> argparse.Namespace:
         panopticon=False,
         galileo=False,
         croma=False,
+        terramind=False,
     )
 
 
@@ -55,6 +56,7 @@ def minimal_args() -> argparse.Namespace:
         panopticon=False,
         galileo=False,
         croma=False,
+        terramind=False,
     )
 
 
