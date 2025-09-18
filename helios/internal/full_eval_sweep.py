@@ -157,7 +157,7 @@ def get_dofa_v2_args(pretrained_normalizer: bool = True) -> str:
     if pretrained_normalizer:
         dofa_v2_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_MIN_MAX_INT_256"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_MIN_MAX_INT_256" # Based on the values provided it seems like they want inputs scaled to 0-256 before normalization
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -218,6 +218,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_galileo_args()
     elif args.croma:
         return get_croma_args()
+    elif args.dofa_v2:
+        return get_dofa_v2_args()
     return ""
 
 
@@ -423,15 +425,14 @@ def main() -> None:
         help="If set, use the galileo normalization settings",
     )
     parser.add_argument(
-<<<<<<< HEAD
         "--dofa_v2",
         action="store_true",
         help="If set, use the dofa v2 normalization settings",
-=======
+    )
+    parser.add_argument(
         "--croma",
         action="store_true",
         help="If set, use the croma normalization settings",
->>>>>>> main
     )
     args, extra_cli = parser.parse_known_args()
 

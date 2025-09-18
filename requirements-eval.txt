@@ -6,3 +6,4 @@ rioxarray
 scikit-learn
 xarray
 timm # For dofa v2
+huggingface-hub

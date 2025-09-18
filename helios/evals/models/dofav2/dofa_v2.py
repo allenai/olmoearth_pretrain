@@ -1,7 +1,7 @@
 """Wrapper to run evals on the DOFA v2 model https://github.com/zhu-xlab/DOFA."""
 
-import time
 import torch
+from enum import StrEnum
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
@@ -15,9 +15,14 @@ from logging import getLogger
 from helios.train.masking import MaskedHeliosSample
 from helios.data.constants import Modality
 from helios.nn.flexihelios import PoolingType
+from huggingface_hub import hf_hub_download
+
+from .dofav2_model import vit_base_patch14, vit_large_patch14
 
 logger = getLogger(__name__)
 
+# DOFA v2 standardizes based on mean and standard deviation. The means are base on first scaling values to 0-255
+# I am currently using the downstream dataset min max for this scaling but maybe I should be using the global min max from the satlas dataset
 # vh,vv
 S1_MEAN = [166.36275909, 88.45542715]  # / 255.0
 S1_STD = [64.83126309, 43.07350145]  # /255.0
@@ -26,9 +31,9 @@ S2_MEAN = [
     114.1099739, # These are scaled to 0 - 255
     114.81779093,
     126.63977424,
-    84.33539309, # These are scaled to 0 - 255
-    97.84789168, # These are scaled to 0 - 255
-    103.94461911, # These are scaled to 0 - 255
+    84.33539309,
+    97.84789168,
+    103.94461911,
     101.435633,
     72.32804172,
     56.66528851,
@@ -51,6 +56,7 @@ WAVE_LENGTHS_SENTINEL1 = [5.405, 5.405]
 def apply_normalization(data: torch.Tensor, modality: str) -> torch.Tensor:
     """Apply normalization to the data."""
     if modality == Modality.SENTINEL2_L2A.name:
+        #
         return transforms.Normalize(S2_MEAN, S2_STD)(data)
     elif modality == Modality.SENTINEL1.name:
         return transforms.Normalize(S1_MEAN, S1_STD)(data)
@@ -68,7 +74,13 @@ DOFA_S1_BANDS = [Modality.SENTINEL1.band_order.index(b) for b in ["vv", "vh"]]
 # DOUBLE CHECK LIST
 # AM I LOADING V2
 # AM I APPLYING NORMALIZATION correctly
-# Are the bands in the right order
+
+class DOFAv2HFPaths(StrEnum):
+    """Paths for the DOFA v2 model on Hugging Face."""
+    DOFA_V2_BASE = "dofav2_vit_base_e150.pth"
+    DOFA_V2_LARGE = "dofav2_vit_large_e150.pth"
+
+# I need a new class with the dofa v2 model as the torchub one is the old version
 class DOFAv2(nn.Module):
     """DOFA v2 model."""
 
@@ -76,35 +88,36 @@ class DOFAv2(nn.Module):
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
     ]
-    patch_size: int = 16
+    patch_size: int = 14
     base_resize: int = 224
 
     def __init__(
-        self, torchhub_id: str = "vit_base_dofa", apply_normalization: bool = False
+        self, hf_filename: str, apply_normalization: bool = False
     ):
         super().__init__()
-        self._load_model(torchhub_id)
+        self._load_model(hf_filename)
         self.apply_normalization = apply_normalization
 
-    def _load_model(self, torchhub_id: str):
+    def _load_model(self, hf_filename: str):
         """Load the DOFA v2 model from torch hub."""
-        # Hack to get around https://discuss.pytorch.org/t/torch-hub-load-gives-httperror-rate-limit-exceeded/124769
-        torch.hub._validate_not_a_forked_repo = lambda a, b, c: True
-        for attempt in range(2):
-            try:
-                self.model = torch.hub.load(
-                    "zhu-xlab/DOFA",
-                    torchhub_id,  # The entry point defined in hubconf.py
-                    pretrained=True,
-                )
-                break
-            except Exception as e:
-                logger.warning(
-                    f"Error loading DOFA v2 model: {e}. Retrying in 5 seconds..."
-                )
-                time.sleep(5)
+
+        model_path = hf_hub_download(
+            repo_id="earthflow/DOFA",
+            filename=hf_filename
+        )
+        if hf_filename == DOFAv2HFPaths.DOFA_V2_BASE:
+            model = vit_base_patch14()
+        elif hf_filename == DOFAv2HFPaths.DOFA_V2_LARGE:
+            model = vit_large_patch14()
         else:
-            raise RuntimeError("Failed to load DOFA v2 model after retrying.")
+            raise ValueError(f"Unsupported model: {hf_filename}")
+        logger.info(f"Loading model from: {model_path}")
+        model.load_state_dict(torch.load(model_path, map_location="cpu"))
+        logger.info(f"Model loaded")
+        # log number of parameters
+        logger.info(f"Number of parameters: {sum(p.numel() for p in model.parameters())}")
+        self.model = model
+        self.model.eval()
 
     def get_wave_lengths(self, modality: str) -> list[float]:
         """Get the wave lengths for the modality."""
@@ -194,7 +207,7 @@ class DOFAv2(nn.Module):
         # potentially will need to add a flag for segmentation
         output_features = []
         for dofa_input, wave_lengths in per_timestep_dofa_inputs_and_wave_lengths:
-            timestep_output = self.model.forward_features(dofa_input, wave_lengths)
+            timestep_output, _ = self.model.forward(dofa_input, wave_lengths)
             # This is already pooled for classification
             logger.info(f"Timestep output shape: {timestep_output.shape}")
             output_features.append(timestep_output.unsqueeze(0))
@@ -212,10 +225,10 @@ class DOFAv2(nn.Module):
 class DOFAv2Config(Config):
     """Config for the DOFA v2 model."""
 
-    torchhub_id: str = "vit_base_dofa"
+    hf_filename: str = DOFAv2HFPaths.DOFA_V2_BASE
     apply_normalization: bool = False
 
     def build(self) -> "DOFAv2":
         return DOFAv2(
-            torchhub_id=self.torchhub_id, apply_normalization=self.apply_normalization
+            hf_filename=self.hf_filename, apply_normalization=self.apply_normalization
         )

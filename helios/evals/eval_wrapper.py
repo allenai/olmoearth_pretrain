@@ -210,7 +210,18 @@ class DOFAv2EvalWrapper(EvalWrapper):
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         """Forward pass through the model produces the embedding specified by initialization."""
         # Need to implement correct feature getting for both segmentation and classification based tasks
-        return self.model(masked_helios_sample, pooling=self.pooling_type)
+        if not self.spatial_pool:
+            # Take mean over all t
+            batch_embeddings = self.model(masked_helios_sample, pooling=self.pooling_type)
+            #TODO: only use class token
+            # batch_embeddings = batch_embeddings[:, 0, :]
+            batch_embeddings = reduce(batch_embeddings, "b ... d -> b d", self.pooling_type)
+        else:
+            batch_embeddings = self.model(masked_helios_sample, pooling=self.pooling_type)
+            # remove cls token
+            batch_embeddings = batch_embeddings[:, 1:, :]
+            # reshap
+        return batch_embeddings
 
 def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     """Factory function to get the appropriate eval wrapper for a given model.

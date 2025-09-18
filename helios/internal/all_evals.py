@@ -55,6 +55,7 @@ EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
+        # norm_method=NormMethod.STANDARDIZE,
     ),
     "m_forestnet": DownstreamTaskConfig(
         dataset="m-forestnet",
