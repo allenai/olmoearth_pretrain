@@ -36,6 +36,7 @@ def base_args() -> argparse.Namespace:
         model_name=None,
         panopticon=False,
         galileo=False,
+        croma=False,
     )
 
 
@@ -53,6 +54,7 @@ def minimal_args() -> argparse.Namespace:
         model_name=None,
         panopticon=False,
         galileo=False,
+        croma=False,
     )
 
 

@@ -101,6 +101,18 @@ def get_dino_v3_args() -> str:
     return dino_v3_args
 
 
+def get_croma_args() -> str:
+    """Get the croma arguments."""
+    croma_args = dataset_args
+    croma_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return croma_args
+
+
 def get_panopticon_args() -> str:
     """Get the panopticon arguments."""
     panopticon_args = dataset_args
@@ -204,6 +216,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
     #TODO: Fix bug where galileo args are added twice I need seperate functions for these
     elif args.galileo:
         return get_galileo_args()
+    elif args.croma:
+        return get_croma_args()
     return ""
 
 
@@ -298,6 +312,8 @@ def _get_module_path(args: argparse.Namespace) -> str:
         return get_launch_script_path(BaselineModels.DINOv3)
     elif args.panopticon:
         return get_launch_script_path(BaselineModels.Panopticon)
+    elif args.croma:
+        return get_launch_script_path(BaselineModels.Croma)
     elif args.galileo:
         return get_launch_script_path(BaselineModels.Galileo)
     elif args.dofa_v2:
@@ -407,9 +423,15 @@ def main() -> None:
         help="If set, use the galileo normalization settings",
     )
     parser.add_argument(
+<<<<<<< HEAD
         "--dofa_v2",
         action="store_true",
         help="If set, use the dofa v2 normalization settings",
+=======
+        "--croma",
+        action="store_true",
+        help="If set, use the croma normalization settings",
+>>>>>>> main
     )
     args, extra_cli = parser.parse_known_args()
 

@@ -1,5 +1,6 @@
 """Models for evals."""
 
+from helios.evals.models.croma.croma import Croma, CromaConfig
 from helios.evals.models.dinov2.dinov2 import DINOv2, DINOv2Config
 from enum import StrEnum
 from helios.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
@@ -13,6 +14,7 @@ class BaselineModels(StrEnum):
     Galileo = "galileo"
     Panopticon = "panopticon"
     DOFAv2 = "dofa_v2"
+    Croma = "croma"
 
 def get_launch_script_path(model_name: str) -> str:
     """Get the launch script path for a model."""
@@ -26,6 +28,8 @@ def get_launch_script_path(model_name: str) -> str:
         return "helios/evals/models/panopticon/panopticon_launch.py"
     elif model_name == BaselineModels.DOFAv2:
         return "helios/evals/models/dofav2/dofa_v2_launch.py"
+    elif model_name == BaselineModels.Croma:
+        return "helios/evals/models/croma/croma_launch.py"
     else:
         raise ValueError(f"Invalid model name: {model_name}")
 
@@ -42,4 +46,6 @@ __all__ = [
     "DINOv3Config",
     "DOFAv2",
     "DOFAv2Config",
+    "Croma",
+    "CromaConfig",
 ]

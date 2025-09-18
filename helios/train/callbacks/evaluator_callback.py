@@ -241,6 +241,8 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(f"Task supported modalities: {task_supported_modalities}")
         task_instance_used_modalities = evaluator.input_modalities
         logger.info(f"Task instance used modalities: {task_instance_used_modalities}")
+        if len(task_instance_used_modalities) == 0:
+            task_instance_used_modalities = task_supported_modalities
         does_model_support_all_task_instance_used_modalities = set(
             task_instance_used_modalities
         ).issubset(set(self.model_supported_modalities))
