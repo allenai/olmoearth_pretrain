@@ -213,8 +213,6 @@ class DOFAv2EvalWrapper(EvalWrapper):
         if not self.spatial_pool:
             # Take mean over all t
             batch_embeddings = self.model(masked_helios_sample, pooling=self.pooling_type)
-            #TODO: only use class token
-            # batch_embeddings = batch_embeddings[:, 0, :]
             batch_embeddings = reduce(batch_embeddings, "b ... d -> b d", self.pooling_type)
         else:
             batch_embeddings = self.model(masked_helios_sample, pooling=self.pooling_type)

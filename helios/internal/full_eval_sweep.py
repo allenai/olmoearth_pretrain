@@ -219,7 +219,7 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
     elif args.croma:
         return get_croma_args()
     elif args.dofa_v2:
-        return get_dofa_v2_args()
+        return get_dofa_v2_args(False)
     return ""
 
 
