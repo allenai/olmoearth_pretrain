@@ -15,8 +15,6 @@ from helios.nn.flexihelios import PoolingType
 from helios.train.masking import MaskedHeliosSample
 
 # for Prithvi, true values are ["B02", "B03", "B04", "B05", "B06", "B07"]
-# for all other bands, we just copy the nearest relevant band value; Prithvi
-# shouldn't be using them anyway
 PRITHVI_MEAN = [
     1087.0,
     1342.0,
