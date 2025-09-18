@@ -5,3 +5,4 @@ geopandas
 rioxarray
 scikit-learn
 xarray
+timm # For dofa v2

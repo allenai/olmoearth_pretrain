@@ -16,10 +16,6 @@ from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
-def make_resize_transform(resize_size: int) -> transforms.Resize:
-    """Make resize transform for dinov3."""
-    resize = transforms.Resize((resize_size, resize_size), antialias=True)
-    return resize
 
 
 # Shared default launch components that are disregarded when we run evals

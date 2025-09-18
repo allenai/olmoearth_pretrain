@@ -16,13 +16,16 @@ from helios.nn.flexihelios import PoolingType
 from helios.train.masking import MaskedHeliosSample
 
 from .constants import MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL, REPO_DIR, DinoV3Models
-from helios.evals.models.utils import make_resize_transform
 
 logger = logging.getLogger(__name__)
 # Use timm's names
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
 
+def make_resize_transform(resize_size: int) -> transforms.Resize:
+    """Make resize transform for dinov3."""
+    resize = transforms.Resize((resize_size, resize_size), antialias=True)
+    return resize
 
 def make_normalize_transform_web() -> transforms.Normalize:
     """Make normalize transofrm for dinov3 trained on web dataset."""

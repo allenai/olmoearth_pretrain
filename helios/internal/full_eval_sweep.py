@@ -12,7 +12,7 @@ from logging import getLogger
 from typing import Any
 
 from helios.evals.datasets.configs import dataset_to_config, get_eval_mode
-from helios.evals.models import get_launch_script_path
+from helios.evals.models import get_launch_script_path, BaselineModels
 from helios.internal.all_evals import EVAL_TASKS
 from helios.internal.experiment import SubCmd
 from helios.nn.flexihelios import PoolingType
@@ -138,6 +138,14 @@ def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     )
     return galileo_args
 
+def get_dofa_v2_args(pretrained_normalizer: bool = True) -> str:
+    """Get the dofa v2 arguments."""
+    dofa_v2_args = dataset_args
+    if pretrained_normalizer:
+        dofa_v2_args += " " + "--model.apply_normalization=True"
+    else:
+        dofa_v2_args += " " + "--model.apply_normalization=False"
+    return dofa_v2_args
 
 def _get_sub_command(args: argparse.Namespace) -> str:
     """Determine the sub command based on args and cluster."""
@@ -181,6 +189,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_panopticon_args()
     elif args.galileo:
         return get_galileo_args()
+    elif args.dofa_v2:
+        return get_dofa_v2_args()
     return ""
 
 
@@ -191,6 +201,11 @@ def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
             return get_galileo_args(pretrained_normalizer=False)
         elif norm_mode == "pre_trained":
             return get_galileo_args(pretrained_normalizer=True)
+    elif args.dofa_v2:
+        if norm_mode == "dataset":
+            return get_dofa_v2_args(pretrained_normalizer=False)
+        elif norm_mode == "pre_trained":
+            return get_dofa_v2_args(pretrained_normalizer=True)
     else:
         if norm_mode == "dataset":
             return dataset_args
@@ -272,11 +287,13 @@ def _build_hyperparameter_command(
 def _get_module_path(args: argparse.Namespace) -> str:
     """Get the module path for the launch script."""
     if args.dino_v3:
-        return get_launch_script_path("dino_v3")
+        return get_launch_script_path(BaselineModels.DINOv3)
     elif args.panopticon:
-        return get_launch_script_path("panopticon")
+        return get_launch_script_path(BaselineModels.Panopticon)
     elif args.galileo:
-        return get_launch_script_path("galileo")
+        return get_launch_script_path(BaselineModels.Galileo)
+    elif args.dofa_v2:
+        return get_launch_script_path(BaselineModels.DOFAv2)
     else:
         raise ValueError(f"Invalid model name: {args.model_name}")
 
@@ -380,6 +397,11 @@ def main() -> None:
         "--galileo",
         action="store_true",
         help="If set, use the galileo normalization settings",
+    )
+    parser.add_argument(
+        "--dofa_v2",
+        action="store_true",
+        help="If set, use the dofa v2 normalization settings",
     )
     args, extra_cli = parser.parse_known_args()
 

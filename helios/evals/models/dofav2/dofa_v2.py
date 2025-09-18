@@ -3,7 +3,10 @@
 import time
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.transforms as transforms
 from dataclasses import dataclass
+from einops import rearrange
 
 from olmo_core.config import Config
 
@@ -12,7 +15,6 @@ from logging import getLogger
 from helios.train.masking import MaskedHeliosSample
 from helios.data.constants import Modality
 from helios.nn.flexihelios import PoolingType
-from helios.evals.models.utils import make_resize_transform
 
 logger = getLogger(__name__)
 
@@ -49,9 +51,9 @@ WAVE_LENGTHS_SENTINEL1 = [5.405, 5.405]
 def apply_normalization(data: torch.Tensor, modality: str) -> torch.Tensor:
     """Apply normalization to the data."""
     if modality == Modality.SENTINEL2_L2A.name:
-        return (data - torch.tensor(S2_MEAN)) / torch.tensor(S2_STD)
+        return transforms.Normalize(S2_MEAN, S2_STD)(data)
     elif modality == Modality.SENTINEL1.name:
-        return (data - torch.tensor(S1_MEAN)) / torch.tensor(S1_STD)
+        return transforms.Normalize(S1_MEAN, S1_STD)(data)
     else:
         raise ValueError(f"Unsupported modality: {modality}")
 
@@ -60,7 +62,7 @@ DOFA_S2_BANDS = [
     Modality.SENTINEL2_L2A.band_order.index(b)
     for b in ["B02", "B03", "B04", "B05", "B06", "B07", "B08", "B11", "B12"]
 ]
-DOFA_S1_BANDS = [Modality.SENTINEL1.band_order.index(b) for b in ["VH", "VV"]]
+DOFA_S1_BANDS = [Modality.SENTINEL1.band_order.index(b) for b in ["vv", "vh"]]
 
 
 # DOUBLE CHECK LIST
@@ -75,7 +77,7 @@ class DOFAv2(nn.Module):
         Modality.SENTINEL1.name,
     ]
     patch_size: int = 16
-    image_size: int = 224
+    base_resize: int = 224
 
     def __init__(
         self, torchhub_id: str = "vit_base_dofa", apply_normalization: bool = False
@@ -128,23 +130,35 @@ class DOFAv2(nn.Module):
         data_list = []
         for i in range(t_dim):
             data_i = data[:, :, :, i, :]
+            logger.info(f"Data shape prior to band subset: {data_i.shape}")
 
             if modality == Modality.SENTINEL2_L2A.name:
-                data_i = data_i[:, :, :DOFA_S2_BANDS]
+                data_i = data_i[..., DOFA_S2_BANDS]
             elif modality == Modality.SENTINEL1.name:
-                data_i = data_i[:, :, :DOFA_S1_BANDS]
+                data_i = data_i[..., DOFA_S1_BANDS]
 
+            num_channels = data_i.shape[-1]
             if original_height > self.base_resize:
                 new_height = original_height
             elif original_height <= self.base_resize and original_height > 1:
                 new_height = self.base_resize
             else:
                 new_height = self.patch_size
-
-            resize_transform = make_resize_transform(new_height)
-            data_i = resize_transform(data_i)
+            # log shape prior to resize
+            logger.info(f"Data shape prior to resize: {data_i.shape}")
+            # TODO: check if this is correct
+            # Rearrange for interpolating hw
+            data_i = rearrange(data_i, "b h w c -> b c h w")
+            data_i = F.interpolate(
+                data_i,
+                size=(new_height, new_height),
+                mode="bilinear",
+                align_corners=False,
+            )
+            logger.info(f"Data shape: {data_i.shape}")
             if self.apply_normalization:
                 data_i = apply_normalization(data_i, modality)
+            logger.info(f"Data shape after normalization: {data_i.shape}")
             data_list.append((data_i, self.get_wave_lengths(modality)))
 
         return data_list
