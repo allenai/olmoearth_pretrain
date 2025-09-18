@@ -1,5 +1,6 @@
 """Models for evals."""
 
+from helios.evals.models.croma.croma import Croma, CromaConfig
 from helios.evals.models.dinov2.dinov2 import DINOv2, DINOv2Config
 from helios.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
 from helios.evals.models.galileo import GalileoConfig, GalileoWrapper
@@ -19,6 +20,8 @@ def get_launch_script_path(model_name: str) -> str:
         return "helios/evals/models/panopticon/panopticon_launch.py"
     elif model_name == "terramind":
         return "helios/evals/models/terramind/terramind_launch.py"
+    elif model_name == "croma":
+        return "helios/evals/models/croma/croma_launch.py"
     else:
         raise ValueError(f"Invalid model name: {model_name}")
 
@@ -35,4 +38,6 @@ __all__ = [
     "DINOv3Config",
     "Terramind",
     "TerramindConfig",
+    "Croma",
+    "CromaConfig",
 ]

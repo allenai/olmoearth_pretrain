@@ -101,6 +101,18 @@ def get_dino_v3_args() -> str:
     return dino_v3_args
 
 
+def get_croma_args() -> str:
+    """Get the croma arguments."""
+    croma_args = dataset_args
+    croma_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return croma_args
+
+
 def get_panopticon_args() -> str:
     """Get the panopticon arguments."""
     panopticon_args = dataset_args
@@ -203,6 +215,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_galileo_args()
     elif args.terramind:
         return get_terramind_args()
+    elif args.croma:
+        return get_croma_args()
     return ""
 
 
@@ -309,6 +323,8 @@ def _get_module_path(args: argparse.Namespace) -> str:
         return get_launch_script_path("panopticon")
     elif args.terramind:
         return get_launch_script_path("terramind")
+    elif args.croma:
+        return get_launch_script_path("croma")
     elif args.galileo:
         return get_launch_script_path("galileo")
     else:
@@ -419,6 +435,11 @@ def main() -> None:
         "--galileo",
         action="store_true",
         help="If set, use the galileo normalization settings",
+    )
+    parser.add_argument(
+        "--croma",
+        action="store_true",
+        help="If set, use the croma normalization settings",
     )
     args, extra_cli = parser.parse_known_args()
 
