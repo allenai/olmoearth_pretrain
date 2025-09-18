@@ -14,6 +14,26 @@ from helios.evals.models.prithvi.prithvi_mae import PrithviMAE
 from helios.nn.flexihelios import PoolingType
 from helios.train.masking import MaskedHeliosSample
 
+# for Prithvi, true values are ["B02", "B03", "B04", "B05", "B06", "B07"]
+# for all other bands, we just copy the nearest relevant band value; Prithvi
+# shouldn't be using them anyway
+PRITHVI_MEAN = [
+    1087.0,
+    1342.0,
+    1433.0,
+    2734.0,
+    1958.0,
+    1363.0,
+]
+PRITHVI_STD = [
+    2248.0,
+    2179.0,
+    2178.0,
+    1850.0,
+    1242.0,
+    1049.0,
+]
+
 
 class PrithviWrapper(nn.Module):
     """Class containing the Prithvi model that can ingest MaskedHeliosSample objects."""
@@ -21,11 +41,13 @@ class PrithviWrapper(nn.Module):
     def __init__(
         self,
         load_directory: Path,
+        use_pretrained_normalizer: bool = True,
     ):
         """Initialize the Prithvi wrapper.
 
         Args:
             load_directory: The directory to load from
+            use_pretrained_normalizer: Whether or not to apply prithvi pretraining normalization
         """
         super().__init__()
 
@@ -46,9 +68,19 @@ class PrithviWrapper(nn.Module):
         self.model.load_state_dict(state_dict, strict=False)
         self.image_resolution = config["img_size"]
         self.bands = config["bands"]
+        self.patch_size = config["patch_size"]
         self.helios_s2_to_prithvi = [
             Modality.SENTINEL2_L2A.band_order.index(b) for b in self.bands
         ]
+        self.use_pretrained_normalizer = use_pretrained_normalizer
+
+    @staticmethod
+    def normalize(data: torch.Tensor) -> torch.Tensor:
+        """Normalize Prithvi input according to Prithvi stats."""
+        # https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M/blob/main/inference.py#L140
+        return (
+            data - torch.tensor(PRITHVI_MEAN, dtype=data.dtype, device=data.device)
+        ) / (torch.tensor(PRITHVI_STD, dtype=data.dtype, device=data.device))
 
     def _process_modality_data(
         self, data: torch.Tensor, modality: str
@@ -83,7 +115,7 @@ class PrithviWrapper(nn.Module):
                 align_corners=False,
             )
             if self.use_pretrained_normalizer:
-                data_i = self.normalize(data_i, modality)
+                data_i = self.normalize(data_i)
             data_list.append(data_i)
 
         return data_list
