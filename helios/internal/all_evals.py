@@ -21,6 +21,7 @@ from helios.internal.experiment import (
     CommonComponents,
     main,
 )
+from helios.evals.datasets.normalize import NormMethod
 from helios.nn.flexihelios import (
     PoolingType,
 )
@@ -52,7 +53,7 @@ EVAL_TASKS = {
         embedding_batch_size=128,
         num_workers=0,
         pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=False,
+        norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
     ),
     "m_forestnet": DownstreamTaskConfig(

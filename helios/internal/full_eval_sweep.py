@@ -145,12 +145,18 @@ def get_dofa_v2_args(pretrained_normalizer: bool = True) -> str:
     if pretrained_normalizer:
         dofa_v2_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_MIN_MAX_INT_256"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
         dofa_v2_args += " " + "--model.apply_normalization=True"
     else:
+        dofa_v2_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
         dofa_v2_args += " " + "--model.apply_normalization=False"
     return dofa_v2_args
 

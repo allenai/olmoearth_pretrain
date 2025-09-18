@@ -56,6 +56,7 @@ class NormMethod(str, Enum):
     NORM_YES_CLIP_2_STD_INT = "norm_yes_clip_2_std_int"
     NORM_YES_CLIP_INT = "norm_yes_clip_int"
     NORM_YES_CLIP_MIN_MAX_INT = "norm_yes_clip_min_max_int"
+    NORM_MIN_MAX_INT_256 = "norm_min_max_int_256"
     STANDARDIZE = "standardize"
     NO_NORM = "no_norm"
 
@@ -78,7 +79,7 @@ def _get_normalization_bounds(
         NormMethod.NORM_NO_CLIP: 1.0,
     }
 
-    if method == NormMethod.NORM_YES_CLIP_MIN_MAX_INT:
+    if method == NormMethod.NORM_YES_CLIP_MIN_MAX_INT or method == NormMethod.NORM_MIN_MAX_INT_256:
         if mins is None or maxs is None:
             logger.info("No mins/maxs provided, falling back to 2 std bounds")
             std_mult = bounds_config[NormMethod.NORM_YES_CLIP_2_STD_INT]
@@ -109,6 +110,7 @@ def _apply_clip_and_quantize(
         NormMethod.NORM_YES_CLIP_3_STD_INT,
         NormMethod.NORM_YES_CLIP_2_STD_INT,
         NormMethod.NORM_YES_CLIP_MIN_MAX_INT,
+        NormMethod.NORM_MIN_MAX_INT_256,
     }
 
     if method in clip_methods:
@@ -117,6 +119,8 @@ def _apply_clip_and_quantize(
         # Scale, quantize to 8-bit, then scale back
         image = image * 255
         image = np.clip(image, 0, 255).astype(np.uint8)
+        if method == NormMethod.NORM_MIN_MAX_INT_256:
+            return image
         image = image.astype(original_dtype) / 255
 
     return image
