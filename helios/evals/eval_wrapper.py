@@ -30,6 +30,9 @@ class EvalWrapper:
         patch_size: int,
         pooling_type: PoolingType,
         concat_features: bool = False,
+        use_task_embeds: bool = False,
+        task_embed_path: str | None = None,
+        dataset: str | None = None,
         use_pooled_tokens: bool = False,
     ):
         """Initialize the eval wrapper.
@@ -40,6 +43,9 @@ class EvalWrapper:
             patch_size: The patch size to use for the model.
             pooling_type: The pooling type to use for the model.
             concat_features: Whether to concatenate features across modalities.
+            use_task_embeds: Whether to use task embeddings.
+            task_embed_path: The path to the task embeddings.
+            dataset: The dataset to evaluate on.
             use_pooled_tokens: Whether to use pooled tokens.
         """
         super().__init__()
@@ -54,6 +60,12 @@ class EvalWrapper:
             assert isinstance(self.model, EncodeEarlyAttnPool), (
                 "Pooled tokens are only supported for EncodeEarlyAttnPool"
             )
+
+        if use_task_embeds:
+            self.task_emb = torch.load(task_embed_path)[dataset]
+            self.task_emb = self.task_emb.to(self.device).unsqueeze(0)
+        else:
+            self.task_emb = None
 
     @property
     def device(self) -> torch.device:
@@ -86,7 +98,7 @@ class HeliosEvalWrapper(EvalWrapper):
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
             batch_embeddings: TokensAndMasks = self.model(
-                masked_helios_sample, patch_size=self.patch_size
+                masked_helios_sample, patch_size=self.patch_size, task_emb=self.task_emb
             )["tokens_and_masks"]  # (bsz, dim)
             # Concat features across modalities in space averaged across time
             batch_embeddings = batch_embeddings.pool_unmasked_tokens(
@@ -96,7 +108,7 @@ class HeliosEvalWrapper(EvalWrapper):
             )
         else:
             pooled_tokens_dict = self.model(
-                masked_helios_sample, patch_size=self.patch_size
+                masked_helios_sample, patch_size=self.patch_size, task_emb=self.task_emb
             )["pooled_tokens_and_masks"]
             pooled_tokens = pooled_tokens_dict["modality_pooled_tokens"]
             # spatial pool is true means we want to keep the spatial dimensions

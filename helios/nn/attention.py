@@ -10,6 +10,9 @@ from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
+from helios.nn.lora import TaskLoRALinear
+from helios.nn.moe.soft import SoftMoE
+
 try:
     import flash_attn
 except ImportError:
@@ -110,6 +113,7 @@ class Attention(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        task_lora_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the attention module.
 
@@ -123,6 +127,7 @@ class Attention(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
             use_flash_attn: Use flash attention
+            task_lora_kwargs: Keyword arguments for task-conditioned LoRA
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -140,8 +145,19 @@ class Attention(nn.Module):
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
+
+        # Disable task LoRA if index is not in task_lora_indices
+        task_lora_kwargs = task_lora_kwargs or {}
+        self.use_task_lora = task_lora_kwargs.pop("use_task_lora", False)
+        lora_indices = task_lora_kwargs.pop("task_lora_indices", [])
+        if task_lora_kwargs.pop("index", None) not in lora_indices:
+            self.use_task_lora = False
+
+        self.proj = nn.Linear(dim, dim)
+        if self.use_task_lora:
+            kwargs: dict[str, Any] = task_lora_kwargs or {}
+            self.lora = TaskLoRALinear(dim, dim, **kwargs)
 
     def sdpa(
         self,
@@ -227,6 +243,7 @@ class Attention(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        task_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -240,6 +257,7 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            task_emb: Optional task embedding tensor of shape (B, task_dim)
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
@@ -284,9 +302,12 @@ class Attention(nn.Module):
             attn_mask=attn_mask,
         )
         x = x.transpose(1, 2).reshape(original_shape)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
+        x_proj = self.proj(x)
+        if self.use_task_lora:
+            x_out = self.lora(x, x_proj, task_emb=task_emb)
+        else:
+            x_out = x_proj
+        return self.proj_drop(x_out)
 
 
 class Mlp(nn.Module):
@@ -424,22 +445,7 @@ class DropPath(nn.Module):
 
 
 class Block(nn.Module):
-    """Transformer block with self/cross attention and MLP.
-
-    Args:
-        dim: Input dimension
-        num_heads: Number of attention heads
-        mlp_ratio: Ratio of mlp hidden dim to input dim. Default: 4.0
-        qkv_bias: Add bias to qkv projections. Default: False
-        qk_norm: Apply normalization to q,k. Default: False
-        drop: Dropout rate. Default: 0.0
-        attn_drop: Attention dropout rate. Default: 0.0
-        drop_path: Drop path rate. Default: 0.0
-        init_values: Layer scale initialization value. Default: None
-        act_layer: Activation layer. Default: nn.GELU
-        norm_layer: Normalization layer. Default: nn.LayerNorm
-        cross_attn: Whether to use cross attention. Default: False
-    """
+    """Transformer block with self/cross attention and MLP."""
 
     def __init__(
         self,
@@ -456,6 +462,8 @@ class Block(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        task_lora_kwargs: dict[str, Any] | None = None,
+        task_moe_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -473,6 +481,8 @@ class Block(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
+            task_lora_kwargs: Keyword arguments for task-conditioned LoRA
+            task_moe_kwargs: Keyword arguments for task-conditioned MoE
         """
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -486,6 +496,7 @@ class Block(nn.Module):
             norm_layer=norm_layer,
             cross_attn=cross_attn,
             use_flash_attn=use_flash_attn,
+            task_lora_kwargs=task_lora_kwargs,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -493,15 +504,54 @@ class Block(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
         self.norm2 = norm_layer(dim)
-        self.mlp = Mlp(
-            in_features=dim,
-            hidden_features=int(dim * mlp_ratio),
-            act_layer=act_layer,
-            drop=drop,
-        )
+
+        # Disable task MoE if index is not in task_moe_indices
+        task_moe_kwargs = (task_moe_kwargs or {}).copy()
+        self.use_task_moe = task_moe_kwargs.pop("use_task_moe", False)
+        self.replace_ffn = task_moe_kwargs.pop("replace_ffn", False)
+
+        index = task_moe_kwargs.pop("index", None)
+        moe_indices = task_moe_kwargs.pop("task_moe_indices", None)
+        if moe_indices is not None and index not in moe_indices:
+            self.use_task_moe = False
+            self.replace_ffn = False
+
+        if self.use_task_moe:
+            self.moe = SoftMoE(dim, **task_moe_kwargs)
+            if not self.replace_ffn:
+                # Project [MoE, MLP] to dim to control increased activation norm
+                self.moe_proj = nn.Linear(dim * 2, dim, bias=False)
+
+        if not self.replace_ffn:
+            self.mlp = Mlp(
+                in_features=dim,
+                hidden_features=int(dim * mlp_ratio),
+                act_layer=act_layer,
+                drop=drop,
+            )
+        else:
+            assert self.use_task_moe, "cannot replace ffn without using moe"
+
         self.ls2 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         )
+
+    def mlp_fn(
+        self, x: torch.Tensor, task_emb: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """Return FFN output or MoE output depending on configuration.
+
+        Args:
+            x: Input tensor of shape (B, N, C)
+            task_emb: Optional task embedding tensor of shape (B, task_dim)
+
+        Returns:
+            Output tensor of shape (B, N, C)
+        """
+        if self.replace_ffn:
+            return self.moe(x, task_emb=task_emb)["outputs"]
+        else:
+            return self.mlp(x)
 
     def forward(
         self,
@@ -514,6 +564,7 @@ class Block(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        task_emb: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -527,6 +578,7 @@ class Block(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            task_emb: Optional task embedding tensor of shape (B, task_dim)
 
         Returns:
             Output tensor of shape (B, N, C)
@@ -543,11 +595,19 @@ class Block(nn.Module):
                     max_seqlen_q=max_seqlen_q,
                     max_seqlen_k=max_seqlen_k,
                     attn_mask=attn_mask,
+                    task_emb=task_emb,
                 )
             )
         )
 
-        x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
+        x_mlp = self.norm2(x)
+        mlp_out = self.mlp_fn(x_mlp, task_emb=task_emb)
+
+        if self.use_task_moe and not self.replace_ffn:
+            moe_out = self.moe(x_mlp, task_emb=task_emb)["outputs"]
+            mlp_out = self.moe_proj(torch.concat([moe_out, mlp_out], dim=-1))
+
+        x = x + self.drop_path(self.ls2(mlp_out))
         return x
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:

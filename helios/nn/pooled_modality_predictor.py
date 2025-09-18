@@ -446,6 +446,7 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         always_pass_none_mask_to_transformer: bool = False,
+        task_emb: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
@@ -529,6 +530,7 @@ class EncodeEarlyAttnPool(Encoder):
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
+                task_emb=task_emb,
             )
 
         if exit_ids_seq is not None:
@@ -562,6 +564,7 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         always_pass_none_mask_to_transformer: bool = False,
+        task_emb: Tensor | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -571,6 +574,7 @@ class EncodeEarlyAttnPool(Encoder):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             always_pass_none_mask_to_transformer: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
+            task_emb: Task embedding to use for the attention
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -588,6 +592,7 @@ class EncodeEarlyAttnPool(Encoder):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+                task_emb=task_emb,
             )
         else:
             pooled_tokens_and_masks = {}

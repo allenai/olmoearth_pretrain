@@ -902,6 +902,8 @@ class FlexiHeliosBase(nn.Module):
         random_channel_embeddings: bool = False,
         use_flash_attn: bool = False,
         qk_norm: bool = False,
+        task_lora_kwargs: dict[str, Any] | None = None,
+        task_moe_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the FlexiHeliosBase class."""
         super().__init__()
@@ -916,8 +918,15 @@ class FlexiHeliosBase(nn.Module):
         self.use_flash_attn = use_flash_attn
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
-        self.blocks = nn.ModuleList(
-            [
+
+        if task_lora_kwargs is None:
+            task_lora_kwargs = {}
+        if task_moe_kwargs is None:
+            task_moe_kwargs = {}
+
+        blocks = []
+        for i in range(depth):
+            blocks.append(
                 Block(
                     embedding_size,
                     num_heads,
@@ -928,11 +937,12 @@ class FlexiHeliosBase(nn.Module):
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
+                    task_lora_kwargs=task_lora_kwargs | {"index": i},
+                    task_moe_kwargs=task_moe_kwargs | {"index": i},
                 )
-                for _ in range(depth)
-            ]
-        )
+            )
 
+        self.blocks = nn.ModuleList(blocks)
         self.composite_encodings = FlexiHeliosCompositeEncodings(
             embedding_size,
             self.supported_modalities,
@@ -944,6 +954,9 @@ class FlexiHeliosBase(nn.Module):
 
     def _init_weights(self, m: nn.Module) -> None:
         if isinstance(m, nn.Linear):
+            # respect opt-out flag (e.g., TaskLoRALinear gens)
+            if getattr(m, "_skip_reinit", False):
+                return
             # we use xavier_uniform following official JAX ViT:
             torch.nn.init.xavier_uniform_(m.weight)
             if isinstance(m, nn.Linear) and m.bias is not None:
@@ -1147,6 +1160,8 @@ class Encoder(FlexiHeliosBase):
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
+        task_lora_kwargs: dict[str, Any] | None = None,
+        task_moe_kwargs: dict[str, Any] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1170,6 +1185,8 @@ class Encoder(FlexiHeliosBase):
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
+            task_lora_kwargs: Keyword arguments for task-conditioned LoRA
+            task_moe_kwargs: Keyword arguments for task-conditioned MoE
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1183,6 +1200,8 @@ class Encoder(FlexiHeliosBase):
             use_flash_attn=use_flash_attn,
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
+            task_lora_kwargs=task_lora_kwargs,
+            task_moe_kwargs=task_moe_kwargs,
         )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
@@ -1346,6 +1365,7 @@ class Encoder(FlexiHeliosBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         always_pass_none_mask_to_transformer: bool = False,
+        task_emb: torch.Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1411,6 +1431,7 @@ class Encoder(FlexiHeliosBase):
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
+                task_emb=task_emb,
             )
 
         if self.use_flash_attn:
@@ -1447,6 +1468,7 @@ class Encoder(FlexiHeliosBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         always_pass_none_mask_to_transformer: bool = False,
+        task_emb: torch.Tensor | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -1456,6 +1478,7 @@ class Encoder(FlexiHeliosBase):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             always_pass_none_mask_to_transformer: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
+            task_emb: Task embedding to condition the encoder on (optional)
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -1472,6 +1495,7 @@ class Encoder(FlexiHeliosBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+                task_emb=task_emb,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
         # TODO: we should probably switch this to a dict
@@ -1896,6 +1920,8 @@ class EncoderConfig(Config):
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
+    task_lora_kwargs: dict[str, Any] | None = None
+    task_moe_kwargs: dict[str, Any] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""

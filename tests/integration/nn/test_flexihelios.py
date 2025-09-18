@@ -16,6 +16,7 @@ from helios.nn.flexihelios import (
     Predictor,
     TokensAndMasks,
 )
+from helios.nn.lora import TaskLoRALinear
 from helios.nn.utils import unpack_encoder_output
 from helios.train.masking import MaskedHeliosSample, MaskValue
 
@@ -566,6 +567,72 @@ class TestEncoder:
                 or ("block" in name)
             ):
                 assert param.grad is not None, name
+
+    def test_encoder_with_task_lora_end_to_end(
+        self,
+        supported_modalities: list[ModalitySpec],
+        modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    ) -> None:
+        """End-to-end encoder test with task-conditioned LoRA enabled.
+
+        Args:
+            supported_modalities: The supported modalities for the encoder.
+            modality_band_set_len_and_total_bands: The band set lengths and total bands for each modality.
+        """
+        # Small encoder with task LoRA wired in
+        task_d = 8
+        encoder = Encoder(
+            embedding_size=16,
+            max_patch_size=4,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            depth=2,
+            drop_path=0.0,
+            supported_modalities=supported_modalities,
+            max_sequence_length=12,
+            task_lora_kwargs=dict(
+                use_task_lora=True,
+                task_lora_indices=[0, 1],
+                task_dim=task_d,
+            ),
+        )
+
+        # Build a small MaskedHeliosSample
+        s2_sets, s2_total = modality_band_set_len_and_total_bands["sentinel2_l2a"]
+        ll_sets, ll_total = modality_band_set_len_and_total_bands["latlon"]
+        B, H, W, T, C = 1, 4, 4, 2, s2_total
+        s2 = torch.randn(B, H, W, T, C)
+        s2_mask = torch.zeros(B, H, W, T, C, dtype=torch.long)
+        latlon = torch.randn(B, ll_total)
+        latlon_mask = torch.zeros(B, ll_total, dtype=torch.float32)
+        days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+        months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+        years = torch.randint(2019, 2021, (B, T, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)
+
+        x = MaskedHeliosSample(
+            sentinel2_l2a=s2,
+            sentinel2_l2a_mask=s2_mask,
+            latlon=latlon,
+            latlon_mask=latlon_mask,
+            timestamps=timestamps,
+        )
+
+        patch_size = 2
+        input_res = 1
+        task_emb = torch.randn(B, task_d)  # (batch, task_dim)
+
+        out = encoder.forward(
+            x, patch_size, input_res, token_exit_cfg=None, task_emb=task_emb
+        )
+        loss = out["tokens_and_masks"].sentinel2_l2a.sum()  # type: ignore
+        loss.backward()
+
+        for m in encoder.modules():
+            if isinstance(m, TaskLoRALinear):
+                assert all(p.grad is not None for p in m.gen_a.parameters())
+                assert all(p.grad is not None for p in m.gen_b.parameters())
 
 
 class TestPredictor:
