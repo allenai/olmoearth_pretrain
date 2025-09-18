@@ -113,6 +113,24 @@ def get_croma_args() -> str:
     return croma_args
 
 
+def get_tessera_args() -> str:
+    """Get the tessera arguments."""
+    tessera_args = dataset_args
+    tessera_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    tessera_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=8"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return tessera_args
+
+
 def get_panopticon_args() -> str:
     """Get the panopticon arguments."""
     panopticon_args = dataset_args
@@ -195,6 +213,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_galileo_args()
     elif args.croma:
         return get_croma_args()
+    elif args.tessera:
+        return get_tessera_args()
     return ""
 
 
@@ -205,6 +225,9 @@ def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
             return get_galileo_args(pretrained_normalizer=False)
         elif norm_mode == "pre_trained":
             return get_galileo_args(pretrained_normalizer=True)
+    elif args.tessera:
+        # For Tessera, use dataset normalization always for now
+        return get_tessera_args()
     else:
         if norm_mode == "dataset":
             return dataset_args
@@ -293,6 +316,8 @@ def _get_module_path(args: argparse.Namespace) -> str:
         return get_launch_script_path("croma")
     elif args.galileo:
         return get_launch_script_path("galileo")
+    elif args.tessera:
+        return get_launch_script_path("tessera")
     else:
         raise ValueError(f"Invalid model name: {args.model_name}")
 
@@ -325,7 +350,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         hp_params = (
             loop_through_params()
             if not args.dino_v3
-            and not args.panopticon  # Only use the dataset normalization stats for these models
+            and not args.panopticon
+            and not args.tessera  # Only use the dataset normalization stats for these models
             else no_norm_sweep()
         )
 
@@ -401,6 +427,11 @@ def main() -> None:
         "--croma",
         action="store_true",
         help="If set, use the croma normalization settings",
+    )
+    parser.add_argument(
+        "--tessera",
+        action="store_true",
+        help="If set, use the tessera normalization settings",
     )
     args, extra_cli = parser.parse_known_args()
 
