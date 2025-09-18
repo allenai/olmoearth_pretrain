@@ -204,7 +204,6 @@ def build_common_components(
             logger.info(f"Setting nccl_debug to {override}")
             nccl_debug = override.split("=")[1].lower() in ("true", "1", "yes")
             break
-
     launch_config = build_launch_config(
         name=f"{run_name}-{cmd_to_launch}",
         cmd=[script, cmd_to_launch, run_name, cluster, *overrides],
