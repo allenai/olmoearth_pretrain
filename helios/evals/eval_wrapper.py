@@ -8,7 +8,14 @@ from einops import reduce
 from torch import nn
 
 from helios.evals.datasets.configs import TaskType
-from helios.evals.models import Croma, DINOv2, DINOv3, GalileoWrapper, Panopticon
+from helios.evals.models import (
+    AnySat,
+    Croma,
+    DINOv2,
+    DINOv3,
+    GalileoWrapper,
+    Panopticon,
+)
 from helios.nn.flexihelios import FlexiHeliosBase, PoolingType, TokensAndMasks
 from helios.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from helios.nn.st_model import STBase
@@ -149,6 +156,18 @@ class GalileoEvalWrapper(EvalWrapper):
         )
 
 
+class AnySatEvalWrapper(EvalWrapper):
+    """Wrapper for AnySat models."""
+
+    def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        return self.model(
+            masked_helios_sample,
+            pooling=self.pooling_type,
+            spatial_pool=self.spatial_pool,
+        )
+
+
 class DINOv2EvalWrapper(EvalWrapper):
     """Wrapper for DINOv2 models."""
 
@@ -232,5 +251,7 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     elif isinstance(model, GalileoWrapper):
         logger.info("Using GalileoEvalWrapper")
         return GalileoEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, AnySat):
+        return AnySatEvalWrapper(model=model, **kwargs)
     else:
         raise NotImplementedError(f"No EvalWrapper for model type {type(model)}")
