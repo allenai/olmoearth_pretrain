@@ -138,14 +138,22 @@ def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     )
     return galileo_args
 
+
 def get_dofa_v2_args(pretrained_normalizer: bool = True) -> str:
     """Get the dofa v2 arguments."""
     dofa_v2_args = dataset_args
     if pretrained_normalizer:
+        dofa_v2_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
         dofa_v2_args += " " + "--model.apply_normalization=True"
     else:
         dofa_v2_args += " " + "--model.apply_normalization=False"
     return dofa_v2_args
+
 
 def _get_sub_command(args: argparse.Namespace) -> str:
     """Determine the sub command based on args and cluster."""
@@ -187,30 +195,24 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_dino_v3_args()
     elif args.panopticon:
         return get_panopticon_args()
+    #TODO: Fix bug where galileo args are added twice I need seperate functions for these
     elif args.galileo:
         return get_galileo_args()
-    elif args.dofa_v2:
-        return get_dofa_v2_args()
     return ""
 
 
 def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
     """Get normalization-specific command arguments."""
+    use_pretrained_normalizer = norm_mode == "pre_trained"
+    use_dataset_normalizer = norm_mode == "dataset"
+    if not use_pretrained_normalizer and not use_dataset_normalizer:
+        raise ValueError(f"Invalid normalization mode: {norm_mode}")
     if args.galileo:
-        if norm_mode == "dataset":
-            return get_galileo_args(pretrained_normalizer=False)
-        elif norm_mode == "pre_trained":
-            return get_galileo_args(pretrained_normalizer=True)
+        return get_galileo_args(pretrained_normalizer=use_pretrained_normalizer)
     elif args.dofa_v2:
-        if norm_mode == "dataset":
-            return get_dofa_v2_args(pretrained_normalizer=False)
-        elif norm_mode == "pre_trained":
-            return get_dofa_v2_args(pretrained_normalizer=True)
+        return get_dofa_v2_args(pretrained_normalizer=use_pretrained_normalizer)
     else:
-        if norm_mode == "dataset":
-            return dataset_args
-        elif norm_mode == "pre_trained":
-            return helios_args
+        return dataset_args if use_dataset_normalizer else helios_args
     return ""
 
 
@@ -408,7 +410,7 @@ def main() -> None:
     commands_to_run = build_commands(args, extra_cli)
 
     for cmd in commands_to_run:
-        logger.info(cmd)
+        logger.info(f"Running command: {cmd}")
         subprocess.run(cmd, shell=True, check=True)  # nosec
 
 

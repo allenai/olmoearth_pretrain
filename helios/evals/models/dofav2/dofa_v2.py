@@ -23,12 +23,12 @@ S1_MEAN = [166.36275909, 88.45542715]  # / 255.0
 S1_STD = [64.83126309, 43.07350145]  # /255.0
 
 S2_MEAN = [
-    114.1099739,
+    114.1099739, # These are scaled to 0 - 255
     114.81779093,
     126.63977424,
-    84.33539309,
-    97.84789168,
-    103.94461911,
+    84.33539309, # These are scaled to 0 - 255
+    97.84789168, # These are scaled to 0 - 255
+    103.94461911, # These are scaled to 0 - 255
     101.435633,
     72.32804172,
     56.66528851,
@@ -60,7 +60,7 @@ def apply_normalization(data: torch.Tensor, modality: str) -> torch.Tensor:
 
 DOFA_S2_BANDS = [
     Modality.SENTINEL2_L2A.band_order.index(b)
-    for b in ["B02", "B03", "B04", "B05", "B06", "B07", "B08", "B11", "B12"]
+    for b in ["B04", "B03", "B02", "B05", "B06", "B07", "B08", "B11", "B12"]
 ]
 DOFA_S1_BANDS = [Modality.SENTINEL1.band_order.index(b) for b in ["vv", "vh"]]
 
@@ -195,12 +195,16 @@ class DOFAv2(nn.Module):
         output_features = []
         for dofa_input, wave_lengths in per_timestep_dofa_inputs_and_wave_lengths:
             timestep_output = self.model.forward_features(dofa_input, wave_lengths)
+            # This is already pooled for classification
+            logger.info(f"Timestep output shape: {timestep_output.shape}")
             output_features.append(timestep_output.unsqueeze(0))
         # stack in the timestep dimension and take the mean or maybe the max?
         if pooling == PoolingType.MEAN:
             output_features = torch.cat(output_features, dim=0).mean(dim=0)
+            logger.info(f"Output features shape: {output_features.shape}")
         elif pooling == PoolingType.MAX:
             output_features = torch.max(torch.cat(output_features, dim=0), dim=0)[0]
+            logger.info(f"Output features shape: {output_features.shape}")
         return output_features
 
 

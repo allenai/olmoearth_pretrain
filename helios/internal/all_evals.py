@@ -52,7 +52,7 @@ EVAL_TASKS = {
         embedding_batch_size=128,
         num_workers=0,
         pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
+        norm_stats_from_pretrained=False,
         eval_interval=Duration.epochs(5),
     ),
     "m_forestnet": DownstreamTaskConfig(
