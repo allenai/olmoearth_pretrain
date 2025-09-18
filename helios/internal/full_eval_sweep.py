@@ -151,6 +151,32 @@ def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     return galileo_args
 
 
+def get_prithvi_args(pretrained_normalizer: bool = True) -> str:
+    """Get the galileo arguments."""
+    prithvi_args = dataset_args
+    if pretrained_normalizer:
+        # To use Prithvi pretrained normalizer we want to leave normalization to the Prithvi wrapper
+        prithvi_args = dataset_args
+        prithvi_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        prithvi_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        # IF we use dataset stats we want to turn off the pretrained normalizer
+        prithvi_args += " " + "--model.use_pretrained_normalizer=False"
+    prithvi_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=8"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return prithvi_args
+
+
 def _get_sub_command(args: argparse.Namespace) -> str:
     """Determine the sub command based on args and cluster."""
     if args.dry_run:
@@ -195,6 +221,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_galileo_args()
     elif args.croma:
         return get_croma_args()
+    elif args.prithvi:
+        return get_prithvi_args()
     return ""
 
 
@@ -293,6 +321,8 @@ def _get_module_path(args: argparse.Namespace) -> str:
         return get_launch_script_path("croma")
     elif args.galileo:
         return get_launch_script_path("galileo")
+    elif args.prithvi:
+        return get_launch_script_path("prithvi")
     else:
         raise ValueError(f"Invalid model name: {args.model_name}")
 
@@ -401,6 +431,11 @@ def main() -> None:
         "--croma",
         action="store_true",
         help="If set, use the croma normalization settings",
+    )
+    parser.add_argument(
+        "--prithvi",
+        action="store_true",
+        help="If set, use the prithvi normalization settings",
     )
     args, extra_cli = parser.parse_known_args()
 
