@@ -17,9 +17,11 @@ from helios.internal.all_evals import EVAL_TASKS
 from helios.internal.experiment import SubCmd
 from helios.nn.flexihelios import PoolingType
 
-LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
+# LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
+LP_LRs = [1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 Normalization_MODES = ["dataset", "pre_trained"]
-pooling_types = [PoolingType.MEAN, PoolingType.MAX]
+# pooling_types = [PoolingType.MEAN, PoolingType.MAX]
+pooling_types = [PoolingType.MEAN]
 
 logger = getLogger(__name__)
 
