@@ -200,7 +200,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
-        patch_size=8,
+        patch_size=16,
     ),
     # "cropharvest_Togo_12_sentinel2": DownstreamTaskConfig(
     #     dataset="cropharvest_Togo_12",
