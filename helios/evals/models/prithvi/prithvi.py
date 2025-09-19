@@ -175,12 +175,12 @@ class Prithvi(nn.Module):
         """Forward pass through the satlas model."""
         processed_input = self.prepare_input(masked_helios_sample)
         output = self.model.forward_features(processed_input)[-1]
-        t = output.shape[2]
         # following
         # https://github.com/IBM/terratorch/blob/main/terratorch/models/backbones/prithvi_mae.py#L449
         # we remove the class token. This is also the approach they
         # take for classification: https://github.com/IBM/terratorch/blob/main/terratorch/models/scalar_output_model.py#L19
         output = output[:, 1:, :]
+        t = output.shape[2]
 
         if not spatial_pool:
             # then we don't want to keep the spatial dimensions
