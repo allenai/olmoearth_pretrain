@@ -306,36 +306,36 @@ class ThroughputBenchmarkRunner:
                     device=device,
                     dtype=dtype,
                 )
-        else:
-            s1_tensor = None
+            else:
+                s1_tensor = None
 
-        if run_params.use_s2:
-            # dims: (B, H, W, T, len(S2_BANDS)]
-            s2_tensor = torch.rand(
-                batch_size,
-                run_params.image_size,
-                run_params.image_size,
-                run_params.num_timesteps,
-                NUM_S2_BANDS,
-                device=device,
-                dtype=dtype,
-            )
-        else:
-            s2_tensor = None
+            if run_params.use_s2:
+                # dims: (B, H, W, T, len(S2_BANDS)]
+                s2_tensor = torch.rand(
+                    batch_size,
+                    run_params.image_size,
+                    run_params.image_size,
+                    run_params.num_timesteps,
+                    NUM_S2_BANDS,
+                    device=device,
+                    dtype=dtype,
+                )
+            else:
+                s2_tensor = None
 
-        if run_params.use_landsat:
-            # dims: (B, H, W, T, len(LANDSAT_bands))
-            landsat_tensor = torch.rand(
-                batch_size,
-                run_params.image_size,
-                run_params.image_size,
-                run_params.num_timesteps,
-                NUM_LANDSAT_BANDS,
-                device=device,
-                dtype=dtype,
-            )
-        else:
-            landsat_tensor = None
+            if run_params.use_landsat:
+                # dims: (B, H, W, T, len(LANDSAT_bands))
+                landsat_tensor = torch.rand(
+                    batch_size,
+                    run_params.image_size,
+                    run_params.image_size,
+                    run_params.num_timesteps,
+                    NUM_LANDSAT_BANDS,
+                    device=device,
+                    dtype=dtype,
+                )
+            else:
+                landsat_tensor = None
 
         latlon = torch.rand(batch_size, 2, device=device, dtype=dtype)  # dims: (B, 2)
         timestamps = torch.ones(
