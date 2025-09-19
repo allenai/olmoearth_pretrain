@@ -6,10 +6,12 @@ import torch.nn.functional as F
 import numpy as np
 import math
 
+
 class AttentionPooling(nn.Module):
     def __init__(self, input_dim):
         super().__init__()
         self.query = nn.Linear(input_dim, 1)
+
     def forward(self, x):
         # x: (B, seq_len, dim)
         w = torch.softmax(self.query(x), dim=1)  # (B, seq_len, 1)
@@ -29,6 +31,7 @@ class TemporalAwarePooling(nn.Module):
         w = torch.softmax(self.query(x_context), dim=1)
         return (w * x).sum(dim=1)
 
+
 class TemporalEncoding(nn.Module):
     def __init__(self, d_model, num_freqs=64):
         super().__init__()
@@ -36,7 +39,9 @@ class TemporalEncoding(nn.Module):
         self.d_model = d_model
 
         # Learnable frequency parameters (more flexible than fixed frequencies)
-        self.freqs = nn.Parameter(torch.exp(torch.linspace(0, np.log(365.0), num_freqs)))
+        self.freqs = nn.Parameter(
+            torch.exp(torch.linspace(0, np.log(365.0), num_freqs))
+        )
 
         # Project Fourier features to the target dimension through a linear layer
         self.proj = nn.Linear(2 * num_freqs, d_model)
@@ -48,12 +53,13 @@ class TemporalEncoding(nn.Module):
 
         # Generate multi-frequency sine/cosine features
         t_scaled = t * self.freqs.view(1, 1, -1)  # (B, seq_len, num_freqs)
-        sin = torch.sin(t_scaled + self.phase[..., :self.num_freqs])
-        cos = torch.cos(t_scaled + self.phase[..., self.num_freqs:2*self.num_freqs])
+        sin = torch.sin(t_scaled + self.phase[..., : self.num_freqs])
+        cos = torch.cos(t_scaled + self.phase[..., self.num_freqs : 2 * self.num_freqs])
 
         # Concatenate and project to the target dimension
         encoding = torch.cat([sin, cos], dim=-1)  # (B, seq_len, 2*num_freqs)
         return self.proj(encoding)  # (B, seq_len, d_model)
+
 
 class TemporalPositionalEncoder(nn.Module):
     def __init__(self, d_model):
@@ -63,7 +69,10 @@ class TemporalPositionalEncoder(nn.Module):
     def forward(self, doy):
         # doy: [B, T] tensor containing DOY values (0-365)
         position = doy.unsqueeze(-1).float()  # Ensure float type
-        div_term = torch.exp(torch.arange(0, self.d_model, 2, dtype=torch.float) * -(math.log(10000.0) / self.d_model))
+        div_term = torch.exp(
+            torch.arange(0, self.d_model, 2, dtype=torch.float)
+            * -(math.log(10000.0) / self.d_model)
+        )
         div_term = div_term.to(doy.device)
 
         pe = torch.zeros(doy.shape[0], doy.shape[1], self.d_model, device=doy.device)
@@ -71,42 +80,55 @@ class TemporalPositionalEncoder(nn.Module):
         pe[:, :, 1::2] = torch.cos(position * div_term)
         return pe
 
+
 class TransformerEncoder(nn.Module):
-    def __init__(self, band_num, latent_dim, nhead=8, num_encoder_layers=4,
-                dim_feedforward=512, dropout=0.1, max_seq_len=20):
+    def __init__(
+        self,
+        band_num,
+        latent_dim,
+        nhead=8,
+        num_encoder_layers=4,
+        dim_feedforward=512,
+        dropout=0.1,
+        max_seq_len=20,
+    ):
         super().__init__()
         # Total input dimension: bands
         input_dim = band_num
 
         # Embedding to increase dimension
         self.embedding = nn.Sequential(
-            nn.Linear(input_dim, latent_dim*4),
+            nn.Linear(input_dim, latent_dim * 4),
             nn.ReLU(),
-            nn.Linear(latent_dim*4, latent_dim*4)
+            nn.Linear(latent_dim * 4, latent_dim * 4),
         )
 
         # Temporal Encoder for DOY as position encoding
-        self.temporal_encoder = TemporalPositionalEncoder(d_model=latent_dim*4)
+        self.temporal_encoder = TemporalPositionalEncoder(d_model=latent_dim * 4)
 
         # Transformer Encoder Layer
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=latent_dim*4,
+            d_model=latent_dim * 4,
             nhead=nhead,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
             activation="relu",
             batch_first=True,
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=num_encoder_layers
+        )
 
         # Temporal Aware Pooling
-        self.attn_pool = TemporalAwarePooling(latent_dim*4)
+        self.attn_pool = TemporalAwarePooling(latent_dim * 4)
 
     def forward(self, x):
         # x: (B, seq_len, 10 bands + 1 doy)
         # Split bands and doy
         bands = x[:, :, :-1]  # All columns except last one
-        doy = x[:, :, -1]     # Last column is DOY
+        doy = x[:, :, -1]  # Last column is DOY
+        print(f"Bands shape: {bands.shape}")
+        print(f"Doy shape: {doy.shape}")
         # Embedding of bands
         bands_embedded = self.embedding(bands)  # (B, seq_len, latent_dim*4)
         temporal_encoding = self.temporal_encoder(doy)
@@ -117,12 +139,7 @@ class TransformerEncoder(nn.Module):
         return x
 
 
-
 # Requires day of year as input
-
-
-
-
 
 
 class MultimodalBTInferenceModel(torch.nn.Module):
@@ -130,12 +147,22 @@ class MultimodalBTInferenceModel(torch.nn.Module):
     Model for the inference phase, containing only two Transformer encoders (S2 + S1),
     without the projection head.
     """
-    def __init__(self, s2_backbone, s1_backbone, fusion_method, dim_reducer):
+
+    def __init__(self, s2_backbone, s1_backbone, fusion_method, latent_dim):
         super().__init__()
         self.s2_backbone = s2_backbone
         self.s1_backbone = s1_backbone
         self.fusion_method = fusion_method
-        self.dim_reducer = dim_reducer
+        self.latent_dim = latent_dim
+        if fusion_method == "concat":
+            in_dim = 8 * latent_dim
+        elif fusion_method == "sum":
+            in_dim = 4 * latent_dim
+        self.in_dim = in_dim
+        # the dim reducer only works if we have both s2_x and s1_x
+        self.dim_reducer = nn.Sequential(
+            nn.Linear(self.in_dim, latent_dim),
+        )
 
     def forward(self, s2_x=None, s1_x=None):
         """
@@ -149,9 +176,10 @@ class MultimodalBTInferenceModel(torch.nn.Module):
             raise ValueError("At least one of s2_x or s1_x must be provided.")
 
         s2_repr = self.s2_backbone(s2_x) if s2_x is not None else None
+        print(f"S2 repr shape: {s2_repr.shape}")
         s1_repr = self.s1_backbone(s1_x) if s1_x is not None else None
-
-        if s2_repr is not None and s1_repr is not None:
+        both_present = s2_repr is not None and s1_repr is not None
+        if both_present:
             if self.fusion_method == "sum":
                 fused = s2_repr + s1_repr
             elif self.fusion_method == "concat":
@@ -164,23 +192,22 @@ class MultimodalBTInferenceModel(torch.nn.Module):
             fused = s1_repr
         else:
             raise ValueError("No valid input for fusion.")
-
-        fused = self.dim_reducer(fused)
+        if both_present:
+            fused = self.dim_reducer(fused)
         return fused
-
 
 
 def build_inference_model():
 
     config = {
-    "fusion_method": "concat",  # Options: 'sum' or 'concat'
-    "latent_dim": 128,
+        "fusion_method": "concat",  # Options: 'sum' or 'concat'
+        "latent_dim": 128,
     }
     # Note: After enhancement, the number of S2 data channels is fixed at 12 (10 original bands + 2 doy features), and the number of S1 data channels is 4 (2+2)
     ###############Sentinel-2##################
     s2_backbone_ssl = TransformerEncoder(
         band_num=10,
-        latent_dim=config['latent_dim'],
+        latent_dim=config["latent_dim"],
         # nhead=16,
         # num_encoder_layers=32,
         # dim_feedforward=512,
@@ -188,12 +215,12 @@ def build_inference_model():
         num_encoder_layers=8,
         dim_feedforward=4096,
         dropout=0.1,
-        max_seq_len=40
+        max_seq_len=40,
     )
     ###############Sentinel-1##################
     s1_backbone_ssl = TransformerEncoder(
         band_num=2,
-        latent_dim=config['latent_dim'],
+        latent_dim=config["latent_dim"],
         # nhead=16,
         # num_encoder_layers=32,
         # dim_feedforward=512,
@@ -201,8 +228,13 @@ def build_inference_model():
         num_encoder_layers=8,
         dim_feedforward=4096,
         dropout=0.1,
-        max_seq_len=40
+        max_seq_len=40,
     )
 
-    inference_model = MultimodalBTInferenceModel(s2_backbone_ssl, s1_backbone_ssl, config["fusion_method"], config["dim_reducer"])
+    inference_model = MultimodalBTInferenceModel(
+        s2_backbone_ssl,
+        s1_backbone_ssl,
+        config["fusion_method"],
+        latent_dim=config["latent_dim"],
+    )
     return inference_model

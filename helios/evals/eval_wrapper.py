@@ -8,7 +8,7 @@ from einops import reduce
 from torch import nn
 
 from helios.evals.datasets.configs import TaskType
-from helios.evals.models import Croma, DINOv2, DINOv3, GalileoWrapper, Panopticon
+from helios.evals.models import Croma, DINOv2, DINOv3, GalileoWrapper, Panopticon, Tessera
 from helios.nn.flexihelios import FlexiHeliosBase, PoolingType, TokensAndMasks
 from helios.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from helios.nn.st_model import STBase
@@ -157,7 +157,7 @@ class DINOv2EvalWrapper(EvalWrapper):
         # i need to do the apply imagenet normalizer thing in here
         if self.spatial_pool:
             # Intermediate features are not yet working because of some bug internal to the model
-            batch_embeddings = self.model.forward_features(
+            batch_embeddings = self.model(
                 masked_helios_sample,
                 pooling=self.pooling_type,
             )
@@ -167,6 +167,7 @@ class DINOv2EvalWrapper(EvalWrapper):
                 masked_helios_sample,
                 pooling=self.pooling_type,
             )
+            batch_embeddings = reduce(batch_embeddings, "b ... d -> b d", self.pooling_type)
         return batch_embeddings
 
 
@@ -203,6 +204,19 @@ class DINOv3EvalWrapper(EvalWrapper):
             )
         return batch_embeddings
 
+class TesseraEvalWrapper(EvalWrapper):
+    """Wrapper for Tessera models."""
+
+    def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        if self.spatial_pool:
+            batch_embeddings = self.model(
+                masked_helios_sample,
+                pooling=self.pooling_type,
+            )
+        else:
+            batch_embeddings = self.model(masked_helios_sample, pooling=self.pooling_type)
+        return batch_embeddings
 
 def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     """Factory function to get the appropriate eval wrapper for a given model.
@@ -232,5 +246,8 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     elif isinstance(model, GalileoWrapper):
         logger.info("Using GalileoEvalWrapper")
         return GalileoEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, Tessera):
+        logger.info("Using TesseraEvalWrapper")
+        return TesseraEvalWrapper(model=model, **kwargs)
     else:
         raise NotImplementedError(f"No EvalWrapper for model type {type(model)}")

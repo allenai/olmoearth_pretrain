@@ -5,9 +5,10 @@ import math
 import numpy as np
 from dataclasses import dataclass
 from typing import Optional
+from itertools import product
 
 import torch
-from einops import rearrange
+from einops import rearrange, repeat, reduce
 from olmo_core.config import Config
 from torch import nn
 from torchvision import transforms
@@ -76,17 +77,18 @@ class Tessera(nn.Module):
 
     def _load_model(self, checkpoint_path: Optional[str] = None) -> None:
         """Load the Tessera model."""
-        if checkpoint_path is None:
-            logger.warning("No checkpoint provided for Tessera model. Using placeholder model.")
-            # Create a placeholder model for now
-            self.model = self._create_placeholder_model()
-        else:
-            logger.info(f"Loading Tessera model from {checkpoint_path}")
-            try:
-                # TODO: Implement actual Tessera model loading
-                self.model = build_inference_model(checkpoint_path)
-            except Exception as e:
-                logger.warning(f"Failed to load Tessera checkpoint: {e}. Using placeholder.")
+
+        # TODO: Implement actual Tessera model loading
+        model = build_inference_model()
+        state_dict = torch.load(checkpoint_path, map_location="cpu")['model_state_dict']
+        # remove the _orig_mod prefix from all the keys
+        state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+        # remove all keys starting with "projector."
+        state_dict = {k: v for k, v in state_dict.items() if not k.startswith("projector.")}
+        # remove all "fusion_method." prefix from the keys
+        model.load_state_dict(state_dict)
+        logger.info(f"Loaded Tessera model from {checkpoint_path}")
+        self.model = model
 
 
     def calculate_day_of_year(self, timestamp: torch.Tensor) -> torch.Tensor:
@@ -139,30 +141,37 @@ class Tessera(nn.Module):
 
         if (s2_x := masked_helios_sample.sentinel2_l2a) is not None:
             # Steps filter to the bands and reshape to (b, h, w, t, c)
-            s2_x = s2_x[:, :, :, :, HELIOS_SENTINEL2_TESSERA_BANDS]
-            s2_x = rearrange(s2_x, "b h w t c -> b c h w t")
+            s2_x = s2_x[..., HELIOS_SENTINEL2_TESSERA_BANDS]
             if self.use_pretrained_normalizer:
-                s2_x = self.standardize(s2_x, torch.tensor(S2_BAND_MEAN), torch.tensor(S2_BAND_STD))
+                s2_x = self.standardize(s2_x, torch.tensor(S2_BAND_MEAN, device=s2_x.device), torch.tensor(S2_BAND_STD, device=s2_x.device))
                 # standardize the s2_x
+            # log the s2_x shape
+            logger.info(f"S2_x shape: {s2_x.shape}")
             # get day of year
             doy = self.calculate_day_of_year(masked_helios_sample.timestamps)
             # what is the shape of doy?
             print(doy.shape)
             # concatenate as an extra band at every HW as the last band use einops to repeat
-            doy = rearrange(doy, "b t doy -> b t h w doy", h=s2_x.shape[2], w=s2_x.shape[3])
+            doy = repeat(doy, "b t  -> b  h w t 1", h=s2_x.shape[1], w=s2_x.shape[2])
+            logger.info(f"Doy shape: {doy.shape}")
+            logger.info(f"S2_x shape: {s2_x.shape}")
             s2_x = torch.cat([s2_x, doy], dim=-1)
+            logger.info(f"S2_x shape: {s2_x.shape}")
         if (s1_x := masked_helios_sample.sentinel1) is not None:
             # Steps filter to the bands and reshape to (b, h, w, t, c)
-            s1_x = s1_x[:, :, :, :, HELIOS_SENTINEL1_TESSERA_BANDS]
-            s1_x = rearrange(s1_x, "b h w t c -> b c h w t")
+            s1_x = s1_x[..., HELIOS_SENTINEL1_TESSERA_BANDS]
+            if self.use_pretrained_normalizer:
+                s1_x = self.standardize(s1_x, torch.tensor(S1_BAND_MEAN, device=s1_x.device), torch.tensor(S1_BAND_STD, device=s1_x.device))
+                # standardize the s1_x
             # get day of year
             doy = self.calculate_day_of_year(masked_helios_sample.timestamps)
             # what is the shape of doy?
             print(doy.shape)
             # concatenate as an extra band at every HW as the last band use einops to repeat
-            doy = rearrange(doy, "b t doy -> b t h w doy", h=s1_x.shape[2], w=s1_x.shape[3])
+            doy = repeat(doy, "b t  -> b h w t 1", h=s1_x.shape[1], w=s1_x.shape[2])
+            logger.info(f"Doy shape: {doy.shape}")
+            logger.info(f"S1_x shape: {s1_x.shape}")
             s1_x = torch.cat([s1_x, doy], dim=-1)
-
         return s2_x, s1_x
 
 
@@ -175,20 +184,29 @@ class Tessera(nn.Module):
         """Forward pass through Tessera model for classification."""
         # Prepare input
         s2_x, s1_x = self.prepare_input(masked_helios_sample)
-
-        # Forward pass through Tessera model
-        # Loop over H and W as well to get the output feature map
-        output_features = self.model(s2_x, s1_x)
+        b, h, w, t, c = s2_x.shape
+        # Create an output tensor with the same shape as s2_x except the last dim, and set the last dim to the latent dim
+        output_shape = tuple([b, h, w, self.model.latent_dim])
+        output_features = torch.zeros(*output_shape, device=s2_x.device)
         logger.info(f"Output features shape: {output_features.shape}")
 
-        # Aggregate across timesteps
-        if pooling == PoolingType.MEAN:
-            output_features = torch.cat(output_features, dim=0).mean(dim=0)
-        elif pooling == PoolingType.MAX:
-            output_features = torch.max(torch.cat(output_features, dim=0), dim=0)[0]
-        else:
-            raise ValueError(f"Unsupported pooling type: {pooling}")
+        for i,j in product(range(h), range(w)):
+            if s2_x is not None:
+                s2_x_ij = s2_x[:, i, j, :, :]
+            else:
+                s2_x_ij = None
+            if s1_x is not None:
+                s1_x_ij = s1_x[:, i, j, :, :]
+            else:
+                s1_x_ij = None
+            output_features_ij = self.model(s2_x_ij, s1_x_ij)
+            logger.info(f"Output features ij shape: {output_features_ij.shape}")
+            output_features[:, i, j, :] = output_features_ij
+        # Forward pass through Tessera model
+        # Loop over H and W as well to get the output feature map
+        logger.info(f"Output features shape: {output_features.shape}")
 
+        output_features = reduce(output_features, "b ... d -> b d", pooling)
         return output_features
 
     def forward_features(
