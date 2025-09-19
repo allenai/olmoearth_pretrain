@@ -156,7 +156,6 @@ def get_satlas_args(pretrained_normalizer: bool = True) -> str:
     satlas_args = dataset_args
     if pretrained_normalizer:
         # To use satlas pretrained normalizer we want to leave normalization to the satlas wrapper
-        satlas_args = dataset_args
         satlas_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
@@ -166,6 +165,12 @@ def get_satlas_args(pretrained_normalizer: bool = True) -> str:
 
         satlas_args += " " + "--model.use_pretrained_normalizer=True"
     else:
+        satlas_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
         # IF we use dataset stats we want to turn off the pretrained normalizer
         satlas_args += " " + "--model.use_pretrained_normalizer=False"
     return satlas_args
