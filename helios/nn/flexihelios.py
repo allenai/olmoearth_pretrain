@@ -1516,7 +1516,7 @@ class Encoder(FlexiHeliosBase):
         Returns:
             TokensAndMasks containing the encoded representations and their masks
         """
-        if always_pass_none_mask_to_transformer and token_exit_cfg is None:
+        if always_pass_none_mask_to_transformer and token_exit_cfg is not None:
             raise ValueError(
                 "token_exit_cfg cannot be set when always_pass_none_mask_to_transformer is True"
             )
