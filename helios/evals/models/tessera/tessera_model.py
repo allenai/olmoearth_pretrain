@@ -127,8 +127,6 @@ class TransformerEncoder(nn.Module):
         # Split bands and doy
         bands = x[:, :, :-1]  # All columns except last one
         doy = x[:, :, -1]  # Last column is DOY
-        print(f"Bands shape: {bands.shape}")
-        print(f"Doy shape: {doy.shape}")
         # Embedding of bands
         bands_embedded = self.embedding(bands)  # (B, seq_len, latent_dim*4)
         temporal_encoding = self.temporal_encoder(doy)

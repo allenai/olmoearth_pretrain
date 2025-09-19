@@ -55,6 +55,11 @@ class Tessera(nn.Module):
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
     ]
+    required_modalities: list[str] = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+    ]
+    requires_timeseries: bool = True
 
     def __init__(
         self,
@@ -145,18 +150,11 @@ class Tessera(nn.Module):
             if self.use_pretrained_normalizer:
                 s2_x = self.standardize(s2_x, torch.tensor(S2_BAND_MEAN, device=s2_x.device), torch.tensor(S2_BAND_STD, device=s2_x.device))
                 # standardize the s2_x
-            # log the s2_x shape
-            logger.info(f"S2_x shape: {s2_x.shape}")
             # get day of year
             doy = self.calculate_day_of_year(masked_helios_sample.timestamps)
-            # what is the shape of doy?
-            print(doy.shape)
             # concatenate as an extra band at every HW as the last band use einops to repeat
             doy = repeat(doy, "b t  -> b  h w t 1", h=s2_x.shape[1], w=s2_x.shape[2])
-            logger.info(f"Doy shape: {doy.shape}")
-            logger.info(f"S2_x shape: {s2_x.shape}")
             s2_x = torch.cat([s2_x, doy], dim=-1)
-            logger.info(f"S2_x shape: {s2_x.shape}")
         if (s1_x := masked_helios_sample.sentinel1) is not None:
             # Steps filter to the bands and reshape to (b, h, w, t, c)
             s1_x = s1_x[..., HELIOS_SENTINEL1_TESSERA_BANDS]
@@ -165,12 +163,8 @@ class Tessera(nn.Module):
                 # standardize the s1_x
             # get day of year
             doy = self.calculate_day_of_year(masked_helios_sample.timestamps)
-            # what is the shape of doy?
-            print(doy.shape)
             # concatenate as an extra band at every HW as the last band use einops to repeat
             doy = repeat(doy, "b t  -> b h w t 1", h=s1_x.shape[1], w=s1_x.shape[2])
-            logger.info(f"Doy shape: {doy.shape}")
-            logger.info(f"S1_x shape: {s1_x.shape}")
             s1_x = torch.cat([s1_x, doy], dim=-1)
         if s2_x is None or s1_x is None:
             raise ValueError("Tessera does not support single modality input")
@@ -190,7 +184,6 @@ class Tessera(nn.Module):
         # Create an output tensor with the same shape as s2_x except the last dim, and set the last dim to the latent dim
         output_shape = tuple([b, h, w, self.model.latent_dim])
         output_features = torch.zeros(*output_shape, device=s2_x.device)
-        logger.info(f"Output features shape: {output_features.shape}")
 
         for i,j in product(range(h), range(w)):
             if s2_x is not None:
@@ -202,7 +195,6 @@ class Tessera(nn.Module):
             else:
                 s1_x_ij = None
             output_features_ij = self.model(s2_x_ij, s1_x_ij)
-            logger.info(f"Output features ij shape: {output_features_ij.shape}")
             output_features[:, i, j, :] = output_features_ij
         # Forward pass through Tessera model
         # Loop over H and W as well to get the output feature map

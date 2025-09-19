@@ -255,6 +255,22 @@ class DownstreamEvaluatorCallback(Callback):
             return self.trainer.train_module.model.supported_modalities
         return Modality.names()
 
+    def _check_input_requirements(self, evaluator: DownstreamEvaluator) -> bool:
+        """Check if the evaluator is supported by the model."""
+        model = self.trainer.train_module.model
+
+        # Check required modalities
+        required_modalities_present = True
+        if hasattr(model, "required_modalities"):
+            required_modalities_present = set(model.required_modalities).issubset(set(evaluator.input_modalities))
+
+        # Check timeseries requirement
+        has_timeseries = True
+        if hasattr(model, "requires_timeseries") and model.requires_timeseries:
+            has_timeseries = evaluator.config.timeseries
+
+        return required_modalities_present and has_timeseries
+
     def pre_train(self) -> None:
         """Run the evaluators on startup."""
         if self.eval_on_startup:
@@ -272,6 +288,11 @@ class DownstreamEvaluatorCallback(Callback):
                 if not self._check_supported_modalities(evaluator):
                     logger.info(
                         f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model"
+                    )
+                    continue
+                if not self._check_input_requirements(evaluator):
+                    logger.info(
+                        f"Skipping {evaluator.evaluation_name} because it doesn't match input requirements of the model"
                     )
                     continue
                 val_result, eval_time = self._perform_eval(evaluator)
