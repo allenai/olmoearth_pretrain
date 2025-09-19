@@ -113,21 +113,28 @@ def get_croma_args() -> str:
     return croma_args
 
 
-def get_tessera_args() -> str:
+def get_tessera_args(pretrained_normalizer: bool = True) -> str:
     """Get the tessera arguments."""
     tessera_args = dataset_args
-    tessera_args += " " + " ".join(
-        [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-            for task_name in EVAL_TASKS.keys()
-        ]
-    )
-    tessera_args += " " + " ".join(
-        [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=8"
-            for task_name in EVAL_TASKS.keys()
-        ]
-    )
+    if pretrained_normalizer:
+        # To use galileo pretrained normalizer we want to leave normalization to the galileo wrapper
+        tessera_args = dataset_args
+        tessera_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        tessera_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        tessera_args += " " + "--model.use_pretrained_normalizer=False"
+        tessera_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
     return tessera_args
 
 

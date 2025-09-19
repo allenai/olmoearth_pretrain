@@ -2,7 +2,7 @@
 
 import logging
 import math
-import warnings
+import numpy as np
 from dataclasses import dataclass
 from typing import Optional
 
@@ -16,19 +16,24 @@ from helios.data.constants import Modality
 from helios.nn.flexihelios import PoolingType
 from helios.train.masking import MaskedHeliosSample
 
+from helios.evals.models.tessera.tessera_model import build_inference_model
+
 logger = logging.getLogger(__name__)
 
-# Tessera typically expects Sentinel-2 data normalized to [0,1] or similar
-# These values may need adjustment based on the actual Tessera implementation
-TESSERA_DEFAULT_MEAN = (0.485, 0.456, 0.406)  # Placeholder values
-TESSERA_DEFAULT_STD = (0.229, 0.224, 0.225)  # Placeholder values
-
-
+# Normalization stats copied from https://github.com/ucam-eo/tessera/blob/a883aa12392eb9fc237ae4c29824318760e138a2/tessera_infer/src/datasets/ssl_dataset.py
+# Mean and variance
+S2_BAND_MEAN = np.array([1711.0938,1308.8511,1546.4543,3010.1293,3106.5083,
+                        2068.3044,2685.0845,2931.5889,2514.6928,1899.4922], dtype=np.float32)
+S2_BAND_STD = np.array([1926.1026,1862.9751,1803.1792,1741.7837,1677.4543,
+                        1888.7862,1736.3090,1715.8104,1514.5199,1398.4779], dtype=np.float32)
+S1_BAND_MEAN = np.array([5484.0407,3003.7812], dtype=np.float32)
+S1_BAND_STD = np.array([1871.2334,1726.0670], dtype=np.float32)
+# Tessera wants to be standardized by its pretraining evaluation statistics
 def make_tessera_normalize_transform() -> transforms.Normalize:
     """Make normalize transform for Tessera model."""
     normalize = transforms.Normalize(
-        mean=TESSERA_DEFAULT_MEAN,
-        std=TESSERA_DEFAULT_STD,
+        mean=S2_BAND_MEAN,
+        std=S2_BAND_STD,
     )
     return normalize
 
@@ -39,30 +44,33 @@ def make_tessera_resize_transform(resize_size: int) -> transforms.Resize:
     return resize
 
 
-# Tessera expects Sentinel-2 bands - adjust based on actual requirements
-# Common Sentinel-2 bands: B02 (Blue), B03 (Green), B04 (Red), B08 (NIR)
-# B05, B06, B07, B8A, B11, B12 (SWIR bands)
+# Tessera band order based on https://github.com/ucam-eo/tessera/blob/a883aa12392eb9fc237ae4c29824318760e138a2/tessera_preprocessing/s2_fast_processor.py#L51
 HELIOS_SENTINEL2_TESSERA_BANDS = [
-    Modality.SENTINEL2_L2A.band_order.index(b) 
+    Modality.SENTINEL2_L2A.band_order.index(b)
     for b in ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12"]
     if b in Modality.SENTINEL2_L2A.band_order
 ]
+HELIOS_SENTINEL1_TESSERA_BANDS = [
+    Modality.SENTINEL1.band_order.index(b)
+    for b in ["vv", "vh"]
+    if b in Modality.SENTINEL1.band_order
+]
 
-
+# Only makes sense for pixel time series data
 class Tessera(nn.Module):
     """Wrapper for the Tessera model that can ingest MaskedHeliosSample objects."""
 
-    patch_size: int = 16  # Common patch size, adjust based on actual model
-    base_resize: int = 224  # Common input size, adjust based on actual model
+    # Pixel time series data
+    patch_size: int = 1
     supported_modalities: list[str] = [
         Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
     ]
 
     def __init__(
         self,
         checkpoint_path: Optional[str] = None,
         apply_normalization: bool = True,
-        input_size: int = 224,
     ):
         """Initialize the Tessera wrapper.
 
@@ -73,13 +81,12 @@ class Tessera(nn.Module):
         """
         super().__init__()
         self.apply_normalization = apply_normalization
-        self.input_size = input_size
         self.checkpoint_path = checkpoint_path
-        
+
         if self.apply_normalization:
             logger.info("Applying Tessera normalization to input data")
             self.normalize_transform = make_tessera_normalize_transform()
-        
+
         # Initialize model - placeholder for now
         self._load_model(checkpoint_path)
 
@@ -93,94 +100,81 @@ class Tessera(nn.Module):
             logger.info(f"Loading Tessera model from {checkpoint_path}")
             try:
                 # TODO: Implement actual Tessera model loading
-                # This will be updated when the actual Tessera implementation is available
-                self.model = self._load_tessera_checkpoint(checkpoint_path)
+                self.model = build_inference_model(checkpoint_path)
             except Exception as e:
                 logger.warning(f"Failed to load Tessera checkpoint: {e}. Using placeholder.")
-                self.model = self._create_placeholder_model()
 
-    def _create_placeholder_model(self) -> nn.Module:
-        """Create a placeholder model for testing purposes."""
-        # Simple placeholder - just a linear layer that outputs fixed size features
-        return nn.Sequential(
-            nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Flatten(),
-            nn.Linear(len(HELIOS_SENTINEL2_TESSERA_BANDS), 768)  # Common feature size
+
+    def calculate_day_of_year(self, timestamp: torch.Tensor) -> torch.Tensor:
+        """Calculate day of year from timestamp.
+
+        Args:
+            timestamp: Tensor of shape (..., 3) where last dim is [day, month, year]
+        Returns:
+            Tensor of same shape as input without last dim, with day of year as int
+        """
+        # timestamp[..., 0] = day, timestamp[..., 1] = month, timestamp[..., 2] = year
+        day = timestamp[..., 0]
+        month = timestamp[..., 1]
+        year = timestamp[..., 2]
+
+        # Days in months for non-leap years
+        days_in_month = torch.tensor(
+            [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31], device=timestamp.device
         )
 
-    def _load_tessera_checkpoint(self, checkpoint_path: str) -> nn.Module:
-        """Load actual Tessera model from checkpoint."""
-        # TODO: Implement actual loading logic based on Tessera's checkpoint format
-        # This is a placeholder that will need to be updated
-        raise NotImplementedError("Tessera checkpoint loading not yet implemented")
+        # Check for leap year: (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
+        is_leap = ((year % 4 == 0) & (year % 100 != 0)) | (year % 400 == 0)
 
-    def _process_modality_data(
-        self,
-        data: torch.Tensor,
-        modality: str,
-    ) -> list[torch.Tensor]:
-        """Process individual modality data for Tessera."""
-        # Rearrange from "b h w t c -> b (c t) h w" for model format
-        t_dim = data.shape[3]
-        original_height = data.shape[2]
-        
-        data_list = []
-        for i in range(t_dim):
-            data_i = rearrange(data[:, :, :, i, :], "b h w c -> b c h w")
-            
-            # Select appropriate bands for Tessera
-            if modality == "sentinel2_l2a":
-                data_i = data_i[:, HELIOS_SENTINEL2_TESSERA_BANDS, :, :]
-            
-            # Resize if necessary
-            if original_height != self.input_size:
-                resize_transform = make_tessera_resize_transform(self.input_size)
-                data_i = resize_transform(data_i)
-            
-            # Apply normalization if enabled
-            if self.apply_normalization:
-                data_i = self.normalize_transform(data_i)
-            
-            data_list.append(data_i)
-        
-        return data_list
+        # Cumulative days at the start of each month (0 for Jan, 31 for Feb, etc.)
+        cum_days = torch.cat(
+            [torch.zeros(1, device=timestamp.device, dtype=days_in_month.dtype), days_in_month.cumsum(0)[:-1]]
+        )
+
+        # Get cumulative days for the given month
+        # month is 1-based (Jan=1), so subtract 1 for indexing
+        month_idx = month.long() - 1
+        cum_days_for_month = cum_days[month_idx]
+
+        # Add 1 if leap year and month > 2
+        leap_day = (is_leap & (month > 2)).long()
+
+        doy = cum_days_for_month + day + leap_day
+        return doy
 
     def prepare_input(
         self,
         masked_helios_sample: MaskedHeliosSample,
     ) -> list[torch.Tensor]:
         """Prepare input for the Tessera model from MaskedHeliosSample."""
-        input_data_timesteps: dict[int, list[torch.Tensor]] = {}
-        
-        for modality in masked_helios_sample.modalities:
-            if modality not in self.supported_modalities:
-                logger.warning(
-                    f"Skipping modality {modality} as it is not supported by Tessera. "
-                    f"Supported modalities: {self.supported_modalities}"
-                )
-                continue
+        # Want a batch of samples with tuple shape (b, h, w, t, c)
 
-            data = getattr(masked_helios_sample, modality)
-            if data is None:
-                continue
+        if (s2_x := masked_helios_sample.sentinel2_l2a) is not None:
+            # Steps filter to the bands and reshape to (b, h, w, t, c)
+            s2_x = s2_x[:, :, :, :, HELIOS_SENTINEL2_TESSERA_BANDS]
+            s2_x = rearrange(s2_x, "b h w t c -> b c h w t")
+            # get day of year
+            doy = self.calculate_day_of_year(masked_helios_sample.timestamps)
+            # what is the shape of doy?
+            print(doy.shape)
+            # concatenate as an extra band at every HW as the last band use einops to repeat
+            doy = rearrange(doy, "b t doy -> b t h w doy", h=s2_x.shape[2], w=s2_x.shape[3])
+            s2_x = torch.cat([s2_x, doy], dim=-1)
+        if (s1_x := masked_helios_sample.sentinel1) is not None:
+            # Steps filter to the bands and reshape to (b, h, w, t, c)
+            s1_x = s1_x[:, :, :, :, HELIOS_SENTINEL1_TESSERA_BANDS]
+            s1_x = rearrange(s1_x, "b h w t c -> b c h w t")
+            # get day of year
+            doy = self.calculate_day_of_year(masked_helios_sample.timestamps)
+            # what is the shape of doy?
+            print(doy.shape)
+            # concatenate as an extra band at every HW as the last band use einops to repeat
+            doy = rearrange(doy, "b t doy -> b t h w doy", h=s1_x.shape[2], w=s1_x.shape[3])
+            s1_x = torch.cat([s1_x, doy], dim=-1)
 
-            # Process the modality data
-            processed_data = self._process_modality_data(data, modality)
-            for i, data_i in enumerate(processed_data):
-                if i not in input_data_timesteps:
-                    input_data_timesteps[i] = []
-                input_data_timesteps[i].append(data_i)
+        return s2_x, s1_x
 
-        if not input_data_timesteps:
-            raise ValueError("No valid modalities found for Tessera processing")
-        
-        per_timestep_inputs = []
-        for i, input_data_i in input_data_timesteps.items():
-            # Concatenate all modality data along channel dimension
-            concatenated_imgs = torch.cat(input_data_i, dim=1)
-            per_timestep_inputs.append(concatenated_imgs)
-        
-        return per_timestep_inputs
+
 
     def forward(
         self,
@@ -189,15 +183,13 @@ class Tessera(nn.Module):
     ) -> torch.Tensor:
         """Forward pass through Tessera model for classification."""
         # Prepare input
-        per_timestep_inputs = self.prepare_input(masked_helios_sample)
-        
-        # Process each timestep
-        output_features = []
-        for data in per_timestep_inputs:
-            # Forward pass through Tessera model
-            timestep_output = self.model(data)
-            output_features.append(timestep_output.unsqueeze(0))
-        
+        s2_x, s1_x = self.prepare_input(masked_helios_sample)
+
+        # Forward pass through Tessera model
+        # Loop over H and W as well to get the output feature map
+        output_features = self.model(s2_x, s1_x)
+        logger.info(f"Output features shape: {output_features.shape}")
+
         # Aggregate across timesteps
         if pooling == PoolingType.MEAN:
             output_features = torch.cat(output_features, dim=0).mean(dim=0)
@@ -205,7 +197,7 @@ class Tessera(nn.Module):
             output_features = torch.max(torch.cat(output_features, dim=0), dim=0)[0]
         else:
             raise ValueError(f"Unsupported pooling type: {pooling}")
-        
+
         return output_features
 
     def forward_features(
@@ -217,13 +209,13 @@ class Tessera(nn.Module):
         # For now, use the same forward pass as classification
         # This may need to be updated based on actual Tessera architecture
         per_timestep_inputs = self.prepare_input(masked_helios_sample)
-        
+
         output_features = []
         for data in per_timestep_inputs:
             # Get feature maps from model
             # TODO: Update this when we have the actual Tessera implementation
             features = self.model(data)
-            
+
             # Reshape for segmentation if needed
             if len(features.shape) == 2:  # (batch, features)
                 # Placeholder reshaping - adjust based on actual model output
@@ -231,9 +223,9 @@ class Tessera(nn.Module):
                 feat_dim = features.shape[1]
                 h = w = int(math.sqrt(self.input_size // self.patch_size))
                 features = features.view(batch_size, h, w, feat_dim)
-            
+
             output_features.append(features.unsqueeze(0))
-        
+
         # Aggregate across timesteps
         if pooling == PoolingType.MEAN:
             output_features = torch.cat(output_features, dim=0).mean(dim=0)
@@ -241,7 +233,7 @@ class Tessera(nn.Module):
             output_features = torch.max(torch.cat(output_features, dim=0), dim=0)[0]
         else:
             raise ValueError(f"Unsupported pooling type: {pooling}")
-        
+
         return output_features
 
     def __call__(
