@@ -1314,9 +1314,9 @@ class Encoder(FlexiHeliosBase):
             tokens: Tokens with removed tokens added
             mask: Mask with removed tokens added
         """
-        assert x.shape[1] > 0, (
-            "x must have at least one token we should not mask all tokens"
-        )
+        assert (
+            x.shape[1] > 0
+        ), "x must have at least one token we should not mask all tokens"
         masked_tokens = repeat(
             torch.zeros_like(x[0, 0, :]), "d -> b t d", b=x.shape[0], t=indices.shape[1]
         )
@@ -1349,9 +1349,9 @@ class Encoder(FlexiHeliosBase):
     ) -> tuple[Tensor | None]:
         """Create the exit sequences and tokens."""
         # Check that tokens_only_dict doesn't contain any mask keys
-        assert all(not key.endswith("_mask") for key in tokens_only_dict), (
-            "tokens_only_dict should not contain mask keys"
-        )
+        assert all(
+            not key.endswith("_mask") for key in tokens_only_dict
+        ), "tokens_only_dict should not contain mask keys"
         if token_exit_cfg:
             exit_ids_per_modality = self.create_token_exit_ids(
                 tokens_only_dict, token_exit_cfg
@@ -1516,7 +1516,10 @@ class Encoder(FlexiHeliosBase):
         Returns:
             TokensAndMasks containing the encoded representations and their masks
         """
-        # TODO: Add step to validate the exit config is valid
+        if always_pass_none_mask_to_transformer and token_exit_cfg is None:
+            raise ValueError(
+                "token_exit_cfg cannot be set when always_pass_none_mask_to_transformer is True"
+            )
         patchified_tokens_and_masks = self.patch_embeddings.forward(
             x, patch_size, inference_fast_pass=always_pass_none_mask_to_transformer
         )
@@ -1774,9 +1777,9 @@ class PredictorBase(FlexiHeliosBase):
         tokens[:, -unmasked_tokens.shape[1] :] = (
             unmasked_tokens * unmasked_tokens_mask.unsqueeze(-1)
         )
-        tokens[:, : tokens_to_decode.shape[1]] += (
-            tokens_to_decode * tokens_to_decode_mask.unsqueeze(-1)
-        )
+        tokens[
+            :, : tokens_to_decode.shape[1]
+        ] += tokens_to_decode * tokens_to_decode_mask.unsqueeze(-1)
         tokens = tokens.scatter(1, indices[:, :, None].expand_as(tokens), tokens)
         return tokens
 
