@@ -38,6 +38,8 @@ PRITHVI_STD = [
 class Prithvi(nn.Module):
     """Class containing the Prithvi model that can ingest MaskedHeliosSample objects."""
 
+    supported_modalities = [Modality.SENTINEL2_L2A.name]
+
     def __init__(
         self,
         load_directory: str,
