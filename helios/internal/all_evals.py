@@ -190,7 +190,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=False,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
-        patch_size=16,
+        patch_size=32,
     ),
     # "m_cashew_plant": DownstreamTaskConfig(
     #     dataset="m-cashew-plant",
