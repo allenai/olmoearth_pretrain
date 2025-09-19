@@ -26,9 +26,6 @@ MIN_PATCH_SIZE = 1
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for Tessera evaluation."""
     model_config = TesseraConfig(
-        apply_normalization=True,
-        input_size=224,
-        checkpoint_path=None,  # Will be set when checkpoint is available
     )
     return model_config
 

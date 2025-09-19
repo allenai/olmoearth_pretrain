@@ -28,20 +28,8 @@ S2_BAND_STD = np.array([1926.1026,1862.9751,1803.1792,1741.7837,1677.4543,
                         1888.7862,1736.3090,1715.8104,1514.5199,1398.4779], dtype=np.float32)
 S1_BAND_MEAN = np.array([5484.0407,3003.7812], dtype=np.float32)
 S1_BAND_STD = np.array([1871.2334,1726.0670], dtype=np.float32)
-# Tessera wants to be standardized by its pretraining evaluation statistics
-def make_tessera_normalize_transform() -> transforms.Normalize:
-    """Make normalize transform for Tessera model."""
-    normalize = transforms.Normalize(
-        mean=S2_BAND_MEAN,
-        std=S2_BAND_STD,
-    )
-    return normalize
 
 
-def make_tessera_resize_transform(resize_size: int) -> transforms.Resize:
-    """Make resize transform for Tessera model."""
-    resize = transforms.Resize((resize_size, resize_size), antialias=True)
-    return resize
 
 
 # Tessera band order based on https://github.com/ucam-eo/tessera/blob/a883aa12392eb9fc237ae4c29824318760e138a2/tessera_preprocessing/s2_fast_processor.py#L51
@@ -70,22 +58,18 @@ class Tessera(nn.Module):
     def __init__(
         self,
         checkpoint_path: Optional[str] = None,
-        apply_normalization: bool = True,
+        use_pretrained_normalizer: bool = True,
     ):
         """Initialize the Tessera wrapper.
 
         Args:
             checkpoint_path: Path to Tessera model checkpoint (optional)
-            apply_normalization: Whether to apply normalization to input data
+            use_pretrained_normalizer: Whether to apply normalization to input data
             input_size: Input image size expected by the model
         """
         super().__init__()
-        self.apply_normalization = apply_normalization
+        self.use_pretrained_normalizer = use_pretrained_normalizer
         self.checkpoint_path = checkpoint_path
-
-        if self.apply_normalization:
-            logger.info("Applying Tessera normalization to input data")
-            self.normalize_transform = make_tessera_normalize_transform()
 
         # Initialize model - placeholder for now
         self._load_model(checkpoint_path)
@@ -142,6 +126,10 @@ class Tessera(nn.Module):
         doy = cum_days_for_month + day + leap_day
         return doy
 
+    @staticmethod
+    def standardize(data: torch.Tensor , mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
+        return data.sub_(mean).div_(std)
+
     def prepare_input(
         self,
         masked_helios_sample: MaskedHeliosSample,
@@ -153,6 +141,9 @@ class Tessera(nn.Module):
             # Steps filter to the bands and reshape to (b, h, w, t, c)
             s2_x = s2_x[:, :, :, :, HELIOS_SENTINEL2_TESSERA_BANDS]
             s2_x = rearrange(s2_x, "b h w t c -> b c h w t")
+            if self.use_pretrained_normalizer:
+                s2_x = self.standardize(s2_x, torch.tensor(S2_BAND_MEAN), torch.tensor(S2_BAND_STD))
+                # standardize the s2_x
             # get day of year
             doy = self.calculate_day_of_year(masked_helios_sample.timestamps)
             # what is the shape of doy?
@@ -250,13 +241,11 @@ class TesseraConfig(Config):
     """olmo_core style config for Tessera."""
 
     checkpoint_path: Optional[str] = None
-    apply_normalization: bool = True
-    input_size: int = 224
+    use_pretrained_normalizer: bool = True
 
     def build(self) -> "Tessera":
         """Build the Tessera model from this config."""
         return Tessera(
             checkpoint_path=self.checkpoint_path,
-            apply_normalization=self.apply_normalization,
-            input_size=self.input_size,
+            use_pretrained_normalizer=self.use_pretrained_normalizer,
         )
