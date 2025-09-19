@@ -172,6 +172,8 @@ class Tessera(nn.Module):
             logger.info(f"Doy shape: {doy.shape}")
             logger.info(f"S1_x shape: {s1_x.shape}")
             s1_x = torch.cat([s1_x, doy], dim=-1)
+        if s2_x is None or s1_x is None:
+            raise ValueError("Tessera does not support single modality input")
         return s2_x, s1_x
 
 
