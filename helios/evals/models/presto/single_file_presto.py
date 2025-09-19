@@ -440,9 +440,9 @@ class Encoder(nn.Module):
         dynamic_world: torch.Tensor,
         # different from the original
         # presto - latlons can be optionally ignored
-        latlons: Optional[torch.Tensor] = None,
-        mask: Optional[torch.Tensor] = None,
-        month: Union[torch.Tensor, int] = 0,
+        latlons: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+        month: torch.Tensor | int = 0,
         eval_task: bool = True,
     ):
         device = x.device
