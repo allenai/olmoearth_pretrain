@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import yaml
 from einops import rearrange
+from huggingface_hub import hf_hub_download
 from olmo_core.config import Config
 from upath import UPath
 
@@ -35,6 +36,8 @@ PRITHVI_STD = [
     1049.0,
 ]
 
+HF_HUB_ID = "ibm-nasa-geospatial/Prithvi-EO-2.0-300M"
+
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +60,28 @@ class Prithvi(nn.Module):
         """
         super().__init__()
 
+        if not (UPath(load_directory) / "config.json").exists():
+            _ = hf_hub_download(
+                local_dir=UPath(load_directory),
+                repo_id=HF_HUB_ID,
+                filename="config.json",
+                revision="b2f2520ab889f42a25c5361ba18761fcb4ea44ad",
+            )
         with (UPath(load_directory) / "config.json").open("r") as f:
             config = yaml.safe_load(f)["pretrained_cfg"]
 
         config["num_frames"] = 1
 
         self.model = PrithviMAE(**config)
+
+        if not (UPath(load_directory) / "Prithvi_EO_V2_300M.pt").exists():
+            _ = hf_hub_download(
+                local_dir=UPath(load_directory),
+                repo_id=HF_HUB_ID,
+                filename="Prithvi_EO_V2_300M.pt",
+                revision="b2f2520ab889f42a25c5361ba18761fcb4ea44ad",
+            )
+
         state_dict = torch.load(
             UPath(load_directory) / "Prithvi_EO_V2_300M.pt", map_location="cpu"
         )
