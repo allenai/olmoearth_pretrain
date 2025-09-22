@@ -262,7 +262,9 @@ class DownstreamEvaluatorCallback(Callback):
         # Check required modalities
         required_modalities_present = True
         if hasattr(model, "required_modalities"):
-            required_modalities_present = set(model.required_modalities).issubset(set(evaluator.input_modalities))
+            required_modalities_present = set(model.required_modalities).issubset(
+                set(evaluator.input_modalities)
+            )
 
         # Check timeseries requirement
         has_timeseries = True

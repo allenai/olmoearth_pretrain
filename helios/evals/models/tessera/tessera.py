@@ -1,23 +1,20 @@
 """Tessera foundation model https://github.com/ucam-eo/tessera ."""
 
 import logging
-import math
-import numpy as np
-from dataclasses import dataclass
-from typing import Optional
-from itertools import product
-from datetime import datetime
 import os
+from dataclasses import dataclass
+from itertools import product
+
+import numpy as np
 import torch
-from einops import repeat, reduce
+from einops import reduce, repeat
 from olmo_core.config import Config
 from torch import nn
 
 from helios.data.constants import Modality
+from helios.evals.models.tessera.tessera_model import build_inference_model
 from helios.nn.flexihelios import PoolingType
 from helios.train.masking import MaskedHeliosSample
-
-from helios.evals.models.tessera.tessera_model import build_inference_model
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +85,7 @@ class Tessera(nn.Module):
 
     def __init__(
         self,
-        checkpoint_path: Optional[str] = None,
+        checkpoint_path: str | None = None,
         use_pretrained_normalizer: bool = True,
     ):
         """Initialize the Tessera wrapper.
@@ -105,9 +102,8 @@ class Tessera(nn.Module):
         # Initialize model - placeholder for now
         self._load_model(checkpoint_path)
 
-    def _load_model(self, checkpoint_path: Optional[str] = None) -> None:
+    def _load_model(self, checkpoint_path: str | None = None) -> None:
         """Load the Tessera model."""
-
         # TODO: Implement actual Tessera model loading
         model = build_inference_model()
         state_dict = torch.load(checkpoint_path, map_location="cpu")["model_state_dict"]
@@ -126,6 +122,7 @@ class Tessera(nn.Module):
 
         Args:
             timestamp: Tensor of shape (..., 3) where last dim is [day, month, year]
+
         Returns:
             Tensor of same shape as input without last dim, with day of year as int
         """
@@ -171,7 +168,7 @@ class Tessera(nn.Module):
     def prepare_input(
         self,
         masked_helios_sample: MaskedHeliosSample,
-    ) -> list[torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Prepare input for the Tessera model from MaskedHeliosSample."""
         if (s2_x := masked_helios_sample.sentinel2_l2a) is None or (
             s1_x := masked_helios_sample.sentinel1
@@ -226,11 +223,12 @@ class Tessera(nn.Module):
         # so we need to return the output features as is
         return output_features
 
+
 @dataclass
 class TesseraConfig(Config):
     """olmo_core style config for Tessera."""
 
-    checkpoint_path: Optional[str] = None
+    checkpoint_path: str | None = None
     use_pretrained_normalizer: bool = True
 
     def build(self) -> "Tessera":
@@ -241,7 +239,9 @@ class TesseraConfig(Config):
             )
             # if the file exists use it otherwise give instructions to download it and ovveride to point to the local path
             if os.path.exists(default_weka_path):
-                logger.info(f"Using default Tessera checkpoint from {default_weka_path}")
+                logger.info(
+                    f"Using default Tessera checkpoint from {default_weka_path}"
+                )
                 self.checkpoint_path = default_weka_path
             else:
                 logger.info(

@@ -187,7 +187,9 @@ class DINOv2EvalWrapper(EvalWrapper):
                 masked_helios_sample,
                 pooling=self.pooling_type,
             )
-            batch_embeddings = reduce(batch_embeddings, "b ... d -> b d", self.pooling_type)
+            batch_embeddings = reduce(
+                batch_embeddings, "b ... d -> b d", self.pooling_type
+            )
         return batch_embeddings
 
 
@@ -224,13 +226,19 @@ class DINOv3EvalWrapper(EvalWrapper):
             )
         return batch_embeddings
 
+
 class TesseraEvalWrapper(EvalWrapper):
     """Wrapper for Tessera models."""
 
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         """Forward pass through the model produces the embedding specified by initialization."""
-        batch_embeddings = self.model(masked_helios_sample, pooling=self.pooling_type, spatial_pool=self.spatial_pool)
+        batch_embeddings = self.model(
+            masked_helios_sample,
+            pooling=self.pooling_type,
+            spatial_pool=self.spatial_pool,
+        )
         return batch_embeddings
+
 
 def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     """Factory function to get the appropriate eval wrapper for a given model.
