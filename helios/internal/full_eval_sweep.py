@@ -176,6 +176,33 @@ def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     return galileo_args
 
 
+def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
+    """Get the Prithvi arguments."""
+    prithvi_args = dataset_args
+    if pretrained_normalizer:
+        # To use Prithvi pretrained normalizer we want to leave normalization to the Prithvi wrapper
+        prithvi_args = dataset_args
+        prithvi_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        prithvi_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        prithvi_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+        # IF we use dataset stats we want to turn off the pretrained normalizer
+        prithvi_args += " " + "--model.use_pretrained_normalizer=False"
+
+    return prithvi_args
+
+
 def _get_sub_command(args: argparse.Namespace) -> str:
     """Determine the sub command based on args and cluster."""
     if args.dry_run:
@@ -222,6 +249,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_croma_args()
     elif args.tessera:
         return get_tessera_args()
+    elif args.prithvi_v2:
+        return get_prithviv2_args()
     return ""
 
 
@@ -233,8 +262,12 @@ def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
         elif norm_mode == "pre_trained":
             return get_galileo_args(pretrained_normalizer=True)
     elif args.tessera:
-        # For Tessera, use dataset normalization always for now
         return get_tessera_args()
+    elif args.prithvi_v2:
+        if norm_mode == "dataset":
+            return get_prithviv2_args(pretrained_normalizer=False)
+        elif norm_mode == "pre_trained":
+            return get_prithviv2_args(pretrained_normalizer=True)
     else:
         if norm_mode == "dataset":
             return dataset_args
@@ -325,6 +358,8 @@ def _get_module_path(args: argparse.Namespace) -> str:
         return get_launch_script_path("galileo")
     elif args.tessera:
         return get_launch_script_path("tessera")
+    elif args.prithvi_v2:
+        return get_launch_script_path("prithvi_v2")
     else:
         raise ValueError(f"Invalid model name: {args.model_name}")
 
@@ -439,6 +474,9 @@ def main() -> None:
         "--tessera",
         action="store_true",
         help="If set, use the tessera normalization settings",
+        "--prithvi_v2",
+        action="store_true",
+        help="If set, use the prithvi normalization settings",
     )
     args, extra_cli = parser.parse_known_args()
 
