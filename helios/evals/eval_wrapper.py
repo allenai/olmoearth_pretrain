@@ -171,6 +171,7 @@ class PrithviV2EvalWrapper(EvalWrapper):
 
 class DINOv2EvalWrapper(EvalWrapper):
     """Wrapper for DINOv2 models."""
+
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         """Forward pass through the model produces the embedding specified by initialization."""
         # i need to do the apply imagenet normalizer thing in here
