@@ -226,15 +226,6 @@ class Tessera(nn.Module):
         # so we need to return the output features as is
         return output_features
 
-    def __call__(
-        self,
-        masked_helios_sample: MaskedHeliosSample,
-        pooling: PoolingType = PoolingType.MEAN,
-    ) -> torch.Tensor:
-        """Make the wrapper callable."""
-        return self.forward(masked_helios_sample, pooling)
-
-
 @dataclass
 class TesseraConfig(Config):
     """olmo_core style config for Tessera."""
@@ -250,6 +241,7 @@ class TesseraConfig(Config):
             )
             # if the file exists use it otherwise give instructions to download it and ovveride to point to the local path
             if os.path.exists(default_weka_path):
+                logger.info(f"Using default Tessera checkpoint from {default_weka_path}")
                 self.checkpoint_path = default_weka_path
             else:
                 logger.info(
