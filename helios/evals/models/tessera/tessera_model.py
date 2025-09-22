@@ -162,52 +162,41 @@ class MultimodalBTInferenceModel(torch.nn.Module):
             nn.Linear(self.in_dim, latent_dim),
         )
 
-    def forward(self, s2_x=None, s1_x=None):
+    def forward(self, s2_x, s1_x):
         """
         s2_x.shape = (batch, seq_len_s2, band_num_s2)
         s1_x.shape = (batch, seq_len_s1, band_num_s1)
         Output: (batch, latent_dim) or (batch, 2*latent_dim) if fusion=concat
 
-        At least one of s2_x or s1_x must be provided.
+        Both s2_x and s1_x must be provided, otherwise the dim reducer will  mismatch dim as the weights use concat method.
         """
-        if s2_x is None and s1_x is None:
-            raise ValueError("At least one of s2_x or s1_x must be provided.")
+        if s2_x is None or s1_x is None:
+            raise ValueError("Both s2_x and s1_x must be provided, otherwise the dim reducer will  mismatch dim as the weights use concat method.")
+        s2_repr = self.s2_backbone(s2_x)  # (batch, latent_dim)
+        s1_repr = self.s1_backbone(s1_x)  # (batch, latent_dim)
 
-        s2_repr = self.s2_backbone(s2_x) if s2_x is not None else None
-        s1_repr = self.s1_backbone(s1_x) if s1_x is not None else None
-        both_present = s2_repr is not None and s1_repr is not None
-        if both_present:
-            if self.fusion_method == "sum":
-                fused = s2_repr + s1_repr
-            elif self.fusion_method == "concat":
-                fused = torch.cat([s2_repr, s1_repr], dim=-1)
-            else:
-                raise ValueError(f"Unknown fusion method: {self.fusion_method}")
-        elif s2_repr is not None:
-            fused = s2_repr
-        elif s1_repr is not None:
-            fused = s1_repr
+        if self.fusion_method == "sum":
+            fused = s2_repr + s1_repr
+        elif self.fusion_method == "concat":
+            fused = torch.cat([s2_repr, s1_repr], dim=-1)
         else:
-            raise ValueError("No valid input for fusion.")
-        if both_present:
-            fused = self.dim_reducer(fused)
+            raise ValueError(f"Unknown fusion method: {self.fusion_method}")
+        fused = self.dim_reducer(fused)
         return fused
 
 
 def build_inference_model():
 
     config = {
-        "fusion_method": "concat",  # Options: 'sum' or 'concat'
+        "fusion_method": "concat",
         "latent_dim": 128,
     }
+    # Config from https://github.com/ucam-eo/tessera/blob/alpha_version_1.0/tessera_infer/configs/multi_tile_infer_config.py
     # Note: After enhancement, the number of S2 data channels is fixed at 12 (10 original bands + 2 doy features), and the number of S1 data channels is 4 (2+2)
     ###############Sentinel-2##################
     s2_backbone_ssl = TransformerEncoder(
         band_num=10,
         latent_dim=config["latent_dim"],
-        # nhead=16,
-        # num_encoder_layers=32,
-        # dim_feedforward=512,
         nhead=8,
         num_encoder_layers=8,
         dim_feedforward=4096,
@@ -218,9 +207,6 @@ def build_inference_model():
     s1_backbone_ssl = TransformerEncoder(
         band_num=2,
         latent_dim=config["latent_dim"],
-        # nhead=16,
-        # num_encoder_layers=32,
-        # dim_feedforward=512,
         nhead=8,
         num_encoder_layers=8,
         dim_feedforward=4096,

@@ -256,23 +256,18 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
 
 def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
     """Get normalization-specific command arguments."""
-    if args.galileo:
-        if norm_mode == "dataset":
-            return get_galileo_args(pretrained_normalizer=False)
-        elif norm_mode == "pre_trained":
-            return get_galileo_args(pretrained_normalizer=True)
-    elif args.tessera:
-        return get_tessera_args()
-    elif args.prithvi_v2:
-        if norm_mode == "dataset":
-            return get_prithviv2_args(pretrained_normalizer=False)
-        elif norm_mode == "pre_trained":
-            return get_prithviv2_args(pretrained_normalizer=True)
-    else:
-        if norm_mode == "dataset":
-            return dataset_args
-        elif norm_mode == "pre_trained":
-            return helios_args
+    model_map = {
+        "galileo": get_galileo_args,
+        "tessera": get_tessera_args,
+        "prithvi_v2": get_prithviv2_args,
+    }
+    for model, func in model_map.items():
+        if getattr(args, model, False):
+            return func(pretrained_normalizer=(norm_mode == "pre_trained"))
+    if norm_mode == "dataset":
+        return dataset_args
+    if norm_mode == "pre_trained":
+        return helios_args
     return ""
 
 
@@ -337,6 +332,7 @@ def _build_hyperparameter_command(
     cmd_args += _get_model_specific_args(args)
 
     # Add normalization-specific args
+    # These args will override the model-specific args
     cmd_args += _get_normalization_args(args, norm_mode)
 
     return (
@@ -474,6 +470,8 @@ def main() -> None:
         "--tessera",
         action="store_true",
         help="If set, use the tessera normalization settings",
+    )
+    parser.add_argument(
         "--prithvi_v2",
         action="store_true",
         help="If set, use the prithvi normalization settings",
