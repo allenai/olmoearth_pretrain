@@ -5,4 +5,5 @@ geopandas
 rioxarray
 satlaspretrain-models
 scikit-learn
+timm==0.9.7
 xarray

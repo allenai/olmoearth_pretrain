@@ -5,6 +5,7 @@ from helios.evals.models.dinov2.dinov2 import DINOv2, DINOv2Config
 from helios.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
 from helios.evals.models.galileo import GalileoConfig, GalileoWrapper
 from helios.evals.models.panopticon.panopticon import Panopticon, PanopticonConfig
+from helios.evals.models.prithviv2.prithviv2 import PrithviV2, PrithviV2Config
 from helios.evals.models.satlas.satlas import Satlas, SatlasConfig
 
 
@@ -22,6 +23,8 @@ def get_launch_script_path(model_name: str) -> str:
         return "helios/evals/models/satlas/satlas_launch.py"
     elif model_name == "croma":
         return "helios/evals/models/croma/croma_launch.py"
+    elif model_name == "prithvi_v2":
+        return "helios/evals/models/prithviv2/prithviv2_launch.py"
     else:
         raise ValueError(f"Invalid model name: {model_name}")
 
@@ -40,4 +43,6 @@ __all__ = [
     "SatlasConfig",
     "Croma",
     "CromaConfig",
+    "PrithviV2",
+    "PrithviV2Config",
 ]
