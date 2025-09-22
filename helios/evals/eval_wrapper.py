@@ -171,13 +171,12 @@ class PrithviV2EvalWrapper(EvalWrapper):
 
 class DINOv2EvalWrapper(EvalWrapper):
     """Wrapper for DINOv2 models."""
-
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         """Forward pass through the model produces the embedding specified by initialization."""
         # i need to do the apply imagenet normalizer thing in here
         if self.spatial_pool:
             # Intermediate features are not yet working because of some bug internal to the model
-            batch_embeddings = self.model(
+            batch_embeddings = self.model.forward_features(
                 masked_helios_sample,
                 pooling=self.pooling_type,
             )
@@ -186,9 +185,6 @@ class DINOv2EvalWrapper(EvalWrapper):
             batch_embeddings = self.model(
                 masked_helios_sample,
                 pooling=self.pooling_type,
-            )
-            batch_embeddings = reduce(
-                batch_embeddings, "b ... d -> b d", self.pooling_type
             )
         return batch_embeddings
 
