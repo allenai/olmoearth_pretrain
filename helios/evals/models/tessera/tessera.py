@@ -144,7 +144,10 @@ class Tessera(nn.Module):
 
         # Cumulative days at the start of each month (0 for Jan, 31 for Feb, etc.)
         cum_days = torch.cat(
-            [torch.zeros(1, device=timestamp.device, dtype=days_in_month.dtype), days_in_month.cumsum(0)[:-1]]
+            [
+                torch.zeros(1, device=timestamp.device, dtype=days_in_month.dtype),
+                days_in_month.cumsum(0)[:-1],
+            ]
         )
 
         # Get cumulative days for the given month
@@ -170,7 +173,9 @@ class Tessera(nn.Module):
         masked_helios_sample: MaskedHeliosSample,
     ) -> list[torch.Tensor]:
         """Prepare input for the Tessera model from MaskedHeliosSample."""
-        if (s2_x := masked_helios_sample.sentinel2_l2a) is None or (s1_x := masked_helios_sample.sentinel1) is None:
+        if (s2_x := masked_helios_sample.sentinel2_l2a) is None or (
+            s1_x := masked_helios_sample.sentinel1
+        ) is None:
             raise ValueError("Tessera does not support single modality input")
 
         doy = self.calculate_day_of_year(masked_helios_sample.timestamps)
@@ -199,67 +204,26 @@ class Tessera(nn.Module):
         self,
         masked_helios_sample: MaskedHeliosSample,
         pooling: PoolingType = PoolingType.MEAN,
+        spatial_pool: bool = False,
     ) -> torch.Tensor:
         """Forward pass through Tessera model for classification."""
         # Prepare input
         s2_x, s1_x = self.prepare_input(masked_helios_sample)
-        b, h, w, t, c = s2_x.shape
+        b, h, w, _, _ = s2_x.shape
         # Create an output tensor with the same shape as s2_x except the last dim, and set the last dim to the latent dim
         output_shape = tuple([b, h, w, self.model.latent_dim])
         output_features = torch.zeros(*output_shape, device=s2_x.device)
 
         for i, j in product(range(h), range(w)):
-            if s2_x is not None:
-                s2_x_ij = s2_x[:, i, j, :, :]
-            else:
-                s2_x_ij = None
-            if s1_x is not None:
-                s1_x_ij = s1_x[:, i, j, :, :]
-            else:
-                s1_x_ij = None
+            s2_x_ij = s2_x[:, i, j, :, :]
+            s1_x_ij = s1_x[:, i, j, :, :]
             output_features_ij = self.model(s2_x_ij, s1_x_ij)
             output_features[:, i, j, :] = output_features_ij
-        # Forward pass through Tessera model
-        # Loop over H and W as well to get the output feature map
-        logger.info(f"Output features shape: {output_features.shape}")
 
-        output_features = reduce(output_features, "b ... d -> b d", pooling)
-        return output_features
-
-    def forward_features(
-        self,
-        masked_helios_sample: MaskedHeliosSample,
-        pooling: PoolingType = PoolingType.MEAN,
-    ) -> torch.Tensor:
-        """Forward pass through Tessera model for segmentation."""
-        # For now, use the same forward pass as classification
-        # This may need to be updated based on actual Tessera architecture
-        per_timestep_inputs = self.prepare_input(masked_helios_sample)
-
-        output_features = []
-        for data in per_timestep_inputs:
-            # Get feature maps from model
-            # TODO: Update this when we have the actual Tessera implementation
-            features = self.model(data)
-
-            # Reshape for segmentation if needed
-            if len(features.shape) == 2:  # (batch, features)
-                # Placeholder reshaping - adjust based on actual model output
-                batch_size = features.shape[0]
-                feat_dim = features.shape[1]
-                h = w = int(math.sqrt(self.input_size // self.patch_size))
-                features = features.view(batch_size, h, w, feat_dim)
-
-            output_features.append(features.unsqueeze(0))
-
-        # Aggregate across timesteps
-        if pooling == PoolingType.MEAN:
-            output_features = torch.cat(output_features, dim=0).mean(dim=0)
-        elif pooling == PoolingType.MAX:
-            output_features = torch.max(torch.cat(output_features, dim=0), dim=0)[0]
-        else:
-            raise ValueError(f"Unsupported pooling type: {pooling}")
-
+        if not spatial_pool:
+            output_features = reduce(output_features, "b ... d -> b d", pooling)
+        # Tessera pools across modality and time within the architecture
+        # so we need to return the output features as is
         return output_features
 
     def __call__(

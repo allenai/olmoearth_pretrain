@@ -229,13 +229,7 @@ class TesseraEvalWrapper(EvalWrapper):
 
     def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
         """Forward pass through the model produces the embedding specified by initialization."""
-        if self.spatial_pool:
-            batch_embeddings = self.model(
-                masked_helios_sample,
-                pooling=self.pooling_type,
-            )
-        else:
-            batch_embeddings = self.model(masked_helios_sample, pooling=self.pooling_type)
+        batch_embeddings = self.model(masked_helios_sample, pooling=self.pooling_type, spatial_pool=self.spatial_pool)
         return batch_embeddings
 
 def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
