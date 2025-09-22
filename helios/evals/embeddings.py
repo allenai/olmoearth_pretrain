@@ -56,7 +56,7 @@ def get_embeddings(
                     batch_embeddings = rearrange(
                         batch_embeddings, "b h w d -> b (h w) d"
                     )
-                    label = rearrange(label, "b h w d -> b (h w) d")
+                    label = rearrange(label, "b h w -> b (h w)")
 
                     assert batch_embeddings.shape[1] == label.shape[1]
                     num_tokens = batch_embeddings.shape[1]
@@ -70,7 +70,7 @@ def get_embeddings(
                     batch_embeddings = rearrange(
                         batch_embeddings, "b (h w) d -> b h w d", h=new_hw, w=new_hw
                     )
-                    label = rearrange(label, "b (h w) d -> b h w d", h=new_hw, w=new_hw)
+                    label = rearrange(label, "b (h w) -> b h w", h=new_hw, w=new_hw)
             embeddings.append(batch_embeddings.cpu())
             labels.append(label)
             logger.info(f"Processed {i} / {total_samples}")
