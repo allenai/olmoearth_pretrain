@@ -335,10 +335,6 @@ class ModalityPatchDiscriminationLossNew(Loss):
                     # we will occasionally get a sample with no decoded values due to missing data this will let us skip it
                     # logger.warning("No decoded values for this sample")
                     continue
-                # a hack to deal with ERA5 tokens, it ranges from 1 to 12
-                # we don't want to contrastive on only a few tokens
-                if c < 3:
-                    continue
                 pred_sample = pred[:, start:end, :]
                 target_sample = target[:, start:end, :]
                 score_sample = (
