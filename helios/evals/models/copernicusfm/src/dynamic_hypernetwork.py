@@ -327,8 +327,10 @@ class Dynamic_MLP_OFA(nn.Module):
         dynamic_weight = weight.view(
             inplanes, self.kernel_size, self.kernel_size, self.embed_dim
         )
+        print("in Dynamic MLP OFA")
+        print(dynamic_weight.shape, inplanes.shape)
         dynamic_weight = dynamic_weight.permute([3, 0, 1, 2])
-
+        print(dynamic_weight.shape, inplanes.shape)
         if bias is not None:
             bias = bias.view([self.embed_dim]) * self.scaler
 
