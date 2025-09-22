@@ -174,7 +174,6 @@ class MultimodalBTInferenceModel(torch.nn.Module):
             raise ValueError("At least one of s2_x or s1_x must be provided.")
 
         s2_repr = self.s2_backbone(s2_x) if s2_x is not None else None
-        print(f"S2 repr shape: {s2_repr.shape}")
         s1_repr = self.s1_backbone(s1_x) if s1_x is not None else None
         both_present = s2_repr is not None and s1_repr is not None
         if both_present:
