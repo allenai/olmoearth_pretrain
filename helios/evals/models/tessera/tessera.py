@@ -6,12 +6,12 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Optional
 from itertools import product
-
+from datetime import datetime
+import os
 import torch
-from einops import rearrange, repeat, reduce
+from einops import repeat, reduce
 from olmo_core.config import Config
 from torch import nn
-from torchvision import transforms
 
 from helios.data.constants import Modality
 from helios.nn.flexihelios import PoolingType
@@ -23,14 +23,38 @@ logger = logging.getLogger(__name__)
 
 # Normalization stats copied from https://github.com/ucam-eo/tessera/blob/a883aa12392eb9fc237ae4c29824318760e138a2/tessera_infer/src/datasets/ssl_dataset.py
 # Mean and variance
-S2_BAND_MEAN = np.array([1711.0938,1308.8511,1546.4543,3010.1293,3106.5083,
-                        2068.3044,2685.0845,2931.5889,2514.6928,1899.4922], dtype=np.float32)
-S2_BAND_STD = np.array([1926.1026,1862.9751,1803.1792,1741.7837,1677.4543,
-                        1888.7862,1736.3090,1715.8104,1514.5199,1398.4779], dtype=np.float32)
-S1_BAND_MEAN = np.array([5484.0407,3003.7812], dtype=np.float32)
-S1_BAND_STD = np.array([1871.2334,1726.0670], dtype=np.float32)
-
-
+S2_BAND_MEAN = np.array(
+    [
+        1711.0938,
+        1308.8511,
+        1546.4543,
+        3010.1293,
+        3106.5083,
+        2068.3044,
+        2685.0845,
+        2931.5889,
+        2514.6928,
+        1899.4922,
+    ],
+    dtype=np.float32,
+)
+S2_BAND_STD = np.array(
+    [
+        1926.1026,
+        1862.9751,
+        1803.1792,
+        1741.7837,
+        1677.4543,
+        1888.7862,
+        1736.3090,
+        1715.8104,
+        1514.5199,
+        1398.4779,
+    ],
+    dtype=np.float32,
+)
+S1_BAND_MEAN = np.array([5484.0407, 3003.7812], dtype=np.float32)
+S1_BAND_STD = np.array([1871.2334, 1726.0670], dtype=np.float32)
 
 
 # Tessera band order based on https://github.com/ucam-eo/tessera/blob/a883aa12392eb9fc237ae4c29824318760e138a2/tessera_preprocessing/s2_fast_processor.py#L51
@@ -44,6 +68,7 @@ HELIOS_SENTINEL1_TESSERA_BANDS = [
     for b in ["vv", "vh"]
     if b in Modality.SENTINEL1.band_order
 ]
+
 
 # Only makes sense for pixel time series data
 class Tessera(nn.Module):
@@ -85,16 +110,16 @@ class Tessera(nn.Module):
 
         # TODO: Implement actual Tessera model loading
         model = build_inference_model()
-        state_dict = torch.load(checkpoint_path, map_location="cpu")['model_state_dict']
+        state_dict = torch.load(checkpoint_path, map_location="cpu")["model_state_dict"]
         # remove the _orig_mod prefix from all the keys
         state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
         # remove all keys starting with "projector."
-        state_dict = {k: v for k, v in state_dict.items() if not k.startswith("projector.")}
-        # remove all "fusion_method." prefix from the keys
+        state_dict = {
+            k: v for k, v in state_dict.items() if not k.startswith("projector.")
+        }
         model.load_state_dict(state_dict)
         logger.info(f"Loaded Tessera model from {checkpoint_path}")
         self.model = model
-
 
     def calculate_day_of_year(self, timestamp: torch.Tensor) -> torch.Tensor:
         """Calculate day of year from timestamp.
@@ -134,7 +159,10 @@ class Tessera(nn.Module):
         return doy
 
     @staticmethod
-    def standardize(data: torch.Tensor , mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
+    def standardize(
+        data: torch.Tensor, mean: torch.Tensor, std: torch.Tensor
+    ) -> torch.Tensor:
+        """Standardize the data."""
         return data.sub_(mean).div_(std)
 
     def prepare_input(
@@ -142,35 +170,30 @@ class Tessera(nn.Module):
         masked_helios_sample: MaskedHeliosSample,
     ) -> list[torch.Tensor]:
         """Prepare input for the Tessera model from MaskedHeliosSample."""
-        # Want a batch of samples with tuple shape (b, h, w, t, c)
-
-        if (s2_x := masked_helios_sample.sentinel2_l2a) is not None:
-            # Steps filter to the bands and reshape to (b, h, w, t, c)
-            s2_x = s2_x[..., HELIOS_SENTINEL2_TESSERA_BANDS]
-            if self.use_pretrained_normalizer:
-                s2_x = self.standardize(s2_x, torch.tensor(S2_BAND_MEAN, device=s2_x.device), torch.tensor(S2_BAND_STD, device=s2_x.device))
-                # standardize the s2_x
-            # get day of year
-            doy = self.calculate_day_of_year(masked_helios_sample.timestamps)
-            # concatenate as an extra band at every HW as the last band use einops to repeat
-            doy = repeat(doy, "b t  -> b  h w t 1", h=s2_x.shape[1], w=s2_x.shape[2])
-            s2_x = torch.cat([s2_x, doy], dim=-1)
-        if (s1_x := masked_helios_sample.sentinel1) is not None:
-            # Steps filter to the bands and reshape to (b, h, w, t, c)
-            s1_x = s1_x[..., HELIOS_SENTINEL1_TESSERA_BANDS]
-            if self.use_pretrained_normalizer:
-                s1_x = self.standardize(s1_x, torch.tensor(S1_BAND_MEAN, device=s1_x.device), torch.tensor(S1_BAND_STD, device=s1_x.device))
-                # standardize the s1_x
-            # get day of year
-            doy = self.calculate_day_of_year(masked_helios_sample.timestamps)
-            # concatenate as an extra band at every HW as the last band use einops to repeat
-            doy = repeat(doy, "b t  -> b h w t 1", h=s1_x.shape[1], w=s1_x.shape[2])
-            s1_x = torch.cat([s1_x, doy], dim=-1)
-        if s2_x is None or s1_x is None:
+        if (s2_x := masked_helios_sample.sentinel2_l2a) is None or (s1_x := masked_helios_sample.sentinel1) is None:
             raise ValueError("Tessera does not support single modality input")
+
+        doy = self.calculate_day_of_year(masked_helios_sample.timestamps)
+        doy = repeat(doy, "b t  -> b  h w t 1", h=s2_x.shape[1], w=s2_x.shape[2])
+
+        s2_x = s2_x[..., HELIOS_SENTINEL2_TESSERA_BANDS]
+        s1_x = s1_x[..., HELIOS_SENTINEL1_TESSERA_BANDS]
+
+        if self.use_pretrained_normalizer:
+            s2_x = self.standardize(
+                s2_x,
+                torch.tensor(S2_BAND_MEAN, device=s2_x.device),
+                torch.tensor(S2_BAND_STD, device=s2_x.device),
+            )
+            s1_x = self.standardize(
+                s1_x,
+                torch.tensor(S1_BAND_MEAN, device=s1_x.device),
+                torch.tensor(S1_BAND_STD, device=s1_x.device),
+            )
+
+        s2_x = torch.cat([s2_x, doy], dim=-1)
+        s1_x = torch.cat([s1_x, doy], dim=-1)
         return s2_x, s1_x
-
-
 
     def forward(
         self,
@@ -185,7 +208,7 @@ class Tessera(nn.Module):
         output_shape = tuple([b, h, w, self.model.latent_dim])
         output_features = torch.zeros(*output_shape, device=s2_x.device)
 
-        for i,j in product(range(h), range(w)):
+        for i, j in product(range(h), range(w)):
             if s2_x is not None:
                 s2_x_ij = s2_x[:, i, j, :, :]
             else:
@@ -257,6 +280,20 @@ class TesseraConfig(Config):
 
     def build(self) -> "Tessera":
         """Build the Tessera model from this config."""
+        if self.checkpoint_path is None:
+            default_weka_path = (
+                "/weka/dfive-default/helios/models/tessera/tessera_checkpoint.pt"
+            )
+            # if the file exists use it otherwise give instructions to download it and ovveride to point to the local path
+            if os.path.exists(default_weka_path):
+                self.checkpoint_path = default_weka_path
+            else:
+                logger.info(
+                    f"Tessera checkpoint not found at {default_weka_path},\
+                     please download it and override the checkpoint_path with \
+                      --model.checkpoint_path=<path_to_checkpoint>"
+                )
+                self.checkpoint_path = default_weka_path
         return Tessera(
             checkpoint_path=self.checkpoint_path,
             use_pretrained_normalizer=self.use_pretrained_normalizer,
