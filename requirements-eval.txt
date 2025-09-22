@@ -4,4 +4,5 @@ geobench @ git+https://github.com/ServiceNow/geo-bench.git  # Unreleased relaxed
 geopandas
 rioxarray
 scikit-learn
+timm==0.9.7
 xarray

@@ -6,6 +6,7 @@ from helios.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
 from helios.evals.models.galileo import GalileoConfig, GalileoWrapper
 from helios.evals.models.panopticon.panopticon import Panopticon, PanopticonConfig
 from helios.evals.models.tessera.tessera import Tessera, TesseraConfig
+from helios.evals.models.prithviv2.prithviv2 import PrithviV2, PrithviV2Config
 
 
 def get_launch_script_path(model_name: str) -> str:
@@ -22,6 +23,8 @@ def get_launch_script_path(model_name: str) -> str:
         return "helios/evals/models/croma/croma_launch.py"
     elif model_name == "tessera":
         return "helios/evals/models/tessera/tessera_launch.py"
+    elif model_name == "prithvi_v2":
+        return "helios/evals/models/prithviv2/prithviv2_launch.py"
     else:
         raise ValueError(f"Invalid model name: {model_name}")
 
@@ -40,4 +43,6 @@ __all__ = [
     "CromaConfig",
     "Tessera",
     "TesseraConfig",
+    "PrithviV2",
+    "PrithviV2Config",
 ]
