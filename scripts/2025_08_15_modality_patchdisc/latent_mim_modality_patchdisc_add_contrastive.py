@@ -74,7 +74,7 @@ def my_build_common_components(
         # Modality.LATLON.name,
         # Modality.SRTM.name,
         # Modality.OPENSTREETMAP_RASTER.name,
-        Modality.ERA5_10.name,
+        # Modality.ERA5_10.name,
     ]
     return config
 
