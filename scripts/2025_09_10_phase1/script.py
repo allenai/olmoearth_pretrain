@@ -73,6 +73,9 @@ def my_build_common_components(
         Modality.WORLDCOVER.name,
         Modality.SRTM.name,
         Modality.OPENSTREETMAP_RASTER.name,
+        Modality.WRI_CANOPY_HEIGHT_MAP.name,
+        Modality.CDL.name,
+        Modality.WORLDCEREAL.name,
     ]
     config.launch.num_gpus = 8
     return config
@@ -125,8 +128,11 @@ def build_train_module_config(
                     "worldcover",
                     "srtm",
                     "openstreetmap_raster",
+                    "wri_canopy_height_map",
+                    "cdl",
+                    "worldcereal",
                 ],
-            }
+            },
         ),
         loss_config=LossConfig(
             loss_config={
