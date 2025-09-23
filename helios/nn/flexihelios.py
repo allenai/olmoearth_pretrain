@@ -1114,7 +1114,7 @@ class FlexiHeliosBase(nn.Module):
         return tokens_only_dict
 
     @staticmethod
-    def pack_tokens(tokens: Tensor, mask: Tensor | None) -> Tensor:
+    def pack_tokens(tokens: Tensor, mask: Tensor) -> Tensor:
         """Pack the Batch and sequence length dimensions of tokens and mask into a single tensor.
 
         Args:
