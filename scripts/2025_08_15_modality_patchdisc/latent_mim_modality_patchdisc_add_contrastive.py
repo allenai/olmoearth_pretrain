@@ -8,7 +8,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelType,
 )
 from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import ConstantWithWarmup
+from olmo_core.optim.scheduler import CosineWithWarmup
 from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
@@ -70,11 +70,11 @@ def my_build_common_components(
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
-        Modality.WORLDCOVER.name,
+        # Modality.WORLDCOVER.name,
         # Modality.LATLON.name,
-        Modality.SRTM.name,
-        Modality.OPENSTREETMAP_RASTER.name,
-        Modality.ERA5_10.name,
+        # Modality.SRTM.name,
+        # Modality.OPENSTREETMAP_RASTER.name,
+        # Modality.ERA5_10.name,
     ]
     return config
 
@@ -125,12 +125,12 @@ def build_train_module_config(
                 # "only_encode_modalities": [
                 #     Modality.ERA5_10.name,
                 # ],
-                "only_decode_modalities": [
-                    Modality.OPENSTREETMAP_RASTER.name,
-                    Modality.WORLDCOVER.name,
-                    Modality.SRTM.name,
-                    # Modality.ERA5_10.name,
-                ],
+                # "only_decode_modalities": [
+                #     Modality.OPENSTREETMAP_RASTER.name,
+                #     Modality.WORLDCOVER.name,
+                #     Modality.SRTM.name,
+                #     # Modality.ERA5_10.name,
+                # ],
             }
         ),
         loss_config=LossConfig(
@@ -147,7 +147,7 @@ def build_train_module_config(
         ),
         token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
-        scheduler=ConstantWithWarmup(warmup_steps=8000),
+        scheduler=CosineWithWarmup(warmup_steps=8000),
         ema_decay=(1.0, 1.0),
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
