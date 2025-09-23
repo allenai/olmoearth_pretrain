@@ -385,7 +385,7 @@ class EncodeEarlyAttnPool(Encoder):
             og_shape = tokens.shape
             tokens = self.pack_tokens(tokens, new_mask)
 
-        attn_mask = self.get_attn_or_none_mask(new_mask, fast_pass)
+        attn_mask = self._maybe_get_attn_mask(new_mask, fast_pass)
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             if i_blk == self.num_pre_modality_pooling_layers:
