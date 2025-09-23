@@ -493,6 +493,15 @@ FT_EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         epochs=50,
     ),
+    "sen1floods11": DownstreamTaskConfig(
+        dataset="sen1floods11",
+        ft_batch_size=32,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+    ),
 }
 
 
