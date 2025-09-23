@@ -148,7 +148,7 @@ class DownstreamEvaluator:
         )
 
     def _get_embeddings(
-        self, data_loader: DataLoader
+        self, data_loader: DataLoader, is_train: bool
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Get the embeddings for the given data loader."""
         print(
@@ -177,12 +177,10 @@ class DownstreamEvaluator:
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
+            "is_train": is_train,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
-        return get_embeddings(
-            data_loader=data_loader,
-            model=model,
-        )
+        return get_embeddings(data_loader=data_loader, model=model)
 
     def val(self) -> float:
         """Validate the model on the downstream task."""
@@ -191,9 +189,11 @@ class DownstreamEvaluator:
 
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
-        train_embeddings, train_labels = self._get_embeddings(train_loader)
+        train_embeddings, train_labels = self._get_embeddings(
+            train_loader, is_train=True
+        )
         logger.info(f"Getting test embeddings for {self.dataset}...")
-        test_embeddings, test_labels = self._get_embeddings(val_loader)
+        test_embeddings, test_labels = self._get_embeddings(val_loader, is_train=False)
         logger.info(
             f"Time to get embeddings for {self.dataset}: {time.time() - start_time:.2f}s"
         )

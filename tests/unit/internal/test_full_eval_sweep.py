@@ -38,6 +38,7 @@ def base_args() -> argparse.Namespace:
         galileo=False,
         satlas=False,
         croma=False,
+        anysat=False,
         prithvi_v2=False,
         tessera=False,
     )
@@ -59,6 +60,7 @@ def minimal_args() -> argparse.Namespace:
         galileo=False,
         satlas=False,
         croma=False,
+        anysat=False,
         prithvi_v2=False,
         tessera=False,
     )

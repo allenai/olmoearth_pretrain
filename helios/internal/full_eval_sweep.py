@@ -150,6 +150,24 @@ def get_panopticon_args() -> str:
     return panopticon_args
 
 
+def get_anysat_args() -> str:
+    """Get the anysat arguments."""
+    anysat_args = dataset_args
+    anysat_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    anysat_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=4"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return anysat_args
+
+
 def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     """Get the galileo arguments."""
     galileo_args = dataset_args
@@ -274,6 +292,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_satlas_args()
     elif args.croma:
         return get_croma_args()
+    elif args.anysat:
+        return get_anysat_args()
     elif args.tessera:
         return get_tessera_args()
     elif args.prithvi_v2:
@@ -500,6 +520,11 @@ def main() -> None:
         "--croma",
         action="store_true",
         help="If set, use the croma normalization settings",
+    )
+    parser.add_argument(
+        "--anysat",
+        action="store_true",
+        help="If set, use the anysat normalization settings",
     )
     parser.add_argument(
         "--tessera",
