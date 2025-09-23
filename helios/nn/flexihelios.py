@@ -1114,7 +1114,7 @@ class FlexiHeliosBase(nn.Module):
         return tokens_only_dict
 
     @staticmethod
-    def pack_tokens(tokens: Tensor, mask: Tensor) -> Tensor:
+    def pack_tokens(tokens: Tensor, mask: Tensor | None) -> Tensor:
         """Pack the Batch and sequence length dimensions of tokens and mask into a single tensor.
 
         Args:
@@ -1358,7 +1358,7 @@ class Encoder(FlexiHeliosBase):
             exit_ids_seq = None
         return exit_ids_seq
 
-    def get_attn_or_none_mask(
+    def _maybe_get_attn_mask(
         self,
         new_mask: Tensor,
         fast_pass: bool,
@@ -1368,6 +1368,39 @@ class Encoder(FlexiHeliosBase):
             return None
         else:
             return new_mask
+
+    def _maybe_remove_masked_tokens(
+        self,
+        tokens: Tensor,
+        mask: Tensor,
+        fast_pass: bool,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Remove masked tokens from the tokens and masks."""
+        if fast_pass:
+            # This is the inference fast pass
+            indices = None
+            new_mask = None
+            seq_lengths = None
+            max_seqlen = None
+            bool_mask = None
+        else:
+            bool_mask = mask == MaskValue.ONLINE_ENCODER.value
+            tokens, indices, new_mask, seq_lengths, max_seqlen = (
+                self.remove_masked_tokens(tokens, bool_mask)
+            )
+        return tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask
+
+    def _maybe_add_removed_tokens(
+        self,
+        tokens: Tensor,
+        indices: Tensor,
+        mask: Tensor,
+        fast_pass: bool,
+    ) -> Tensor:
+        """Add removed tokens to the tokens and masks."""
+        if not fast_pass:
+            tokens, _ = self.add_removed_tokens(tokens, indices, mask)
+        return tokens
 
     def apply_attn(
         self,
@@ -1398,17 +1431,10 @@ class Encoder(FlexiHeliosBase):
         tokens_dict.update(original_masks_dict)
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
-        if fast_pass:
-            # This is the inference fast pass
-            indices = None
-            new_mask = None
-            seq_lengths = None
-            max_seqlen = None
-        else:
-            bool_mask = mask == MaskValue.ONLINE_ENCODER.value
-            tokens, indices, new_mask, seq_lengths, max_seqlen = (
-                self.remove_masked_tokens(tokens, bool_mask)
-            )
+        tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
+            self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
+        )
+
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
                 exit_ids_seq, bool_mask
@@ -1418,18 +1444,15 @@ class Encoder(FlexiHeliosBase):
                 exited_tokens, bool_mask
             )
 
-        # TODO: we can remove this if we are using the torch flash attention implementation for inference
-        if fast_pass:
-            cu_seqlens = None
-        else:
-            cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
-
         # Pack x tokens
-        if self.use_flash_attn:
+        if self.use_flash_attn and not fast_pass:
+            cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
             og_shape = tokens.shape
             tokens = self.pack_tokens(tokens, new_mask)
+        else:
+            cu_seqlens = None
 
-        attn_mask = self.get_attn_or_none_mask(
+        attn_mask = self._maybe_get_attn_mask(
             new_mask,
             fast_pass=fast_pass,
         )
@@ -1459,7 +1482,8 @@ class Encoder(FlexiHeliosBase):
                 attn_mask=attn_mask,
             )
 
-        if self.use_flash_attn:
+        # TODO: Integrate fast pass with non torch flash attention
+        if self.use_flash_attn and not fast_pass:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
 
         if exit_ids_seq is not None:
@@ -1478,9 +1502,7 @@ class Encoder(FlexiHeliosBase):
         tokens = self.norm(tokens)
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
-        # TODO: Need this to be even more of a no-op
-        if not fast_pass:
-            tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
+        tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
 
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
@@ -1530,6 +1552,7 @@ class Encoder(FlexiHeliosBase):
         output_dict = {
             "tokens_and_masks": output,
         }
+
         if not fast_pass:
             output_dict["project_aggregated"] = self.project_and_aggregate(output)
         return output_dict

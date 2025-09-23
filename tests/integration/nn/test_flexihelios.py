@@ -238,13 +238,13 @@ class TestEncoder:
         patch_size = 4
         input_res = 10
 
-        for always_pass_none_mask_to_transformer in [True, False]:
+        for fast_pass in [True, False]:
             output = encoder.apply_attn(
                 x=x,
                 timestamps=timestamps,
                 patch_size=patch_size,
                 input_res=input_res,
-                always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+                fast_pass=fast_pass,
             )
 
             # Ensure shape is preserved in the output tokens.
@@ -256,7 +256,7 @@ class TestEncoder:
             assert (output["sentinel2_l2a_mask"] == sentinel2_l2a_mask).all(), (
                 "Mask should be preserved in output"
             )
-            if always_pass_none_mask_to_transformer:
+            if fast_pass:
                 assert (
                     output["sentinel2_l2a"][
                         sentinel2_l2a_mask >= MaskValue.TARGET_ENCODER_ONLY.value
@@ -620,7 +620,7 @@ class TestEncoder:
                 patch_size,
                 input_res,
                 token_exit_cfg=None,
-                always_pass_none_mask_to_transformer=True,
+                fast_pass=True,
             )
         output, _, _ = unpack_encoder_output(output_dict)
 
