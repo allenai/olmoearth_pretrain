@@ -125,6 +125,26 @@ def get_panopticon_args() -> str:
     return panopticon_args
 
 
+def get_clay_args(pretrained_normalizer: bool = True) -> str:
+    """Get the clay arguments."""
+    clay_args = dataset_args
+    if pretrained_normalizer:
+        # To use clay pretrained normalizer we want to leave normalization to the clay wrapper
+        clay_args = dataset_args
+        clay_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        clay_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        # IF we use dataset stats we want to turn off the pretrained normalizer
+        clay_args += " " + "--model.use_pretrained_normalizer=False"
+    return clay_args
+
+
 def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     """Get the galileo arguments."""
     galileo_args = dataset_args
@@ -191,6 +211,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_dino_v3_args()
     elif args.panopticon:
         return get_panopticon_args()
+    elif args.clay:
+        return get_clay_args()
     elif args.galileo:
         return get_galileo_args()
     elif args.croma:
@@ -291,6 +313,8 @@ def _get_module_path(args: argparse.Namespace) -> str:
         return get_launch_script_path("panopticon")
     elif args.croma:
         return get_launch_script_path("croma")
+    elif args.clay:
+        return get_launch_script_path("clay")
     elif args.galileo:
         return get_launch_script_path("galileo")
     else:
@@ -401,6 +425,11 @@ def main() -> None:
         "--croma",
         action="store_true",
         help="If set, use the croma normalization settings",
+    )
+    parser.add_argument(
+        "--clay",
+        action="store_true",
+        help="If set, use the clay normalization settings",
     )
     args, extra_cli = parser.parse_known_args()
 
