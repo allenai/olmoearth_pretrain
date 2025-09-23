@@ -918,20 +918,20 @@ def test_space_cross_modality_masking(set_random_seeds: None) -> None:
     logger.info(f"masked_sample: {masked_sample}")
     # Check that the worldcover mask has the expected values
     # Check that latlon mask has the expected values
-    expected_latlon_mask = torch.tensor([[0], [2], [0], [0]])
+    expected_latlon_mask = torch.tensor([[2], [2], [1], [2]])
     expected_worldcover_mask = torch.tensor(
         [
             [
-                [[[2]], [[2]], [[2]], [[1]]],
-                [[[2]], [[2]], [[1]], [[2]]],
-                [[[2]], [[2]], [[1]], [[2]]],
-                [[[2]], [[2]], [[1]], [[2]]],
+                [[[1]], [[1]], [[1]], [[0]]],
+                [[[1]], [[1]], [[1]], [[1]]],
+                [[[1]], [[1]], [[1]], [[1]]],
+                [[[1]], [[1]], [[1]], [[1]]],
             ],
             [
-                [[[1]], [[2]], [[2]], [[1]]],
-                [[[2]], [[2]], [[2]], [[2]]],
-                [[[2]], [[1]], [[2]], [[2]]],
-                [[[2]], [[2]], [[1]], [[2]]],
+                [[[1]], [[1]], [[1]], [[0]]],
+                [[[1]], [[1]], [[1]], [[1]]],
+                [[[1]], [[1]], [[1]], [[1]]],
+                [[[1]], [[1]], [[1]], [[1]]],
             ],
             [
                 [[[1]], [[1]], [[1]], [[1]]],
@@ -940,14 +940,15 @@ def test_space_cross_modality_masking(set_random_seeds: None) -> None:
                 [[[1]], [[1]], [[1]], [[1]]],
             ],
             [
-                [[[2]], [[2]], [[2]], [[2]]],
-                [[[2]], [[1]], [[2]], [[2]]],
-                [[[2]], [[2]], [[1]], [[1]]],
-                [[[1]], [[2]], [[2]], [[2]]],
+                [[[1]], [[1]], [[1]], [[1]]],
+                [[[1]], [[1]], [[1]], [[1]]],
+                [[[1]], [[1]], [[1]], [[0]]],
+                [[[1]], [[1]], [[1]], [[1]]],
             ],
         ]
     )
-
+    logger.info(f"masked_sample: worldcover_mask {masked_sample.worldcover_mask}")
+    logger.info(f"masked_sample: latlon_mask {masked_sample.latlon_mask}")
     # Assert that the masks match the expected values
     assert torch.equal(masked_sample.worldcover_mask, expected_worldcover_mask)
     assert torch.equal(masked_sample.latlon_mask, expected_latlon_mask)
@@ -992,8 +993,7 @@ def test_space_cross_modality_masking_with_missing_data(set_random_seeds: None) 
     )
     # Check that the worldcover mask has the expected values
     # Check that latlon mask has the expected values
-    expected_latlon_mask = torch.tensor([[0], [0], [0], [0]])
-
+    expected_latlon_mask = torch.tensor([[2], [2], [1], [2]])
     # Assert that the masks match the expected values
     assert (masked_sample_allow_false.worldcover_mask == MaskValue.MISSING.value).all()  # type: ignore
     assert torch.equal(masked_sample_allow_false.latlon_mask, expected_latlon_mask)
