@@ -262,10 +262,9 @@ class ThroughputBenchmarkRunner:
                 skip_first=0,  # Don't skip any steps
                 wait=0,  # Start profiling immediately
                 warmup=5,  # Warmup for 5 steps (matches your current warmup)
-                active=3,  # Profile for 10 steps
+                active=5,  # Profile for 5 steps
                 repeat=1,  # Only one cycle
             )
-            # Set up a mock trainer object for the profiler
 
             profiler.trainer = MinimalTrainer(device, self.work_dir)
 
@@ -274,13 +273,9 @@ class ThroughputBenchmarkRunner:
         if run_params.wandb_enabled:
             project = os.getenv(constants.PARAM_KEYS["project"], constants.PROJECT_NAME)
             owner = os.getenv(constants.PARAM_KEYS["owner"], constants.ENTITY_NAME)
-            # add a uuid to the name
             name = run_params.run_name
             name = f"{run_params.run_name}-{self.sweep_name}"
-            if self.sweep_group_name is not None:
-                group = self.sweep_group_name
-            else:
-                group = None
+            group = self.sweep_group_name
             wandb_callback = WandBCallback(
                 project=project,
                 entity=owner,
@@ -291,7 +286,6 @@ class ThroughputBenchmarkRunner:
             wandb_callback.trainer = MinimalTrainer(device, self.work_dir)
             callbacks.append(wandb_callback)
 
-        # Initialize profiler
         for callback in callbacks:
             callback.pre_train()
 
