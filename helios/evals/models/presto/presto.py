@@ -199,7 +199,7 @@ class PrestoWrapper(nn.Module):
 
         if not spatial_pool:
             output_features = reduce(output_features, "b ... d -> b d", pooling)
-        # Tessera pools across modality and time within the architecture
+        # Presto pools across modality and time within the architecture
         # so we need to return the output features as is
         return output_features
 
