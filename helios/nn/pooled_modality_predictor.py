@@ -497,7 +497,7 @@ class EncodeEarlyAttnPool(Encoder):
             )
         cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
 
-        attn_mask = self.get_attn_or_none_mask(new_mask, fast_pass)
+        attn_mask = self._maybe_get_attn_mask(new_mask, fast_pass)
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             if i_blk < self.num_pre_modality_pooling_layers:
