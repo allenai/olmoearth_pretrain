@@ -275,6 +275,59 @@ class TestEncoder:
                     "Masked tokens should be 0 in output because mask is not overridden"
                 )
 
+    @torch.inference_mode()
+    def test_fast_pass_is_the_same_as_no_masks(
+        self,
+        encoder: Encoder,
+        modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    ) -> None:
+        """Test applying attention layers with masking via the apply_attn method."""
+        sentinel2_l2a_num_band_sets, _ = modality_band_set_len_and_total_bands[
+            "sentinel2_l2a"
+        ]
+        latlon_num_band_sets, _ = modality_band_set_len_and_total_bands["latlon"]
+        B, H, W, T, C, D = 1, 2, 2, 3, sentinel2_l2a_num_band_sets, 16
+        sentinel2_l2a_tokens = torch.randn(B, H, W, T, C, D)
+        sentinel2_l2a_mask = torch.full(
+            (B, H, W, T, C), MaskValue.ONLINE_ENCODER.value, dtype=torch.long
+        )
+
+        latlon = torch.randn(B, latlon_num_band_sets, D)
+        latlon_mask = torch.full(
+            (B, latlon_num_band_sets),
+            MaskValue.ONLINE_ENCODER.value,
+            dtype=torch.float32,
+        )
+
+        # Construct the TokensAndMasks namedtuple with mock modality data + mask.
+        x = {
+            "sentinel2_l2a": sentinel2_l2a_tokens,
+            "sentinel2_l2a_mask": sentinel2_l2a_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+        }
+
+        timestamps = torch.tensor(
+            [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
+        ).unsqueeze(0)
+        patch_size = 4
+        input_res = 10
+
+        encoder.eval()
+        outputs = []
+        for fast_pass in [True, False]:
+            output = encoder.apply_attn(
+                x=x,
+                timestamps=timestamps,
+                patch_size=patch_size,
+                input_res=input_res,
+                fast_pass=fast_pass,
+            )
+            outputs.append(output)
+
+        assert torch.allclose(outputs[0]["sentinel2_l2a"], outputs[1]["sentinel2_l2a"])
+        assert torch.allclose(outputs[0]["latlon"], outputs[1]["latlon"])
+
     def test_forward_exit_config_none(
         self,
         encoder: Encoder,
