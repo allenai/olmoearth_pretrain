@@ -418,7 +418,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         modality: str,
         input_data: MaskedHeliosSample,
         patch_size: int,
-        inference_fast_pass: bool = False,
+        fast_pass: bool = False,
     ) -> tuple[Tensor, Tensor]:
         """Apply embedding to a modality."""
         logger.debug(f"applying embedding to modality:{modality}")
@@ -429,7 +429,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         modality_spec = Modality.get(modality)
 
         modality_tokens, modality_masks = [], []
-        for idx, channel_set_indices in enumerate(modality_spec.bandsets_as_indices()):
+        for idx in range(modality_spec.num_band_sets):
             modality_specific_kwargs = {}
             if not modality_spec.is_spatial:
                 # static in time
@@ -443,13 +443,8 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     idx,
                 ]
                 modality_specific_kwargs = {"patch_size": patch_size}
-            # Now apply the embedding to the patchified data
-            if inference_fast_pass:
-                should_embed = True
-            else:
-                should_embed = (token_mask == MaskValue.ONLINE_ENCODER.value).any()
-            if should_embed:
-                # TODO: Add fallback to old version
+            # In the fast pass we want to the sync that comes with checking for online encoder
+            if fast_pass or (token_mask == MaskValue.ONLINE_ENCODER.value).any():
                 buffer_name = self._get_buffer_name(modality, idx)
                 patchified_data = torch.index_select(
                     modality_data, -1, getattr(self, buffer_name)
@@ -483,7 +478,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         self,
         input_data: MaskedHeliosSample,
         patch_size: int,
-        inference_fast_pass: bool = False,
+        fast_pass: bool = False,
     ) -> dict[str, Tensor]:
         """Return flexibly patchified embeddings for each modality of the input data.
 
@@ -503,7 +498,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         )
         for modality in modalities_to_process:
             modality_tokens, modality_masks = self.apply_embedding_to_modality(
-                modality, input_data, patch_size, inference_fast_pass
+                modality, input_data, patch_size, fast_pass
             )
             output_dict[modality] = modality_tokens
             modality_mask_name = input_data.get_masked_modality_name(modality)
@@ -1366,10 +1361,10 @@ class Encoder(FlexiHeliosBase):
     def get_attn_or_none_mask(
         self,
         new_mask: Tensor,
-        always_pass_none_mask_to_transformer: bool,
+        fast_pass: bool,
     ) -> Tensor | None:
         """Get the attention mask or None if we should pass None to the transformer."""
-        if always_pass_none_mask_to_transformer or not self.training:
+        if fast_pass or not self.training:
             return None
         else:
             return new_mask
@@ -1381,7 +1376,7 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
-        always_pass_none_mask_to_transformer: bool = False,
+        fast_pass: bool = False,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1403,8 +1398,7 @@ class Encoder(FlexiHeliosBase):
         tokens_dict.update(original_masks_dict)
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
-        # we could remove this sort entirely
-        if always_pass_none_mask_to_transformer:
+        if fast_pass:
             # This is the inference fast pass
             indices = None
             new_mask = None
@@ -1425,10 +1419,11 @@ class Encoder(FlexiHeliosBase):
             )
 
         # TODO: we can remove this if we are using the torch flash attention implementation for inference
-        if always_pass_none_mask_to_transformer:
+        if fast_pass:
             cu_seqlens = None
         else:
             cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
+
         # Pack x tokens
         if self.use_flash_attn:
             og_shape = tokens.shape
@@ -1436,7 +1431,7 @@ class Encoder(FlexiHeliosBase):
 
         attn_mask = self.get_attn_or_none_mask(
             new_mask,
-            always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+            fast_pass=fast_pass,
         )
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
@@ -1484,11 +1479,9 @@ class Encoder(FlexiHeliosBase):
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
         # TODO: Need this to be even more of a no-op
-        if not always_pass_none_mask_to_transformer:
+        if not fast_pass:
             tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
-        else:
-            # Fast pass does not need to do sorting
-            pass
+
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
         )
@@ -1502,7 +1495,7 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
-        always_pass_none_mask_to_transformer: bool = False,
+        fast_pass: bool = False,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -1511,17 +1504,16 @@ class Encoder(FlexiHeliosBase):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
-            always_pass_none_mask_to_transformer: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
         """
-        if always_pass_none_mask_to_transformer and token_exit_cfg is not None:
-            raise ValueError(
-                "token_exit_cfg cannot be set when always_pass_none_mask_to_transformer is True"
-            )
+        if fast_pass and token_exit_cfg is not None:
+            raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
+
         patchified_tokens_and_masks = self.patch_embeddings.forward(
-            x, patch_size, inference_fast_pass=always_pass_none_mask_to_transformer
+            x, patch_size, fast_pass=fast_pass
         )
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
@@ -1532,14 +1524,13 @@ class Encoder(FlexiHeliosBase):
                 patch_size=patch_size,
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
-                always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+                fast_pass=fast_pass,
             )
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        # TODO: we should probably switch this to a dict
         output_dict = {
             "tokens_and_masks": output,
         }
-        if not always_pass_none_mask_to_transformer:
+        if not fast_pass:
             output_dict["project_aggregated"] = self.project_and_aggregate(output)
         return output_dict
 
