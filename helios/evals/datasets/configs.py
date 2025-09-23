@@ -32,6 +32,7 @@ class EvalDatasetConfig(NamedTuple):
     # this is only necessary for segmentation tasks,
     # and defines the input / output height width.
     height_width: int | None = None
+    timeseries: bool = False
 
 
 DATASET_TO_CONFIG = {
@@ -124,6 +125,7 @@ DATASET_TO_CONFIG = {
         is_multilabel=False,
         height_width=64,
         supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        timeseries=True,
     ),
     "breizhcrops": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
@@ -132,6 +134,7 @@ DATASET_TO_CONFIG = {
         is_multilabel=False,
         height_width=1,
         supported_modalities=[Modality.SENTINEL2_L2A.name],
+        timeseries=True,
     ),
     "sickle": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -144,6 +147,7 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL1.name,
             Modality.SENTINEL2_L2A.name,
         ],
+        timeseries=True,
     ),
     "cropharvest": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
@@ -158,6 +162,7 @@ DATASET_TO_CONFIG = {
             Modality.SENTINEL1.name,
             Modality.SRTM.name,
         ],
+        timeseries=True,
     ),
 }
 

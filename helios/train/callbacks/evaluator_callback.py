@@ -26,7 +26,7 @@ from helios.evals.datasets.configs import (
 from helios.evals.datasets.normalize import NormMethod
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
-from helios.evals.eval_wrapper import get_eval_wrapper
+from helios.evals.eval_wrapper import Satlas, get_eval_wrapper
 from helios.evals.knn import run_knn
 from helios.evals.linear_probe import ProbeType, train_and_eval_probe
 from helios.nn.flexihelios import PoolingType
@@ -242,6 +242,12 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(f"Task instance used modalities: {task_instance_used_modalities}")
         if len(task_instance_used_modalities) == 0:
             task_instance_used_modalities = task_supported_modalities
+
+        if isinstance(self.trainer.train_module.model, Satlas):
+            if len(task_instance_used_modalities) > 1:
+                # satlas can only ingest one modality at a time
+                return False
+
         does_model_support_all_task_instance_used_modalities = set(
             task_instance_used_modalities
         ).issubset(set(self.model_supported_modalities))
@@ -253,6 +259,24 @@ class DownstreamEvaluatorCallback(Callback):
         if hasattr(self.trainer.train_module.model, "supported_modalities"):
             return self.trainer.train_module.model.supported_modalities
         return Modality.names()
+
+    def _check_input_requirements(self, evaluator: DownstreamEvaluator) -> bool:
+        """Check if the evaluator is supported by the model."""
+        model = self.trainer.train_module.model
+
+        # Check required modalities
+        required_modalities_present = True
+        if hasattr(model, "required_modalities"):
+            required_modalities_present = set(model.required_modalities).issubset(
+                set(evaluator.input_modalities)
+            )
+
+        # Check timeseries requirement
+        has_timeseries = True
+        if hasattr(model, "requires_timeseries") and model.requires_timeseries:
+            has_timeseries = evaluator.config.timeseries
+
+        return required_modalities_present and has_timeseries
 
     def pre_train(self) -> None:
         """Run the evaluators on startup."""
@@ -271,6 +295,11 @@ class DownstreamEvaluatorCallback(Callback):
                 if not self._check_supported_modalities(evaluator):
                     logger.info(
                         f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model"
+                    )
+                    continue
+                if not self._check_input_requirements(evaluator):
+                    logger.info(
+                        f"Skipping {evaluator.evaluation_name} because it doesn't match input requirements of the model"
                     )
                     continue
                 val_result, eval_time = self._perform_eval(evaluator)

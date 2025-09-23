@@ -158,6 +158,18 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL1.name, Modality.LANDSAT.name],
         epochs=50,
     ),
+    "sickle_sentinel1_sentinel2": DownstreamTaskConfig(
+        dataset="sickle",
+        embedding_batch_size=32,
+        probe_batch_size=16,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        probe_lr=0.002,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        epochs=50,
+    ),
     "pastis_sentinel1": DownstreamTaskConfig(
         dataset="pastis",
         embedding_batch_size=32,
@@ -172,7 +184,7 @@ EVAL_TASKS = {
     ),
     "pastis_sentinel1_sentinel2": DownstreamTaskConfig(
         dataset="pastis",
-        embedding_batch_size=32,
+        embedding_batch_size=512,
         probe_batch_size=8,
         num_workers=2,
         pooling_type=PoolingType.MEAN,

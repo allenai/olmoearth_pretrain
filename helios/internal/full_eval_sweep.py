@@ -113,6 +113,31 @@ def get_croma_args() -> str:
     return croma_args
 
 
+def get_tessera_args(pretrained_normalizer: bool = True) -> str:
+    """Get the tessera arguments."""
+    tessera_args = dataset_args
+    if pretrained_normalizer:
+        # To use galileo pretrained normalizer we want to leave normalization to the galileo wrapper
+        tessera_args = dataset_args
+        tessera_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        tessera_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        tessera_args += " " + "--model.use_pretrained_normalizer=False"
+        tessera_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+    return tessera_args
+
+
 def get_panopticon_args() -> str:
     """Get the panopticon arguments."""
     panopticon_args = dataset_args
@@ -167,6 +192,31 @@ def get_galileo_args(pretrained_normalizer: bool = True) -> str:
         ]
     )
     return galileo_args
+
+
+def get_satlas_args(pretrained_normalizer: bool = True) -> str:
+    """Get the satlas arguments."""
+    satlas_args = dataset_args
+    if pretrained_normalizer:
+        # To use satlas pretrained normalizer we want to leave normalization to the satlas wrapper
+        satlas_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        satlas_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        satlas_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+        # IF we use dataset stats we want to turn off the pretrained normalizer
+        satlas_args += " " + "--model.use_pretrained_normalizer=False"
+    return satlas_args
 
 
 def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
@@ -238,10 +288,14 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_panopticon_args()
     elif args.galileo:
         return get_galileo_args()
+    elif args.satlas:
+        return get_satlas_args()
     elif args.croma:
         return get_croma_args()
     elif args.anysat:
         return get_anysat_args()
+    elif args.tessera:
+        return get_tessera_args()
     elif args.prithvi_v2:
         return get_prithviv2_args()
     return ""
@@ -249,21 +303,19 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
 
 def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
     """Get normalization-specific command arguments."""
-    if args.galileo:
-        if norm_mode == "dataset":
-            return get_galileo_args(pretrained_normalizer=False)
-        elif norm_mode == "pre_trained":
-            return get_galileo_args(pretrained_normalizer=True)
-    elif args.prithvi_v2:
-        if norm_mode == "dataset":
-            return get_prithviv2_args(pretrained_normalizer=False)
-        elif norm_mode == "pre_trained":
-            return get_prithviv2_args(pretrained_normalizer=True)
-    else:
-        if norm_mode == "dataset":
-            return dataset_args
-        elif norm_mode == "pre_trained":
-            return helios_args
+    model_map = {
+        "galileo": get_galileo_args,
+        "tessera": get_tessera_args,
+        "prithvi_v2": get_prithviv2_args,
+        "satlas": get_satlas_args,
+    }
+    for model, func in model_map.items():
+        if getattr(args, model, False):
+            return func(pretrained_normalizer=(norm_mode == "pre_trained"))
+    if norm_mode == "dataset":
+        return dataset_args
+    if norm_mode == "pre_trained":
+        return helios_args
     return ""
 
 
@@ -328,6 +380,7 @@ def _build_hyperparameter_command(
     cmd_args += _get_model_specific_args(args)
 
     # Add normalization-specific args
+    # These args will override the model-specific args
     cmd_args += _get_normalization_args(args, norm_mode)
 
     return (
@@ -347,6 +400,10 @@ def _get_module_path(args: argparse.Namespace) -> str:
         return get_launch_script_path("croma")
     elif args.galileo:
         return get_launch_script_path("galileo")
+    elif args.satlas:
+        return get_launch_script_path("satlas")
+    elif args.tessera:
+        return get_launch_script_path("tessera")
     elif args.prithvi_v2:
         return get_launch_script_path("prithvi_v2")
     else:
@@ -381,7 +438,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         hp_params = (
             loop_through_params()
             if not args.dino_v3
-            and not args.panopticon  # Only use the dataset normalization stats for these models
+            and not args.panopticon
+            and not args.tessera  # Only use the dataset normalization stats for these models
             else no_norm_sweep()
         )
 
@@ -454,6 +512,11 @@ def main() -> None:
         help="If set, use the galileo normalization settings",
     )
     parser.add_argument(
+        "--satlas",
+        action="store_true",
+        help="If set, use the satlas normalization settings",
+    )
+    parser.add_argument(
         "--croma",
         action="store_true",
         help="If set, use the croma normalization settings",
@@ -462,6 +525,11 @@ def main() -> None:
         "--anysat",
         action="store_true",
         help="If set, use the anysat normalization settings",
+    )
+    parser.add_argument(
+        "--tessera",
+        action="store_true",
+        help="If set, use the tessera normalization settings",
     )
     parser.add_argument(
         "--prithvi_v2",
