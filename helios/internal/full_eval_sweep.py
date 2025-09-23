@@ -48,6 +48,14 @@ ft_mode_args = " ".join(
 
 ft_lr_args_template = " ".join([create_task_arg(t, "ft_lr") for t in _ft_task_names()])
 
+ft_dataset_args = " ".join(
+    [" "]
+    + [
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_stats_from_pretrained=False"
+        for task_name in FT_EVAL_TASKS.keys()
+    ]
+)
+
 lr_args = " ".join(
     [
         create_task_arg(task_name, "probe_lr")
@@ -115,7 +123,7 @@ def get_dino_v3_args(finetune: bool = False) -> str:
     """Get the dino v3 arguments."""
     # Normalization strategy is to scale with min max to 0 - 256 and then scale back to 0 - 1
     # Normalization is then applied by the eval wrapper by default
-    dino_v3_args = dataset_args
+    dino_v3_args = dataset_args if not finetune else ft_dataset_args
     if not finetune:
         dino_v3_args += " " + " ".join(
             [
@@ -135,7 +143,7 @@ def get_dino_v3_args(finetune: bool = False) -> str:
 
 def get_croma_args(finetune: bool = False) -> str:
     """Get the croma arguments."""
-    croma_args = dataset_args
+    croma_args = dataset_args if not finetune else ft_dataset_args
     if not finetune:
         croma_args += " " + " ".join(
             [
@@ -180,7 +188,7 @@ def get_tessera_args(pretrained_normalizer: bool = True) -> str:
 
 def get_panopticon_args() -> str:
     """Get the panopticon arguments."""
-    panopticon_args = dataset_args
+    panopticon_args = dataset_args if not finetune else ft_dataset_args
     if not finetune:
         panopticon_args += " " + " ".join(
             [
@@ -278,10 +286,10 @@ def get_anysat_args() -> str:
 
 def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     """Get the galileo arguments."""
-    galileo_args = dataset_args
+    galileo_args = dataset_args if not finetune else ft_dataset_args
     if pretrained_normalizer:
         # To use galileo pretrained normalizer we want to leave normalization to the galileo wrapper
-        galileo_args = dataset_args
+        galileo_args = dataset_args if not finetune else ft_dataset_args
         if not finetune:
             galileo_args += " " + " ".join(
                 [
