@@ -88,13 +88,13 @@ class Helios(torch.nn.Module):
         self,
         x: MaskedHeliosSample,
         patch_size: int,
-        always_pass_none_mask_to_transformer: bool = True,
+        fast_pass: bool = True,
     ) -> TokensAndMasks:
         """Pass-through."""
         return self.model.forward(
             x,
             patch_size=patch_size,
-            always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+            fast_pass=fast_pass,
         )["tokens_and_masks"]
 
 
@@ -175,7 +175,7 @@ class ThroughputBenchmarkRunner:
         self.sweep_dict = sweep_dict
         self.cross_product_sweep = cross_product_sweep
         uuid_str = str(uuid.uuid4())[:6]
-        self.sweep_name = "_".join(sweep_dict.keys()) + "-" + uuid_str
+        self.sweep_name = "_".join(self.sweep_dict.keys()) + "-" + uuid_str
 
     def build_model(self, run_params: RunParams) -> Helios:
         """Builds a model based on the run parameters."""
