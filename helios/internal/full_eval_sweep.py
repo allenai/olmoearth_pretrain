@@ -756,7 +756,7 @@ def main() -> None:
         "--model_name",
         type=str,
         required=False,
-        help="If set, use this as the  base run name",
+        help="If set, use this as the base run name",
     )
     parser.add_argument(
         "--dino_v3",

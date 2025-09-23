@@ -56,8 +56,7 @@ class _BackboneWithHead(nn.Module):
         else:
             logits_per_patch = int(self.num_classes * self.patch_size * self.patch_size)
             self._head = nn.Linear(emb_dim, logits_per_patch, bias=True)
-        # nn.init.trunc_normal_(self._head.weight, std=0.02)
-        # nn.init.zeros_(self._head.bias)
+
         self._head = self._head.to(device=device)
         self._inited = True
 
@@ -182,7 +181,7 @@ def run_finetune_eval(
     logger.info(f"Total parameters: {total:,}")
     logger.info(f"Trainable parameters: {trainable:,}")
 
-    opt = torch.optim.AdamW(ft.parameters(), lr=lr, foreach=False)
+    opt = torch.optim.AdamW(ft.parameters(), lr=lr)
     if task_config.task_type == TaskType.CLASSIFICATION:
         loss_fn: nn.Module = (
             nn.MultiLabelSoftMarginLoss()
@@ -230,7 +229,7 @@ def run_finetune_eval(
                 max_lr=lr,
                 min_lr=1.0e-5,
             )
-            torch.nn.utils.clip_grad_norm_(ft.parameters(), 1.0, foreach=False)
+            # torch.nn.utils.clip_grad_norm_(ft.parameters(), 1.0)
             opt.step()
             opt.zero_grad()
 
