@@ -127,6 +127,15 @@ DATASET_TO_CONFIG = {
         supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
         timeseries=True,
     ),
+    "pastis128": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=19,
+        is_multilabel=False,
+        height_width=128,
+        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        timeseries=True,
+    ),
     "breizhcrops": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],
