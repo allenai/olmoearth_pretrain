@@ -31,6 +31,7 @@ torch.multiprocessing.set_sharing_strategy("file_system")
 
 DATA_DIR = UPath("/weka/dfive-default/helios/evaluation/PASTIS-R")
 PASTIS_DIR = UPath("/weka/dfive-default/presto_eval_sets/pastis_r")
+PASTIS_DIR_ORIG = UPath("/weka/dfive-default/presto_eval_sets/pastis_r_origsize")
 PASTIS_DIR_PARTITION = UPath("/weka/dfive-default/presto_eval_sets/pastis")
 
 
@@ -64,12 +65,14 @@ class PASTISRProcessor:
     It also imputes the missing bands in the S2 images.
     """
 
-    def __init__(self, data_dir: str, output_dir: str):
+    def __init__(self, data_dir: str, output_dir: str, resize_to_64: bool = True):
         """Initialize PASTIS-R processor.
 
         Args:
             data_dir: Path to PASTIS-R dataset
             output_dir: Path to output directory
+            resize_to_64: Whether or not to resize the pastis dataset into 64x64 tiles
+                from 128x128 tiles
         """
         self.data_dir = UPath(data_dir)
         self.output_dir = UPath(output_dir)
@@ -91,6 +94,7 @@ class PASTISRProcessor:
             "201909",
             "201910",
         ]
+        self.resize_to_64 = resize_to_64
 
     def impute(self, img: torch.Tensor) -> torch.Tensor:
         """Impute missing bands in Sentinel-2 images."""
@@ -197,20 +201,29 @@ class PASTISRProcessor:
                 ]
             )
 
-        return {
-            "fold": f"fold_{properties['Fold']}",
-            "s2_images": split_images(s2_images),
-            "s1_images": split_images(s1_images),
-            "months": torch.stack([months] * 4),
-            "targets": torch.stack(
-                [
-                    targets[:64, :64],
-                    targets[64:, :64],
-                    targets[:64, 64:],
-                    targets[64:, 64:],
-                ]
-            ),
-        }
+        if self.resize_to_64:
+            return {
+                "fold": f"fold_{properties['Fold']}",
+                "s2_images": split_images(s2_images),
+                "s1_images": split_images(s1_images),
+                "months": torch.stack([months] * 4),
+                "targets": torch.stack(
+                    [
+                        targets[:64, :64],
+                        targets[64:, :64],
+                        targets[:64, 64:],
+                        targets[64:, 64:],
+                    ]
+                ),
+            }
+        else:
+            return {
+                "fold": f"fold_{properties['Fold']}",
+                "s2_images": s2_images.unsqueeze(0),
+                "s1_images": s1_images.unsqueeze(0),
+                "months": months.unsqueeze(0),
+                "targets": targets.unsqueeze(0),
+            }
 
     def process(self) -> None:
         """Process the PASTIS-R dataset."""
@@ -318,6 +331,17 @@ def process_pastis(
     processor = PASTISRProcessor(
         data_dir=data_dir,
         output_dir=output_dir,
+    )
+    processor.process()
+
+
+def process_pastis_orig_size(
+    data_dir: str = DATA_DIR,
+    output_dir: str = PASTIS_DIR_ORIG,
+) -> None:
+    """Process PASTIS-R dataset."""
+    processor = PASTISRProcessor(
+        data_dir=data_dir, output_dir=output_dir, resize_to_64=False
     )
     processor.process()
 
