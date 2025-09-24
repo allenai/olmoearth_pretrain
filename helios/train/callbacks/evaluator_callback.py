@@ -369,7 +369,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             and len(task.input_modalities) > 0
         ):
             raise ValueError(
-                f"input_modalities must be set for multimodal tasks only, got {task.dataset}"
+                f"input_modalities is only supported for multimodal tasks, got {task.dataset}"
             )
         # Make sure input_modalities contains only unique modalities
         if len(task.input_modalities) != len(set(task.input_modalities)):
