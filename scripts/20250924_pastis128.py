@@ -104,11 +104,11 @@ class PASTISRProcessor:
             img = torch.tensor(images[int(idx)], dtype=torch.float32)
             # S2 in PASTIS has 10 bands, so imputation is always needed
             if modality_name == MODALITY_SENTINEL2L2A_NAME:
-                if img.shape[1] == 10:
+                if img.shape[0] == 10:
                     img = self.impute(img)
                 else:
                     raise ValueError(
-                        f"Sentinal2 image has {img.shape[1]} bands, expected 10. Shape is {img.shape}!"
+                        f"Sentinal2 image has {img.shape[0]} bands, expected 10. Shape is {img.shape}!"
                     )
             months_dict[month].append(img)
 

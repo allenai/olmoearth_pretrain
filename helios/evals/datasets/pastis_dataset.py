@@ -138,7 +138,7 @@ class PASTISRProcessor:
             img = torch.tensor(images[int(idx)], dtype=torch.float32)
             # S2 in PASTIS has 10 bands, so imputation is always needed
             if modality_name == Modality.SENTINEL2_L2A.name:
-                if img.shape[1] == 10:
+                if img.shape[0] == 10:
                     img = self.impute(img)
                 else:
                     raise ValueError(
