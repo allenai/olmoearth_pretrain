@@ -1403,22 +1403,22 @@ class TestModalityCrossMaskingStrategy:
         expected_encoded_decoded_bandsets = [
             (
                 {
-                    ("sentinel2_l2a", 0),
-                    ("sentinel2_l2a", 1),
-                    ("sentinel1", 0),
-                    ("latlon", 1),
+                    (Modality.SENTINEL2_L2A.name, 0),
+                    (Modality.SENTINEL2_L2A.name, 1),
+                    (Modality.SENTINEL1.name, 0),
+                    (Modality.LATLON.name, 1),
                 },
-                {("latlon", 0)},
+                {(Modality.LATLON.name, 0)},
             ),
             (
                 {
-                    ("worldcover", 0),
-                    ("sentinel2_l2a", 1),
-                    ("sentinel1", 0),
-                    ("sentinel2_l2a", 0),
-                    ("latlon", 1),
+                    (Modality.WORLDCOVER.name, 0),
+                    (Modality.SENTINEL2_L2A.name, 1),
+                    (Modality.SENTINEL1.name, 0),
+                    (Modality.SENTINEL2_L2A.name, 0),
+                    (Modality.LATLON.name, 1),
                 },
-                {("latlon", 0)},
+                {(Modality.LATLON.name, 0)},
             ),
         ]
         assert expected_encoded_decoded_bandsets == encoded_decoded_bandsets
