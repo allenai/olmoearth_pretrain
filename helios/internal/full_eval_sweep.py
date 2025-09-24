@@ -219,6 +219,32 @@ def get_satlas_args(pretrained_normalizer: bool = True) -> str:
     return satlas_args
 
 
+def get_presto_args(pretrained_normalizer: bool = True) -> str:
+    """Get the presto arguments."""
+    presto_args = dataset_args
+    if pretrained_normalizer:
+        # To use presto pretrained normalizer we want to leave normalization to the presto wrapper
+        presto_args = dataset_args
+        presto_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        presto_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        # IF we use dataset stats we want to turn off the pretrained normalizer
+        presto_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+        presto_args += " " + "--model.use_pretrained_normalizer=False"
+    return presto_args
+
+
 def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
     """Get the Prithvi arguments."""
     prithvi_args = dataset_args
@@ -292,6 +318,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_satlas_args()
     elif args.croma:
         return get_croma_args()
+    elif args.presto:
+        return get_presto_args()
     elif args.anysat:
         return get_anysat_args()
     elif args.tessera:
@@ -308,6 +336,7 @@ def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
         "tessera": get_tessera_args,
         "prithvi_v2": get_prithviv2_args,
         "satlas": get_satlas_args,
+        "presto": get_presto_args,
     }
     for model, func in model_map.items():
         if getattr(args, model, False):
@@ -400,6 +429,8 @@ def _get_module_path(args: argparse.Namespace) -> str:
         return get_launch_script_path("croma")
     elif args.galileo:
         return get_launch_script_path("galileo")
+    elif args.presto:
+        return get_launch_script_path("presto")
     elif args.satlas:
         return get_launch_script_path("satlas")
     elif args.tessera:
@@ -520,6 +551,11 @@ def main() -> None:
         "--croma",
         action="store_true",
         help="If set, use the croma normalization settings",
+    )
+    parser.add_argument(
+        "--presto",
+        action="store_true",
+        help="If set, use the presto normalization settings",
     )
     parser.add_argument(
         "--anysat",

@@ -892,7 +892,7 @@ def test_random_range_masking() -> None:
 
 def test_space_cross_modality_masking(set_random_seeds: None) -> None:
     """Test space cross modality masking."""
-    b, h, w, t = 4, 4, 4, 3
+    b, h, w, t = 100, 4, 4, 3
 
     patch_size = 1
 
@@ -912,48 +912,52 @@ def test_space_cross_modality_masking(set_random_seeds: None) -> None:
     )
 
     strategy = ModalityCrossSpaceMaskingStrategy(
-        encode_ratio=0.1,
-        decode_ratio=0.75,
+        encode_ratio=0.5,
+        decode_ratio=0.5,
         allow_encoding_decoding_same_bandset=False,
     )
     masked_sample = strategy.apply_mask(batch, patch_size=patch_size)
     logger.info(f"masked_sample: {masked_sample}")
-    # Check that the worldcover mask has the expected values
-    # Check that latlon mask has the expected values
-    expected_latlon_mask = torch.tensor([[2], [2], [1], [2]])
-    expected_worldcover_mask = torch.tensor(
-        [
-            [
-                [[[1]], [[1]], [[1]], [[0]]],
-                [[[1]], [[1]], [[1]], [[1]]],
-                [[[1]], [[1]], [[1]], [[1]]],
-                [[[1]], [[1]], [[1]], [[1]]],
-            ],
-            [
-                [[[1]], [[2]], [[2]], [[1]]],
-                [[[2]], [[2]], [[2]], [[2]]],
-                [[[2]], [[1]], [[2]], [[2]]],
-                [[[2]], [[2]], [[1]], [[2]]],
-            ],
-            [
-                [[[2]], [[2]], [[1]], [[2]]],
-                [[[2]], [[1]], [[2]], [[1]]],
-                [[[2]], [[2]], [[1]], [[2]]],
-                [[[2]], [[2]], [[2]], [[2]]],
-            ],
-            [
-                [[[2]], [[2]], [[2]], [[2]]],
-                [[[2]], [[1]], [[2]], [[2]]],
-                [[[2]], [[2]], [[1]], [[1]]],
-                [[[1]], [[2]], [[2]], [[2]]],
-            ],
-        ]
-    )
-    logger.info(f"masked_sample: worldcover_mask {masked_sample.worldcover_mask}")
-    logger.info(f"masked_sample: latlon_mask {masked_sample.latlon_mask}")
-    # Assert that the masks match the expected values
-    assert torch.equal(masked_sample.worldcover_mask, expected_worldcover_mask)
-    assert torch.equal(masked_sample.latlon_mask, expected_latlon_mask)
+
+    # 50% of the latlons will be masked via space masking.
+    # For the remaining 50%, cross modality will pick 2, 3, 4, or 5 band sets to encode.
+    # We provided six band sets total.
+    # This means 0.5 + 0.5 * 1/4 (4/6 + 3/6 + 2/6 + 1/6) = 0.7083 of latlons should be masked.
+    latlon_masked_fraction = torch.count_nonzero(
+        masked_sample.latlon_mask == MaskValue.DECODER.value
+    ) / torch.numel(masked_sample.latlon_mask)
+    assert 0.65 <= latlon_masked_fraction <= 0.75
+
+    # We also verify that, for the first band of SENTINEL2_L2A, there should both be
+    # samples where ~50% are encoded and 50% target encoder only, and ~50% decoded and
+    # 50% target encoder only.
+    # And nothing else.
+    saw_encode_sample = False
+    saw_decode_sample = False
+    for sample_idx in range(b):
+        assert masked_sample.sentinel2_l2a_mask is not None
+        cur_mask = masked_sample.sentinel2_l2a_mask[sample_idx, :, :, :, 0]
+        encode_fraction = torch.count_nonzero(
+            cur_mask == MaskValue.ONLINE_ENCODER.value
+        ) / torch.numel(cur_mask)
+        decode_fraction = torch.count_nonzero(
+            cur_mask == MaskValue.DECODER.value
+        ) / torch.numel(cur_mask)
+        target_encoder_fraction = torch.count_nonzero(
+            cur_mask == MaskValue.TARGET_ENCODER_ONLY.value
+        ) / torch.numel(cur_mask)
+        if 0.4 <= encode_fraction <= 0.6 and 0.4 <= target_encoder_fraction <= 0.6:
+            saw_encode_sample = True
+            continue
+        elif 0.4 <= decode_fraction <= 0.6 and 0.4 <= target_encoder_fraction <= 0.6:
+            saw_decode_sample = True
+            continue
+        else:
+            raise AssertionError(
+                f"got unexpected sample with encode_fraction={encode_fraction}, decode_fraction={decode_fraction}, target_encoder_fraction={target_encoder_fraction}"
+            )
+    assert saw_encode_sample
+    assert saw_decode_sample
 
 
 def test_space_cross_modality_masking_with_missing_data(set_random_seeds: None) -> None:
@@ -1281,33 +1285,29 @@ class TestModalityCrossMaskingStrategy:
             [
                 (Modality.SENTINEL2_L2A.name, 0),
                 (Modality.SENTINEL2_L2A.name, 1),
-                (Modality.LATLON.name, 0),
-                (Modality.LATLON.name, 1),
-            ],
-            [
-                (Modality.SENTINEL2_L2A.name, 0),
-                (Modality.SENTINEL2_L2A.name, 1),
+                (Modality.SENTINEL2_L2A.name, 2),
                 (Modality.WORLDCOVER.name, 0),
                 (Modality.LATLON.name, 0),
-                (Modality.LATLON.name, 1),
             ],
-        ]
-        expected_encoded_decoded_bandsets = [
-            (
-                set([(Modality.SENTINEL2_L2A.name, 0)]),
-                set([(Modality.SENTINEL2_L2A.name, 1)]),
-            ),
-            (
-                set([(Modality.SENTINEL2_L2A.name, 0)]),
-                set([(Modality.SENTINEL2_L2A.name, 1)]),
-            ),
-        ]
-        strat = ModalityCrossRandomMaskingStrategy()
+        ] * 64
+        strat = ModalityCrossRandomMaskingStrategy(
+            allow_encoding_decoding_same_bandset=False
+        )
         encoded_decoded_bandsets = strat.select_encoded_decoded_bandsets(
             present_modalities_bandsets
         )
-        logger.info(f"encoded_decoded_bandsets: {encoded_decoded_bandsets}")
-        assert expected_encoded_decoded_bandsets == encoded_decoded_bandsets
+        # Make sure all the different numbers of encode band sets are captured.
+        # Could be 2, 3, or 4.
+        # 1 encoded band set should not occur, since ModalityCrossMaskingStrategy enforces
+        # it to be at least 2 so that we don't try to encode only latlon (which could get
+        # masked entirely for some samples since it is masked on batch dimension).
+        # 5 encoded band sets should not occur, since we need at least one decode band set
+        # with allow_encoding_decoding_same_bandset is False.
+        counts = {
+            len(encoded_decoded_tuple[0])
+            for encoded_decoded_tuple in encoded_decoded_bandsets
+        }
+        assert counts == {2, 3, 4}
 
     def test_select_encoded_decoded_bandsets_only_decode_modalities(self) -> None:
         """Test select encoded decoded bandsets with only decode modalities."""
@@ -1318,7 +1318,6 @@ class TestModalityCrossMaskingStrategy:
                 (Modality.SENTINEL2_L2A.name, 2),
                 (Modality.SENTINEL1.name, 0),
                 (Modality.LATLON.name, 0),
-                (Modality.LATLON.name, 1),
                 (Modality.OPENSTREETMAP_RASTER.name, 0),
             ],
             [
@@ -1328,33 +1327,7 @@ class TestModalityCrossMaskingStrategy:
                 (Modality.WORLDCOVER.name, 0),
                 (Modality.SENTINEL1.name, 0),
                 (Modality.LATLON.name, 0),
-                (Modality.LATLON.name, 1),
             ],
-        ]
-        expected_encoded_decoded_bandsets = [
-            (
-                {
-                    (Modality.SENTINEL2_L2A.name, 0),
-                    (Modality.LATLON.name, 1),
-                    (Modality.SENTINEL2_L2A.name, 2),
-                    (Modality.LATLON.name, 0),
-                    (Modality.OPENSTREETMAP_RASTER.name, 0),
-                    (Modality.SENTINEL2_L2A.name, 1),
-                    (Modality.SENTINEL1.name, 0),
-                },
-                set(),
-            ),
-            (
-                {
-                    (Modality.SENTINEL2_L2A.name, 0),
-                    (Modality.LATLON.name, 1),
-                    (Modality.SENTINEL2_L2A.name, 2),
-                    (Modality.LATLON.name, 0),
-                    (Modality.SENTINEL2_L2A.name, 1),
-                    (Modality.SENTINEL1.name, 0),
-                },
-                {(Modality.WORLDCOVER.name, 0)},
-            ),
         ]
         strat = ModalityCrossRandomMaskingStrategy(
             only_decode_modalities=[Modality.WORLDCOVER.name]
@@ -1363,7 +1336,13 @@ class TestModalityCrossMaskingStrategy:
             present_modalities_bandsets
         )
         logger.info(f"encoded_decoded_bandsets: {encoded_decoded_bandsets}")
-        assert expected_encoded_decoded_bandsets == encoded_decoded_bandsets
+        # WorldCover should not be encoded for either sample since it is only decode.
+        assert (Modality.WORLDCOVER.name, 0) not in encoded_decoded_bandsets[0][0]
+        assert (Modality.WORLDCOVER.name, 0) not in encoded_decoded_bandsets[1][0]
+        # WorldCover should not be decoded for first sample since it isn't present.
+        assert (Modality.WORLDCOVER.name, 0) not in encoded_decoded_bandsets[0][1]
+        # WorldCover should be decoded for second sample.
+        assert (Modality.WORLDCOVER.name, 0) in encoded_decoded_bandsets[1][1]
 
     def test_select_encoded_decoded_bandsets_no_overlap(self) -> None:
         """Test select encoded decoded bandsets with no overlap."""
@@ -1371,54 +1350,23 @@ class TestModalityCrossMaskingStrategy:
             [
                 (Modality.SENTINEL2_L2A.name, 0),
                 (Modality.SENTINEL2_L2A.name, 1),
-                (Modality.SENTINEL1.name, 0),
-                (Modality.LATLON.name, 0),
-                (Modality.LATLON.name, 1),
-            ],
-            [
-                (Modality.SENTINEL2_L2A.name, 0),
-                (Modality.SENTINEL2_L2A.name, 1),
+                (Modality.SENTINEL2_L2A.name, 2),
                 (Modality.WORLDCOVER.name, 0),
                 (Modality.SENTINEL1.name, 0),
                 (Modality.LATLON.name, 0),
-                (Modality.LATLON.name, 1),
             ],
-        ]
-        expected_encoded_decoded_bandsets = [
-            (
-                set([(Modality.SENTINEL2_L2A.name, 0)]),
-                set([(Modality.SENTINEL2_L2A.name, 1)]),
-            ),
-            (
-                set([(Modality.SENTINEL2_L2A.name, 0)]),
-                set([(Modality.SENTINEL2_L2A.name, 1)]),
-            ),
-        ]
+        ] * 64
         strat = ModalityCrossRandomMaskingStrategy(
             allow_encoding_decoding_same_bandset=False
         )
         encoded_decoded_bandsets = strat.select_encoded_decoded_bandsets(
             present_modalities_bandsets
         )
-        expected_encoded_decoded_bandsets = [
-            (
-                {
-                    (Modality.SENTINEL2_L2A.name, 0),
-                    (Modality.SENTINEL2_L2A.name, 1),
-                    (Modality.SENTINEL1.name, 0),
-                    (Modality.LATLON.name, 1),
-                },
-                {(Modality.LATLON.name, 0)},
-            ),
-            (
-                {
-                    (Modality.WORLDCOVER.name, 0),
-                    (Modality.SENTINEL2_L2A.name, 1),
-                    (Modality.SENTINEL1.name, 0),
-                    (Modality.SENTINEL2_L2A.name, 0),
-                    (Modality.LATLON.name, 1),
-                },
-                {(Modality.LATLON.name, 0)},
-            ),
-        ]
-        assert expected_encoded_decoded_bandsets == encoded_decoded_bandsets
+
+        # Now we should see 2, 3, 4, and 5 band sets being encoded in different samples.
+        # 5 band sets encoded is possible since we can decode portions of each one.
+        counts = {
+            len(encoded_decoded_tuple[0])
+            for encoded_decoded_tuple in encoded_decoded_bandsets
+        }
+        assert counts == {2, 3, 4, 5}

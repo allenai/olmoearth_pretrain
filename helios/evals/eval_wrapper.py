@@ -15,6 +15,7 @@ from helios.evals.models import (
     DINOv3,
     GalileoWrapper,
     Panopticon,
+    PrestoWrapper,
     PrithviV2,
     Satlas,
     Tessera,
@@ -268,6 +269,21 @@ class CromaEvalWrapper(EvalWrapper):
         return batch_embeddings, labels
 
 
+class PrestoEvalWrapper(EvalWrapper):
+    """Wrapper for Presto models."""
+
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        batch_embeddings = self.model(
+            masked_helios_sample,
+            pooling=self.pooling_type,
+            spatial_pool=self.spatial_pool,
+        )
+        return batch_embeddings, labels
+
+
 class DINOv3EvalWrapper(EvalWrapper):
     """Wrapper for DINOv3 models."""
 
@@ -349,6 +365,9 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     elif isinstance(model, GalileoWrapper):
         logger.info("Using GalileoEvalWrapper")
         return GalileoEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, PrestoWrapper):
+        logger.info("Using PrestoEvalWrapper")
+        return PrestoEvalWrapper(model=model, **kwargs)
     elif isinstance(model, AnySat):
         logger.info("Using AnySatEvalWrapper")
         return AnySatEvalWrapper(model=model, **kwargs)
