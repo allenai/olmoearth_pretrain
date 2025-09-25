@@ -74,6 +74,11 @@ class Panopticon(nn.Module):
         Returns:
             Processed tensor of shape [B, C*T, H, W]
         """
+        # Try to normalize by batch statistics to see if that work.
+        means = torch.mean(data, dim=(0, 1, 2, 3), keepdim=True)
+        stds = torch.std(data, dim=(0, 1, 2, 3), keepdim=True)
+        data = (data - means) / stds
+
         # Rearrange from "b h w t c -> b (c t) h w" for DinoV2/Panopticon format
         t_dim = data.shape[3]
 
@@ -149,16 +154,6 @@ class Panopticon(nn.Module):
             # I need to convert the helios channel ordering to get the right panopticon channel value
             chn_ids = self._create_channel_ids(modality, batch_size, device)
             channel_ids_list.append(chn_ids)
-
-            if modality == "sentinel2_l2a":
-                for i, data_i in enumerate(processed_data):
-                    assert data_i.shape[1] == 12
-                    input_data_timesteps[i].append(data_i[:, 11:12])
-                chn_ids = torch.tensor(
-                    [1373.3636762095748], dtype=torch.float32, device=device
-                )
-                chn_ids = repeat(chn_ids, "c -> b c", b=batch_size)
-                channel_ids_list.append(chn_ids)
 
         if not input_data_timesteps:
             raise ValueError("No valid modalities found for processing")
