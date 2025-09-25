@@ -150,6 +150,16 @@ class Panopticon(nn.Module):
             chn_ids = self._create_channel_ids(modality, batch_size, device)
             channel_ids_list.append(chn_ids)
 
+            if modality == "sentinel2_l2a":
+                for i, data_i in enumerate(processed_data):
+                    assert data_i.shape[1] == 12
+                    input_data_timesteps[i].append(data_i[11])
+                chn_ids = torch.tensor(
+                    [1373.3636762095748], dtype=torch.float32, device=device
+                )
+                chn_ids = repeat(chn_ids, "c -> b c", b=batch_size)
+                channel_ids_list.append(chn_ids)
+
         if not input_data_timesteps:
             raise ValueError("No valid modalities found for processing")
         # chn ids are shared across all the timesteps so we cna concatenate just once
