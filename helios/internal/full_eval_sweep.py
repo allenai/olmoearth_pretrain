@@ -150,6 +150,18 @@ def get_panopticon_args() -> str:
     return panopticon_args
 
 
+def get_copernicusfm_args() -> str:
+    """Get the copernicusfm arguments."""
+    copernicusfm_args = dataset_args
+    copernicusfm_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return copernicusfm_args
+
+
 def get_anysat_args() -> str:
     """Get the anysat arguments."""
     anysat_args = dataset_args
@@ -318,6 +330,8 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_satlas_args()
     elif args.croma:
         return get_croma_args()
+    elif args.copernicusfm:
+        return get_copernicusfm_args()
     elif args.presto:
         return get_presto_args()
     elif args.anysat:
@@ -470,6 +484,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             loop_through_params()
             if not args.dino_v3
             and not args.panopticon
+            and not args.copernicusfm  # Only use the dataset normalization stats for these models
             and not args.tessera  # Only use the dataset normalization stats for these models
             else no_norm_sweep()
         )
@@ -551,6 +566,11 @@ def main() -> None:
         "--croma",
         action="store_true",
         help="If set, use the croma normalization settings",
+    )
+    parser.add_argument(
+        "--copernicusfm",
+        action="store_true",
+        help="If set, use the copernicusfm normalization settings",
     )
     parser.add_argument(
         "--presto",

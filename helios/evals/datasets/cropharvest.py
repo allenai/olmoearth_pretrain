@@ -320,9 +320,9 @@ class CropHarvestDataset(Dataset):
         if Modality.SENTINEL2_L2A.name in self.input_modalities:
             input_dict[Modality.SENTINEL2_L2A.name] = torch.tensor(s2).float()
         if Modality.SENTINEL1.name in self.input_modalities:
-            input_dict[Modality.SENTINEL1.name] = torch.tensor(s2).float()
+            input_dict[Modality.SENTINEL1.name] = torch.tensor(s1).float()
         if Modality.SRTM.name in self.input_modalities:
-            input_dict[Modality.SRTM.name] = torch.tensor(s2).float()
+            input_dict[Modality.SRTM.name] = torch.tensor(srtm).float()
         if Modality.LATLON.name in self.input_modalities:
             input_dict[Modality.LATLON.name] = torch.tensor(latlon).float()
         return MaskedHeliosSample.from_heliossample(HeliosSample(**input_dict)), y
