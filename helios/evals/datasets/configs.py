@@ -3,6 +3,8 @@
 from enum import Enum
 from typing import NamedTuple
 
+from helios.data.constants import Modality
+
 
 class TaskType(Enum):
     """Possible task types."""
@@ -26,9 +28,11 @@ class EvalDatasetConfig(NamedTuple):
     imputes: list[tuple[str, str]]
     num_classes: int
     is_multilabel: bool
+    supported_modalities: list[str]
     # this is only necessary for segmentation tasks,
     # and defines the input / output height width.
     height_width: int | None = None
+    timeseries: bool = False
 
 
 DATASET_TO_CONFIG = {
@@ -37,12 +41,14 @@ DATASET_TO_CONFIG = {
         imputes=[],
         num_classes=10,
         is_multilabel=False,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
     ),
     "m-bigearthnet": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[("11 - SWIR", "10 - SWIR - Cirrus")],
         num_classes=43,
         is_multilabel=True,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
     ),
     "m-so2sat": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
@@ -53,12 +59,14 @@ DATASET_TO_CONFIG = {
         ],
         num_classes=17,
         is_multilabel=False,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
     ),
     "m-brick-kiln": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],
         num_classes=2,
         is_multilabel=False,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
     ),
     "m-sa-crop-type": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -66,6 +74,7 @@ DATASET_TO_CONFIG = {
         num_classes=10,
         is_multilabel=False,
         height_width=256,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
     ),
     "m-cashew-plant": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -73,6 +82,7 @@ DATASET_TO_CONFIG = {
         num_classes=7,
         is_multilabel=False,
         height_width=256,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
     ),
     "m-forestnet": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
@@ -86,6 +96,7 @@ DATASET_TO_CONFIG = {
         ],
         num_classes=12,
         is_multilabel=False,
+        supported_modalities=[Modality.LANDSAT.name],
     ),
     "mados": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -97,6 +108,7 @@ DATASET_TO_CONFIG = {
         num_classes=15,
         is_multilabel=False,
         height_width=80,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
     ),
     "sen1floods11": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -104,6 +116,7 @@ DATASET_TO_CONFIG = {
         num_classes=2,
         is_multilabel=False,
         height_width=64,
+        supported_modalities=[Modality.SENTINEL1.name],
     ),
     "pastis": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -111,6 +124,8 @@ DATASET_TO_CONFIG = {
         num_classes=19,
         is_multilabel=False,
         height_width=64,
+        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        timeseries=True,
     ),
     "breizhcrops": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
@@ -118,6 +133,8 @@ DATASET_TO_CONFIG = {
         num_classes=9,
         is_multilabel=False,
         height_width=1,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        timeseries=True,
     ),
     "sickle": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
@@ -125,23 +142,35 @@ DATASET_TO_CONFIG = {
         num_classes=2,
         is_multilabel=False,
         height_width=32,
+        supported_modalities=[
+            Modality.LANDSAT.name,
+            Modality.SENTINEL1.name,
+            Modality.SENTINEL2_L2A.name,
+        ],
+        timeseries=True,
+    ),
+    "cropharvest": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[
+            ("02 - Blue", "01 - Coastal aerosol"),
+            ("11 - SWIR", "10 - SWIR - Cirrus"),
+        ],
+        num_classes=2,
+        is_multilabel=False,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.SRTM.name,
+        ],
+        timeseries=True,
     ),
 }
 
 
 def dataset_to_config(dataset: str) -> EvalDatasetConfig:
     """Retrieve the correct config for a given dataset."""
-    if dataset in DATASET_TO_CONFIG:
-        return DATASET_TO_CONFIG[dataset]
-    elif dataset.startswith("cropharvest"):
-        return EvalDatasetConfig(
-            task_type=TaskType.CLASSIFICATION,
-            imputes=[
-                ("02 - Blue", "01 - Coastal aerosol"),
-                ("11 - SWIR", "10 - SWIR - Cirrus"),
-            ],
-            num_classes=2,
-            is_multilabel=False,
-        )
-    else:
+    key = "cropharvest" if dataset.startswith("cropharvest") else dataset
+    try:
+        return DATASET_TO_CONFIG[key]
+    except KeyError:
         raise ValueError(f"Unrecognized dataset: {dataset}")

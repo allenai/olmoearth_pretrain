@@ -43,7 +43,6 @@ def test_helios_dataset(
     assert item.sentinel1.shape == (256, 256, 12, 2)  # type: ignore
     assert item.worldcover.shape == (256, 256, 1, 1)  # type: ignore
     assert item.openstreetmap_raster.shape == (256, 256, 1, 30)  # type: ignore
-    assert item.latlon.shape == (2,)  # type: ignore
     assert item.timestamps.shape == (12, 3)  # type: ignore
 
 

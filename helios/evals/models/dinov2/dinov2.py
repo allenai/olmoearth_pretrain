@@ -115,6 +115,7 @@ class DINOv2(nn.Module):
             data_i = F.interpolate(
                 data_i,
                 size=(new_height, new_height),
+                # maybe i should use the reccomended transform here
                 mode="bilinear",
                 align_corners=False,
             )

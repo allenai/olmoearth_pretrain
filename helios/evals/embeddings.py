@@ -35,7 +35,9 @@ def get_embeddings(
                 masked_helios_sample_dict
             )
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                batch_embeddings = model(masked_helios_sample)
+                batch_embeddings, label = model(
+                    masked_helios_sample=masked_helios_sample, labels=label
+                )
 
             embeddings.append(batch_embeddings.cpu())
             labels.append(label)

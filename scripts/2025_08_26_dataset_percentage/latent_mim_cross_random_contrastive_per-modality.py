@@ -162,7 +162,6 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
-        dataset_percentage=0.01,
     )
 
 
@@ -174,7 +173,9 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
             training_modalities=common.training_modalities,
         ),
     ]
-    return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
+    return HeliosConcatDatasetConfig(
+        dataset_configs=dataset_configs, dataset_percentage=0.01, seed=3622
+    )
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:

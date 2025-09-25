@@ -23,6 +23,9 @@ from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig, collate_helios
 from helios.data.visualize import visualize_sample
+from helios.inference_benchmarking.run_throughput_benchmark import (
+    ThroughputBenchmarkRunnerConfig,
+)
 from helios.train.train_module.train_module import HeliosTrainModuleConfig
 
 logger = logging.getLogger(__name__)
@@ -100,6 +103,14 @@ class HeliosExperimentConfig(Config):
     init_seed: int = 12536
 
 
+@dataclass
+class BenchmarkExperimentConfig(Config):
+    """Configuration for a throughput benchmarking run."""
+
+    launch: HeliosBeakerLaunchConfig
+    benchmark: ThroughputBenchmarkRunnerConfig
+
+
 def split_common_overrides(overrides: list[str]) -> tuple[list[str], list[str]]:
     """Split the common overrides from the command line."""
     common_overrides = [
@@ -155,6 +166,35 @@ def build_config(
     logger.info("Overrides: %s", overrides)
     config = config.merge(overrides)
     return config
+
+
+def build_benchmark_config(
+    common: CommonComponents,
+    inference_benchmarking_config_builder: Callable[
+        [], ThroughputBenchmarkRunnerConfig
+    ],
+    overrides: list[str],
+) -> BenchmarkExperimentConfig:
+    """Build a throughput benchmarking configuration."""
+    inference_benchmarking_config = inference_benchmarking_config_builder()
+    config = BenchmarkExperimentConfig(
+        launch=common.launch,
+        benchmark=inference_benchmarking_config,
+    )
+    config = config.merge(overrides)
+    logger.info("Benchmark config: %s", config)
+    return config
+
+
+def benchmark(config: BenchmarkExperimentConfig) -> None:
+    """Benchmark an experiment."""
+    runner = config.benchmark.build()
+    runner.run()
+
+
+def launch_benchmark(config: BenchmarkExperimentConfig) -> None:
+    """Launch a throughput benchmarking run."""
+    config.launch.launch(follow=False, torchrun=False)
 
 
 def train(config: HeliosExperimentConfig) -> None:
@@ -249,6 +289,8 @@ class SubCmd(StrEnum):
     launch_prep = "launch_prep"
     dry_run = "dry_run"
     visualize = "visualize"
+    benchmark = "benchmark"
+    launch_benchmark = "launch_benchmark"
 
     def prepare_environment(self) -> None:
         """Prepare the environment for the given subcommand."""
@@ -258,6 +300,8 @@ class SubCmd(StrEnum):
             SubCmd.prep,
             SubCmd.launch_prep,
             SubCmd.visualize,
+            SubCmd.benchmark,
+            SubCmd.launch_benchmark,
         ):
             prepare_cli_environment()
         elif self == SubCmd.train:
@@ -267,7 +311,10 @@ class SubCmd(StrEnum):
         else:
             raise NotImplementedError(self)
 
-    def run(self, config: HeliosExperimentConfig) -> None:
+    def run(
+        self,
+        config: HeliosExperimentConfig | BenchmarkExperimentConfig,
+    ) -> None:
         """Run the given subcommand."""
         if get_local_rank() == 0:
             print(config)
@@ -305,6 +352,10 @@ class SubCmd(StrEnum):
             prep(config)
         elif self == SubCmd.launch_prep:
             launch_prep(config)
+        elif self == SubCmd.benchmark:
+            benchmark(config)
+        elif self == SubCmd.launch_benchmark:
+            launch_benchmark(config)
         else:
             raise NotImplementedError(self)
 
@@ -312,13 +363,20 @@ class SubCmd(StrEnum):
 def main(
     *,
     common_components_builder: Callable,
-    model_config_builder: Callable[[CommonComponents], Config],
-    dataset_config_builder: Callable[[CommonComponents], Config],
-    dataloader_config_builder: Callable[[CommonComponents], HeliosDataLoaderConfig],
-    trainer_config_builder: Callable[[CommonComponents], TrainerConfig],
-    train_module_config_builder: Callable[[CommonComponents], HeliosTrainModuleConfig],
+    model_config_builder: Callable[[CommonComponents], Config] | None = None,
+    dataset_config_builder: Callable[[CommonComponents], Config] | None = None,
+    dataloader_config_builder: (
+        Callable[[CommonComponents], HeliosDataLoaderConfig] | None
+    ) = None,
+    trainer_config_builder: Callable[[CommonComponents], TrainerConfig] | None = None,
+    train_module_config_builder: (
+        Callable[[CommonComponents], HeliosTrainModuleConfig] | None
+    ) = None,
     visualize_config_builder: (
         Callable[[CommonComponents], HeliosVisualizeConfig] | None
+    ) = None,
+    inference_benchmarking_config_builder: (
+        Callable[[], ThroughputBenchmarkRunnerConfig] | None
     ) = None,
 ) -> None:
     """Main entry point for Helios experiments.
@@ -358,15 +416,30 @@ If running command on a local machine ie from a session, you can use the [b]loca
 
     cmd = SubCmd(cmd)
     cmd.prepare_environment()
-    config = build_config(
-        common=common,
-        model_config_builder=model_config_builder,
-        dataset_config_builder=dataset_config_builder,
-        dataloader_config_builder=dataloader_config_builder,
-        trainer_config_builder=trainer_config_builder,
-        train_module_config_builder=train_module_config_builder,
-        visualize_config_builder=visualize_config_builder,
-        overrides=overrides,
-    )
+
+    if cmd == SubCmd.benchmark or cmd == SubCmd.launch_benchmark:
+        if inference_benchmarking_config_builder is None:
+            raise ValueError("inference_benchmarking_config_builder is not set")
+        config = build_benchmark_config(
+            common=common,
+            inference_benchmarking_config_builder=inference_benchmarking_config_builder,
+            overrides=overrides,
+        )
+    else:
+        assert model_config_builder is not None
+        assert dataset_config_builder is not None
+        assert dataloader_config_builder is not None
+        assert trainer_config_builder is not None
+        assert train_module_config_builder is not None
+        config = build_config(
+            common=common,
+            model_config_builder=model_config_builder,
+            dataset_config_builder=dataset_config_builder,
+            dataloader_config_builder=dataloader_config_builder,
+            trainer_config_builder=trainer_config_builder,
+            train_module_config_builder=train_module_config_builder,
+            visualize_config_builder=visualize_config_builder,
+            overrides=overrides,
+        )
 
     cmd.run(config)

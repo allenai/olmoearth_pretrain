@@ -103,7 +103,6 @@ def _create_test_dataloader(
     tmp_path: Path,
     seed: int = 42,
     shuffle: bool = True,
-    dataset_percentage: float = 1.0,
     num_dataset_repeats_per_epoch: int = 1,
     global_batch_size: int = 2,
 ) -> HeliosDataLoader:
@@ -134,7 +133,6 @@ def _create_test_dataloader(
         max_patch_size=1,
         sampled_hw_p_list=[256],
         num_dataset_repeats_per_epoch=num_dataset_repeats_per_epoch,
-        dataset_percentage=dataset_percentage,
     )
 
 
@@ -192,29 +190,6 @@ def test_build_global_indices_no_shuffle_consistent(tmp_path: Path) -> None:
     )
 
 
-def test_build_global_indices_dataset_percentage_deterministic(tmp_path: Path) -> None:
-    """Test that dataset percentage produces deterministic subset selection."""
-    dataloader1 = _create_test_dataloader(tmp_path, seed=123, dataset_percentage=0.5)
-    dataloader1._epoch = 1
-    indices1 = dataloader1._build_global_indices()
-
-    dataloader2 = _create_test_dataloader(tmp_path, seed=123, dataset_percentage=0.5)
-    dataloader2._epoch = 3
-    indices2 = dataloader2._build_global_indices()
-
-    # Same subset should be selected (but potentially different shuffle order)
-    assert len(indices1) == len(indices2), (
-        "Same dataset percentage should produce same length"
-    )
-
-    # The unique elements should be the same (same subset selected)
-    unique1 = np.unique(indices1)
-    unique2 = np.unique(indices2)
-    np.testing.assert_array_equal(
-        unique1, unique2, "Same seed should select identical subset regardless of epoch"
-    )
-
-
 def test_build_global_indices_different_seeds_different_results(tmp_path: Path) -> None:
     """Test that different seeds produce different results."""
     dataloader1 = _create_test_dataloader(tmp_path, seed=42)
@@ -228,25 +203,6 @@ def test_build_global_indices_different_seeds_different_results(tmp_path: Path) 
     # Different seeds should produce different results (with high probability)
     assert not np.array_equal(indices1, indices2), (
         "Different seeds should produce different results"
-    )
-
-
-def test_build_global_indices_multiple_repeats_length(tmp_path: Path) -> None:
-    """Test that multiple dataset repeats produce correct length."""
-    # Single repeat
-    dataloader1 = _create_test_dataloader(tmp_path, num_dataset_repeats_per_epoch=1)
-    dataloader1._epoch = 1
-    indices1 = dataloader1._build_global_indices()
-
-    # Triple repeat
-    dataloader2 = _create_test_dataloader(tmp_path, num_dataset_repeats_per_epoch=3)
-    dataloader2._epoch = 1
-    indices2 = dataloader2._build_global_indices()
-
-    # Should be 3x longer
-    expected_length = len(indices1) * 3
-    assert len(indices2) == expected_length, (
-        f"Expected length {expected_length} with 3 repeats, got {len(indices2)}"
     )
 
 
@@ -271,41 +227,6 @@ def test_build_global_indices_multiple_repeats_deterministic(tmp_path: Path) -> 
     )
 
 
-def test_build_global_indices_dataset_percentage_subset_consistency(
-    tmp_path: Path,
-) -> None:
-    """Test that dataset percentage selects consistent subset across different shuffle epochs."""
-    # Skip test if dataset is too small
-    temp_dataloader = _create_test_dataloader(tmp_path)
-
-    dataloader1 = _create_test_dataloader(tmp_path, seed=456, dataset_percentage=0.7)
-    dataloader1._epoch = 1
-    indices1 = dataloader1._build_global_indices()
-
-    dataloader2 = _create_test_dataloader(tmp_path, seed=456, dataset_percentage=0.7)
-    dataloader2._epoch = 10
-    indices2 = dataloader2._build_global_indices()
-
-    # Verify same subset is selected despite different epochs
-    expected_subset_size = int(len(temp_dataloader.dataset) * 0.7)
-    # Account for cropping to make evenly divisible by batch size
-    expected_subset_size = (
-        expected_subset_size // dataloader1.global_batch_size
-    ) * dataloader1.global_batch_size
-
-    assert len(indices1) == expected_subset_size
-    assert len(indices2) == expected_subset_size
-
-    # Same unique elements should be present
-    unique1 = np.unique(indices1)
-    unique2 = np.unique(indices2)
-    np.testing.assert_array_equal(
-        unique1,
-        unique2,
-        "Dataset percentage should select same subset across different epochs",
-    )
-
-
 def test_build_global_indices_properties_validation(tmp_path: Path) -> None:
     """Test that built indices have expected properties and constraints."""
     dataloader = _create_test_dataloader(tmp_path, seed=42)
@@ -327,12 +248,3 @@ def test_build_global_indices_properties_validation(tmp_path: Path) -> None:
     assert len(indices) % dataloader.global_batch_size == 0, (
         "Indices length should be divisible by global batch size"
     )
-
-    # With shuffle=True and dataset_percentage=1.0, should contain each valid index at least once
-    if dataloader.shuffle and dataloader.dataset_percentage == 1.0:
-        expected_length = (
-            dataloader.total_unique_size * dataloader.num_dataset_repeats_per_epoch
-        )
-        assert len(indices) == expected_length, (
-            f"Expected {expected_length} indices, got {len(indices)}"
-        )

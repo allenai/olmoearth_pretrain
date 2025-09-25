@@ -361,7 +361,7 @@ class EncodeEarlyAttnPool(Encoder):
         modalities_to_dims_dict: dict,
         exit_ids_seq: Tensor | None = None,
         exited_tokens: Tensor | None = None,
-        always_pass_none_mask_to_transformer: bool = False,
+        fast_pass: bool = False,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens, mask = self.collapse_and_combine_hwtc(tokens_and_masks_dict)
@@ -385,9 +385,7 @@ class EncodeEarlyAttnPool(Encoder):
             og_shape = tokens.shape
             tokens = self.pack_tokens(tokens, new_mask)
 
-        attn_mask = self.get_attn_or_none_mask(
-            new_mask, always_pass_none_mask_to_transformer
-        )
+        attn_mask = self._maybe_get_attn_mask(new_mask, fast_pass)
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             if i_blk == self.num_pre_modality_pooling_layers:
@@ -445,7 +443,7 @@ class EncodeEarlyAttnPool(Encoder):
         patch_size: int,
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
-        always_pass_none_mask_to_transformer: bool = False,
+        fast_pass: bool = False,
     ) -> dict[str, Tensor]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
@@ -471,7 +469,7 @@ class EncodeEarlyAttnPool(Encoder):
             pre_pooled_modality_to_dims_dict,
             exit_ids_seq,
             exited_tokens,
-            always_pass_none_mask_to_transformer,
+            fast_pass,
         )
         # update the tokens_dict with the original masks
         tokens_dict.update(original_masks_dict)
@@ -499,9 +497,7 @@ class EncodeEarlyAttnPool(Encoder):
             )
         cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
 
-        attn_mask = self.get_attn_or_none_mask(
-            new_mask, always_pass_none_mask_to_transformer
-        )
+        attn_mask = self._maybe_get_attn_mask(new_mask, fast_pass)
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             if i_blk < self.num_pre_modality_pooling_layers:
@@ -561,7 +557,7 @@ class EncodeEarlyAttnPool(Encoder):
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
-        always_pass_none_mask_to_transformer: bool = False,
+        fast_pass: bool = False,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -570,7 +566,7 @@ class EncodeEarlyAttnPool(Encoder):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
-            always_pass_none_mask_to_transformer: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
+            fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -587,7 +583,7 @@ class EncodeEarlyAttnPool(Encoder):
                 patch_size=patch_size,
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
-                always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+                fast_pass=fast_pass,
             )
         else:
             pooled_tokens_and_masks = {}
