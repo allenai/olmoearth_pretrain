@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from importlib import resources
 
 import torch
+import torch.nn.functional as F
 import yaml
 from einops import rearrange, repeat
 from olmo_core.config import Config
@@ -82,19 +83,12 @@ class Panopticon(nn.Module):
         for i in range(t_dim):
             data_i = rearrange(data[:, :, :, i, :], "b h w c -> b c h w")
 
-            """new_height = self.patch_size if original_height == 1 else 224
-
             data_i = F.interpolate(
                 data_i,
-                size=(new_height, new_height),
+                size=(224, 224),
                 mode="bilinear",
                 align_corners=False,
-            )"""
-
-            while data_i.shape[2] < 224:
-                data_i = data_i.repeat(1, 1, 2, 2)
-
-            data_i = data_i[:, :, 0:224, 0:224]
+            )
 
             data_list.append(data_i)
         return data_list
