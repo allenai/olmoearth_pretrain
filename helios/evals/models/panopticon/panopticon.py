@@ -77,7 +77,7 @@ class Panopticon(nn.Module):
         # Try to normalize by batch statistics to see if that work.
         means = torch.mean(data, dim=(0, 1, 2, 3), keepdim=True)
         stds = torch.std(data, dim=(0, 1, 2, 3), keepdim=True)
-        data = (data - means) / stds
+        data = (data - means) / stds * 2
 
         # Rearrange from "b h w t c -> b (c t) h w" for DinoV2/Panopticon format
         t_dim = data.shape[3]
