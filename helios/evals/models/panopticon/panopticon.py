@@ -153,7 +153,7 @@ class Panopticon(nn.Module):
             if modality == "sentinel2_l2a":
                 for i, data_i in enumerate(processed_data):
                     assert data_i.shape[1] == 12
-                    input_data_timesteps[i].append(data_i[11])
+                    input_data_timesteps[i].append(data_i[11:12])
                 chn_ids = torch.tensor(
                     [1373.3636762095748], dtype=torch.float32, device=device
                 )
