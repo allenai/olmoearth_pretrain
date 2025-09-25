@@ -61,6 +61,8 @@ MODALITY_TO_WAVELENGTH_BANDWIDTHS: dict[str, dict[str, list]] = {
     },
 }
 
+DEFAULT_LOAD_DIRECTORY = "/weka/dfive-default/helios/models/copernicusfm"
+
 
 class CopernicusFM(torch.nn.Module):
     """Wrapper for Copernicus FM to ingest Masked Helios Sample."""
@@ -70,9 +72,7 @@ class CopernicusFM(torch.nn.Module):
     input_mode = "spectral"
     supported_modalities = [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name]
 
-    def __init__(
-        self, load_directory: str = "/weka/dfive-default/helios/models/copernicus_fm"
-    ) -> None:
+    def __init__(self, load_directory: str = DEFAULT_LOAD_DIRECTORY) -> None:
         """Initialize the Copernicus FM wrapper.
 
         Args:
@@ -227,7 +227,7 @@ class CopernicusFM(torch.nn.Module):
 class CopernicusFMConfig(Config):
     """olmo_core style config for CopernicusFMConfig."""
 
-    load_directory: str = "/weka/dfive-default/helios/models/copernicusfm"
+    load_directory: str = DEFAULT_LOAD_DIRECTORY
 
     def build(self) -> CopernicusFM:
         """Build the CopernicusFM model."""
