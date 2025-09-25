@@ -70,10 +70,10 @@ def my_build_common_components(
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
-        # Modality.WORLDCOVER.name,
+        Modality.WORLDCOVER.name,
         # Modality.LATLON.name,
         Modality.SRTM.name,
-        # Modality.OPENSTREETMAP_RASTER.name,
+        Modality.OPENSTREETMAP_RASTER.name,
         Modality.ERA5_10.name,
     ]
     return config
@@ -125,12 +125,12 @@ def build_train_module_config(
                 # "only_encode_modalities": [
                 #     Modality.ERA5_10.name,
                 # ],
-                # "only_decode_modalities": [
-                #     Modality.OPENSTREETMAP_RASTER.name,
-                #     Modality.WORLDCOVER.name,
-                #     Modality.SRTM.name,
-                #     # Modality.ERA5_10.name,
-                # ],
+                "only_decode_modalities": [
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                    Modality.ERA5_10.name,
+                ],
             }
         ),
         loss_config=LossConfig(
