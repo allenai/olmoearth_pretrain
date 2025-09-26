@@ -4,15 +4,19 @@ set -e
 PROJECT="ai2-ivan"
 REGION="us-central1"
 TAG="$REGION-docker.pkg.dev/$PROJECT/helios/helios"
-BUCKET="gee-input-data"
-STEPS="6"
+IN_BUCKET="ai2-ivan-helios-input-data"
+STEPS="5"
 
-
-echo "1/$STEPS: Authenticating Google Cloud."
-gcloud config set project "$PROJECT"
-gcloud auth application-default set-quota-project "$PROJECT"
-gcloud auth application-default login
-gcloud auth configure-docker $REGION-docker.pkg.dev
+if [[ "$1" == "--skip-auth" || "$1" == "-s" ]]; then
+        echo "1/$STEPS: Skipping Google Cloud authentication."
+else
+        echo "1/$STEPS: Authenticating Google Cloud."
+        gcloud auth login
+        gcloud auth application-default login
+        gcloud auth application-default set-quota-project "$PROJECT"
+        gcloud config set project "$PROJECT"
+        gcloud auth configure-docker $REGION-docker.pkg.dev
+fi
 
 echo "2/$STEPS: Creating artifact registry project if it doesn't exist."
 if [ -z "$(gcloud artifacts repositories list --format='get(name)' --filter "helios")" ]; then
@@ -22,7 +26,7 @@ if [ -z "$(gcloud artifacts repositories list --format='get(name)' --filter "hel
 fi
 
 echo "3/$STEPS: Building docker container."
-docker build -t "$TAG" -f scripts/litserve/Dockerfile .
+docker build -t "$TAG" -f scripts/inference/Dockerfile .
 
 echo "4/$STEPS: Pushing docker container to cloud."
 docker push "$TAG"
@@ -37,13 +41,3 @@ gcloud run deploy "helios" --image "$TAG":latest \
         --concurrency 10 \
         --max-instances 50 \
         --port 8080
-
-echo "6/$STEPS Deploying trigger function."
-export URL=$(gcloud run services list --platform managed --filter helios --limit 1 --format='get(URL)')
-gcloud functions deploy trigger-helios \
-    --source="scripts/inference/trigger_function" \
-    --trigger-bucket="$BUCKET" \
-    --allow-unauthenticated \
-    --entry-point=trigger \
-    --runtime=python312 \
-    --set-env-vars INFERENCE_HOST="$URL" 

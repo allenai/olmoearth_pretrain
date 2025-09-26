@@ -24,7 +24,7 @@ RUN pip install \
     universal_pathlib>=0.2.5
 
 # additional packages
-RUN pip install --no-cache-dir einops
+RUN pip install --no-cache-dir einops rasterio
 
 WORKDIR /app
 COPY helios /app/helios
@@ -34,7 +34,7 @@ COPY helios /app/helios
 
 
 # Model weights already here
-COPY scripts/litserve /app
+COPY scripts/inference /app
 
-EXPOSE 8000
+EXPOSE 8080
 CMD ["python", "/app/server.py"]
