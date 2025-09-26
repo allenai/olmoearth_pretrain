@@ -1,6 +1,8 @@
-# Run: `python scripts/litserve/client.py` to test server running locally
+# Run: `python scripts/inference/client.py` to test server running locally
 import numpy as np
 import requests
+
+URL = "https://helios-74045595887.us-central1.run.app"
 
 S2_bands = [
     "B01",
@@ -25,5 +27,5 @@ timestamp_mock_data = np.stack(
 s2_mock_data = np.zeros([1, 1, NUM_TIMESTEPS, len(S2_bands)]).tolist()
 mock_json = {"sentinel2_l2a": [s2_mock_data], "timestamps": [timestamp_mock_data]}
 
-response = requests.post("http://127.0.0.1:8000/predict", json=mock_json)
+response = requests.post(f"{URL}/predict", json=mock_json)
 print(f"Status: {response.status_code}\nResponse:\n {response.text}")

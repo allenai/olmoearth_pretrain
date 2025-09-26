@@ -65,4 +65,4 @@ class SimpleLitAPI(ls.LitAPI):
 if __name__ == "__main__":
     api = SimpleLitAPI()
     server = ls.LitServer(api, accelerator="auto")
-    server.run(port=8000)
+    server.run(port=8080)
