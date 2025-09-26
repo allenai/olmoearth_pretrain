@@ -46,6 +46,8 @@ def build_rslearn_model_dataset(
     layers: list[str] | None = None,
     input_size: int | None = None,
     split: str = "train",
+    property_name: str = "category",
+    classes: list[str] | None = None,
 ) -> RsModelDataset:
     """Build an rslearn ModelDataset."""
     if not layers:
@@ -120,8 +122,9 @@ def build_rslearn_model_dataset(
         inputs=inputs,
         # Dummy task to allow vector labels to flow (not used for metrics here)
         task=RsClassificationTask(
-            property_name="category",
-            classes=["Coffee", "Trees", "Grassland", "Maize", "Sugarcane", "Tea"],
+            # TODO: add property name and classes as args
+            property_name=property_name,
+            classes=classes,
         ),
         workers=0,
     )
@@ -175,6 +178,8 @@ class RslearnToHeliosDataset(Dataset):
         layers: list[str] | None = None,
         input_size: int | None = None,
         split: str = "train",
+        property_name: str = "category",
+        classes: list[str] | None = None,
         partition: str = "default",  # accepted but unused (rslearn)
         norm_stats_from_pretrained: bool = True,
         norm_method: str = "norm_no_clip",  # accepted but unused (rslearn)
@@ -201,6 +206,8 @@ class RslearnToHeliosDataset(Dataset):
             layers=layers,
             input_size=input_size,
             split=split,
+            property_name=property_name,
+            classes=classes,
         )
 
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
@@ -243,12 +250,6 @@ class RslearnToHeliosDataset(Dataset):
             if modality == DataModality.SENTINEL1.name:
                 x = convert_to_db(x)
 
-            tc, h, w = x.shape
-            if tc % T != 0:
-                raise ValueError(
-                    f"First dim ({tc}) not divisible by T={T} for {modality}"
-                )
-
             # (T*C, H, W) -> (H, W, T, C)
             x = rearrange(x, "(t c) h w -> h w t c", t=T)
 
@@ -262,7 +263,7 @@ class RslearnToHeliosDataset(Dataset):
 
         helios_sample = HeliosSample(**sample_dict)
         masked_sample = MaskedHeliosSample.from_heliossample(helios_sample)
-        return masked_sample, target["class"]
+        return masked_sample, target["class"].long()
 
 
 # # Example usage:
