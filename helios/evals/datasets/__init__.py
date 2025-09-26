@@ -42,7 +42,7 @@ def get_eval_dataset(
     if input_modalities:
         if not (
             eval_dataset.startswith("cropharvest")
-            or (eval_dataset in ["pastis", "pastis128", "sickle"])
+            or (eval_dataset in ["pastis", "pastis128", "sickle", "nandi", "awf"])
         ):
             raise ValueError(
                 f"input_modalities is only supported for multimodal tasks, got {eval_dataset}"
