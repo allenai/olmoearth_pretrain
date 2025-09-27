@@ -55,6 +55,8 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         input_modalities=[Modality.SENTINEL2_L2A.name],
         input_layers=["sentinel2"],
+        # Use patch size 1 to be consistent with AEF exp
+        patch_size=1,
     ),
     "m_forestnet": DownstreamTaskConfig(
         dataset="m-forestnet",
@@ -88,6 +90,8 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         input_modalities=[Modality.SENTINEL1.name],
         input_layers=["sentinel1_ascending"],
+        # Use patch size 1 to be consistent with AEF exp
+        patch_size=1,
     ),
     "nandi_landsat": DownstreamTaskConfig(
         dataset="nandi",
@@ -97,6 +101,8 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         input_modalities=[Modality.LANDSAT.name],
         input_layers=["landsat"],
+        # Use patch size 1 to be consistent with AEF exp
+        patch_size=1,
     ),
     "awf_sentinel2": DownstreamTaskConfig(
         dataset="awf",
