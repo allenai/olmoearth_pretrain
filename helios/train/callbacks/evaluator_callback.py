@@ -68,6 +68,7 @@ class DownstreamEvaluator:
         task: DownstreamTaskConfig,
         trainer: Trainer,
         device: torch.device | None = None,
+        run_on_test: bool = False,
     ) -> None:
         """Initialize the downstream evaluator.
 
@@ -76,6 +77,8 @@ class DownstreamEvaluator:
             task: Task configuration.
             trainer: Trainer object.
             device: Device to evaluate on.
+            run_on_test: Whether to run the evaluators on the val set
+                only (=False) or on the test and val set (=True)
         """
         self.evaluation_name = evaluation_name
         self.config = dataset_to_config(task.dataset)
@@ -129,6 +132,7 @@ class DownstreamEvaluator:
                 lr=self.probe_lr,
             )
         )
+        self.run_on_test = run_on_test
 
     def _get_data_loader(self, split: str) -> DataLoader:
         """Get the data loader for the given split."""
@@ -197,8 +201,13 @@ class DownstreamEvaluator:
         )
         logger.info(f"Getting val embeddings for {self.dataset}...")
         val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
-        logger.info(f"Getting test embeddings for {self.dataset}...")
-        test_embeddings, test_labels = self._get_embeddings(test_loader, is_train=False)
+        if self.run_on_test:
+            logger.info(f"Getting test embeddings for {self.dataset}...")
+            test_embeddings, test_labels = self._get_embeddings(
+                test_loader, is_train=False
+            )
+        else:
+            test_embeddings, test_labels = None, None
         logger.info(
             f"Time to get embeddings for {self.dataset}: {time.time() - start_time:.2f}s"
         )
@@ -243,6 +252,7 @@ class DownstreamEvaluatorCallback(Callback):
     evaluators: list[DownstreamEvaluator] = field(default_factory=list)
     eval_on_startup: bool = False
     cancel_after_first_eval: bool = False
+    run_on_test: bool = False
 
     def _check_supported_modalities(self, evaluator: DownstreamEvaluator) -> bool:
         """Check if the evaluator is supported by the model."""
@@ -318,11 +328,12 @@ class DownstreamEvaluatorCallback(Callback):
                         {"eval/" + evaluator.evaluation_name: val_result}
                     )
                     wandb_callback.wandb.log(
-                        {"eval/test/" + evaluator.evaluation_name: test_result}
-                    )
-                    wandb_callback.wandb.log(
                         {"eval_time/" + evaluator.evaluation_name: eval_time}
                     )
+                    if self.run_on_test:
+                        wandb_callback.wandb.log(
+                            {"eval/test/" + evaluator.evaluation_name: test_result}
+                        )
 
         if self.cancel_after_first_eval:
             self.trainer.cancel_run(
@@ -348,9 +359,10 @@ class DownstreamEvaluatorCallback(Callback):
         start_time = time.monotonic()
         val_result, test_result = evaluator.val()
         self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
-        self.trainer.record_metric(
-            f"eval/test/{evaluator.evaluation_name}", test_result
-        )
+        if self.run_on_test:
+            self.trainer.record_metric(
+                f"eval/test/{evaluator.evaluation_name}", test_result
+            )
         eval_time = time.monotonic() - start_time
         self.trainer.record_metric(f"eval_time/{evaluator.evaluation_name}", eval_time)
         logger.info(
@@ -372,6 +384,8 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     # without training any longer.
     cancel_after_first_eval: bool = False
     tasks_to_run: list[str] | None = None
+    # whether to run the evaluators on the val set only (=False) or on the test and val set (=True)
+    run_on_test: bool = False
 
     def verify_input_modalities(
         self, task: DownstreamTaskConfig, config: EvalDatasetConfig
@@ -429,10 +443,12 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     task=task,
                     trainer=trainer,
                     device=trainer.device,
+                    run_on_test=self.run_on_test,
                 )
             )
         return DownstreamEvaluatorCallback(
             evaluators=evaluators,
             eval_on_startup=self.eval_on_startup,
             cancel_after_first_eval=self.cancel_after_first_eval,
+            run_on_test=self.run_on_test,
         )

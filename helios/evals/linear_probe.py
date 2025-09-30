@@ -115,8 +115,8 @@ def train_and_eval_probe(
     train_labels: torch.Tensor,
     val_embeddings: torch.Tensor,
     val_labels: torch.Tensor,
-    test_embeddings: torch.Tensor,
-    test_labels: torch.Tensor,
+    test_embeddings: torch.Tensor | None,
+    test_labels: torch.Tensor | None,
     device: torch.device,
     batch_size: int,
     epochs: int = 50,
@@ -125,12 +125,11 @@ def train_and_eval_probe(
 ) -> tuple[float, float]:
     """Run a linear probe on the Helios model."""
     logger.info(f"Probe type {probe_type}")
-    if (
-        train_embeddings.shape[-1]
-        != test_embeddings.shape[-1]
-        != val_embeddings.shape[-1]
-    ):
+    if train_embeddings.shape[-1] != val_embeddings.shape[-1]:
         raise ValueError("Embedding dims don't match.")
+    if test_embeddings is not None:
+        if train_embeddings.shape[-1] != test_embeddings.shape[-1]:
+            raise ValueError("Embedding dims don't match.")
     in_features = train_embeddings.shape[-1]
     output_pixels_per_side_of_patch = None
     if config.task_type == TaskType.SEGMENTATION:
@@ -206,22 +205,25 @@ def train_and_eval_probe(
             task_type=config.task_type,
             probe_type=probe_type,
         )
-        test_miou = evaluate_probe(
-            data_loader=DataLoader(
-                TensorDataset(test_embeddings, test_labels),
-                batch_size=batch_size,
-                shuffle=False,
-            ),
-            probe=probe,
-            num_classes=config.num_classes,
-            num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
-            device=device,
-            task_type=config.task_type,
-            probe_type=probe_type,
-        )
         logger.info(f"Epoch {end_epoch}, MIoU: {val_miou}")
         val_mious.append(val_miou)
-        test_mious.append(test_miou)
+        if test_embeddings is not None:
+            if test_labels is None:
+                raise ValueError("Can't have test embeddings without test labels")
+            test_miou = evaluate_probe(
+                data_loader=DataLoader(
+                    TensorDataset(test_embeddings, test_labels),
+                    batch_size=batch_size,
+                    shuffle=False,
+                ),
+                probe=probe,
+                num_classes=config.num_classes,
+                num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
+                device=device,
+                task_type=config.task_type,
+                probe_type=probe_type,
+            )
+            test_mious.append(test_miou)
     for i in range(len(val_mious)):
         logger.debug(f"Epoch {(i + 1) * eval_interval}, MIoU: {val_mious[i]}")
     max_val_miou = max(val_mious)
@@ -233,7 +235,11 @@ def train_and_eval_probe(
             f"Final MIoU: {final_val_miou} at epoch {epochs} is less than max MIoU: "
             f"{max_val_miou} at epoch {max_epoch}"
         )
-    return final_val_miou, test_mious[-1]
+    if len(test_mious) > 0:
+        final_test_miou = test_mious[-1]
+    else:
+        final_test_miou = 0.0
+    return final_val_miou, final_test_miou
 
 
 def train_probe(
