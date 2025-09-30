@@ -1,10 +1,15 @@
 """Trying to prototype fitting everything into olmo core."""
 
-import sys
-
-sys.path.append(".")
-
 import logging
+
+from script import (
+    build_dataloader_config,
+    build_dataset_config,
+    build_model_config,
+    build_train_module_config,
+    build_trainer_config,
+    build_visualize_config,
+)
 
 from helios.data.constants import Modality
 from helios.internal.common import build_common_components
@@ -16,15 +21,6 @@ from helios.internal.experiment import (
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
-)
-
-from .script import (
-    build_dataloader_config,
-    build_dataset_config,
-    build_model_config,
-    build_train_module_config,
-    build_trainer_config,
-    build_visualize_config,
 )
 
 logger = logging.getLogger(__name__)
