@@ -232,7 +232,7 @@ class TokensAndMasks(NamedTuple):
             return spatial_average_t.max(dim=-1).values
 
     def pool_instance_wise(self, pooling_type: PoolingType) -> Tensor:
-        """Pool al the tokens in the instance."""
+        """Pool all the tokens in the instance."""
         x, mask = self.flatten_tokens_and_masks()
         # 1s for online encoder, 0s elsewhere
         mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
@@ -1028,10 +1028,10 @@ class FlexiHeliosBase(nn.Module):
         mask_list = []
         data_list = []
         for modality in modalities_to_process:
-            # Hack for now only encoding spatial temporal modalities
+            # THIS ONLY INCLUDES SPATIAL TEMPORAL MODALITIES
             modality_spec = Modality.get(modality)
             if modality_spec.is_spatial and modality_spec.is_multitemporal:
-                logger.info(f"modality: {modality} is spatial")
+                logger.info(f"modality: {modality} is spatial and multitemporal")
                 masked_modality_name = MaskedHeliosSample.get_masked_modality_name(
                     modality
                 )
