@@ -1,5 +1,9 @@
 """Trying to prototype fitting everything into olmo core."""
 
+import sys
+
+sys.path.append(".")
+
 import logging
 
 from helios.data.constants import Modality
