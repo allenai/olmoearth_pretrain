@@ -180,39 +180,6 @@ class MaskedHeliosSample(NamedTuple):
         """
         return cls(**dict)
 
-    @property
-    def timesteps_with_at_least_one_modality(self) -> torch.Tensor:
-        """Get timesteps with at least one modality present."""
-        per_modality_present_masks = []
-        for modality in self.modalities:
-            if modality == "timestamps":
-                continue
-            modality_spec = Modality.get(modality)
-            if not modality_spec.is_multitemporal:
-                continue
-            mask_name = MaskedHeliosSample.get_masked_modality_name(modality)
-            mask = getattr(self, mask_name)
-            # Get all timestamps that are present for all samples for the given modality
-            logger.info(
-                f"Mask shape for determining which timestamps appear for modality {modality}: {mask.shape}"
-            )
-            present_mask = (mask != MaskValue.MISSING.value).any(dim=(1, 2, 4))
-            # get shape of mask
-            logger.info(
-                f"Present mask shape for modality {modality}: {present_mask.shape}"
-            )
-            present_mask = present_mask.unsqueeze(1)
-            logger.info(f"Per modality present masks shape: {present_mask.shape}")
-            per_modality_present_masks.append(present_mask)
-
-        at_least_one_modality_present_timestep_mask = (
-            torch.stack(per_modality_present_masks, dim=1).any(dim=1).squeeze(1)
-        )
-        logger.info(
-            f"At least one modality present timestep mask shape: {at_least_one_modality_present_timestep_mask.shape}"
-        )
-        return at_least_one_modality_present_timestep_mask
-
 
 class MaskingStrategy:
     """Abstract base class for masking strategies.
