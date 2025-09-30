@@ -1154,6 +1154,7 @@ class Encoder(FlexiHeliosBase):
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
+        log_token_norm_stats: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1178,6 +1179,7 @@ class Encoder(FlexiHeliosBase):
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
+            log_token_norm_stats: Whether to log the token norm stats
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1194,6 +1196,7 @@ class Encoder(FlexiHeliosBase):
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
+        self.log_token_norm_stats = log_token_norm_stats
         if self.has_register_tokens:
             self.register_tokens = nn.Parameter(
                 torch.zeros(num_register_tokens, embedding_size)
@@ -1511,7 +1514,11 @@ class Encoder(FlexiHeliosBase):
 
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
-            token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
+            token_norm_stats = (
+                self.get_token_norm_stats(tokens, register_tokens)
+                if self.log_token_norm_stats
+                else None
+            )
         else:
             token_norm_stats = None
 
@@ -2004,6 +2011,7 @@ class EncoderConfig(Config):
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
+    log_token_norm_stats: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""

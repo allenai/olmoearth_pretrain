@@ -279,7 +279,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
         tau: float = 0.1,
         pred2unit: bool = False,
         weight: float = 1.0,
-        modality_weights: dict[str, float] = None,
+        modality_weights: dict[str, float] | None = None,
     ):
         """Initialize patch discrimination loss.
 
@@ -290,6 +290,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
                 from within a sample (True) or using all other instances in a batch (False).
                 If this is False, then this is the AllDisc loss from the Galileo paper
             weight: the weight to apply to this loss
+            modality_weights: the weights to apply to each modality
         """
         self.tau = tau
         self.pred2unit = pred2unit
