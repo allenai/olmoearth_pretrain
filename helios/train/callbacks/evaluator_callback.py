@@ -26,7 +26,7 @@ from helios.evals.datasets.configs import (
 from helios.evals.datasets.normalize import NormMethod
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
-from helios.evals.eval_wrapper import get_eval_wrapper
+from helios.evals.eval_wrapper import Satlas, get_eval_wrapper
 from helios.evals.knn import run_knn
 from helios.evals.linear_probe import ProbeType, train_and_eval_probe
 from helios.nn.flexihelios import PoolingType
@@ -148,7 +148,7 @@ class DownstreamEvaluator:
         )
 
     def _get_embeddings(
-        self, data_loader: DataLoader
+        self, data_loader: DataLoader, is_train: bool
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Get the embeddings for the given data loader."""
         print(
@@ -177,12 +177,10 @@ class DownstreamEvaluator:
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
+            "is_train": is_train,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
-        return get_embeddings(
-            data_loader=data_loader,
-            model=model,
-        )
+        return get_embeddings(data_loader=data_loader, model=model)
 
     def val(self) -> float:
         """Validate the model on the downstream task."""
@@ -191,9 +189,11 @@ class DownstreamEvaluator:
 
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
-        train_embeddings, train_labels = self._get_embeddings(train_loader)
+        train_embeddings, train_labels = self._get_embeddings(
+            train_loader, is_train=True
+        )
         logger.info(f"Getting test embeddings for {self.dataset}...")
-        test_embeddings, test_labels = self._get_embeddings(val_loader)
+        test_embeddings, test_labels = self._get_embeddings(val_loader, is_train=False)
         logger.info(
             f"Time to get embeddings for {self.dataset}: {time.time() - start_time:.2f}s"
         )
@@ -241,6 +241,14 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(f"Task supported modalities: {task_supported_modalities}")
         task_instance_used_modalities = evaluator.input_modalities
         logger.info(f"Task instance used modalities: {task_instance_used_modalities}")
+        if len(task_instance_used_modalities) == 0:
+            task_instance_used_modalities = task_supported_modalities
+
+        if isinstance(self.trainer.train_module.model, Satlas):
+            if len(task_instance_used_modalities) > 1:
+                # satlas can only ingest one modality at a time
+                return False
+
         does_model_support_all_task_instance_used_modalities = set(
             task_instance_used_modalities
         ).issubset(set(self.model_supported_modalities))
@@ -252,6 +260,24 @@ class DownstreamEvaluatorCallback(Callback):
         if hasattr(self.trainer.train_module.model, "supported_modalities"):
             return self.trainer.train_module.model.supported_modalities
         return Modality.names()
+
+    def _check_input_requirements(self, evaluator: DownstreamEvaluator) -> bool:
+        """Check if the evaluator is supported by the model."""
+        model = self.trainer.train_module.model
+
+        # Check required modalities
+        required_modalities_present = True
+        if hasattr(model, "required_modalities"):
+            required_modalities_present = set(model.required_modalities).issubset(
+                set(evaluator.input_modalities)
+            )
+
+        # Check timeseries requirement
+        has_timeseries = True
+        if hasattr(model, "requires_timeseries") and model.requires_timeseries:
+            has_timeseries = evaluator.config.timeseries
+
+        return required_modalities_present and has_timeseries
 
     def pre_train(self) -> None:
         """Run the evaluators on startup."""
@@ -270,6 +296,11 @@ class DownstreamEvaluatorCallback(Callback):
                 if not self._check_supported_modalities(evaluator):
                     logger.info(
                         f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model"
+                    )
+                    continue
+                if not self._check_input_requirements(evaluator):
+                    logger.info(
+                        f"Skipping {evaluator.evaluation_name} because it doesn't match input requirements of the model"
                     )
                     continue
                 val_result, eval_time = self._perform_eval(evaluator)
@@ -332,13 +363,13 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
         # Check that input_modalities is only set for multimodal tasks
         if (
             not (
-                (task.dataset in ["pastis", "sickle"])
+                (task.dataset in ["pastis", "pastis128", "sickle"])
                 or task.dataset.startswith("cropharvest")
             )
             and len(task.input_modalities) > 0
         ):
             raise ValueError(
-                f"input_modalities must be set for multimodal tasks, got {task.dataset}"
+                f"input_modalities is only supported for multimodal tasks, got {task.dataset}"
             )
         # Make sure input_modalities contains only unique modalities
         if len(task.input_modalities) != len(set(task.input_modalities)):

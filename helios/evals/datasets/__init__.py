@@ -11,7 +11,7 @@ from .floods_dataset import FLOODS_DIR, Sen1Floods11Dataset
 from .geobench_dataset import GEOBENCH_DIR, GeobenchDataset
 from .mados_dataset import MADOS_DIR, MADOSDataset
 from .normalize import NormMethod
-from .pastis_dataset import PASTIS_DIR, PASTISRDataset
+from .pastis_dataset import PASTIS_DIR, PASTIS_DIR_ORIG, PASTISRDataset
 from .sickle_dataset import SICKLE_DIR, SICKLEDataset
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ def get_eval_dataset(
     if input_modalities:
         if not (
             eval_dataset.startswith("cropharvest")
-            or (eval_dataset in ["pastis", "sickle"])
+            or (eval_dataset in ["pastis", "pastis128", "sickle"])
         ):
             raise ValueError(
                 f"input_modalities is only supported for multimodal tasks, got {eval_dataset}"
@@ -77,15 +77,20 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    elif eval_dataset == "pastis":
-        return PASTISRDataset(
-            path_to_splits=PASTIS_DIR,
-            split=split,
-            partition=partition,
-            norm_stats_from_pretrained=norm_stats_from_pretrained,
-            input_modalities=input_modalities,
-            norm_method=norm_method,
-        )
+    elif eval_dataset.startswith("pastis"):
+        kwargs = {
+            "split": split,
+            "partition": partition,
+            "norm_stats_from_pretrained": norm_stats_from_pretrained,
+            "input_modalities": input_modalities,
+            "norm_method": norm_method,
+        }
+        if "128" in eval_dataset:
+            # "pastis128"
+            kwargs["path_to_splits"] = PASTIS_DIR_ORIG
+        else:
+            kwargs["path_to_splits"] = PASTIS_DIR
+        return PASTISRDataset(**kwargs)  # type: ignore
     elif eval_dataset == "breizhcrops":
         return BreizhCropsDataset(
             path_to_splits=BREIZHCROPS_DIR,

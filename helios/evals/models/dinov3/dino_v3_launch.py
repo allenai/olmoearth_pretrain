@@ -95,7 +95,6 @@ def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
         HeliosDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928",
             training_modalities=common.training_modalities,
-            dataset_percentage=common.dataset_percentage,
         ),
     ]
     return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)

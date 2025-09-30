@@ -4,11 +4,23 @@ from logging import getLogger
 from typing import Any
 
 import torch
-from einops import reduce
+from einops import rearrange, reduce
 from torch import nn
 
 from helios.evals.datasets.configs import TaskType
-from helios.evals.models import DINOv2, DINOv3, GalileoWrapper, Panopticon
+from helios.evals.models import (
+    AnySat,
+    CopernicusFM,
+    Croma,
+    DINOv2,
+    DINOv3,
+    GalileoWrapper,
+    Panopticon,
+    PrestoWrapper,
+    PrithviV2,
+    Satlas,
+    Tessera,
+)
 from helios.nn.flexihelios import FlexiHeliosBase, PoolingType, TokensAndMasks
 from helios.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from helios.nn.st_model import STBase
@@ -31,6 +43,7 @@ class EvalWrapper:
         pooling_type: PoolingType,
         concat_features: bool = False,
         use_pooled_tokens: bool = False,
+        is_train: bool = True,
     ):
         """Initialize the eval wrapper.
 
@@ -41,6 +54,7 @@ class EvalWrapper:
             pooling_type: The pooling type to use for the model.
             concat_features: Whether to concatenate features across modalities.
             use_pooled_tokens: Whether to use pooled tokens.
+            is_train: whether this is being used on the training data.
         """
         super().__init__()
         self.model = model
@@ -54,6 +68,7 @@ class EvalWrapper:
             assert isinstance(self.model, EncodeEarlyAttnPool), (
                 "Pooled tokens are only supported for EncodeEarlyAttnPool"
             )
+        self.is_train = is_train
 
     @property
     def device(self) -> torch.device:
@@ -74,7 +89,9 @@ class EvalWrapper:
         """Delegate attribute access to the underlying model if the attribute is not found on the wrapper."""
         return getattr(self.model, name)
 
-    def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         raise NotImplementedError("Subclasses must implement this method")
 
@@ -82,7 +99,9 @@ class EvalWrapper:
 class HeliosEvalWrapper(EvalWrapper):
     """Wrapper for Helios models."""
 
-    def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
             batch_embeddings: TokensAndMasks = self.model(
@@ -117,13 +136,15 @@ class HeliosEvalWrapper(EvalWrapper):
                     pooled_tokens, "b ... d -> b d", self.pooling_type
                 )
             batch_embeddings = pooled_tokens
-        return batch_embeddings
+        return batch_embeddings, labels
 
 
 class PanopticonEvalWrapper(EvalWrapper):
     """Wrapper for Panopticon models."""
 
-    def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         if self.spatial_pool:
             # Intermediate features are not yet working because of some bug internal to the model
@@ -134,25 +155,89 @@ class PanopticonEvalWrapper(EvalWrapper):
             batch_embeddings = self.model(
                 masked_helios_sample, pooling=self.pooling_type
             )
-        return batch_embeddings
+        return batch_embeddings, labels
 
 
 class GalileoEvalWrapper(EvalWrapper):
     """Wrapper for Galileo models."""
 
-    def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
-        return self.model(
+        embeddings = self.model(
             masked_helios_sample,
             pooling=self.pooling_type,
             spatial_pool=self.spatial_pool,
         )
+        return embeddings, labels
+
+
+class AnySatEvalWrapper(EvalWrapper):
+    """Wrapper for AnySat model."""
+
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        embeddings = self.model(
+            masked_helios_sample,
+            pooling=self.pooling_type,
+            spatial_pool=self.spatial_pool,
+        )
+        if self.is_train and (self.task_type == TaskType.SEGMENTATION):
+            # this is a special case for AnySat. Since it outputs per-pixel embeddings,
+            # we subsample training pixels to keep the memory requirements reasonable.
+            # From https://arxiv.org/abs/2502.09356:
+            # """
+            # for semantic segmentation, the AnySat features are per-pixel
+            # instead of per-patch. For comparable training cost, we sam-
+            # ple 6.25% of its pixel features per image when training, but
+            # evaluate with all pixel features when testing. We confirmed
+            # the fairness of this evaluation with the the AnySat authors
+            # by personal communication.
+            # """
+            subsample_by = 1 / 16
+            embeddings = rearrange(embeddings, "b h w d -> b (h w) d")
+            labels = rearrange(labels, "b h w -> b (h w)")
+
+            assert embeddings.shape[1] == labels.shape[1]
+            num_tokens = embeddings.shape[1]
+            num_tokens_to_keep = int(num_tokens * subsample_by)
+            sampled_indices = torch.randperm(num_tokens)[:num_tokens_to_keep]
+            embeddings = embeddings[:, sampled_indices]
+            labels = labels[:, sampled_indices]
+
+            new_hw = int(num_tokens_to_keep**0.5)
+            # reshape to h w
+            embeddings = rearrange(
+                embeddings, "b (h w) d -> b h w d", h=new_hw, w=new_hw
+            )
+            labels = rearrange(labels, "b (h w) -> b h w", h=new_hw, w=new_hw)
+        return embeddings, labels
+
+
+class PrithviV2EvalWrapper(EvalWrapper):
+    """Wrapper for PrithviV2 model."""
+
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        embeddings = self.model(
+            masked_helios_sample,
+            pooling=self.pooling_type,
+            spatial_pool=self.spatial_pool,
+        )
+        return embeddings, labels
 
 
 class DINOv2EvalWrapper(EvalWrapper):
     """Wrapper for DINOv2 models."""
 
-    def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         # i need to do the apply imagenet normalizer thing in here
         if self.spatial_pool:
@@ -167,13 +252,60 @@ class DINOv2EvalWrapper(EvalWrapper):
                 masked_helios_sample,
                 pooling=self.pooling_type,
             )
-        return batch_embeddings
+        return batch_embeddings, labels
+
+
+class CromaEvalWrapper(EvalWrapper):
+    """Wrapper for Croma models."""
+
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        batch_embeddings = self.model(
+            masked_helios_sample,
+            pooling=self.pooling_type,
+            spatial_pool=self.spatial_pool,
+        )
+        return batch_embeddings, labels
+
+
+class CopernicusFMWrapper(EvalWrapper):
+    """Wrapper for CopernicusFM model."""
+
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        batch_embeddings = self.model(
+            masked_helios_sample,
+            pooling=self.pooling_type,
+            spatial_pool=self.spatial_pool,
+        )
+        return batch_embeddings, labels
+
+
+class PrestoEvalWrapper(EvalWrapper):
+    """Wrapper for Presto model."""
+
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        batch_embeddings = self.model(
+            masked_helios_sample,
+            pooling=self.pooling_type,
+            spatial_pool=self.spatial_pool,
+        )
+        return batch_embeddings, labels
 
 
 class DINOv3EvalWrapper(EvalWrapper):
     """Wrapper for DINOv3 models."""
 
-    def __call__(self, masked_helios_sample: MaskedHeliosSample) -> torch.Tensor:
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         # i need to do the apply imagenet normalizer thing in here
         if self.spatial_pool:
@@ -188,7 +320,37 @@ class DINOv3EvalWrapper(EvalWrapper):
                 masked_helios_sample,
                 pooling=self.pooling_type,
             )
-        return batch_embeddings
+        return batch_embeddings, labels
+
+
+class SatlasEvalWrapper(EvalWrapper):
+    """Wrapper for Satlas models."""
+
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        batch_embeddings = self.model(
+            masked_helios_sample,
+            pooling=self.pooling_type,
+            spatial_pool=self.spatial_pool,
+        )
+        return batch_embeddings, labels
+
+
+class TesseraEvalWrapper(EvalWrapper):
+    """Wrapper for Tessera models."""
+
+    def __call__(
+        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        batch_embeddings = self.model(
+            masked_helios_sample,
+            pooling=self.pooling_type,
+            spatial_pool=self.spatial_pool,
+        )
+        return batch_embeddings, labels
 
 
 def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
@@ -213,8 +375,29 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     elif isinstance(model, DINOv3):
         logger.info("Using DINOv3EvalWrapper")
         return DINOv3EvalWrapper(model=model, **kwargs)
+    elif isinstance(model, Croma):
+        logger.info("Using CromaEvalWrapper")
+        return CromaEvalWrapper(model=model, **kwargs)
     elif isinstance(model, GalileoWrapper):
         logger.info("Using GalileoEvalWrapper")
         return GalileoEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, CopernicusFM):
+        logger.info("Using CopernicusFMWrapper")
+        return CopernicusFMWrapper(model=model, **kwargs)
+    elif isinstance(model, PrestoWrapper):
+        logger.info("Using PrestoEvalWrapper")
+        return PrestoEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, AnySat):
+        logger.info("Using AnySatEvalWrapper")
+        return AnySatEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, Satlas):
+        logger.info("Using SatlasEvalWrapper")
+        return SatlasEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, Tessera):
+        logger.info("Using TesseraEvalWrapper")
+        return TesseraEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, PrithviV2):
+        logger.info("Using PrithviEvalWrapper")
+        return PrithviV2EvalWrapper(model=model, **kwargs)
     else:
         raise NotImplementedError(f"No EvalWrapper for model type {type(model)}")

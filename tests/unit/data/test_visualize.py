@@ -21,6 +21,7 @@ def test_visualize_sample(
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
         Modality.OPENSTREETMAP_RASTER.name,
+        Modality.LATLON.name,
     ]
     dataset = HeliosDataset(
         h5py_dir=setup_h5py_dir,
