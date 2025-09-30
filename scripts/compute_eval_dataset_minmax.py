@@ -496,36 +496,36 @@ def main():
 
         traceback.print_exc()
 
-    # BreizhCrops
-    try:
-        all_stats["breizhcrops"] = compute_breizhcrops_stats(
-            BREIZHCROPS_DIR, args.max_samples
-        )
-    except Exception as e:
-        print(f"ERROR processing BreizhCrops: {e}")
-        import traceback
+    # # BreizhCrops
+    # try:
+    #     all_stats["breizhcrops"] = compute_breizhcrops_stats(
+    #         BREIZHCROPS_DIR, args.max_samples
+    #     )
+    # except Exception as e:
+    #     print(f"ERROR processing BreizhCrops: {e}")
+    #     import traceback
 
-        traceback.print_exc()
+    #     traceback.print_exc()
 
-    # SICKLE
-    try:
-        all_stats["sickle"] = compute_sickle_stats(SICKLE_DIR, args.max_samples)
-    except Exception as e:
-        print(f"ERROR processing SICKLE: {e}")
-        import traceback
+    # # SICKLE
+    # try:
+    #     all_stats["sickle"] = compute_sickle_stats(SICKLE_DIR, args.max_samples)
+    # except Exception as e:
+    #     print(f"ERROR processing SICKLE: {e}")
+    #     import traceback
 
-        traceback.print_exc()
+    #     traceback.print_exc()
 
-    # CropHarvest
-    try:
-        all_stats["cropharvest"] = compute_cropharvest_stats(
-            CROPHARVEST_DIR, args.max_samples
-        )
-    except Exception as e:
-        print(f"ERROR processing CropHarvest: {e}")
-        import traceback
+    # # CropHarvest
+    # try:
+    #     all_stats["cropharvest"] = compute_cropharvest_stats(
+    #         CROPHARVEST_DIR, args.max_samples
+    #     )
+    # except Exception as e:
+    #     print(f"ERROR processing CropHarvest: {e}")
+    #     import traceback
 
-        traceback.print_exc()
+    #     traceback.print_exc()
 
     # Save to JSON
     if args.output is not None:

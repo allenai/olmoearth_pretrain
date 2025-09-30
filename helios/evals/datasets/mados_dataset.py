@@ -16,6 +16,7 @@ from upath import UPath
 from helios.data.constants import Modality
 from helios.data.dataset import HeliosSample
 from helios.train.masking import MaskedHeliosSample
+from .utils import load_min_max_stats
 
 from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_HELIOS_S2_BANDS
 from .normalize import normalize_bands
@@ -148,7 +149,9 @@ class PrepMADOSDataset(Dataset):
 
         image = torch.cat(
             [B1, B2, B3, B4, B5, B6, B7, B8, B8A, B9, B10, B11, B12], axis=1
-        ).squeeze(0)  # (13, 240, 240)
+        ).squeeze(
+            0
+        )  # (13, 240, 240)
         mask = (
             self._load_mask(scene_num_1, scene_num_2).squeeze(0).squeeze(0)
         )  # (240, 240)
@@ -226,7 +229,9 @@ class MADOSDataset(Dataset):
         if split == "valid":
             split = "val"
 
-        self.means, self.stds = self._get_norm_stats(BAND_STATS)
+        self.min_max_stats = load_min_max_stats()["mados"]
+        merged_band_stats = {**BAND_STATS, **self.min_max_stats["sentinel2_l2a"]}
+        self.means, self.stds, self.mins, self.maxs = self._get_norm_stats(merged_band_stats)
         self.split = split
         self.norm_method = norm_method
 
@@ -251,14 +256,18 @@ class MADOSDataset(Dataset):
     @staticmethod
     def _get_norm_stats(
         imputed_band_info: dict[str, dict[str, float]],
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         means = []
         stds = []
+        mins = []
+        maxs = []
         for band_name in EVAL_S2_BAND_NAMES:
             assert band_name in imputed_band_info, f"{band_name} not found in band_info"
             means.append(imputed_band_info[band_name]["mean"])  # type: ignore
             stds.append(imputed_band_info[band_name]["std"])  # type: ignore
-        return np.array(means), np.array(stds)
+            mins.append(imputed_band_info[band_name]["min"])  # type: ignore
+            maxs.append(imputed_band_info[band_name]["max"])  # type: ignore
+        return np.array(means), np.array(stds), np.array(mins), np.array(maxs)
 
     def __len__(self) -> int:
         """Lenth of the dataset."""
@@ -271,7 +280,7 @@ class MADOSDataset(Dataset):
 
         if not self.norm_stats_from_pretrained:
             image = normalize_bands(
-                image.numpy(), self.means, self.stds, self.norm_method
+                image.numpy(), self.means, self.stds, self.mins, self.maxs, self.norm_method
             )
         image = repeat(image, "h w c -> h w t c", t=1)[
             :,

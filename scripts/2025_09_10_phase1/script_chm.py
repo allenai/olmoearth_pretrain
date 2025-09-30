@@ -18,6 +18,7 @@ from helios.internal.experiment import (
     SubCmd,
     main,
 )
+from olmo_core.optim.scheduler import SequentialScheduler, ConstantScheduler, CosWithWarmup
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
@@ -70,6 +71,17 @@ def my_build_train_module_config(
             ],
         }
     )
+    n = 450_000
+    m = 200_000
+
+    scheduler = SequentialScheduler(
+        schedulers=[
+            ConstantScheduler(),                    # offset phase
+            CosWithWarmup(warmup=0, t_max=m, alpha_f=0.1),  # cosine over next m steps
+        ],
+        schedulers_max=[n - 1],  # ensures cosine starts exactly at step n
+    )
+    train_module_config.scheduler = scheduler
     return train_module_config
 
 
