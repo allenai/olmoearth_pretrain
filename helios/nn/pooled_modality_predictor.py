@@ -429,7 +429,6 @@ class EncodeEarlyAttnPool(Encoder):
             og_shape = tokens.shape
             tokens = self.pack_tokens(tokens, new_mask)
 
-
         attn_mask = self._maybe_get_attn_mask(new_mask, fast_pass)
 
         # Add register tokens before attention layers
@@ -554,8 +553,7 @@ class EncodeEarlyAttnPool(Encoder):
             )
         cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
 
-
-         attn_mask = self._maybe_get_attn_mask(new_mask, fast_pass)
+        attn_mask = self._maybe_get_attn_mask(new_mask, fast_pass)
 
         # Add register tokens before post-modality pooling attention layers
         if self.has_register_tokens and register_tokens is not None:

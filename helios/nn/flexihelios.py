@@ -1463,7 +1463,7 @@ class Encoder(FlexiHeliosBase):
 
         token_norm_stats = {**reg_stats, **nonreg_stats}
         return token_norm_stats
-      
+
     def _maybe_remove_masked_tokens(
         self,
         tokens: Tensor,
@@ -1504,7 +1504,6 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
-
         fast_pass: bool = False,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
@@ -1593,7 +1592,6 @@ class Encoder(FlexiHeliosBase):
             token_norm_stats = None
 
         if self.use_flash_attn and not fast_pass:
-
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
 
         if exit_ids_seq is not None:
@@ -1661,7 +1659,7 @@ class Encoder(FlexiHeliosBase):
         else:
             token_norm_stats = {}
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        output_dict = {
+        output_dict: dict[str, Any] = {
             "tokens_and_masks": output,
         }
         if token_norm_stats:
