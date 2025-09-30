@@ -239,7 +239,7 @@ class TestEncoder:
         input_res = 10
 
         for fast_pass in [True, False]:
-            output = encoder.apply_attn(
+            output, _ = encoder.apply_attn(
                 x=x,
                 timestamps=timestamps,
                 patch_size=patch_size,
@@ -316,7 +316,7 @@ class TestEncoder:
         encoder.eval()
         outputs = []
         for fast_pass in [True, False]:
-            output = encoder.apply_attn(
+            output, _ = encoder.apply_attn(
                 x=x,
                 timestamps=timestamps,
                 patch_size=patch_size,
