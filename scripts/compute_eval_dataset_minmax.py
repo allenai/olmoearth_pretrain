@@ -71,7 +71,6 @@ def _process_image_file(file_path, modality_type):
     for band_idx in range(num_bands):
         band_data = image[:, :, :, band_idx]
         valid_data = band_data[~np.isnan(band_data) & ~np.isinf(band_data)]
-        print(f"Band {band_idx} has {len(valid_data)} valid data points")
         if len(valid_data) > 0:
             mins[band_idx] = float(valid_data.min())
             maxs[band_idx] = float(valid_data.max())
@@ -424,7 +423,6 @@ def compute_cropharvest_stats(
     all_maxs = [float("-inf")] * 18
 
     total_samples = 0
-
     for dataset in evaluation_datasets:
         print(f"  Processing {dataset.id}...")
         try:
@@ -463,16 +461,30 @@ def compute_cropharvest_stats(
     # Then 2 S1 bands
     # Then 1 SRTM band
     stats = {
-        "sentinel2_l2a": {
-            band_name: {"min": all_mins[i], "max": all_maxs[i]}
-            for i, band_name in enumerate(CROPHARVEST_S2_EVAL_BANDS_BEFORE_IMPUTATION)
-        },
         "sentinel1": {
-            band_name: {"min": all_mins[9 + i], "max": all_maxs[9 + i]}
+            band_name: {"min": all_mins[i], "max": all_maxs[i]}
             for i, band_name in enumerate(EVAL_S1_BAND_NAMES)
         },
+        "sentinel2_l2a": {
+            band_name: {
+                "min": all_mins[len(EVAL_S1_BAND_NAMES) + i],
+                "max": all_maxs[len(EVAL_S1_BAND_NAMES) + i],
+            }
+            for i, band_name in enumerate(CROPHARVEST_S2_EVAL_BANDS_BEFORE_IMPUTATION)
+        },
         "srtm": {
-            band_name: {"min": all_mins[11], "max": all_maxs[11]}
+            band_name: {
+                "min": all_mins[
+                    len(EVAL_S1_BAND_NAMES)
+                    + len(CROPHARVEST_S2_EVAL_BANDS_BEFORE_IMPUTATION)
+                    + i
+                ],
+                "max": all_maxs[
+                    len(EVAL_S1_BAND_NAMES)
+                    + len(CROPHARVEST_S2_EVAL_BANDS_BEFORE_IMPUTATION)
+                    + i
+                ],
+            }
             for i, band_name in enumerate(EVAL_SRTM_BAND_NAMES)
         },
     }
