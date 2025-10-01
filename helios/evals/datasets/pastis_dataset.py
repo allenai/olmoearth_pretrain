@@ -23,6 +23,7 @@ from helios.evals.datasets.constants import (
     EVAL_TO_HELIOS_S2_BANDS,
 )
 from helios.evals.datasets.normalize import normalize_bands
+from helios.evals.datasets.utils import load_min_max_stats
 from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
@@ -379,12 +380,47 @@ class PASTISRDataset(Dataset):
 
         self.input_modalities = input_modalities
 
-        # Does not support 12 band L2A data
-        self.s2_means, self.s2_stds = self._get_norm_stats(
-            S2_BAND_STATS, EVAL_S2_BAND_NAMES
+        # Load min/max stats and merge with band stats
+        self.min_max_stats = load_min_max_stats()["pastis"]
+        s2_minmax = self.min_max_stats["sentinel2_l2a"]
+        s1_minmax = self.min_max_stats["sentinel1"]
+
+        merged_s2_stats = {
+            band_name: {
+                **(
+                    {k: S2_BAND_STATS[band_name][k] for k in ("mean", "std")}
+                    if band_name in S2_BAND_STATS
+                    else {}
+                ),
+                **(
+                    {k: s2_minmax[band_name][k] for k in ("min", "max")}
+                    if band_name in s2_minmax
+                    else {}
+                ),
+            }
+            for band_name in EVAL_S2_BAND_NAMES
+        }
+        merged_s1_stats = {
+            band_name: {
+                **(
+                    {k: S1_BAND_STATS[band_name][k] for k in ("mean", "std")}
+                    if band_name in S1_BAND_STATS
+                    else {}
+                ),
+                **(
+                    {k: s1_minmax[band_name][k] for k in ("min", "max")}
+                    if band_name in s1_minmax
+                    else {}
+                ),
+            }
+            for band_name in EVAL_S1_BAND_NAMES
+        }
+
+        self.s2_means, self.s2_stds, self.s2_mins, self.s2_maxs = self._get_norm_stats(
+            merged_s2_stats, EVAL_S2_BAND_NAMES
         )
-        self.s1_means, self.s1_stds = self._get_norm_stats(
-            S1_BAND_STATS, EVAL_S1_BAND_NAMES
+        self.s1_means, self.s1_stds, self.s1_mins, self.s1_maxs = self._get_norm_stats(
+            merged_s1_stats, EVAL_S1_BAND_NAMES
         )
         self.split = split
         self.norm_method = norm_method
@@ -416,14 +452,18 @@ class PASTISRDataset(Dataset):
     def _get_norm_stats(
         imputed_band_info: dict[str, dict[str, float]],
         band_names: list[str],
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         means = []
         stds = []
+        mins = []
+        maxs = []
         for band_name in band_names:
             assert band_name in imputed_band_info, f"{band_name} not found in band_info"
             means.append(imputed_band_info[band_name]["mean"])  # type: ignore
             stds.append(imputed_band_info[band_name]["std"])  # type: ignore
-        return np.array(means), np.array(stds)
+            mins.append(imputed_band_info[band_name]["min"])  # type: ignore
+            maxs.append(imputed_band_info[band_name]["max"])  # type: ignore
+        return np.array(means), np.array(stds), np.array(mins), np.array(maxs)
 
     def __len__(self) -> int:
         """Length of the dataset."""
@@ -448,10 +488,20 @@ class PASTISRDataset(Dataset):
         # If using norm stats from pretrained we should normalize before we rearrange
         if not self.norm_stats_from_pretrained:
             s2_image = normalize_bands(
-                s2_image, self.s2_means, self.s2_stds, self.norm_method
+                s2_image,
+                self.s2_means,
+                self.s2_stds,
+                self.s2_mins,
+                self.s2_maxs,
+                self.norm_method,
             )
             s1_image = normalize_bands(
-                s1_image, self.s1_means, self.s1_stds, self.norm_method
+                s1_image,
+                self.s1_means,
+                self.s1_stds,
+                self.s1_mins,
+                self.s1_maxs,
+                self.norm_method,
             )
 
         s2_image = s2_image[:, :, :, EVAL_TO_HELIOS_S2_BANDS]

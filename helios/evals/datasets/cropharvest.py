@@ -26,6 +26,7 @@ from .cropharvest_package.bands import BANDS
 from .cropharvest_package.datasets import CropHarvest
 from .cropharvest_package.utils import memoized
 from .normalize import normalize_bands
+from .utils import load_min_max_stats
 
 logger = logging.getLogger("__main__")
 
@@ -90,6 +91,63 @@ X_STD = np.array(
         6.18644770735272,
         # NDVI
         0.17878359339732122,
+    ]
+)
+
+# Build X_MIN and X_MAX from minmax_stats.json
+_minmax_stats = load_min_max_stats()["cropharvest"]
+X_MIN = np.array(
+    [
+        # S1
+        _minmax_stats["sentinel1"]["vv"]["min"],
+        _minmax_stats["sentinel1"]["vh"]["min"],
+        # S2 (B2, B3, B4, B5, B6, B7, B8, B8A, B9, B11, B12)
+        _minmax_stats["sentinel2_l2a"]["02 - Blue"]["min"],
+        _minmax_stats["sentinel2_l2a"]["03 - Green"]["min"],
+        _minmax_stats["sentinel2_l2a"]["04 - Red"]["min"],
+        _minmax_stats["sentinel2_l2a"]["05 - Vegetation Red Edge"]["min"],
+        _minmax_stats["sentinel2_l2a"]["06 - Vegetation Red Edge"]["min"],
+        _minmax_stats["sentinel2_l2a"]["07 - Vegetation Red Edge"]["min"],
+        _minmax_stats["sentinel2_l2a"]["08 - NIR"]["min"],
+        _minmax_stats["sentinel2_l2a"]["08A - Vegetation Red Edge"]["min"],
+        _minmax_stats["sentinel2_l2a"]["09 - Water vapour"]["min"],
+        _minmax_stats["sentinel2_l2a"]["11 - SWIR"]["min"],
+        _minmax_stats["sentinel2_l2a"]["12 - SWIR"]["min"],
+        # ERA5 (no min/max stats available)
+        0.0,
+        0.0,
+        # SRTM (elevation only, slope uses same stats)
+        _minmax_stats["srtm"]["srtm"]["min"],
+        _minmax_stats["srtm"]["srtm"]["min"],
+        # NDVI (no min/max stats available)
+        0.0,
+    ]
+)
+X_MAX = np.array(
+    [
+        # S1
+        _minmax_stats["sentinel1"]["vv"]["max"],
+        _minmax_stats["sentinel1"]["vh"]["max"],
+        # S2 (B2, B3, B4, B5, B6, B7, B8, B8A, B9, B11, B12)
+        _minmax_stats["sentinel2_l2a"]["02 - Blue"]["max"],
+        _minmax_stats["sentinel2_l2a"]["03 - Green"]["max"],
+        _minmax_stats["sentinel2_l2a"]["04 - Red"]["max"],
+        _minmax_stats["sentinel2_l2a"]["05 - Vegetation Red Edge"]["max"],
+        _minmax_stats["sentinel2_l2a"]["06 - Vegetation Red Edge"]["max"],
+        _minmax_stats["sentinel2_l2a"]["07 - Vegetation Red Edge"]["max"],
+        _minmax_stats["sentinel2_l2a"]["08 - NIR"]["max"],
+        _minmax_stats["sentinel2_l2a"]["08A - Vegetation Red Edge"]["max"],
+        _minmax_stats["sentinel2_l2a"]["09 - Water vapour"]["max"],
+        _minmax_stats["sentinel2_l2a"]["11 - SWIR"]["max"],
+        _minmax_stats["sentinel2_l2a"]["12 - SWIR"]["max"],
+        # ERA5 (no min/max stats available)
+        1000.0,
+        1.0,
+        # SRTM (elevation only, slope uses same stats)
+        _minmax_stats["srtm"]["srtm"]["max"],
+        _minmax_stats["srtm"]["srtm"]["max"],
+        # NDVI (no min/max stats available)
+        1.0,
     ]
 )
 
@@ -274,7 +332,7 @@ class CropHarvestDataset(Dataset):
         )
 
         if not self.norm_stats_from_pretrained:
-            x = normalize_bands(x, X_MEAN, X_STD, method=self.norm_method)
+            x = normalize_bands(x, X_MEAN, X_STD, X_MIN, X_MAX, method=self.norm_method)
 
         x_hw = repeat(x, "t c -> h w t c", w=1, h=1)
 
