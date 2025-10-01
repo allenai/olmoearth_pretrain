@@ -2,9 +2,10 @@
 
 import json
 from collections.abc import Sequence
+from functools import lru_cache
 from importlib.resources import files
 
-import torch.multiprocessing
+import torch
 from torch.utils.data import default_collate
 
 from helios.train.masking import MaskedHeliosSample
@@ -21,6 +22,7 @@ def eval_collate_fn(
     return MaskedHeliosSample(**collated_sample), collated_target
 
 
+@lru_cache(maxsize=1)
 def load_min_max_stats() -> dict:
     """Load the min/max stats for a given dataset."""
     with (files("helios.evals.datasets.config") / "minmax_stats.json").open() as f:
