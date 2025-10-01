@@ -18,6 +18,7 @@ from helios.internal.experiment import (
     SubCmd,
     main,
 )
+from olmo_core.optim.scheduler import SequentialScheduler, ConstantScheduler, CosWithWarmup
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
