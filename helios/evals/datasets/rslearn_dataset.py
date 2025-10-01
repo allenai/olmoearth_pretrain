@@ -241,7 +241,7 @@ class RslearnToHeliosDataset(Dataset):
         for modality in self.input_modalities:
             if modality not in input_dict:
                 raise ValueError(f"Modality {modality} not found in dataset inputs")
-
+            num_bands = DataModality.get(modality).num_bands
             x = input_dict[modality]
             if x.ndim != 3:
                 raise ValueError(
@@ -250,7 +250,7 @@ class RslearnToHeliosDataset(Dataset):
             # Convert to dB for Sentinel-1
             if modality == DataModality.SENTINEL1.name:
                 x = convert_to_db(x)
-            x = rearrange(x, "(t c) h w -> h w t c", t=T)
+            x = rearrange(x, "(t c) h w -> h w t c", t=T, c=num_bands)
 
             if self.norm_stats_from_pretrained:
                 x = self.normalizer_computed.normalize(DataModality.get(modality), x)
