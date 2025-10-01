@@ -8,8 +8,8 @@ TOKEN_BUDGET=1750
 MICROBATCH=32
 
 # Edit these lists to sweep different anneals
-RESTART_STEPS=(450000)
-TMAX_NUM_STEPS=(20000 40000 60000)           # step n (resume here)
+RESTART_STEPS=(450000 250000)
+TMAX_NUM_STEPS=(50000 100000 200000)           # step n (resume here)
 
 for n in "${RESTART_STEPS[@]}"; do
 	n_minus_1=$((n - 1))
