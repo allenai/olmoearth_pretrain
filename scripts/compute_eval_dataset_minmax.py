@@ -18,6 +18,7 @@ Non-geobench datasets include:
 import argparse
 import json
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -46,7 +47,28 @@ from helios.evals.datasets.constants import (  # noqa: E402
 )
 
 
-def compute_mados_stats(path_to_splits: UPath, max_samples: int | None = None) -> dict:
+def _process_image_file(file_path, modality_type):
+    """Helper function to process a single image file and return min/max values."""
+    from einops import rearrange
+
+    image = torch.load(file_path).numpy()  # Shape: (T, C, H, W)
+    image = rearrange(image, "t c h w -> h w t c")
+
+    num_bands = image.shape[-1]
+    mins = [float("inf")] * num_bands
+    maxs = [float("-inf")] * num_bands
+
+    for band_idx in range(num_bands):
+        band_data = image[:, :, :, band_idx]
+        valid_data = band_data[~np.isnan(band_data) & ~np.isinf(band_data)]
+        if len(valid_data) > 0:
+            mins[band_idx] = float(valid_data.min())
+            maxs[band_idx] = float(valid_data.max())
+
+    return mins, maxs
+
+
+def compute_mados_stats(path_to_splits: UPath, max_samples: int | None = None, num_workers: int = 1) -> dict:
     """Compute min/max stats for MADOS dataset."""
     print("Computing stats for MADOS (Sentinel-2 L2A)...")
 
@@ -76,7 +98,7 @@ def compute_mados_stats(path_to_splits: UPath, max_samples: int | None = None) -
 
 
 def compute_sen1floods11_stats(
-    path_to_splits: UPath, max_samples: int | None = None
+    path_to_splits: UPath, max_samples: int | None = None, num_workers: int = 1
 ) -> dict:
     """Compute min/max stats for Sen1Floods11 dataset."""
     print("Computing stats for Sen1Floods11 (Sentinel-1)...")
@@ -119,7 +141,7 @@ def compute_sen1floods11_stats(
 
 
 def compute_pastis_stats(
-    path_to_splits: UPath, dataset_name: str, max_samples: int | None = None
+    path_to_splits: UPath, dataset_name: str, max_samples: int | None = None, num_workers: int = 1
 ) -> dict:
     """Compute min/max stats for PASTIS or PASTIS128 dataset."""
     print(f"Computing stats for {dataset_name} (Sentinel-2 L2A, Sentinel-1)...")
@@ -144,39 +166,33 @@ def compute_pastis_stats(
     s1_mins = [float("inf")] * len(EVAL_S1_BAND_NAMES)
     s1_maxs = [float("-inf")] * len(EVAL_S1_BAND_NAMES)
 
-    # Process S2 images
-    print(f"  Processing {len(s2_files)} Sentinel-2 images...")
-    for s2_file in tqdm(s2_files, desc="S2"):
-        s2_image = torch.load(s2_file).numpy()  # Shape: (T, C, H, W)
-        # Rearrange to (H, W, T, C)
-        from einops import rearrange
+    # Process S2 images in parallel
+    print(f"  Processing {len(s2_files)} Sentinel-2 images with {num_workers} workers...")
+    if num_workers > 1:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = {executor.submit(_process_image_file, f, "s2"): f for f in s2_files}
+            for future in tqdm(as_completed(futures), total=len(s2_files), desc="S2"):
+                mins, maxs = future.result()
+                for band_idx in range(len(mins)):
+                    s2_mins[band_idx] = min(s2_mins[band_idx], mins[band_idx])
+                    s2_maxs[band_idx] = max(s2_maxs[band_idx], maxs[band_idx])
+    else:
+        for s2_file in tqdm(s2_files, desc="S2"):
+            mins, maxs = _process_image_file(s2_file, "s2")
+            for band_idx in range(len(mins)):
+                s2_mins[band_idx] = min(s2_mins[band_idx], mins[band_idx])
+                s2_maxs[band_idx] = max(s2_maxs[band_idx], maxs[band_idx])
 
-        s2_image = rearrange(s2_image, "t c h w -> h w t c")
-
-        # Update min/max per band
-        for band_idx in range(s2_image.shape[-1]):
-            band_data = s2_image[:, :, :, band_idx]
-            valid_data = band_data[~np.isnan(band_data) & ~np.isinf(band_data)]
-            if len(valid_data) > 0:
-                s2_mins[band_idx] = min(s2_mins[band_idx], float(valid_data.min()))
-                s2_maxs[band_idx] = max(s2_maxs[band_idx], float(valid_data.max()))
-
-    # Process S1 images
-    print(f"  Processing {len(s1_files)} Sentinel-1 images...")
-    for s1_file in tqdm(s1_files, desc="S1"):
-        s1_image = torch.load(s1_file).numpy()  # Shape: (T, C, H, W)
-        # Rearrange to (H, W, T, C)
-        from einops import rearrange
-
-        s1_image = rearrange(s1_image, "t c h w -> h w t c")
-
-        # Update min/max per band
-        for band_idx in range(s1_image.shape[-1]):
-            band_data = s1_image[:, :, :, band_idx]
-            valid_data = band_data[~np.isnan(band_data) & ~np.isinf(band_data)]
-            if len(valid_data) > 0:
-                s1_mins[band_idx] = min(s1_mins[band_idx], float(valid_data.min()))
-                s1_maxs[band_idx] = max(s1_maxs[band_idx], float(valid_data.max()))
+    # Process S1 images in parallel
+    print(f"  Processing {len(s1_files)} Sentinel-1 images with {num_workers} workers...")
+    if num_workers > 1:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = {executor.submit(_process_image_file, f, "s1"): f for f in s1_files}
+            for future in tqdm(as_completed(futures), total=len(s1_files), desc="S1"):
+                mins, maxs = future.result()
+                for band_idx in range(len(mins)):
+                    s1_mins[band_idx] = min(s1_mins[band_idx], mins[band_idx])
+                    s1_maxs[band_idx] = max(s1_maxs[band_idx], maxs[band_idx])
 
     stats = {
         "sentinel2_l2a": {
@@ -193,7 +209,7 @@ def compute_pastis_stats(
 
 
 def compute_breizhcrops_stats(
-    path_to_splits: UPath, max_samples: int | None = None
+    path_to_splits: UPath, max_samples: int | None = None, num_workers: int = 1
 ) -> dict:
     """Compute min/max stats for BreizhCrops dataset."""
     print("Computing stats for BreizhCrops (Sentinel-2 L2A)...")
@@ -255,7 +271,7 @@ def compute_breizhcrops_stats(
     return stats
 
 
-def compute_sickle_stats(path_to_splits: UPath, max_samples: int | None = None) -> dict:
+def compute_sickle_stats(path_to_splits: UPath, max_samples: int | None = None, num_workers: int = 1) -> dict:
     """Compute min/max stats for SICKLE dataset."""
     print("Computing stats for SICKLE (Sentinel-2 L2A, Sentinel-1, Landsat-8)...")
 
@@ -284,50 +300,56 @@ def compute_sickle_stats(path_to_splits: UPath, max_samples: int | None = None) 
     l8_mins = [float("inf")] * len(EVAL_L8_BAND_NAMES)
     l8_maxs = [float("-inf")] * len(EVAL_L8_BAND_NAMES)
 
-    # Process S2 images
-    print(f"  Processing {len(s2_files)} Sentinel-2 images...")
-    for s2_file in tqdm(s2_files, desc="S2"):
-        s2_image = torch.load(s2_file).numpy()  # Shape: (T, C, H, W)
-        from einops import rearrange
+    # Process S2 images in parallel
+    print(f"  Processing {len(s2_files)} Sentinel-2 images with {num_workers} workers...")
+    if num_workers > 1:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = {executor.submit(_process_image_file, f, "s2"): f for f in s2_files}
+            for future in tqdm(as_completed(futures), total=len(s2_files), desc="S2"):
+                mins, maxs = future.result()
+                for band_idx in range(len(mins)):
+                    s2_mins[band_idx] = min(s2_mins[band_idx], mins[band_idx])
+                    s2_maxs[band_idx] = max(s2_maxs[band_idx], maxs[band_idx])
+    else:
+        for s2_file in tqdm(s2_files, desc="S2"):
+            mins, maxs = _process_image_file(s2_file, "s2")
+            for band_idx in range(len(mins)):
+                s2_mins[band_idx] = min(s2_mins[band_idx], mins[band_idx])
+                s2_maxs[band_idx] = max(s2_maxs[band_idx], maxs[band_idx])
 
-        s2_image = rearrange(s2_image, "t c h w -> h w t c")
+    # Process S1 images in parallel
+    print(f"  Processing {len(s1_files)} Sentinel-1 images with {num_workers} workers...")
+    if num_workers > 1:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = {executor.submit(_process_image_file, f, "s1"): f for f in s1_files}
+            for future in tqdm(as_completed(futures), total=len(s1_files), desc="S1"):
+                mins, maxs = future.result()
+                for band_idx in range(len(mins)):
+                    s1_mins[band_idx] = min(s1_mins[band_idx], mins[band_idx])
+                    s1_maxs[band_idx] = max(s1_maxs[band_idx], maxs[band_idx])
+    else:
+        for s1_file in tqdm(s1_files, desc="S1"):
+            mins, maxs = _process_image_file(s1_file, "s1")
+            for band_idx in range(len(mins)):
+                s1_mins[band_idx] = min(s1_mins[band_idx], mins[band_idx])
+                s1_maxs[band_idx] = max(s1_maxs[band_idx], maxs[band_idx])
 
-        for band_idx in range(s2_image.shape[-1]):
-            band_data = s2_image[:, :, :, band_idx]
-            valid_data = band_data[~np.isnan(band_data) & ~np.isinf(band_data)]
-            if len(valid_data) > 0:
-                s2_mins[band_idx] = min(s2_mins[band_idx], float(valid_data.min()))
-                s2_maxs[band_idx] = max(s2_maxs[band_idx], float(valid_data.max()))
-
-    # Process S1 images
-    print(f"  Processing {len(s1_files)} Sentinel-1 images...")
-    for s1_file in tqdm(s1_files, desc="S1"):
-        s1_image = torch.load(s1_file).numpy()  # Shape: (T, C, H, W)
-        from einops import rearrange
-
-        s1_image = rearrange(s1_image, "t c h w -> h w t c")
-
-        for band_idx in range(s1_image.shape[-1]):
-            band_data = s1_image[:, :, :, band_idx]
-            valid_data = band_data[~np.isnan(band_data) & ~np.isinf(band_data)]
-            if len(valid_data) > 0:
-                s1_mins[band_idx] = min(s1_mins[band_idx], float(valid_data.min()))
-                s1_maxs[band_idx] = max(s1_maxs[band_idx], float(valid_data.max()))
-
-    # Process L8 images
-    print(f"  Processing {len(l8_files)} Landsat-8 images...")
-    for l8_file in tqdm(l8_files, desc="L8"):
-        l8_image = torch.load(l8_file).numpy()  # Shape: (T, C, H, W)
-        from einops import rearrange
-
-        l8_image = rearrange(l8_image, "t c h w -> h w t c")
-
-        for band_idx in range(l8_image.shape[-1]):
-            band_data = l8_image[:, :, :, band_idx]
-            valid_data = band_data[~np.isnan(band_data) & ~np.isinf(band_data)]
-            if len(valid_data) > 0:
-                l8_mins[band_idx] = min(l8_mins[band_idx], float(valid_data.min()))
-                l8_maxs[band_idx] = max(l8_maxs[band_idx], float(valid_data.max()))
+    # Process L8 images in parallel
+    print(f"  Processing {len(l8_files)} Landsat-8 images with {num_workers} workers...")
+    if num_workers > 1:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = {executor.submit(_process_image_file, f, "l8"): f for f in l8_files}
+            for future in tqdm(as_completed(futures), total=len(l8_files), desc="L8"):
+                mins, maxs = future.result()
+                for band_idx in range(len(mins)):
+                    l8_mins[band_idx] = min(l8_mins[band_idx], mins[band_idx])
+                    l8_maxs[band_idx] = max(l8_maxs[band_idx], maxs[band_idx])
+    else:
+        for l8_file in tqdm(l8_files, desc="L8"):
+            mins, maxs = _process_image_file(l8_file, "l8")
+            for band_idx in range(len(mins)):
+                l8_mins[band_idx] = min(l8_mins[band_idx], mins[band_idx])
+                l8_maxs[band_idx] = max(l8_maxs[band_idx], maxs[band_idx])
 
     stats = {
         "sentinel2_l2a": {
@@ -348,7 +370,7 @@ def compute_sickle_stats(path_to_splits: UPath, max_samples: int | None = None) 
 
 
 def compute_cropharvest_stats(
-    cropharvest_dir: UPath, max_samples: int | None = None
+    cropharvest_dir: UPath, max_samples: int | None = None, num_workers: int = 1
 ) -> dict:
     """Compute min/max stats for CropHarvest dataset."""
     print("Computing stats for CropHarvest (Sentinel-2 L2A, Sentinel-1, SRTM)...")
@@ -439,6 +461,12 @@ def main():
         help="Maximum number of samples to process per dataset (for smoke testing). Default: process all samples.",
     )
     parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="Number of parallel workers for processing. Default: 1 (no parallelization)",
+    )
+    parser.add_argument(
         "--output",
         type=str,
         default=None,
@@ -450,13 +478,14 @@ def main():
     print("Computing min/max values per modality for non-geobench eval datasets")
     if args.max_samples is not None:
         print(f"SMOKE TEST MODE: Processing max {args.max_samples} samples per dataset")
+    print(f"Using {args.num_workers} worker(s) for parallel processing")
     print("=" * 80)
 
     all_stats = {}
 
     # MADOS
     try:
-        all_stats["mados"] = compute_mados_stats(MADOS_DIR, args.max_samples)
+        all_stats["mados"] = compute_mados_stats(MADOS_DIR, args.max_samples, args.num_workers)
     except Exception as e:
         print(f"ERROR processing MADOS: {e}")
         import traceback
@@ -466,7 +495,7 @@ def main():
     # Sen1Floods11
     try:
         all_stats["sen1floods11"] = compute_sen1floods11_stats(
-            FLOODS_DIR, args.max_samples
+            FLOODS_DIR, args.max_samples, args.num_workers
         )
     except Exception as e:
         print(f"ERROR processing Sen1Floods11: {e}")
@@ -477,7 +506,7 @@ def main():
     # PASTIS
     try:
         all_stats["pastis"] = compute_pastis_stats(
-            PASTIS_DIR, "PASTIS", args.max_samples
+            PASTIS_DIR, "PASTIS", args.max_samples, args.num_workers
         )
     except Exception as e:
         print(f"ERROR processing PASTIS: {e}")
@@ -488,7 +517,7 @@ def main():
     # PASTIS128
     try:
         all_stats["pastis128"] = compute_pastis_stats(
-            PASTIS_DIR_ORIG, "PASTIS128", args.max_samples
+            PASTIS_DIR_ORIG, "PASTIS128", args.max_samples, args.num_workers
         )
     except Exception as e:
         print(f"ERROR processing PASTIS128: {e}")
@@ -496,36 +525,36 @@ def main():
 
         traceback.print_exc()
 
-    # # BreizhCrops
-    # try:
-    #     all_stats["breizhcrops"] = compute_breizhcrops_stats(
-    #         BREIZHCROPS_DIR, args.max_samples
-    #     )
-    # except Exception as e:
-    #     print(f"ERROR processing BreizhCrops: {e}")
-    #     import traceback
+    # BreizhCrops
+    try:
+        all_stats["breizhcrops"] = compute_breizhcrops_stats(
+            BREIZHCROPS_DIR, args.max_samples, args.num_workers
+        )
+    except Exception as e:
+        print(f"ERROR processing BreizhCrops: {e}")
+        import traceback
 
-    #     traceback.print_exc()
+        traceback.print_exc()
 
-    # # SICKLE
-    # try:
-    #     all_stats["sickle"] = compute_sickle_stats(SICKLE_DIR, args.max_samples)
-    # except Exception as e:
-    #     print(f"ERROR processing SICKLE: {e}")
-    #     import traceback
+    # SICKLE
+    try:
+        all_stats["sickle"] = compute_sickle_stats(SICKLE_DIR, args.max_samples, args.num_workers)
+    except Exception as e:
+        print(f"ERROR processing SICKLE: {e}")
+        import traceback
 
-    #     traceback.print_exc()
+        traceback.print_exc()
 
-    # # CropHarvest
-    # try:
-    #     all_stats["cropharvest"] = compute_cropharvest_stats(
-    #         CROPHARVEST_DIR, args.max_samples
-    #     )
-    # except Exception as e:
-    #     print(f"ERROR processing CropHarvest: {e}")
-    #     import traceback
+    # CropHarvest
+    try:
+        all_stats["cropharvest"] = compute_cropharvest_stats(
+            CROPHARVEST_DIR, args.max_samples, args.num_workers
+        )
+    except Exception as e:
+        print(f"ERROR processing CropHarvest: {e}")
+        import traceback
 
-    #     traceback.print_exc()
+        traceback.print_exc()
 
     # Save to JSON
     if args.output is not None:
