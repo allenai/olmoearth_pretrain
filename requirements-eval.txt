@@ -3,6 +3,7 @@ breizhcrops==0.0.4.1 # Force the latest available
 geobench @ git+https://github.com/ServiceNow/geo-bench.git  # Unreleased relaxed dependencies
 geopandas
 rioxarray
+rslearn @ git+https://github.com/allenai/rslearn.git@master
 satlaspretrain-models
 scikit-learn
 timm==0.9.7
