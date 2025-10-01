@@ -358,6 +358,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         input_modalities=[Modality.SENTINEL1.name],
         input_layers=["sentinel1_ascending"],
+        eval_interval=Duration.epochs(20),
     ),
     "awf_landsat": DownstreamTaskConfig(
         dataset="awf",
