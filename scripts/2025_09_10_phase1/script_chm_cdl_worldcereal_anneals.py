@@ -81,9 +81,7 @@ def my_build_train_module_config(
     n = 450_000
     m = 20_000
 
-    scheduler = (
-        CosWithWarmup(warmup=n, t_max=n + m, alpha_f=0.1),
-    )  # cosine over next m steps
+    scheduler = CosWithWarmup(warmup=n, t_max=n + m, alpha_f=0.1)
     train_module_config.scheduler = scheduler
     return train_module_config
 
