@@ -230,7 +230,15 @@ class MADOSDataset(Dataset):
             split = "val"
 
         self.min_max_stats = load_min_max_stats()["mados"]
-        merged_band_stats = {**BAND_STATS, **self.min_max_stats["sentinel2_l2a"]}
+        # Merge BAND_STATS and min/max stats, keeping means and stds from BAND_STATS and min/max from min_max_stats
+        minmax = self.min_max_stats["sentinel2_l2a"]
+        merged_band_stats = {
+            band_name: {
+                **({k: BAND_STATS[band_name][k] for k in ("mean", "std")} if band_name in BAND_STATS else {}),
+                **({k: minmax[band_name][k] for k in ("min", "max")} if band_name in minmax else {}),
+            }
+            for band_name in EVAL_S2_BAND_NAMES
+        }
         self.means, self.stds, self.mins, self.maxs = self._get_norm_stats(merged_band_stats)
         self.split = split
         self.norm_method = norm_method
