@@ -34,6 +34,7 @@ all = { file = ["requirements.txt", "requirements-dev.txt", "requirements-eval.t
 
 [tool.setuptools.package-data]
 "helios.data.norm_configs" = ["*.json"]
+"helios.evals.datasets.config" = ["*.json"]
 
 [tool.ruff]
 fix = true

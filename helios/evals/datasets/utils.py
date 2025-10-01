@@ -23,5 +23,5 @@ def eval_collate_fn(
 
 def load_min_max_stats() -> dict:
     """Load the min/max stats for a given dataset."""
-    with (files("helios.evals.datasets") / "config" / "minmax_stats.json").open() as f:
+    with (files("helios.evals.datasets.config") / "minmax_stats.json").open() as f:
         return json.load(f)
