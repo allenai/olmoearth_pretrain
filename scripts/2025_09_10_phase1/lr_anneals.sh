@@ -20,12 +20,12 @@ for n in "${RESTART_STEPS[@]}"; do
 	done
 	for m in "${TMAX_NUM_STEPS[@]}"; do
 		set -x
-        launch_name="base_v6.1_add_chm_cdl_worldcereal_${n}_${TMAX_STEPS}"
+        launch_name="base_v6.1_add_chm_cdl_worldcereal_${n}_${m}"
 		python3 "$SCRIPT" launch $launch_name ai2/jupiter \
 			--data_loader.token_budget="${TOKEN_BUDGET}" \
 			--train_module.rank_microbatch_size="${MICROBATCH}" \
 			--trainer.load_path="${load_path}" \
-			--train_module.scheduler.t_max="${TMAX_STEPS}" \
+			--train_module.scheduler.t_max="${m}" \
 			--train_module.scheduler.warmup="${n_minus_1}"
 		set +x
 	done
