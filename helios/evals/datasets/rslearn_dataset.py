@@ -35,14 +35,27 @@ RSLEARN_TO_HELIOS: dict[str, tuple[str, list[str]]] = {
 
 def build_rslearn_model_dataset(
     rslearn_dataset: RslearnDataset,
+    layers: list[str],
+    classes: list[str],
     rslearn_dataset_groups: list[str] | None = None,
-    layers: list[str] | None = None,
     input_size: int | None = None,
     split: str = "train",
     property_name: str = "category",
-    classes: list[str] | None = None,
 ) -> RsModelDataset:
-    """Build an rslearn ModelDataset."""
+    """Build an rslearn ModelDataset.
+
+    Args:
+        rslearn_dataset: The source RslearnDataset.
+        rslearn_dataset_groups: Optional list of dataset group names to include.
+        layers: Optional list of rslearn layer names to use as model inputs. Example: "sentinel2", only include the base name, no need to include base.1, base.n
+        input_size: Optional input patch size (pixels) to crop/resize samples to.
+        split: Dataset split to use (e.g., "train", "val", "test").
+        property_name: The property in the dataset to use as the target label.
+        classes: Optional list of class names. If None, inferred from dataset.
+
+    Returns:
+        RsModelDataset: A dataset object ready for training or evaluation.
+    """
     if not layers:
         raise ValueError(
             "`layers` must be a non-empty list of rslearn layer names, "
@@ -58,6 +71,9 @@ def build_rslearn_model_dataset(
             f"Unknown rslearn layer(s): {unknown}. "
             f"Allowed: {list(RSLEARN_TO_HELIOS.keys())}"
         )
+
+    if classes is None:
+        raise ValueError("`classes` must be provided and cannot be None.")
 
     # Group rslearn layers by their Helios modality key
     layers_by_helios: dict[str, list[str]] = defaultdict(list)
@@ -164,16 +180,16 @@ class RslearnToHeliosDataset(Dataset):
     def __init__(
         self,
         ds_path: str,
+        layers: list[str],
+        classes: list[str],
+        input_modalities: list[str],
         ds_groups: list[str] | None = None,
-        layers: list[str] | None = None,
         input_size: int | None = None,
         split: str = "train",
         property_name: str = "category",
-        classes: list[str] | None = None,
         partition: str = "default",
         norm_stats_from_pretrained: bool = True,
         norm_method: str = "norm_no_clip",
-        input_modalities: list[str] | None = None,
         start_time: str = "2022-09-01",
         end_time: str = "2023-09-01",
     ):
