@@ -18,7 +18,7 @@ for n in "${RESTART_STEPS[@]}"; do
 	for m in "${TMAX_NUM_STEPS[@]}"; do
 		TMAX_STEPS+=("$((n + m))")
 	done
-	for m in "${TMAX_NUM_STEPS[@]}"; do
+	for m in "${TMAX_STEPS[@]}"; do
 		set -x
         launch_name="base_v6.1_add_chm_cdl_worldcereal_${n}_${m}"
 		python3 "$SCRIPT" launch $launch_name ai2/jupiter \
