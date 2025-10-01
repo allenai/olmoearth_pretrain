@@ -26,7 +26,7 @@ for n in "${RESTART_STEPS[@]}"; do
 			--train_module.rank_microbatch_size="${MICROBATCH}" \
 			--trainer.load_path="${load_path}" \
 			--train_module.scheduler.t_max="${TMAX_STEPS}" \
-			--train_module.scheduler.warmup="[${n_minus_1}]"
+			--train_module.scheduler.warmup="${n_minus_1}"
 		set +x
 	done
 done
