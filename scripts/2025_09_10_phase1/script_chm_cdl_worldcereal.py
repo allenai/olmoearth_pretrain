@@ -2,9 +2,6 @@
 
 import logging
 
-from olmo_core.optim.scheduler import (
-    CosWithWarmup,
-)
 from script import (
     build_dataloader_config,
     build_dataset_config,
@@ -77,14 +74,6 @@ def my_build_train_module_config(
             ],
         }
     )
-    # DEFAULTS
-    n = 450_000
-    m = 20_000
-
-    scheduler = (
-        CosWithWarmup(warmup=n, t_max=n + m, alpha_f=0.1),
-    )  # cosine over next m steps
-    train_module_config.scheduler = scheduler
     return train_module_config
 
 

@@ -2,6 +2,9 @@
 
 import logging
 
+from olmo_core.optim.scheduler import (
+    CosWithWarmup,
+)
 from script import (
     build_dataloader_config,
     build_dataset_config,
@@ -22,7 +25,6 @@ from helios.train.masking import MaskingConfig
 from helios.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
 )
-from olmo_core.optim.scheduler import SequentialScheduler, ConstantScheduler, CosWithWarmup
 
 logger = logging.getLogger(__name__)
 
@@ -79,13 +81,9 @@ def my_build_train_module_config(
     n = 450_000
     m = 20_000
 
-    scheduler = SequentialScheduler(
-        schedulers=[
-            ConstantScheduler(),                    # offset phase
-            CosWithWarmup(warmup=0, t_max=n+m, alpha_f=0.1),  # cosine over next m steps
-        ],
-        schedulers_max=[n - 1],  # ensures cosine starts exactly at step n
-    )
+    scheduler = (
+        CosWithWarmup(warmup=n, t_max=n + m, alpha_f=0.1),
+    )  # cosine over next m steps
     train_module_config.scheduler = scheduler
     return train_module_config
 
