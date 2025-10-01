@@ -1,10 +1,10 @@
 """Shared functions across evaluation datasets."""
 
-from collections.abc import Sequence
 import json
+from collections.abc import Sequence
+from importlib.resources import files
 
 import torch.multiprocessing
-from importlib.resources import files
 from torch.utils.data import default_collate
 
 from helios.train.masking import MaskedHeliosSample
@@ -20,7 +20,8 @@ def eval_collate_fn(
     collated_target = default_collate([t for t in targets])
     return MaskedHeliosSample(**collated_sample), collated_target
 
+
 def load_min_max_stats() -> dict:
     """Load the min/max stats for a given dataset."""
-    with (files("helios.evals.datasets") / f"minmax_stats.json").open() as f:
+    with (files("helios.evals.datasets") / "minmax_stats.json").open() as f:
         return json.load(f)
