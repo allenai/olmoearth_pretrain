@@ -8,11 +8,17 @@ import os
 import subprocess  # nosec
 import uuid
 from collections.abc import Generator
+from enum import StrEnum
 from logging import getLogger
 from typing import Any
 
 from helios.evals.datasets.configs import dataset_to_config, get_eval_mode
 from helios.evals.models import get_launch_script_path
+from helios.evals.models.croma.croma import CHROMA_SIZES
+from helios.evals.models.dinov3.constants import DinoV3Models
+from helios.evals.models.galileo.single_file_galileo import (
+    MODEL_SIZE_TO_WEKA_PATH as GALILEO_MODEL_SIZE_TO_WEKA_PATH,
+)
 from helios.internal.all_evals import EVAL_TASKS
 from helios.internal.experiment import SubCmd
 from helios.nn.flexihelios import PoolingType
@@ -22,6 +28,28 @@ Normalization_MODES = ["dataset", "pre_trained"]
 pooling_types = [PoolingType.MEAN, PoolingType.MAX]
 
 logger = getLogger(__name__)
+
+
+class BaselineModelName(StrEnum):
+    """Enum for baseline model names."""
+
+    DINO_V3 = "dino_v3"
+    PANOPTICON = "panopticon"
+    GALILEO = "galileo"
+    SATLAS = "satlas"
+    CROMA = "croma"
+    COPERNICUSFM = "copernicusfm"
+    PRESTO = "presto"
+    ANYSAT = "anysat"
+    TESSERA = "tessera"
+    PRITHVI_V2 = "prithvi_v2"
+
+
+MODELS_WITH_MULTIPLE_SIZES: dict[BaselineModelName, Any] = {
+    BaselineModelName.CROMA: CHROMA_SIZES,
+    BaselineModelName.DINO_V3: DinoV3Models.values(),
+    BaselineModelName.GALILEO: GALILEO_MODEL_SIZE_TO_WEKA_PATH.keys(),
+}
 
 
 def create_linear_probe_arg(task_name: str, field_name: str) -> str:
@@ -65,26 +93,20 @@ helios_args = " ".join(
 )
 
 
-def loop_through_params() -> Generator[dict[str, Any], None, None]:
+def loop_through_params(no_norm: bool = False) -> Generator[dict[str, Any], None, None]:
     """Yield a dict of the hps we are sweeping over."""
+    if no_norm:
+        normalization_modes = ["dataset"]
+    else:
+        normalization_modes = Normalization_MODES
     for lr in LP_LRs:
-        for norm_mode in Normalization_MODES:
+        for norm_mode in normalization_modes:
             for pooling_type in pooling_types:
                 yield {
                     "lr": lr,
                     "norm_mode": norm_mode,
                     "pooling_type": pooling_type,
                 }
-
-
-def no_norm_sweep() -> Generator[dict[str, Any], None, None]:
-    """Yield a dict of the hps we are sweeping over."""
-    for pooling_type in pooling_types:
-        for lr in LP_LRs:
-            yield {
-                "lr": lr,
-                "pooling_type": pooling_type,
-            }
 
 
 def get_dino_v3_args() -> str:
@@ -303,6 +325,9 @@ def _get_base_run_name(args: argparse.Namespace) -> str:
         parent_dir = os.path.basename(os.path.dirname(args.checkpoint_path))[:100]
         step_num = os.path.basename(args.checkpoint_path)
         run_name = f"{parent_dir}_{step_num}"
+    elif args.model is not None:
+        uuid_str = str(uuid.uuid4())[:8]
+        run_name = args.model.value + "_" + uuid_str
     else:
         logger.warning(
             "No model name provided or checkpoint path, using random run name"
@@ -318,47 +343,53 @@ def _get_checkpoint_args(checkpoint_path: str) -> str:
     return ""
 
 
-def _get_model_specific_args(args: argparse.Namespace) -> str:
+# TODO: Explain why some models are not in the map
+def _get_model_specific_args(model: BaselineModelName | None) -> str:
     """Get model-specific command arguments."""
-    if args.dino_v3:
-        return get_dino_v3_args()
-    elif args.panopticon:
-        return get_panopticon_args()
-    elif args.galileo:
-        return get_galileo_args()
-    elif args.satlas:
-        return get_satlas_args()
-    elif args.croma:
-        return get_croma_args()
-    elif args.copernicusfm:
-        return get_copernicusfm_args()
-    elif args.presto:
-        return get_presto_args()
-    elif args.anysat:
-        return get_anysat_args()
-    elif args.tessera:
-        return get_tessera_args()
-    elif args.prithvi_v2:
-        return get_prithviv2_args()
-    return ""
+    model_args_map = {
+        BaselineModelName.DINO_V3: get_dino_v3_args,
+        BaselineModelName.PANOPTICON: get_panopticon_args,
+        BaselineModelName.GALILEO: get_galileo_args,
+        BaselineModelName.SATLAS: get_satlas_args,
+        BaselineModelName.CROMA: get_croma_args,
+        BaselineModelName.COPERNICUSFM: get_copernicusfm_args,
+        BaselineModelName.PRESTO: get_presto_args,
+        BaselineModelName.ANYSAT: get_anysat_args,
+        BaselineModelName.TESSERA: get_tessera_args,
+        BaselineModelName.PRITHVI_V2: get_prithviv2_args,
+    }
+    if model is None or model not in model_args_map:
+        return ""
+
+    return model_args_map[model]()  # type: ignore
 
 
-def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
+# TODO: Explain why some models are not in the map
+def _get_normalization_args(model: BaselineModelName | None, norm_mode: str) -> str:
     """Get normalization-specific command arguments."""
     model_map = {
-        "galileo": get_galileo_args,
-        "tessera": get_tessera_args,
-        "prithvi_v2": get_prithviv2_args,
-        "satlas": get_satlas_args,
-        "presto": get_presto_args,
+        BaselineModelName.GALILEO: get_galileo_args,
+        BaselineModelName.TESSERA: get_tessera_args,
+        BaselineModelName.PRITHVI_V2: get_prithviv2_args,
+        BaselineModelName.SATLAS: get_satlas_args,
+        BaselineModelName.PRESTO: get_presto_args,
     }
-    for model, func in model_map.items():
-        if getattr(args, model, False):
-            return func(pretrained_normalizer=(norm_mode == "pre_trained"))
+
+    if model in model_map:
+        return model_map[model](pretrained_normalizer=(norm_mode == "pre_trained"))
+
     if norm_mode == "dataset":
         return dataset_args
     if norm_mode == "pre_trained":
         return helios_args
+    return ""
+
+
+def _get_model_size_args(model: BaselineModelName | None, size: str | None) -> str:
+    """Get the model size arguments."""
+    if model in MODELS_WITH_MULTIPLE_SIZES:
+        if size is not None:
+            return f"--model.size={size}"
     return ""
 
 
@@ -370,6 +401,7 @@ def _build_default_command(
     checkpoint_args: str,
     project_name: str,
     extra: str,
+    size: str | None = None,
 ) -> str:
     """Build command for running with default hyperparameters."""
     lr = LP_LRs[0]
@@ -380,12 +412,14 @@ def _build_default_command(
     )
     run_name = f"{base_run_name}_defaults"
 
-    cmd_args = _get_model_specific_args(args)
+    cmd_args = _get_model_specific_args(args.model)
     module_path = (
-        args.module_path if args.module_path is not None else _get_module_path(args)
+        args.module_path
+        if args.module_path is not None
+        else _get_module_path(args.model)
     )
     logger.info(f"Using module path {module_path}")
-
+    cmd_args += _get_model_size_args(args.model, size)
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} helios/internal/all_evals.py "
         f"{sub_command} {run_name} {args.cluster} --launch.priority=high "
@@ -402,6 +436,7 @@ def _build_hyperparameter_command(
     checkpoint_args: str,
     project_name: str,
     extra: str,
+    size: str | None = None,
 ) -> str:
     """Build command for running with specific hyperparameters."""
     lr = params.get("lr", None)
@@ -420,11 +455,13 @@ def _build_hyperparameter_command(
         cmd_args += pooling_args.format(arg=pooling_type)
 
     # Add model-specific args
-    cmd_args += _get_model_specific_args(args)
+    cmd_args += _get_model_specific_args(args.model)
 
     # Add normalization-specific args
     # These args will override the model-specific args
-    cmd_args += _get_normalization_args(args, norm_mode)
+    cmd_args += _get_normalization_args(args.model, norm_mode)
+
+    cmd_args += _get_model_size_args(args.model, size)
 
     return (
         f"TRAIN_SCRIPT_PATH={args.module_path} {launch_command} helios/internal/all_evals.py "
@@ -433,26 +470,11 @@ def _build_hyperparameter_command(
     )
 
 
-def _get_module_path(args: argparse.Namespace) -> str:
+def _get_module_path(model: BaselineModelName | None) -> str:
     """Get the module path for the launch script."""
-    if args.dino_v3:
-        return get_launch_script_path("dino_v3")
-    elif args.panopticon:
-        return get_launch_script_path("panopticon")
-    elif args.croma:
-        return get_launch_script_path("croma")
-    elif args.galileo:
-        return get_launch_script_path("galileo")
-    elif args.presto:
-        return get_launch_script_path("presto")
-    elif args.satlas:
-        return get_launch_script_path("satlas")
-    elif args.tessera:
-        return get_launch_script_path("tessera")
-    elif args.prithvi_v2:
-        return get_launch_script_path("prithvi_v2")
-    else:
-        raise ValueError(f"Invalid model name: {args.model_name}")
+    if model is None:
+        raise ValueError("Model must be specified when module_path is not provided")
+    return get_launch_script_path(model.value)
 
 
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
@@ -468,6 +490,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     commands_to_run = []
 
     if args.defaults_only:
+        if args.model == "all":
+            raise ValueError("Cannot run defaults with all models")
         # Just run with the first/default values
         cmd = _build_default_command(
             args,
@@ -480,29 +504,56 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         )
         commands_to_run.append(cmd)
     else:
-        hp_params = (
-            loop_through_params()
-            if not args.dino_v3
-            and not args.panopticon
-            and not args.copernicusfm  # Only use the dataset normalization stats for these models
-            and not args.tessera  # Only use the dataset normalization stats for these models
-            else no_norm_sweep()
-        )
+        if args.model == "all":
+            models = list(BaselineModelName)
+        else:
+            models = [args.model]
+        for model in models:
+            args.model = model
+            # Models that only use dataset normalizaiton or need dataset normalization to scale to 0 - 1 then always use pretrained
+            dataset_norm_only_models = {
+                BaselineModelName.DINO_V3,
+                BaselineModelName.PANOPTICON,
+                BaselineModelName.COPERNICUSFM,
+                BaselineModelName.TESSERA,
+            }
 
-        for params in hp_params:
-            cmd = _build_hyperparameter_command(
-                args,
-                params,
-                base_run_name,
-                sub_command,
-                launch_command,
-                checkpoint_args,
-                project_name,
-                extra,
+            model_sizes = MODELS_WITH_MULTIPLE_SIZES.get(
+                args.model,
+                [None],  # type: ignore # TODO: Fix this
             )
-            commands_to_run.append(cmd)
+            for size in model_sizes:
+                hp_params = loop_through_params(
+                    no_norm=(args.model in dataset_norm_only_models)
+                )
+
+                for params in hp_params:
+                    cmd = _build_hyperparameter_command(
+                        args,
+                        params,
+                        base_run_name,
+                        sub_command,
+                        launch_command,
+                        checkpoint_args,
+                        project_name,
+                        extra,
+                        size,
+                    )
+                    commands_to_run.append(cmd)
 
     return commands_to_run
+
+
+def _parse_model_arg(value: str) -> BaselineModelName | str:
+    """Parse the model argument, returning either a BaselineModelName or 'all'."""
+    if value == "all":
+        return value
+    try:
+        return BaselineModelName(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Invalid model: {value}. Must be one of {list(BaselineModelName)} or 'all'"
+        )
 
 
 def main() -> None:
@@ -543,54 +594,16 @@ def main() -> None:
         help="If set, use this as the  base run name",
     )
     parser.add_argument(
-        "--dino_v3",
-        action="store_true",
-        help="If set, use the dino v3 normalization settings",
+        "--model",
+        type=_parse_model_arg,
+        required=False,
+        default=None,
+        help="Baseline model to use (e.g., dino_v3, galileo, satlas) or all",
     )
     parser.add_argument(
-        "--panopticon",
+        "--all_sizes",
         action="store_true",
-        help="If set, use the panopticon normalization settings",
-    )
-    parser.add_argument(
-        "--galileo",
-        action="store_true",
-        help="If set, use the galileo normalization settings",
-    )
-    parser.add_argument(
-        "--satlas",
-        action="store_true",
-        help="If set, use the satlas normalization settings",
-    )
-    parser.add_argument(
-        "--croma",
-        action="store_true",
-        help="If set, use the croma normalization settings",
-    )
-    parser.add_argument(
-        "--copernicusfm",
-        action="store_true",
-        help="If set, use the copernicusfm normalization settings",
-    )
-    parser.add_argument(
-        "--presto",
-        action="store_true",
-        help="If set, use the presto normalization settings",
-    )
-    parser.add_argument(
-        "--anysat",
-        action="store_true",
-        help="If set, use the anysat normalization settings",
-    )
-    parser.add_argument(
-        "--tessera",
-        action="store_true",
-        help="If set, use the tessera normalization settings",
-    )
-    parser.add_argument(
-        "--prithvi_v2",
-        action="store_true",
-        help="If set, use the prithvi normalization settings",
+        help="If set, run all sizes for each model",
     )
     args, extra_cli = parser.parse_known_args()
 

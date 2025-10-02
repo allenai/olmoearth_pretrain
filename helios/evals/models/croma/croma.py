@@ -37,6 +37,8 @@ HELIOS_SENTINEL2_BANDS = [
     ]
 ]
 
+CHROMA_SIZES = ["base", "large"]
+
 
 class Croma(nn.Module):
     """Class containing the Croma model that can ingest MaskedHeliosSample objects."""
@@ -61,10 +63,9 @@ class Croma(nn.Module):
         """
         super().__init__()
         load_dir = UPath(load_directory)
-        if size == "base":
-            load_path = load_dir / "CROMA_base.pt"
-        else:
-            load_path = load_dir / "CROMA_large.pt"
+        if size not in CHROMA_SIZES:
+            raise ValueError(f"Invalid size: {size}. Must be one of {CHROMA_SIZES}")
+        load_path = load_dir / f"CROMA_{size}.pt"
 
         self.model = PretrainedCROMA(
             pretrained_path=str(load_path),

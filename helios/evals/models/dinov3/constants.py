@@ -7,15 +7,12 @@ from enum import StrEnum
 class DinoV3Models(StrEnum):
     """Names for different DInoV3 images on torch hub."""
 
-    SMALL_WEB = "dinov3_vits16"
-    SMALL_PLUS_WEB = "dinov3_vits16plus"
     BASE_WEB = "dinov3_vitb16"
     LARGE_WEB = "dinov3_vitl16"
     HUGE_PLUS_WEB = "dinov3_vith16plus"
     FULL_7B_WEB = "dinov3_vit7b16"
-    LARGE_SATELLITE = "dinov3_vitl16_sat"  # just the name I copied too
+    LARGE_SATELLITE = "dinov3_vitl16_sat"
     FULL_7B_SATELLITE = "dinov3_vit7b16_sat"
-    # Not yet clear how to download the satelite models
 
 
 # if non Ai2, user set the DINOV3_REPO_DIR and DINOV3_CHECKPOINT_DIR environment variables

@@ -69,14 +69,14 @@ class DINOv3(nn.Module):
 
     def __init__(
         self,
-        model_name: str = DinoV3Models.LARGE_SATELLITE,
+        size: str = DinoV3Models.LARGE_SATELLITE,
         use_cls_token: bool = False,
         apply_normalization: bool = False,
     ):
         """Initialize the dinov3 wrapper.
 
         Args:
-            model_name: The name that corresponds to the model on torch hub to help find the details for loading the model
+            size: The name that corresponds to the model on torch hub to help find the details for loading the model
             use_cls_token: Whether to use the cls token (default False)
             apply_normalization: Whether to apply imagenet normalization to the input data (default False)
         """
@@ -87,10 +87,10 @@ class DINOv3(nn.Module):
             logger.warning(
                 "Applying imagenet normalization to the input data. Make sure other normalization is not applied."
             )
-        torchhub_id, weights_url = MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL[model_name]
+        torchhub_id, weights_url = MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL[size]
         # Load the model
         self._load_model(torchhub_id, weights_url)
-        if "sat" in model_name:
+        if "sat" in size:
             logger.info("Using satellite normalization")
             self.normalize_transform = make_normalize_transform_sat()
         else:
@@ -260,14 +260,14 @@ class DINOv3(nn.Module):
 class DINOv3Config(Config):
     """olmo_core style config for DINOv2Wrapper."""
 
-    model_name: DinoV3Models = DinoV3Models.LARGE_SATELLITE
+    size: DinoV3Models = DinoV3Models.LARGE_SATELLITE
     use_cls_token: bool = False
     apply_normalization: bool = False
 
     def build(self) -> "DINOv3":
         """Build the DINOv3 from this config."""
         return DINOv3(
-            model_name=self.model_name,
+            size=self.size,
             use_cls_token=self.use_cls_token,
             apply_normalization=self.apply_normalization,
         )
