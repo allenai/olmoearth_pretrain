@@ -3,8 +3,8 @@
 import pytest
 import torch
 
-from helios.data.dataset import HeliosSample
-from helios.train.utils import split_batch
+from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.train.utils import split_batch
 
 
 @pytest.mark.parametrize("microbatch_size", [1, 2, 5])

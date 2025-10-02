@@ -23,7 +23,7 @@ Eurosat best:
 
 import subprocess  # nosec
 
-from helios.internal.utils import MODEL_SIZE_ARGS, build_token_exit_config
+from olmo_earth.internal.utils import MODEL_SIZE_ARGS, build_token_exit_config
 
 MASKING_TYPES = [
     "random",

@@ -13,10 +13,10 @@ from train import (
     build_visualize_config,
 )
 
-from helios.data.concat import HeliosConcatDatasetConfig
-from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.common import build_common_components
-from helios.internal.experiment import (
+from olmo_earth.data.concat import HeliosConcatDatasetConfig
+from olmo_earth.data.dataset import HeliosDatasetConfig
+from olmo_earth.internal.common import build_common_components
+from olmo_earth.internal.experiment import (
     CommonComponents,
     main,
 )

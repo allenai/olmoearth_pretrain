@@ -9,8 +9,8 @@ from shared import (
     build_visualize_config,
 )
 
-from helios.internal.common import build_common_components
-from helios.internal.experiment import main
+from olmo_earth.internal.common import build_common_components
+from olmo_earth.internal.experiment import main
 
 if __name__ == "__main__":
     main(

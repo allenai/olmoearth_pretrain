@@ -12,12 +12,12 @@ from galileo_shared import (
 )
 from olmo_core.config import Config, DType
 
-from helios.data.concat import HeliosConcatDatasetConfig
-from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.experiment import CommonComponents, main
-from helios.internal.utils import MODEL_SIZE_ARGS
-from helios.nn.flexihelios import EncoderConfig, PredictorConfig
-from helios.nn.galileo import GalileoConfig
+from olmo_earth.data.concat import HeliosConcatDatasetConfig
+from olmo_earth.data.dataset import HeliosDatasetConfig
+from olmo_earth.internal.experiment import CommonComponents, main
+from olmo_earth.internal.utils import MODEL_SIZE_ARGS
+from olmo_earth.nn.flexihelios import EncoderConfig, PredictorConfig
+from olmo_earth.nn.galileo import GalileoConfig
 
 MIN_PATCH_SIZE = 1
 MAX_PATCH_SIZE = 8

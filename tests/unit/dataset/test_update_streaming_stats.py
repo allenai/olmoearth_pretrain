@@ -4,7 +4,7 @@ import logging
 
 import numpy as np
 
-from helios.data.utils import update_streaming_stats
+from olmo_earth.data.utils import update_streaming_stats
 
 logger = logging.getLogger(__name__)
 

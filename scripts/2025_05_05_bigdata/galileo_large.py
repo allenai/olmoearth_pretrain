@@ -13,9 +13,9 @@ from galileo_shared import (
     build_visualize_config,
 )
 
-from helios.internal.experiment import CommonComponents, main
-from helios.nn.galileo import GalileoConfig
-from helios.train.train_module.galileo import GalileoTrainModuleConfig
+from olmo_earth.internal.experiment import CommonComponents, main
+from olmo_earth.nn.galileo import GalileoConfig
+from olmo_earth.train.train_module.galileo import GalileoTrainModuleConfig
 
 
 def my_build_model_config(common: CommonComponents) -> GalileoConfig:

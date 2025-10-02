@@ -9,9 +9,9 @@ from train import (
     my_build_common_components,
 )
 
-from helios.data.concat import HeliosConcatDatasetConfig
-from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.experiment import (
+from olmo_earth.data.concat import HeliosConcatDatasetConfig
+from olmo_earth.data.dataset import HeliosDatasetConfig
+from olmo_earth.internal.experiment import (
     CommonComponents,
     main,
 )

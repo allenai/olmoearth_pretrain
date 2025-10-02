@@ -9,9 +9,9 @@ from shared import (
     build_visualize_config,
 )
 
-from helios.data.dataloader import HeliosDataLoaderConfig
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, main
+from olmo_earth.data.dataloader import HeliosDataLoaderConfig
+from olmo_earth.internal.common import build_common_components
+from olmo_earth.internal.experiment import CommonComponents, main
 
 
 def my_build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:

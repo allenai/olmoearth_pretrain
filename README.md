@@ -1,6 +1,6 @@
-# HELIOS
+# OlmoEarth (formerly HELIOS)
 
-Highly Efficient Learning for Integrated Observation Systems (HELIOS)
+**Note: This repository has been renamed from HELIOS to OlmoEarth. The package is now `olmo-earth` and all imports should use `olmo_earth` instead of `helios`. The old `helios` imports are still supported with deprecation warnings for backward compatibility with existing checkpoints.**
 
 Earth system foundation model: data, training, and evaluation
 
@@ -37,7 +37,7 @@ launching training runs on beaker
 
 ### Pre-emptible Jobs
 
-To launch pre-emptible jobs, we will use the main entrypoint in [helios/internal/experiment.py](helios/internal/experiment.py) and write python configuration files that use it like [scripts/latent_mim.py](scripts/latent_mim.py). Depednign on your experiment it might make sense to write a new script with different builders or to just overide as needed for an existing one.
+To launch pre-emptible jobs, we will use the main entrypoint in [olmo_earth/internal/experiment.py](olmo_earth/internal/experiment.py) and write python configuration files that use it like [scripts/latent_mim.py](scripts/latent_mim.py). Depending on your experiment it might make sense to write a new script with different builders or to just overide as needed for an existing one.
 Before launching your script **MAKE SURE YOUR CODE IS COMMITED AND PUSHED** as we are cloning the code on top of a docker image when we launch the job.
 
 We can launch a script as follows:
@@ -101,14 +101,14 @@ OUT OF DATE!
 
 ## Running Eval Suite
 
-[`helios/internal/full_eval_sweep.py`](helios/internal/full_eval_sweep.py) runs comprehensive evaluation sweeps across multiple downstream tasks for any Helios checkpoint. It automatically sweeps over learning rates, pooling types, and normalization strategies.
+[`olmo_earth/internal/full_eval_sweep.py`](olmo_earth/internal/full_eval_sweep.py) runs comprehensive evaluation sweeps across multiple downstream tasks for any OlmoEarth checkpoint. It automatically sweeps over learning rates, pooling types, and normalization strategies.
 
 ### 1. How to run eval for a given checkpoint
 
 Basic command to run evaluation sweep for a checkpoint:
 
 ```
-python3 helios/internal/full_eval_sweep.py \
+python3 olmo_earth/internal/full_eval_sweep.py \
   --cluster=ai2/saturn-cirrascale \
   --checkpoint_path=/path/to/your/checkpoint/step450000 \
   --module_path=scripts/your_training_script.py \
@@ -116,7 +116,7 @@ python3 helios/internal/full_eval_sweep.py \
 
 For just default hyperparameters (faster, single run):
 ```bash
-python3 helios/internal/full_eval_sweep.py \
+python3 olmo_earth/internal/full_eval_sweep.py \
   --cluster=ai2/saturn-cirrascale \
   --checkpoint_path=/path/to/your/checkpoint/step450000 \
   --module_path=scripts/your_training_script.py \
@@ -127,7 +127,7 @@ python3 helios/internal/full_eval_sweep.py \
 
 Pass additional training arguments after the main arguments:
 ```bash
-python3 helios/internal/full_eval_sweep.py \
+python3 olmo_earth/internal/full_eval_sweep.py \
   --cluster=ai2/saturn-cirrascale \
   --checkpoint_path=/path/to/checkpoint \
   --module_path=scripts/your_script.py \
@@ -139,7 +139,7 @@ python3 helios/internal/full_eval_sweep.py \
 
 Use the `--panopticon` flag for Panopticon model evaluation:
 ```bash
-python3 helios/internal/full_eval_sweep.py \
+python3 olmo_earth/internal/full_eval_sweep.py \
   --cluster=ai2/saturn-cirrascale \
   --panopticon \
   --model_name=panopticon
@@ -149,7 +149,7 @@ python3 helios/internal/full_eval_sweep.py \
 
 For DINO v3 evaluation:
 ```bash
-python3 helios/internal/full_eval_sweep.py \
+python3 olmo_earth/internal/full_eval_sweep.py \
   --cluster=ai2/saturn-cirrascale \
   --dino_v3 \
   --model_name=dino_v3_large_sat \
@@ -160,7 +160,7 @@ python3 helios/internal/full_eval_sweep.py \
 
 Use the `--galileo` flag for Galileo model evaluation:
 ```bash
-python3 helios/internal/full_eval_sweep.py \
+python3 olmo_earth/internal/full_eval_sweep.py \
   --cluster=ai2/saturn-cirrascale \
   --galileo \
   --model_name=galileo_vit_base
@@ -168,8 +168,8 @@ python3 helios/internal/full_eval_sweep.py \
 ```
 
 **Key Notes:**
-- The script automatically determines appropriate normalization strategies for each model type (see [`helios/evals/datasets/normalize.py`](helios/evals/datasets/normalize.py))
-  - Helios: Use pretrained normalizer or NORM_METHOD.NORM_NO_CLIP with dataset stats
+- The script automatically determines appropriate normalization strategies for each model type (see [`olmo_earth/evals/datasets/normalize.py`](olmo_earth/evals/datasets/normalize.py))
+  - OlmoEarth: Use pretrained normalizer or NORM_METHOD.NORM_NO_CLIP with dataset stats
   - Galileo: Use galileo pretrained normalizer or  NORM_METHOD.NORM_NO_CLIP with dataset stats
   - Panopticon: Uses NORM_METHOD.STANDARDIZE with the dataset statistics
   - DinoV3: Uses NORM_METHOD.NORM_YES_CLIP_MIN_MAX_INT to get to 0-1 and then applies either the web or sat normalization values
@@ -177,4 +177,4 @@ python3 helios/internal/full_eval_sweep.py \
 - Use `--dry_run` to preview commands without execution
 - For local testing, use `--cluster=local`
 
-See `helios/internal/full_eval_sweep.py` for complete argument list and implementation details.
+See `olmo_earth/internal/full_eval_sweep.py` for complete argument list and implementation details.

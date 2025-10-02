@@ -1,5 +1,5 @@
 [project]
-name = "helios"
+name = "olmo-earth"
 version = "0.0.1"
 description = "A library for developing earth system foundation models"
 authors = [
@@ -20,7 +20,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["helios*"]
+include = ["olmo_earth*", "helios*"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
@@ -33,8 +33,8 @@ beaker = { file = ["requirements-beaker.txt"] }
 all = { file = ["requirements.txt", "requirements-dev.txt", "requirements-eval.txt", "requirements-beaker.txt"] }
 
 [tool.setuptools.package-data]
-"helios.data.norm_configs" = ["*.json"]
-"helios.evals.datasets.config" = ["*.json"]
+"olmo_earth.data.norm_configs" = ["*.json"]
+"olmo_earth.evals.datasets.config" = ["*.json"]
 
 [tool.ruff]
 fix = true
@@ -54,5 +54,6 @@ addopts = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"helios/evals/datasets/cropharvest_package/*" = ["D"]
-"helios/evals/models/copernicusfm/src/*" = ["D", "UP", "E", "F"]
+"olmo_earth/evals/datasets/cropharvest_package/*" = ["D"]
+"olmo_earth/evals/models/copernicusfm/src/*" = ["D", "UP", "E", "F"]
+"helios.py" = ["D"]

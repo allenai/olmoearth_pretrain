@@ -4,9 +4,9 @@ from pathlib import Path
 
 import numpy as np
 
-from helios.data.constants import Modality
-from helios.data.dataloader import HeliosDataLoader, _IterableDatasetWrapper
-from helios.data.dataset import HeliosDataset, collate_helios
+from olmo_earth.data.constants import Modality
+from olmo_earth.data.dataloader import HeliosDataLoader, _IterableDatasetWrapper
+from olmo_earth.data.dataset import HeliosDataset, collate_helios
 
 
 def test_get_batch_item_params_iterator(tmp_path: Path, setup_h5py_dir: Path) -> None:

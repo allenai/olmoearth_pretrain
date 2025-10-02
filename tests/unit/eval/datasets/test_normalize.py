@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from helios.evals.datasets.normalize import (
+from olmo_earth.evals.datasets.normalize import (
     NormMethod,
     impute_normalization_stats,
     normalize_bands,

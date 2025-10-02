@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 from torch.utils.data import DataLoader
 
-from helios.data.constants import Modality
-from helios.evals.datasets import GeobenchDataset
-from helios.evals.datasets.utils import eval_collate_fn
-from helios.nn.flexihelios import Encoder
+from olmo_earth.data.constants import Modality
+from olmo_earth.evals.datasets import GeobenchDataset
+from olmo_earth.evals.datasets.utils import eval_collate_fn
+from olmo_earth.nn.flexihelios import Encoder
 
 
 @pytest.fixture

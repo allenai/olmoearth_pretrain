@@ -16,15 +16,15 @@ from shared import (
     build_visualize_config,
 )
 
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, main
-from helios.nn.flexihelios import PoolingType
-from helios.train.callbacks import (
+from olmo_earth.internal.common import build_common_components
+from olmo_earth.internal.experiment import CommonComponents, main
+from olmo_earth.nn.flexihelios import PoolingType
+from olmo_earth.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
     HeliosWandBCallback,
 )
-from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
+from olmo_earth.train.callbacks.evaluator_callback import DownstreamTaskConfig
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:

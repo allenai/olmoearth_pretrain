@@ -8,11 +8,11 @@ from shared import (
     build_visualize_config,
 )
 
-from helios.data.dataloader import HeliosDataLoaderConfig
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, main
-from helios.nn.latent_mim import LatentMIMConfig
-from helios.nn.st_model import STEncoderConfig, STPredictorConfig
+from olmo_earth.data.dataloader import HeliosDataLoaderConfig
+from olmo_earth.internal.common import build_common_components
+from olmo_earth.internal.experiment import CommonComponents, main
+from olmo_earth.nn.latent_mim import LatentMIMConfig
+from olmo_earth.nn.st_model import STEncoderConfig, STPredictorConfig
 
 MIN_PATCH_SIZE = 4
 MAX_PATCH_SIZE = 4

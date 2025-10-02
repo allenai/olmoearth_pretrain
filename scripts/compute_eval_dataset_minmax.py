@@ -27,7 +27,7 @@ from einops import rearrange
 from tqdm import tqdm
 from upath import UPath
 
-from helios.evals.datasets import (
+from olmo_earth.evals.datasets import (
     BREIZHCROPS_DIR,
     CROPHARVEST_DIR,
     FLOODS_DIR,
@@ -36,24 +36,24 @@ from helios.evals.datasets import (
     PASTIS_DIR_ORIG,
     SICKLE_DIR,
 )
-from helios.evals.datasets.breizhcrops import LEVEL, BreizhCrops
-from helios.evals.datasets.constants import (
+from olmo_earth.evals.datasets.breizhcrops import LEVEL, BreizhCrops
+from olmo_earth.evals.datasets.constants import (
     EVAL_S1_BAND_NAMES,
     EVAL_S2_BAND_NAMES,
     EVAL_SRTM_BAND_NAMES,
 )
-from helios.evals.datasets.cropharvest import (
+from olmo_earth.evals.datasets.cropharvest import (
     S2_EVAL_BANDS_BEFORE_IMPUTATION as CROPHARVEST_S2_EVAL_BANDS_BEFORE_IMPUTATION,
 )
-from helios.evals.datasets.cropharvest import _get_eval_datasets
-from helios.evals.datasets.cropharvest_package.datasets import CropHarvest
-from helios.evals.datasets.sickle_dataset import (
+from olmo_earth.evals.datasets.cropharvest import _get_eval_datasets
+from olmo_earth.evals.datasets.cropharvest_package.datasets import CropHarvest
+from olmo_earth.evals.datasets.sickle_dataset import (
     L8_BAND_STATS as SICKLE_L8_BAND_STATS,
 )
-from helios.evals.datasets.sickle_dataset import (
+from olmo_earth.evals.datasets.sickle_dataset import (
     S1_BAND_STATS as SICKLE_S1_BAND_STATS,
 )
-from helios.evals.datasets.sickle_dataset import (
+from olmo_earth.evals.datasets.sickle_dataset import (
     S2_BAND_STATS as SICKLE_S2_BAND_STATS,
 )
 

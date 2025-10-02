@@ -5,21 +5,21 @@ from olmo_core.config import DType
 from olmo_core.optim.adamw import AdamWConfig
 from olmo_core.train import TrainerConfig
 
-from helios.data.dataloader import HeliosDataLoaderConfig
-from helios.data.dataset import HeliosDatasetConfig
-from helios.data.transform import TransformConfig
-from helios.internal.experiment import (
+from olmo_earth.data.dataloader import HeliosDataLoaderConfig
+from olmo_earth.data.dataset import HeliosDatasetConfig
+from olmo_earth.data.transform import TransformConfig
+from olmo_earth.internal.experiment import (
     CommonComponents,
     HeliosBeakerLaunchConfig,
     HeliosExperimentConfig,
     HeliosVisualizeConfig,
     build_config,
 )
-from helios.nn.flexihelios import EncoderConfig, PredictorConfig
-from helios.nn.latent_mim import LatentMIMConfig
-from helios.train.loss import LossConfig
-from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from olmo_earth.nn.flexihelios import EncoderConfig, PredictorConfig
+from olmo_earth.nn.latent_mim import LatentMIMConfig
+from olmo_earth.train.loss import LossConfig
+from olmo_earth.train.masking import MaskingConfig
+from olmo_earth.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 

@@ -12,10 +12,10 @@ from galileo_shared import (
     build_visualize_config,
 )
 
-from helios.internal.experiment import CommonComponents, main
-from helios.internal.utils import MODEL_SIZE_ARGS
-from helios.nn.flexihelios import EncoderConfig, PredictorConfig
-from helios.nn.galileo import GalileoConfig
+from olmo_earth.internal.experiment import CommonComponents, main
+from olmo_earth.internal.utils import MODEL_SIZE_ARGS
+from olmo_earth.nn.flexihelios import EncoderConfig, PredictorConfig
+from olmo_earth.nn.galileo import GalileoConfig
 
 MIN_PATCH_SIZE = 1
 MAX_PATCH_SIZE = 8

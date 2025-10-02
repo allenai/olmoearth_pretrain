@@ -5,9 +5,9 @@ from pathlib import Path
 
 import numpy as np
 
-from helios.data.constants import Modality
-from helios.data.dataset import HeliosDataset
-from helios.data.visualize import visualize_sample
+from olmo_earth.data.constants import Modality
+from olmo_earth.data.dataset import HeliosDataset
+from olmo_earth.data.visualize import visualize_sample
 
 
 def test_visualize_sample(

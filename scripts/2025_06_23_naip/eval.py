@@ -23,20 +23,20 @@ from train import (
     my_build_common_components,
 )
 
-from helios.data.constants import Modality
-from helios.internal.experiment import (
+from olmo_earth.data.constants import Modality
+from olmo_earth.internal.experiment import (
     CommonComponents,
     main,
 )
-from helios.nn.flexihelios import (
+from olmo_earth.nn.flexihelios import (
     PoolingType,
 )
-from helios.train.callbacks import (
+from olmo_earth.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
     HeliosWandBCallback,
 )
-from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
+from olmo_earth.train.callbacks.evaluator_callback import DownstreamTaskConfig
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:

@@ -5,9 +5,9 @@ import argparse
 import pandas as pd
 import wandb
 
-from helios.inference_benchmarking import constants
-from helios.inference_benchmarking.constants import PARAM_KEYS
-from helios.inference_benchmarking.data_models import RunParams
+from olmo_earth.inference_benchmarking import constants
+from olmo_earth.inference_benchmarking.constants import PARAM_KEYS
+from olmo_earth.inference_benchmarking.data_models import RunParams
 
 
 def main(

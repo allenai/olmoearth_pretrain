@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 from upath import UPath
 
-from helios.data.constants import Modality, ModalitySpec
-from helios.dataset.convert_to_h5py import ConvertToH5py
+from olmo_earth.data.constants import Modality, ModalitySpec
+from olmo_earth.dataset.convert_to_h5py import ConvertToH5py
 
 
 @pytest.fixture

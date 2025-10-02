@@ -4,8 +4,8 @@ import logging
 
 import torch
 
-from helios.nn.flexihelios import TokensAndMasks
-from helios.train.loss import (
+from olmo_earth.nn.flexihelios import TokensAndMasks
+from olmo_earth.train.loss import (
     AdjustedPatchDiscriminationLoss,
     CrossEntropyLoss,
     InfoNCELoss,
@@ -14,7 +14,7 @@ from helios.train.loss import (
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
 )
-from helios.train.masking import MaskValue
+from olmo_earth.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
 

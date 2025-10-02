@@ -9,9 +9,9 @@ from shared import (
     build_visualize_config,
 )
 
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, main
-from helios.nn.latent_mim import LatentMIMConfig
+from olmo_earth.internal.common import build_common_components
+from olmo_earth.internal.experiment import CommonComponents, main
+from olmo_earth.nn.latent_mim import LatentMIMConfig
 
 
 def my_build_model_config(common: CommonComponents) -> LatentMIMConfig:

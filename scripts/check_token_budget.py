@@ -5,8 +5,8 @@ import argparse
 import pandas as pd
 import torch
 
-from helios.data.constants import Modality
-from helios.data.dataset import HeliosSample
+from olmo_earth.data.constants import Modality
+from olmo_earth.data.dataset import HeliosSample
 
 
 def create_dummy_sample(modalities: list[str], H: int, W: int, T: int) -> HeliosSample:

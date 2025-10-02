@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 from numpy.random import default_rng
 
-from helios.data.constants import MISSING_VALUE, Modality
-from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
+from olmo_earth.data.constants import MISSING_VALUE, Modality
+from olmo_earth.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
 
 logger = logging.getLogger(__name__)
 

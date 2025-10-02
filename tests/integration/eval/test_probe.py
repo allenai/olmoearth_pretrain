@@ -2,9 +2,9 @@
 
 import torch
 
-from helios.data.constants import Modality
-from helios.evals.datasets.configs import EvalDatasetConfig, TaskType
-from helios.evals.linear_probe import train_and_eval_probe
+from olmo_earth.data.constants import Modality
+from olmo_earth.evals.datasets.configs import EvalDatasetConfig, TaskType
+from olmo_earth.evals.linear_probe import train_and_eval_probe
 
 
 def test_probe_cls() -> None:

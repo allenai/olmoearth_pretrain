@@ -10,9 +10,9 @@ from shared import (
     my_build_common_components,
 )
 
-from helios.data.dataloader import HeliosDataLoaderConfig
-from helios.internal.experiment import CommonComponents, main
-from helios.nn.latent_mim import LatentMIMConfig
+from olmo_earth.data.dataloader import HeliosDataLoaderConfig
+from olmo_earth.internal.experiment import CommonComponents, main
+from olmo_earth.nn.latent_mim import LatentMIMConfig
 
 
 def my_build_model_config(common: CommonComponents) -> LatentMIMConfig:

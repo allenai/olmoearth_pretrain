@@ -7,7 +7,7 @@ import argparse
 import os
 import subprocess  # nosec
 
-from helios.data.constants import Modality, ModalitySpec
+from olmo_earth.data.constants import Modality, ModalitySpec
 
 OLD_MODALITIES = [
     Modality.SENTINEL2_L2A,

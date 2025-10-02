@@ -10,7 +10,7 @@ from shared import (
     my_build_common_components,
 )
 
-from helios.internal.experiment import main
+from olmo_earth.internal.experiment import main
 
 if __name__ == "__main__":
     main(

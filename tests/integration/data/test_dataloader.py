@@ -5,10 +5,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from helios.data.concat import HeliosConcatDatasetConfig
-from helios.data.constants import Modality
-from helios.data.dataloader import HeliosDataLoader, HeliosDataLoaderConfig
-from helios.data.dataset import HeliosDataset, HeliosDatasetConfig, collate_helios
+from olmo_earth.data.concat import HeliosConcatDatasetConfig
+from olmo_earth.data.constants import Modality
+from olmo_earth.data.dataloader import HeliosDataLoader, HeliosDataLoaderConfig
+from olmo_earth.data.dataset import HeliosDataset, HeliosDatasetConfig, collate_helios
 
 
 def test_helios_dataloader(tmp_path: Path, setup_h5py_dir: Path) -> None:

@@ -4,10 +4,10 @@ import logging
 
 import torch
 
-from helios.data.constants import Modality
-from helios.nn.flexihelios import Encoder, Predictor
-from helios.nn.galileo import Galileo
-from helios.train.masking import MaskedHeliosSample
+from olmo_earth.data.constants import Modality
+from olmo_earth.nn.flexihelios import Encoder, Predictor
+from olmo_earth.nn.galileo import Galileo
+from olmo_earth.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
 

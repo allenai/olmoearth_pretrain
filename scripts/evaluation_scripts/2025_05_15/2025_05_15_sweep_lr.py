@@ -2,7 +2,7 @@
 
 import subprocess  # nosec
 
-from helios.internal.utils import MODEL_SIZE_ARGS
+from olmo_earth.internal.utils import MODEL_SIZE_ARGS
 
 # Model size configurations
 MODEL_SIZES = {

@@ -13,9 +13,9 @@ from galileo_shared import (
     build_visualize_config,
 )
 
-from helios.data.dataloader import HeliosDataLoaderConfig
-from helios.internal.experiment import CommonComponents, main
-from helios.train.train_module.galileo import GalileoTrainModuleConfig
+from olmo_earth.data.dataloader import HeliosDataLoaderConfig
+from olmo_earth.internal.experiment import CommonComponents, main
+from olmo_earth.train.train_module.galileo import GalileoTrainModuleConfig
 
 
 def my_build_train_module_config(

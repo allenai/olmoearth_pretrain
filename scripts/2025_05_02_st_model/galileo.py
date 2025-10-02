@@ -13,7 +13,7 @@ from galileo_shared import (
     build_visualize_config,
 )
 
-from helios.internal.experiment import main
+from olmo_earth.internal.experiment import main
 
 if __name__ == "__main__":
     main(

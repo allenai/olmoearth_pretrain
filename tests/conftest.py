@@ -16,12 +16,12 @@ import torch
 from rasterio.transform import from_origin
 from upath import UPath
 
-from helios.data.constants import MISSING_VALUE, BandSet, Modality, ModalitySpec
-from helios.data.dataset import HeliosSample
-from helios.dataset.convert_to_h5py import ConvertToH5py
-from helios.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
-from helios.dataset.sample import SampleInformation
-from helios.train.masking import MaskValue
+from olmo_earth.data.constants import MISSING_VALUE, BandSet, Modality, ModalitySpec
+from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.dataset.convert_to_h5py import ConvertToH5py
+from olmo_earth.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
+from olmo_earth.dataset.sample import SampleInformation
+from olmo_earth.train.masking import MaskValue
 
 # Avoid triton imports from olmo-core during tests
 sys.modules["triton"] = types.SimpleNamespace(

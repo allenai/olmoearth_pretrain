@@ -9,14 +9,14 @@ import torch
 from olmo_core.optim.adamw import AdamWConfig
 from olmo_core.train.config import TrainerConfig
 
-from helios.data.constants import Modality
-from helios.data.dataset import HeliosSample, collate_helios
-from helios.data.transform import TransformConfig
-from helios.nn.flexihelios import EncoderConfig, PredictorConfig
-from helios.nn.latent_mim import LatentMIM, LatentMIMConfig
-from helios.train.loss import LossConfig
-from helios.train.masking import MaskingConfig
-from helios.train.train_module.contrastive_latentmim import (
+from olmo_earth.data.constants import Modality
+from olmo_earth.data.dataset import HeliosSample, collate_helios
+from olmo_earth.data.transform import TransformConfig
+from olmo_earth.nn.flexihelios import EncoderConfig, PredictorConfig
+from olmo_earth.nn.latent_mim import LatentMIM, LatentMIMConfig
+from olmo_earth.train.loss import LossConfig
+from olmo_earth.train.masking import MaskingConfig
+from olmo_earth.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
 )
 
@@ -164,7 +164,7 @@ def test_train_batch_without_missing_modalities(
     """Test train batch without missing modalities."""
     batch = collate_helios(samples_without_missing_modalities)
     train_module = train_module_config.build(latent_mim_model, device="cpu")
-    with patch("helios.train.train_module.train_module.build_world_mesh"):
+    with patch("olmo_earth.train.train_module.train_module.build_world_mesh"):
         # Mock the trainer property
         mock_trainer = MockTrainer()
         # Create a MagicMock for on_attach
@@ -196,7 +196,7 @@ def test_train_batch_with_missing_modalities(
     # Create a collated batch
     batch = collate_helios(samples_with_missing_modalities)
     train_module = train_module_config.build(latent_mim_model, device="cpu")
-    with patch("helios.train.train_module.train_module.build_world_mesh"):
+    with patch("olmo_earth.train.train_module.train_module.build_world_mesh"):
         # Mock the trainer property
         mock_trainer = MockTrainer()
         # Create a MagicMock for on_attach

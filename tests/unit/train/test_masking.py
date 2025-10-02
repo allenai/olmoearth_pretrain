@@ -4,9 +4,9 @@ import logging
 
 import torch
 
-from helios.data.constants import MISSING_VALUE, Modality
-from helios.data.dataset import HeliosSample
-from helios.train.masking import (
+from olmo_earth.data.constants import MISSING_VALUE, Modality
+from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.train.masking import (
     MaskedHeliosSample,
     MaskValue,
     ModalityCrossRandomMaskingStrategy,

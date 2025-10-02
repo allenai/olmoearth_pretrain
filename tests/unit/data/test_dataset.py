@@ -8,8 +8,8 @@ import pytest
 import torch
 from upath import UPath
 
-from helios.data.constants import MISSING_VALUE, Modality
-from helios.data.dataset import HeliosDataset, HeliosSample, collate_helios
+from olmo_earth.data.constants import MISSING_VALUE, Modality
+from olmo_earth.data.dataset import HeliosDataset, HeliosSample, collate_helios
 
 logger = getLogger(__name__)
 

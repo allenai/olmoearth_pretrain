@@ -5,12 +5,12 @@ import logging
 import pytest
 import torch
 
-from helios.data.constants import Modality, ModalitySpec
-from helios.nn.flexihelios import Encoder, Predictor
-from helios.nn.latent_mim import LatentMIM
-from helios.nn.utils import unpack_encoder_output
-from helios.train.loss import PatchDiscriminationLoss
-from helios.train.masking import MaskedHeliosSample
+from olmo_earth.data.constants import Modality, ModalitySpec
+from olmo_earth.nn.flexihelios import Encoder, Predictor
+from olmo_earth.nn.latent_mim import LatentMIM
+from olmo_earth.nn.utils import unpack_encoder_output
+from olmo_earth.train.loss import PatchDiscriminationLoss
+from olmo_earth.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
 

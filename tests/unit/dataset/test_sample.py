@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 import torch
 
-from helios.data.constants import BandSet, Modality, ModalitySpec
-from helios.data.dataset import HeliosSample
-from helios.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
-from helios.dataset.sample import image_tiles_to_samples
+from olmo_earth.data.constants import BandSet, Modality, ModalitySpec
+from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
+from olmo_earth.dataset.sample import image_tiles_to_samples
 
 CRS = "EPSG:32610"
 

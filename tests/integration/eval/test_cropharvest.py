@@ -4,10 +4,10 @@ from pathlib import Path
 
 from torch.utils.data import DataLoader
 
-from helios.data.constants import Modality
-from helios.evals.datasets import CropHarvestDataset
-from helios.evals.datasets.utils import eval_collate_fn
-from helios.nn.flexihelios import Encoder
+from olmo_earth.data.constants import Modality
+from olmo_earth.evals.datasets import CropHarvestDataset
+from olmo_earth.evals.datasets.utils import eval_collate_fn
+from olmo_earth.nn.flexihelios import Encoder
 
 CROPHARVEST_TEST_DIR = Path(__file__).parents[3] / "cropharvest"
 

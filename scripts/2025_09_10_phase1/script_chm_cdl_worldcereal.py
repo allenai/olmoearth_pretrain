@@ -11,15 +11,15 @@ from script import (
     build_visualize_config,
 )
 
-from helios.data.constants import Modality
-from helios.internal.common import build_common_components
-from helios.internal.experiment import (
+from olmo_earth.data.constants import Modality
+from olmo_earth.internal.common import build_common_components
+from olmo_earth.internal.experiment import (
     CommonComponents,
     SubCmd,
     main,
 )
-from helios.train.masking import MaskingConfig
-from helios.train.train_module.contrastive_latentmim import (
+from olmo_earth.train.masking import MaskingConfig
+from olmo_earth.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
 )
 

@@ -3,7 +3,7 @@
 import argparse
 import subprocess  # nosec
 
-from helios.nn.pooled_modality_predictor import DimsToPool
+from olmo_earth.nn.pooled_modality_predictor import DimsToPool
 
 parser = argparse.ArgumentParser()
 parser.add_argument(

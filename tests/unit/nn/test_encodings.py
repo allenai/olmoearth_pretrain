@@ -2,7 +2,7 @@
 
 import torch
 
-from helios.nn.encodings import (
+from olmo_earth.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,

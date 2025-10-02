@@ -21,35 +21,35 @@ from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
-from helios.data.concat import HeliosConcatDatasetConfig
-from helios.data.constants import Modality
-from helios.data.dataloader import HeliosDataLoaderConfig
-from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.common import build_common_components, build_visualize_config
-from helios.internal.experiment import CommonComponents, main
-from helios.nn.flexihelios import (
+from olmo_earth.data.concat import HeliosConcatDatasetConfig
+from olmo_earth.data.constants import Modality
+from olmo_earth.data.dataloader import HeliosDataLoaderConfig
+from olmo_earth.data.dataset import HeliosDatasetConfig
+from olmo_earth.internal.common import build_common_components, build_visualize_config
+from olmo_earth.internal.experiment import CommonComponents, main
+from olmo_earth.nn.flexihelios import (
     EncoderConfig,
     PoolingType,
     PredictorConfig,
     ReconstructorConfig,
 )
-from helios.nn.galileo import GalileoConfig
-from helios.nn.latent_mim import LatentMIMConfig
-from helios.nn.st_model import STEncoderConfig, STPredictorConfig
-from helios.train.callbacks import (
+from olmo_earth.nn.galileo import GalileoConfig
+from olmo_earth.nn.latent_mim import LatentMIMConfig
+from olmo_earth.nn.st_model import STEncoderConfig, STPredictorConfig
+from olmo_earth.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     HeliosSpeedMonitorCallback,
     HeliosWandBCallback,
 )
-from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
-from helios.train.loss import LossConfig
-from helios.train.masking import MaskingConfig
-from helios.train.train_module.contrastive_latentmim import (
+from olmo_earth.train.callbacks.evaluator_callback import DownstreamTaskConfig
+from olmo_earth.train.loss import LossConfig
+from olmo_earth.train.masking import MaskingConfig
+from olmo_earth.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
 )
-from helios.train.train_module.galileo import GalileoTrainModuleConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
-from helios.train.train_module.train_module import HeliosTrainModuleConfig
+from olmo_earth.train.train_module.galileo import GalileoTrainModuleConfig
+from olmo_earth.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from olmo_earth.train.train_module.train_module import HeliosTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 

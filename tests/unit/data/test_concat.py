@@ -3,9 +3,9 @@
 import numpy as np
 from torch.utils.data import Dataset
 
-from helios.data.concat import HeliosConcatDataset
-from helios.data.constants import Modality
-from helios.data.dataset import GetItemArgs
+from olmo_earth.data.concat import HeliosConcatDataset
+from olmo_earth.data.constants import Modality
+from olmo_earth.data.dataset import GetItemArgs
 
 MOCK_FINGERPRINT_VERSION = "mockversion"
 
