@@ -28,9 +28,6 @@ pooling_types = [PoolingType.MEAN, PoolingType.MAX]
 logger = getLogger(__name__)
 
 
-logger.info(f"MODELS_WITH_MULTIPLE_SIZES: {MODELS_WITH_MULTIPLE_SIZES}")
-
-
 def create_linear_probe_arg(task_name: str, field_name: str) -> str:
     """Create a linear probe argument for a given task name."""
     initial_str = (
@@ -86,6 +83,14 @@ def loop_through_params(no_norm: bool = False) -> Generator[dict[str, Any], None
                     "norm_mode": norm_mode,
                     "pooling_type": pooling_type,
                 }
+
+
+def lr_only_params() -> Generator[dict[str, Any], None, None]:
+    """Yield a dict of the hps we are sweeping over."""
+    for lr in LP_LRs:
+        yield {
+            "lr": lr,
+        }
 
 
 def get_dino_v3_args() -> str:
@@ -499,6 +504,23 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             extra,
         )
         commands_to_run.append(cmd)
+    elif args.lr_only:
+        # only sweep the learning rates use mean pooling  and whatever normalization works best
+        base_run_name = _get_base_run_name(args)
+        lr_params = lr_only_params()
+
+        for params in lr_params:
+            cmd = _build_hyperparameter_command(
+                args,
+                params,
+                base_run_name,
+                sub_command,
+                launch_command,
+                checkpoint_args,
+                project_name,
+                extra,
+            )
+            commands_to_run.append(cmd)
     else:
         if args.model == "all":
             models = list(BaselineModelName)
@@ -600,6 +622,11 @@ def main() -> None:
         "--all_sizes",
         action="store_true",
         help="If set, run all sizes for each model",
+    )
+    parser.add_argument(
+        "--lr_only",
+        action="store_true",
+        help="If set, only run with default values (no sweep)",
     )
     args, extra_cli = parser.parse_known_args()
 
