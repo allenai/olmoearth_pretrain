@@ -20,7 +20,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["olmo_earth*", "helios*"]
+include = ["olmo_earth*"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
@@ -56,4 +56,3 @@ addopts = [
 [tool.ruff.lint.per-file-ignores]
 "olmo_earth/evals/datasets/cropharvest_package/*" = ["D"]
 "olmo_earth/evals/models/copernicusfm/src/*" = ["D", "UP", "E", "F"]
-"helios.py" = ["D"]
