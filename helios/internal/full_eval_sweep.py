@@ -376,6 +376,13 @@ def _get_model_size_args(model: BaselineModelName | None, size: str | None) -> s
     return ""
 
 
+def _get_load_checkpoints_args(model: BaselineModelName | None) -> str:
+    """Get the no checkpoints arguments."""
+    if model is None:
+        return " --trainer.no_checkpoints=True"
+    return ""
+
+
 def _build_default_command(
     args: argparse.Namespace,
     base_run_name: str,
@@ -403,6 +410,7 @@ def _build_default_command(
     )
     logger.info(f"Using module path {module_path}")
     cmd_args += _get_model_size_args(args.model, size)
+    cmd_args += _get_load_checkpoints_args(args.model)
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} helios/internal/all_evals.py "
         f"{sub_command} {run_name} {args.cluster} --launch.priority=high "
@@ -448,6 +456,7 @@ def _build_hyperparameter_command(
         if args.module_path is not None
         else _get_module_path(args.model)
     )
+    cmd_args += _get_load_checkpoints_args(args.model)
     cmd_args += _get_model_size_args(args.model, size)
 
     return (
