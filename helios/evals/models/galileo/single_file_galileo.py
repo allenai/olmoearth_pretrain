@@ -1902,7 +1902,7 @@ MODEL_SIZE_TO_WEKA_PATH = {
 class GalileoConfig(Config):
     """olmo_core style config for GalileoWrapper."""
 
-    model_size: str = "base"
+    size: str = "base"
     patch_size: int = 4
     month: int = 6
     add_layernorm_on_exit: bool = True
@@ -1911,7 +1911,7 @@ class GalileoConfig(Config):
     def build(self) -> GalileoWrapper:
         """Build the Galileo model."""
         return GalileoWrapper(
-            pretrained_path=UPath(MODEL_SIZE_TO_WEKA_PATH[self.model_size]),
+            pretrained_path=UPath(MODEL_SIZE_TO_WEKA_PATH[self.size]),
             patch_size=self.patch_size,
             month=self.month,
             add_layernorm_on_exit=self.add_layernorm_on_exit,
