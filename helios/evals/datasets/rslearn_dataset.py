@@ -245,7 +245,7 @@ class RslearnToHeliosDataset(Dataset):
     @staticmethod
     def _get_norm_stats(ds_norm_stats_json: str) -> dict:
         """Load dataset norm stats."""
-        with (files("helios.evals.config") / ds_norm_stats_json).open() as f:
+        with (files("helios.evals.datasets.config") / ds_norm_stats_json).open() as f:
             blob = json.load(f)
         out = {}
         for modality, per_band in blob.items():
