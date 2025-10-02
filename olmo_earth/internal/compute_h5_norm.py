@@ -18,14 +18,14 @@ from olmo_earth.data.constants import (
     MISSING_VALUE,
     Modality,
 )
-from olmo_earth.data.dataset import GetItemArgs, HeliosDataset, HeliosDatasetConfig
+from olmo_earth.data.dataset import GetItemArgs, OlmoEarthDataset, OlmoEarthDatasetConfig
 from olmo_earth.data.utils import update_streaming_stats
 
 logger = logging.getLogger(__name__)
 
 
 def compute_normalization_values(
-    dataset: HeliosDataset,
+    dataset: OlmoEarthDataset,
     estimate_from: int | None = None,
 ) -> dict[str, Any]:
     """Compute the normalization values for the dataset in a streaming manner.
@@ -121,7 +121,7 @@ if __name__ == "__main__":
     supported_modalities = parse_supported_modalities(args_dict["supported_modalities"])
     logger.info(f"Supported modalities: {supported_modalities}")
     # Use the config to build the dataset
-    dataset_config = HeliosDatasetConfig(
+    dataset_config = OlmoEarthDatasetConfig(
         h5py_dir=args_dict["h5py_dir"],
         training_modalities=supported_modalities,
         normalize=False,

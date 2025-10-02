@@ -11,7 +11,7 @@ from einops import repeat
 from torch.utils.data import ConcatDataset, Dataset
 from upath import UPath
 
-from olmo_earth.train.masking import HeliosSample, MaskedHeliosSample, Modality
+from olmo_earth.train.masking import OlmoEarthSample, MaskedOlmoEarthSample, Modality
 
 from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_HELIOS_S2_BANDS
 from .normalize import normalize_bands
@@ -155,7 +155,7 @@ class BreizhCropsDataset(Dataset):
         """Length of the dataset."""
         return len(self.ds)
 
-    def __getitem__(self, idx: int) -> tuple[MaskedHeliosSample, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Return a Breizhcrops instance."""
         x, y_true, _ = self.ds[idx]
         if self.monthly_average:
@@ -181,8 +181,8 @@ class BreizhCropsDataset(Dataset):
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
 
-        masked_sample = MaskedHeliosSample.from_heliossample(
-            HeliosSample(
+        masked_sample = MaskedOlmoEarthSample.from_heliossample(
+            OlmoEarthSample(
                 sentinel2_l2a=torch.tensor(image).float(), timestamps=timestamp.long()
             )
         )

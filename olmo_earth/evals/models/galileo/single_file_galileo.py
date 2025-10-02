@@ -28,7 +28,7 @@ from upath import UPath
 
 from olmo_earth.data.constants import Modality
 from olmo_earth.nn.flexihelios import PoolingType
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -1840,7 +1840,7 @@ class GalileoWrapper(nn.Module):
 
     def forward(
         self,
-        x: MaskedHeliosSample,
+        x: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
         spatial_pool: bool = False,
     ):

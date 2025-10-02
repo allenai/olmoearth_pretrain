@@ -13,15 +13,15 @@ from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
 from olmo_earth.data.transform import TransformConfig
 from olmo_earth.nn.mae import MAE
 from olmo_earth.nn.utils import unpack_encoder_output
 from olmo_earth.train.loss import LossConfig
-from olmo_earth.train.masking import MaskedHeliosSample, MaskingConfig
+from olmo_earth.train.masking import MaskedOlmoEarthSample, MaskingConfig
 from olmo_earth.train.train_module.train_module import (
-    HeliosTrainModule,
-    HeliosTrainModuleConfig,
+    OlmoEarthTrainModule,
+    OlmoEarthTrainModuleConfig,
 )
 from olmo_earth.train.utils import split_batch
 
@@ -29,7 +29,7 @@ logger = getLogger(__name__)
 
 
 @dataclass
-class MAETrainModuleConfig(HeliosTrainModuleConfig):
+class MAETrainModuleConfig(OlmoEarthTrainModuleConfig):
     """A configuration class for building :class:`MAETrainModule` instances.
 
     Args:
@@ -70,7 +70,7 @@ class MAETrainModuleConfig(HeliosTrainModuleConfig):
         )
 
 
-class MAETrainModule(HeliosTrainModule):
+class MAETrainModule(OlmoEarthTrainModule):
     """A :class:`TrainModule`.
 
     Initialize the training module.
@@ -177,7 +177,7 @@ class MAETrainModule(HeliosTrainModule):
         return self.base_loss.compute(pred, targets)
 
     def model_forward(
-        self, x: MaskedHeliosSample, patch_size: int
+        self, x: MaskedOlmoEarthSample, patch_size: int
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass of the model."""
         with self._model_forward_context():
@@ -199,7 +199,7 @@ class MAETrainModule(HeliosTrainModule):
             return loss, latent, decoded
 
     def train_batch(
-        self, patch_batch: tuple[int, HeliosSample], dry_run: bool = False
+        self, patch_batch: tuple[int, OlmoEarthSample], dry_run: bool = False
     ) -> None:
         """Train a batch.
 

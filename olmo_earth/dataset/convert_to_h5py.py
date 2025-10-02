@@ -576,7 +576,7 @@ class ConvertToH5py:
     def _filter_samples(
         self, samples: list[SampleInformation]
     ) -> list[SampleInformation]:
-        """Filter samples to adjust to the HeliosSample format."""
+        """Filter samples to adjust to the OlmoEarthSample format."""
         logger.info(f"Number of samples before filtering: {len(samples)}")
 
         # Remove bad modalities from samples
@@ -641,7 +641,7 @@ class ConvertToH5py:
     def get_and_filter_samples(self) -> list[SampleInformation]:
         """Get and filter samples.
 
-        This parses csvs, loads images, and filters samples to adjust to the HeliosSample format.
+        This parses csvs, loads images, and filters samples to adjust to the OlmoEarthSample format.
         """
         samples = self._get_samples()
         return self._filter_samples(samples)

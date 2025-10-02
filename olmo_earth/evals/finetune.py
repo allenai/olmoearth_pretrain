@@ -24,7 +24,7 @@ from olmo_earth.evals.datasets.utils import eval_collate_fn
 from olmo_earth.evals.metrics import mean_iou
 from olmo_earth.evals.utils import adjust_learning_rate
 from olmo_earth.nn.flexihelios import Encoder, PoolingType
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 # Fine-tuning learning rates
 FT_LRs = [1e-5, 3e-5, 6e-5, 1e-4, 3e-4, 6e-4, 1e-3, 3e-3, 6e-3]
@@ -237,7 +237,7 @@ class EncoderWithHead(nn.Module):
         else:
             raise ValueError(f"Invalid task type: {task_type}")
 
-    def forward(self, batch: MaskedHeliosSample) -> torch.Tensor:
+    def forward(self, batch: MaskedOlmoEarthSample) -> torch.Tensor:
         """Forward pass."""
         batch_features = self.encoder(batch, patch_size=self.patch_size)
         batch_embeddings = batch_features.pool_unmasked_tokens(
@@ -326,7 +326,7 @@ def finetune_cls(
                         device=device, dtype=torch.bfloat16
                     )
 
-            masked_helios_sample = MaskedHeliosSample.from_dict(
+            masked_helios_sample = MaskedOlmoEarthSample.from_dict(
                 masked_helios_sample_dict
             )
 
@@ -386,7 +386,7 @@ def evaluate_cls(
                         device=device, dtype=torch.bfloat16
                     )
 
-            masked_helios_sample = MaskedHeliosSample.from_dict(
+            masked_helios_sample = MaskedOlmoEarthSample.from_dict(
                 masked_helios_sample_dict
             )
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
@@ -469,7 +469,7 @@ def finetune_seg(
                         device=device, dtype=torch.bfloat16
                     )
 
-            masked_helios_sample = MaskedHeliosSample.from_dict(
+            masked_helios_sample = MaskedOlmoEarthSample.from_dict(
                 masked_helios_sample_dict
             )
 
@@ -549,7 +549,7 @@ def evaluate_seg(
                         device=device, dtype=torch.bfloat16
                     )
 
-            masked_helios_sample = MaskedHeliosSample.from_dict(
+            masked_helios_sample = MaskedOlmoEarthSample.from_dict(
                 masked_helios_sample_dict
             )
 

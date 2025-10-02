@@ -8,18 +8,18 @@ from importlib.resources import files
 import torch
 from torch.utils.data import default_collate
 
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 
 def eval_collate_fn(
-    batch: Sequence[tuple[MaskedHeliosSample, torch.Tensor]],
-) -> tuple[MaskedHeliosSample, torch.Tensor]:
+    batch: Sequence[tuple[MaskedOlmoEarthSample, torch.Tensor]],
+) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
     """Collate function for DataLoaders."""
     samples, targets = zip(*batch)
     # we assume that the same values are consistently None
     collated_sample = default_collate([s.as_dict(return_none=False) for s in samples])
     collated_target = default_collate([t for t in targets])
-    return MaskedHeliosSample(**collated_sample), collated_target
+    return MaskedOlmoEarthSample(**collated_sample), collated_target
 
 
 @lru_cache(maxsize=1)

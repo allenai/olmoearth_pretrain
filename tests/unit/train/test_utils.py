@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
 from olmo_earth.train.utils import split_batch
 
 
@@ -14,7 +14,7 @@ def test_split_batch(microbatch_size: int) -> None:
     sentinel2_tokens = torch.zeros(B, H, W, T, D)
     latlon_tokens = torch.randn(B, 1, D)
     x = {"sentinel2_l2a": sentinel2_tokens, "latlon": latlon_tokens}
-    batch = HeliosSample(**x)
+    batch = OlmoEarthSample(**x)
     micro_batches = split_batch(batch, microbatch_size)
     assert len(micro_batches) == (B + microbatch_size - 1) // microbatch_size
     for i, micro_batch in enumerate(micro_batches):

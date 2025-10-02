@@ -13,7 +13,7 @@ from einops import rearrange, repeat
 from olmo_core.config import Config
 
 from olmo_earth.data.constants import MISSING_VALUE, Modality, ModalitySpec
-from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
 from olmo_earth.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ class MaskValue(Enum):
     MISSING = 3
 
 
-class MaskedHeliosSample(NamedTuple):
+class MaskedOlmoEarthSample(NamedTuple):
     """A masked sample of the data from the Helios dataset.
 
     We always require sentinel2 data.
@@ -100,7 +100,7 @@ class MaskedHeliosSample(NamedTuple):
                     return_dict[field] = val
         return return_dict
 
-    def unmask(self) -> "MaskedHeliosSample":
+    def unmask(self) -> "MaskedOlmoEarthSample":
         """Return an unmasked MaskedHelioSample.
 
         All mask values are MaskValue.ONLINE_ENCODER except for MaskValue.MISSING,
@@ -116,11 +116,11 @@ class MaskedHeliosSample(NamedTuple):
                 return_dict[key] = val * all_but_missing
             else:
                 return_dict[key] = val
-        return MaskedHeliosSample(**return_dict)
+        return MaskedOlmoEarthSample(**return_dict)
 
     @property
     def modalities(self) -> list[str]:
-        """Get the present modalities in this instance of MaskedHeliosSample."""
+        """Get the present modalities in this instance of MaskedOlmoEarthSample."""
         return [
             field
             for field in self._fields
@@ -143,9 +143,9 @@ class MaskedHeliosSample(NamedTuple):
     @classmethod
     def from_heliossample(
         cls,
-        sample: HeliosSample,
-    ) -> "MaskedHeliosSample":
-        """Transforms a HelioSample into a MaskedHeliosSample.
+        sample: OlmoEarthSample,
+    ) -> "MaskedOlmoEarthSample":
+        """Transforms a HelioSample into a MaskedOlmoEarthSample.
 
         This function assumes modalities are uniformly missing.
         """
@@ -158,25 +158,25 @@ class MaskedHeliosSample(NamedTuple):
                 if t is None:
                     masked_sample_dict[key] = None
                     masked_sample_dict[
-                        MaskedHeliosSample.get_masked_modality_name(key)
+                        MaskedOlmoEarthSample.get_masked_modality_name(key)
                     ] = None
                 else:
                     masked_sample_dict[key] = t
                     masked_sample_dict[
-                        MaskedHeliosSample.get_masked_modality_name(key)
+                        MaskedOlmoEarthSample.get_masked_modality_name(key)
                     ] = (
                         torch.ones(sample.shape(key, mask=False))
                         * MaskValue.ONLINE_ENCODER.value
                     )
 
-        return MaskedHeliosSample(**masked_sample_dict)
+        return MaskedOlmoEarthSample(**masked_sample_dict)
 
     @classmethod
-    def from_dict(cls, dict: dict[str, Any]) -> "MaskedHeliosSample":
-        """Create a MaskedHeliosSample from a dictionary, creating empty tensors for missing modalities.
+    def from_dict(cls, dict: dict[str, Any]) -> "MaskedOlmoEarthSample":
+        """Create a MaskedOlmoEarthSample from a dictionary, creating empty tensors for missing modalities.
 
         Args:
-            dict: Dictionary representation of the MaskedHeliosSample.
+            dict: Dictionary representation of the MaskedOlmoEarthSample.
         """
         return cls(**dict)
 
@@ -207,12 +207,12 @@ class MaskingStrategy:
         return self._decode_ratio
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply masking to the input data.
 
         Args:
-            batch: Input data of type HeliosSample
+            batch: Input data of type OlmoEarthSample
             patch_size: Optional patch size for spatial masking strategies
             **kwargs: Additional arguments for maskings
         """
@@ -369,19 +369,19 @@ class TimeMaskingStrategy(MaskingStrategy):
         return mask
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply random masking to the input data.
 
         Masking happens temporally, with whole time steps having the same mask. Non-temporal data is randomly masked.
 
         Args:
-            batch: Input data of type HeliosSample
+            batch: Input data of type OlmoEarthSample
             patch_size: patch size applied to sample
             **kwargs: Additional arguments for maskings
 
         Returns:
-            MaskedHeliosSample containing the masked data and mask
+            MaskedOlmoEarthSample containing the masked data and mask
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for time masking")
@@ -397,7 +397,7 @@ class TimeMaskingStrategy(MaskingStrategy):
                 # set instance and mask to None
                 output_dict[modality_name] = None
                 output_dict[
-                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                    MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = None
             else:
                 if modality_name == "timestamps":
@@ -434,9 +434,9 @@ class TimeMaskingStrategy(MaskingStrategy):
                 mask = self.fill_mask_with_missing_values(instance, mask, modality)
                 output_dict[modality_name] = instance
                 output_dict[
-                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                    MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = mask
-        return MaskedHeliosSample(**output_dict)
+        return MaskedOlmoEarthSample(**output_dict)
 
 
 @MASKING_STRATEGY_REGISTRY.register("space")
@@ -531,19 +531,19 @@ class SpaceMaskingStrategy(MaskingStrategy):
         return mask
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply random masking to the input data.
 
         Masking happens in patchified form, with whole patches having the same mask. Non-spatial data is randomly masked.
 
         Args:
-            batch: Input data of type HeliosSample
+            batch: Input data of type OlmoEarthSample
             patch_size: patch size applied to sample, at an image_tile_size_factor == 16
             **kwargs: Additional arguments for maskings
 
         Returns:
-            MaskedHeliosSample containing the masked data and mask
+            MaskedOlmoEarthSample containing the masked data and mask
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for space masking")
@@ -556,7 +556,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
                 # set instance and mask to None
                 output_dict[modality_name] = None
                 output_dict[
-                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                    MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = None
                 continue
 
@@ -604,10 +604,10 @@ class SpaceMaskingStrategy(MaskingStrategy):
 
             # Keep data as is
             output_dict[modality_name] = instance
-            output_dict[MaskedHeliosSample.get_masked_modality_name(modality_name)] = (
+            output_dict[MaskedOlmoEarthSample.get_masked_modality_name(modality_name)] = (
                 mask
             )
-        return MaskedHeliosSample(**output_dict)
+        return MaskedOlmoEarthSample(**output_dict)
 
 
 @MASKING_STRATEGY_REGISTRY.register("modality")
@@ -624,19 +624,19 @@ class ModalityMaskingStrategy(MaskingStrategy):
         self._decode_ratio = decode_ratio
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Randomly mask out modalities in the input data.
 
         Entire modalities (per instance) are assigned the same mask.
 
         Args:
-            batch: Input data of type HeliosSample
+            batch: Input data of type OlmoEarthSample
             patch_size: Optional patch size for spatial masking strategies
             **kwargs: Additional arguments for maskings
 
         Returns:
-            MaskedHeliosSample containing the masked data and mask
+            MaskedOlmoEarthSample containing the masked data and mask
         """
         output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
         present_modalities = [b for b in batch.modalities if b != "timestamps"]
@@ -679,11 +679,11 @@ class ModalityMaskingStrategy(MaskingStrategy):
             # Ensure we don't do index_put_ on expanded tensors is deprecated.
             mask = mask.view(*shape[:-1], b_s).contiguous()
             mask = self.fill_mask_with_missing_values(instance, mask, modality)
-            output_dict[MaskedHeliosSample.get_masked_modality_name(modality_name)] = (
+            output_dict[MaskedOlmoEarthSample.get_masked_modality_name(modality_name)] = (
                 mask
             )
 
-        return MaskedHeliosSample(**output_dict)
+        return MaskedOlmoEarthSample(**output_dict)
 
 
 @MASKING_STRATEGY_REGISTRY.register("space_time")
@@ -704,8 +704,8 @@ class SpaceTimeMaskingStrategy(MaskingStrategy):
         self.time_strategy = TimeMaskingStrategy(encode_ratio, decode_ratio)
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply space or time masking to the input data."""
         has_enough_timesteps = batch.valid_time >= 3
         # I need a timestamp mask
@@ -738,8 +738,8 @@ class RandomSpaceMaskingStrategy(MaskingStrategy):
         self.space_strategy = SpaceMaskingStrategy(encode_ratio, decode_ratio)
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply space or time masking to the input data."""
         if self.generator.random() < 0.5:
             logger.info("Applying space masking")
@@ -768,8 +768,8 @@ class ModalitySpaceTimeMaskingStrategy(MaskingStrategy):
         self.modality_strategy = ModalityMaskingStrategy(encode_ratio, decode_ratio)
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply band or space or time masking to the input data."""
         has_enough_timesteps = batch.valid_time >= 3
         has_enough_modalities = (len(batch.as_dict()) - 1) >= 2
@@ -841,7 +841,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self.only_decode_modalities = only_decode_modalities
 
     def get_sample_present_modalities_bandsets(
-        self, batch: MaskedHeliosSample
+        self, batch: MaskedOlmoEarthSample
     ) -> list[list[tuple[str, int]]]:
         """Get the modalities that are present for each sample."""
         masked_sample_dict = batch.as_dict(return_none=False)
@@ -852,7 +852,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         for modality in batch.modalities:
             if modality == "timestamps":
                 continue
-            modality_mask_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            modality_mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             modality_mask = masked_sample_dict[modality_mask_name]
             missing_values_mask = modality_mask == MaskValue.MISSING.value
             # Find the samples where the modality is completely missing
@@ -1004,12 +1004,12 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
 
     def apply_bandset_mask_rules(
         self,
-        masked_batch: MaskedHeliosSample,
+        masked_batch: MaskedOlmoEarthSample,
         encoded_decoded_bandsets: list[
             tuple[set[tuple[str, int]], set[tuple[str, int]]]
         ],
         present_modalities_bandsets: list[list[tuple[str, int]]],
-    ) -> MaskedHeliosSample:
+    ) -> MaskedOlmoEarthSample:
         """Compute masks for each band set based on the encode and decode selections.
 
         The encoded and decoded bandsets are typically computed by the select_encoded_decoded_bandsets method.
@@ -1026,7 +1026,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         for modality in masked_batch.modalities:
             if modality == "timestamps":
                 continue
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             modality_spec = Modality.get(modality)
             modality_mask = masked_batch_dict[masked_modality_name]
             # with 1-12 patch size I got a run time aliasing error when writing to the modality mask
@@ -1105,13 +1105,13 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
 
             masked_batch_dict[masked_modality_name] = out_modality_mask
 
-        masked_batch = MaskedHeliosSample(**masked_batch_dict)
+        masked_batch = MaskedOlmoEarthSample(**masked_batch_dict)
 
         return masked_batch
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply space masking to the input data."""
         masked_sample = self.strategy.apply_mask(batch, patch_size, **kwargs)
         present_modalities_bandsets = self.get_sample_present_modalities_bandsets(
@@ -1239,8 +1239,8 @@ class ModalityCrossSpaceTimeMaskingStrategy(MaskingStrategy):
         self.generator = np.random.default_rng(0)
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply space and time cross modality masking to the input data."""
         has_enough_timesteps = batch.valid_time >= 3
         if (self.generator.random() < 0.5) or (not has_enough_timesteps):
@@ -1265,8 +1265,8 @@ class RandomMaskingStrategy(MaskingStrategy):
         self._decode_ratio = decode_ratio
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply random masking to the input data.
 
         All Masking happens in unpatchified form and not grouped across bandsets
@@ -1281,12 +1281,12 @@ class RandomMaskingStrategy(MaskingStrategy):
         ratios of values across the entire batch.
 
         Args:
-            batch: Input data of type HeliosSample
+            batch: Input data of type OlmoEarthSample
             patch_size: patch size applied to sample
             **kwargs: Additional arguments for maskings
 
         Returns:
-            MaskedHeliosSample containing the masked data and mask
+            MaskedOlmoEarthSample containing the masked data and mask
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for random masking")
@@ -1297,7 +1297,7 @@ class RandomMaskingStrategy(MaskingStrategy):
                 # set instance and mask to None
                 output_dict[modality_name] = None
                 output_dict[
-                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                    MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = None
             else:
                 if modality_name == "timestamps":
@@ -1315,9 +1315,9 @@ class RandomMaskingStrategy(MaskingStrategy):
                 mask = self.fill_mask_with_missing_values(instance, mask, modality)
                 output_dict[modality_name] = instance
                 output_dict[
-                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                    MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = mask
-        return MaskedHeliosSample(**output_dict)
+        return MaskedOlmoEarthSample(**output_dict)
 
 
 @MASKING_STRATEGY_REGISTRY.register("modality_cross_random")
@@ -1372,8 +1372,8 @@ class RandomIncreasingMaskingStrategy(RandomMaskingStrategy):
         self.elapsed = 0
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply masking while changing the encode and decode ratio over time."""
         self.elapsed += 1
         if self.elapsed >= self.steps:
@@ -1430,8 +1430,8 @@ class RandomRangeMaskingStrategy(MaskingStrategy):
         self.generator = np.random.default_rng(0)
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply random masking to the input data.
 
         All Masking happens in unpatchified form and not grouped across bandsets
@@ -1446,12 +1446,12 @@ class RandomRangeMaskingStrategy(MaskingStrategy):
         ratios of values across the entire batch.
 
         Args:
-            batch: Input data of type HeliosSample
+            batch: Input data of type OlmoEarthSample
             patch_size: patch size applied to sample
             **kwargs: Additional arguments for maskings
 
         Returns:
-            MaskedHeliosSample containing the masked data and mask
+            MaskedOlmoEarthSample containing the masked data and mask
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for random masking")
@@ -1462,7 +1462,7 @@ class RandomRangeMaskingStrategy(MaskingStrategy):
                 # set instance and mask to None
                 output_dict[modality_name] = None
                 output_dict[
-                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                    MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = None
             else:
                 if modality_name == "timestamps":
@@ -1514,9 +1514,9 @@ class RandomRangeMaskingStrategy(MaskingStrategy):
                 mask = self.fill_mask_with_missing_values(instance, mask, modality)
                 output_dict[modality_name] = instance
                 output_dict[
-                    MaskedHeliosSample.get_masked_modality_name(modality_name)
+                    MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = mask
-        return MaskedHeliosSample(**output_dict)
+        return MaskedOlmoEarthSample(**output_dict)
 
 
 @MASKING_STRATEGY_REGISTRY.register("selectable_modality")
@@ -1544,8 +1544,8 @@ class SelectableModalityMaskingStrategy(MaskingStrategy):
         self.random_strategy = RandomMaskingStrategy(encode_ratio, decode_ratio)
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply random masking, plus mask certain additional modalities."""
         # First apply random masking.
         masked_sample = self.random_strategy.apply_mask(batch, patch_size, **kwargs)
@@ -1568,7 +1568,7 @@ class SelectableModalityMaskingStrategy(MaskingStrategy):
                 value = MaskValue.MISSING.value
             logger.debug("Filling modality %s mask with %s", modality, value)
             getattr(
-                masked_sample, MaskedHeliosSample.get_masked_modality_name(modality)
+                masked_sample, MaskedOlmoEarthSample.get_masked_modality_name(modality)
             )[:] = value
 
         return masked_sample
@@ -1603,8 +1603,8 @@ class SelectableRandomRangeModalityMaskingStrategy(MaskingStrategy):
         self._decode_ratio = self.random_strategy._decode_ratio
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply random masking, plus mask certain additional modalities."""
         # First apply random range masking.
         masked_sample = self.random_strategy.apply_mask(batch, patch_size, **kwargs)
@@ -1629,7 +1629,7 @@ class SelectableRandomRangeModalityMaskingStrategy(MaskingStrategy):
                 else:
                     value = MaskValue.MISSING.value
                 getattr(
-                    masked_sample, MaskedHeliosSample.get_masked_modality_name(modality)
+                    masked_sample, MaskedOlmoEarthSample.get_masked_modality_name(modality)
                 )[batch_idx] = value
 
         return masked_sample
@@ -1655,8 +1655,8 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
         self.generator = np.random.default_rng(0)
 
     def apply_mask(
-        self, batch: HeliosSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedHeliosSample:
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
         """Apply masking to the input data."""
         # Apply other strategy first.
         masked_sample = self.strategy.apply_mask(batch, patch_size, **kwargs)
@@ -1664,7 +1664,7 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
         # Now mark the decoded_modalities for decoding, similar to SelectableModalityMaskingStrategy.
         for modality in self.decoded_modalities:
             mask = getattr(
-                masked_sample, MaskedHeliosSample.get_masked_modality_name(modality)
+                masked_sample, MaskedOlmoEarthSample.get_masked_modality_name(modality)
             )
             if mask is None:
                 continue
@@ -1680,7 +1680,7 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
                 for modality in self.randomize_missing_modalities:
                     mask = getattr(
                         masked_sample,
-                        MaskedHeliosSample.get_masked_modality_name(modality),
+                        MaskedOlmoEarthSample.get_masked_modality_name(modality),
                     )
                     # We check it is available everywhere since if it is missing in
                     # some patches and we mask a different modality then we might end
@@ -1704,7 +1704,7 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
                 for modality in cur_mask_modalities:
                     getattr(
                         masked_sample,
-                        MaskedHeliosSample.get_masked_modality_name(modality),
+                        MaskedOlmoEarthSample.get_masked_modality_name(modality),
                     )[batch_idx] = MaskValue.MISSING.value
 
         return masked_sample
@@ -1751,3 +1751,7 @@ class MaskingConfig(Config):
         return MASKING_STRATEGY_REGISTRY.get_class(mask_strategy_key)(
             **self.strategy_config
         )
+
+
+# Backward compatibility alias
+MaskedHeliosSample = MaskedOlmoEarthSample  # NamedTuple doesn't need wrapper

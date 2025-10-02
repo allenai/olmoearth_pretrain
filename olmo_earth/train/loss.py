@@ -15,7 +15,7 @@ from torch import Tensor
 
 from olmo_earth.data.constants import Modality
 from olmo_earth.nn.flexihelios import PoolingType, TokensAndMasks
-from olmo_earth.train.masking import MaskedHeliosSample, MaskValue
+from olmo_earth.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -662,7 +662,7 @@ class MAELoss(Loss):
         return torch.cat(datas, dim=1), torch.cat(masks, dim=1)
 
     def compute(
-        self, predictions: TokensAndMasks, targets: MaskedHeliosSample, **kwargs: Any
+        self, predictions: TokensAndMasks, targets: MaskedOlmoEarthSample, **kwargs: Any
     ) -> Tensor:
         """Compute MAE loss between predictions and targets.
 

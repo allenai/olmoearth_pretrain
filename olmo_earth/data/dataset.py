@@ -37,7 +37,7 @@ from olmo_earth.types import ArrayTensor
 logger = logging.getLogger(__name__)
 
 
-class HeliosSample(NamedTuple):
+class OlmoEarthSample(NamedTuple):
     """A sample of the data from the Helios dataset.
 
     This is a namedtuple that contains the data of a single sample or a batch of samples from the Helios dataset.
@@ -126,16 +126,16 @@ class HeliosSample(NamedTuple):
         """
         return [modality for modality in self.as_dict(ignore_nones=True).keys()]
 
-    def to_device(self, device: torch.device) -> "HeliosSample":
+    def to_device(self, device: torch.device) -> "OlmoEarthSample":
         """Move all tensors to the specified device.
 
         Args:
             device: The device to move the tensors to.
 
         Returns:
-            A new HeliosSample with all tensors moved to the specified device.
+            A new OlmoEarthSample with all tensors moved to the specified device.
         """
-        return HeliosSample(
+        return OlmoEarthSample(
             **{
                 key: val.to(device)
                 for key, val in self.as_dict(ignore_nones=True).items()
@@ -143,9 +143,9 @@ class HeliosSample(NamedTuple):
             }
         )
 
-    def distribute_tensors(self, device_mesh: DeviceMesh) -> "HeliosSample":
+    def distribute_tensors(self, device_mesh: DeviceMesh) -> "OlmoEarthSample":
         """Distribute the tensors to the specified device mesh."""
-        return HeliosSample(
+        return OlmoEarthSample(
             **{
                 key: distribute_tensor(val, device_mesh)
                 for key, val in self.as_dict(ignore_nones=True).items()
@@ -276,7 +276,7 @@ class HeliosSample(NamedTuple):
         Given a sampled h_w_p (the number of tokens along the h and w dimensions)
         return the maximum t allowed within the
         max_tokens budget so that the patchified
-        HeliosSample will have fewer than max_tokens tokens.
+        OlmoEarthSample will have fewer than max_tokens tokens.
 
         This function assumes we apply (H, W, T=1 patchifying)
         """
@@ -350,7 +350,7 @@ class HeliosSample(NamedTuple):
         sampled_hw_p: int,
         current_length: int,
         missing_timesteps_masks: dict[str, Any] = {},
-    ) -> "HeliosSample":
+    ) -> "OlmoEarthSample":
         """Subset a HelioSample using default rectangular cropping.
 
         Args:
@@ -363,7 +363,7 @@ class HeliosSample(NamedTuple):
             missing_timesteps_masks: A dictionary of missing timesteps masks.
 
         Returns:
-            A subsetted HeliosSample with rectangular cropping applied.
+            A subsetted OlmoEarthSample with rectangular cropping applied.
         """
         if max_tokens_per_instance is None:
             return self
@@ -414,7 +414,7 @@ class HeliosSample(NamedTuple):
             elif modality_spec.is_static_in_space_and_time:
                 new_data_dict[attribute] = modality
 
-        return HeliosSample(**new_data_dict)
+        return OlmoEarthSample(**new_data_dict)
 
     def subset_cutmix(
         self,
@@ -423,7 +423,7 @@ class HeliosSample(NamedTuple):
         sampled_hw_p: int,
         current_length: int,
         missing_timesteps_masks: dict[str, Any] = {},
-    ) -> "HeliosSample":
+    ) -> "OlmoEarthSample":
         """Subset a HelioSample using CutMix patch sampling.
 
         Args:
@@ -436,7 +436,7 @@ class HeliosSample(NamedTuple):
             missing_timesteps_masks: A dictionary of missing timesteps masks.
 
         Returns:
-            A subsetted HeliosSample with CutMix patch sampling applied.
+            A subsetted OlmoEarthSample with CutMix patch sampling applied.
         """
         if max_tokens_per_instance is None:
             return self
@@ -486,33 +486,33 @@ class HeliosSample(NamedTuple):
             elif modality_spec.is_static_in_space_and_time:
                 new_data_dict[attribute] = modality
 
-        return HeliosSample(**new_data_dict)
+        return OlmoEarthSample(**new_data_dict)
 
-    def scale(self, s: float) -> "HeliosSample":
-        """Multiply a HeliosSample by a float."""
-        return HeliosSample(
+    def scale(self, s: float) -> "OlmoEarthSample":
+        """Multiply a OlmoEarthSample by a float."""
+        return OlmoEarthSample(
             **{k: cast(ArrayTensor, v) * s for k, v in self.as_dict().items()}
         )
 
     def add(
-        self, other: "HeliosSample", timestamps_to_keep: ArrayTensor
-    ) -> "HeliosSample":
-        """Add two HeliosSamples together."""
-        if not isinstance(other, HeliosSample):
-            raise ValueError("Addition only supported for HeliosSamples")
+        self, other: "OlmoEarthSample", timestamps_to_keep: ArrayTensor
+    ) -> "OlmoEarthSample":
+        """Add two OlmoEarthSamples together."""
+        if not isinstance(other, OlmoEarthSample):
+            raise ValueError("Addition only supported for OlmoEarthSamples")
         summed_dict: dict[str, ArrayTensor] = {}
         for key, val in self.as_dict(ignore_nones=True).items():
             assert val is not None  # keep mypy happy. True because ignore_nones=True
             other_val = getattr(other, key)
             if other_val is None:
                 raise ValueError(
-                    f"Add requires both HeliosSamples to have the same modalities, other is missing {key}"
+                    f"Add requires both OlmoEarthSamples to have the same modalities, other is missing {key}"
                 )
             summed_dict[key] = val + other_val
         summed_dict["timestamps"] = timestamps_to_keep
-        return HeliosSample(**summed_dict)
+        return OlmoEarthSample(**summed_dict)
 
-    def rotate(self) -> "HeliosSample":
+    def rotate(self) -> "OlmoEarthSample":
         """Rotate the instances by one.
 
         If previously, we had a batch of three instances [B1, B2, B3],
@@ -524,10 +524,10 @@ class HeliosSample(NamedTuple):
                 output_dict[key] = np.concatenate((v[1:], v[:1]), axis=0)
             elif isinstance(v, torch.Tensor):
                 output_dict[key] = torch.cat((v[1:], v[:1]), dim=0)
-        return HeliosSample(**output_dict)
+        return OlmoEarthSample(**output_dict)
 
 
-def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSample]:
+def collate_helios(batch: list[tuple[int, OlmoEarthSample]]) -> tuple[int, OlmoEarthSample]:
     """Collate function that automatically handles any modalities present in the samples."""
 
     # Stack tensors while handling None values
@@ -546,11 +546,11 @@ def collate_helios(batch: list[tuple[int, HeliosSample]]) -> tuple[int, HeliosSa
 
     # Create a dictionary of stacked tensors for each field
     collated_dict = {field: stack_or_none(field) for field in sample_fields}
-    return patch_size, HeliosSample(**collated_dict)
+    return patch_size, OlmoEarthSample(**collated_dict)
 
 
 class GetItemArgs(NamedTuple):
-    """Arguments for the __getitem__ method of the HeliosDataset."""
+    """Arguments for the __getitem__ method of the OlmoEarthDataset."""
 
     idx: int
     patch_size: int
@@ -559,7 +559,7 @@ class GetItemArgs(NamedTuple):
 
 
 # TODO should training modalities be str or modality_spec
-class HeliosDataset(Dataset):
+class OlmoEarthDataset(Dataset):
     """Helios dataset."""
 
     def __init__(
@@ -811,8 +811,8 @@ class HeliosDataset(Dataset):
         return full_timesteps_data
 
     def _fill_missing_modality(
-        self, sample: HeliosSample, modality: str
-    ) -> HeliosSample:
+        self, sample: OlmoEarthSample, modality: str
+    ) -> OlmoEarthSample:
         """Fill an array of shape of modality with the missing value."""
         expected_shape = sample.get_expected_shape(modality)
         logger.info(f"Filling {modality} with shape {expected_shape}")
@@ -824,13 +824,13 @@ class HeliosDataset(Dataset):
 
     def fill_sample_with_missing_values(
         self, sample_dict: dict[str, Any], missing_timesteps_masks: dict[str, Any]
-    ) -> tuple[HeliosSample, list[str]]:
+    ) -> tuple[OlmoEarthSample, list[str]]:
         """Fill the sample with missing values."""
         assert sample_dict["timestamps"].shape[0] == self.max_sequence_length, (
             f"Timestamps shape {sample_dict['timestamps'].shape[0]} does not match max_sequence_length {self.max_sequence_length}"
         )
         missing_modalities = []
-        sample = HeliosSample(**sample_dict)
+        sample = OlmoEarthSample(**sample_dict)
         for modality in self.training_modalities:
             # If one modality is completely missing, we need to fill it all with missing values
             if modality not in sample_dict.keys():
@@ -856,7 +856,7 @@ class HeliosDataset(Dataset):
                     modality_data = self._fill_missing_timesteps(modality_data, mask)
                 # Update the sample dictionary with the potentially imputed data
                 sample_dict[modality] = modality_data
-        return HeliosSample(**sample_dict), missing_modalities
+        return OlmoEarthSample(**sample_dict), missing_modalities
 
     def _pad_timestamps(
         self, sample_dict: dict[str, Any]
@@ -970,7 +970,7 @@ class HeliosDataset(Dataset):
             ]
         return timestamps, missing_timesteps_masks
 
-    def __getitem__(self, args: GetItemArgs) -> tuple[int, HeliosSample]:
+    def __getitem__(self, args: GetItemArgs) -> tuple[int, OlmoEarthSample]:
         """Get the sample at the given index."""
         if hasattr(self, "sample_indices") and self.sample_indices is not None:
             index = self.sample_indices[args.idx]
@@ -1029,12 +1029,12 @@ class HeliosDataset(Dataset):
                     missing_mask, modality_data, normalized_data
                 ).astype(self.dtype)
 
-        return args.patch_size, HeliosSample(**sample_dict)
+        return args.patch_size, OlmoEarthSample(**sample_dict)
 
 
 @dataclass
-class HeliosDatasetConfig(Config):
-    """Configuration for the HeliosDataset."""
+class OlmoEarthDatasetConfig(Config):
+    """Configuration for the OlmoEarthDataset."""
 
     h5py_dir: str
     training_modalities: list[str]
@@ -1078,7 +1078,7 @@ class HeliosDatasetConfig(Config):
         """Get the cache directory."""
         return UPath(self.cache_dir)
 
-    def build(self) -> "HeliosDataset":
+    def build(self) -> "OlmoEarthDataset":
         """Build the dataset."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
@@ -1087,5 +1087,36 @@ class HeliosDatasetConfig(Config):
             self.cache_dir_upath if self.cache_dir is not None else None
         )
         kwargs["dtype"] = self.get_numpy_dtype()
-        logger.info(f"HeliosDataset kwargs: {kwargs}")
-        return HeliosDataset(**kwargs)
+        logger.info(f"OlmoEarthDataset kwargs: {kwargs}")
+        return OlmoEarthDataset(**kwargs)
+
+
+# Backward compatibility aliases
+import warnings as _warnings_dataset
+
+
+def _create_helios_alias(new_class, old_name):
+    """Create backward compatibility alias with deprecation warning."""
+
+    class _HeliosAlias(new_class):
+        def __init__(self, *args, **kwargs):
+            _warnings_dataset.warn(
+                f"'{old_name}' has been renamed to '{new_class.__name__}'. "
+                f"Please update your code to use '{new_class.__name__}' instead. "
+                f"The '{old_name}' alias will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init__(*args, **kwargs)
+
+    _HeliosAlias.__name__ = old_name
+    _HeliosAlias.__qualname__ = old_name
+    return _HeliosAlias
+
+
+# Create aliases for backward compatibility
+HeliosSample = OlmoEarthSample  # NamedTuple doesn't need wrapper
+HeliosDataset = _create_helios_alias(OlmoEarthDataset, "HeliosDataset")
+HeliosDatasetConfig = _create_helios_alias(
+    OlmoEarthDatasetConfig, "HeliosDatasetConfig"
+)

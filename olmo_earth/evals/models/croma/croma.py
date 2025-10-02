@@ -13,7 +13,7 @@ from upath import UPath
 
 from olmo_earth.data.constants import Modality
 from olmo_earth.nn.flexihelios import PoolingType
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 from .use_croma import PretrainedCROMA
 
@@ -39,7 +39,7 @@ HELIOS_SENTINEL2_BANDS = [
 
 
 class Croma(nn.Module):
-    """Class containing the Croma model that can ingest MaskedHeliosSample objects."""
+    """Class containing the Croma model that can ingest MaskedOlmoEarthSample objects."""
 
     patch_size: int = 8
     image_resolution: int = 120
@@ -114,9 +114,9 @@ class Croma(nn.Module):
 
     def prepare_input(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
     ) -> list[dict[str, torch.Tensor]]:
-        """Prepare input for the CHROMA model from MaskedHeliosSample."""
+        """Prepare input for the CHROMA model from MaskedOlmoEarthSample."""
         input_data_timesteps: dict[int, dict[str, torch.Tensor]] = {}
         for modality in masked_helios_sample.modalities:
             if modality not in self.supported_modalities:
@@ -149,7 +149,7 @@ class Croma(nn.Module):
 
     def forward(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
         spatial_pool: bool = False,
     ) -> torch.Tensor:

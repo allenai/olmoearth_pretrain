@@ -13,16 +13,16 @@ from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
 from olmo_earth.data.transform import TransformConfig
 from olmo_earth.nn.flexihelios import TokensAndMasks
 from olmo_earth.nn.latent_mim import LatentMIM
 from olmo_earth.nn.utils import unpack_encoder_output
 from olmo_earth.train.loss import LossConfig
-from olmo_earth.train.masking import MaskedHeliosSample, MaskingConfig
+from olmo_earth.train.masking import MaskedOlmoEarthSample, MaskingConfig
 from olmo_earth.train.train_module.train_module import (
-    HeliosTrainModule,
-    HeliosTrainModuleConfig,
+    OlmoEarthTrainModule,
+    OlmoEarthTrainModuleConfig,
 )
 from olmo_earth.train.utils import split_batch
 
@@ -30,7 +30,7 @@ logger = getLogger(__name__)
 
 
 @dataclass
-class ContrastiveLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
+class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     """A configuration class for building :class:`LatentMIMTrainModule` instances.
 
     Args:
@@ -72,7 +72,7 @@ class ContrastiveLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
         )
 
 
-class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
+class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
     """A :class:`TrainModule`.
 
     Initialize the training module.
@@ -167,7 +167,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         return self.base_loss.compute(pred, targets)
 
     def train_batch(
-        self, batch: tuple[int, HeliosSample], dry_run: bool = False
+        self, batch: tuple[int, OlmoEarthSample], dry_run: bool = False
     ) -> None:
         """Train a batch.
 
@@ -269,7 +269,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         del masked_batch_a, masked_batch_b
 
     def model_forward(
-        self, batch: MaskedHeliosSample, patch_size: int, token_exit_cfg: dict[str, int]
+        self, batch: MaskedOlmoEarthSample, patch_size: int, token_exit_cfg: dict[str, int]
     ) -> tuple[
         torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
     ]:

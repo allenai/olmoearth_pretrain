@@ -10,7 +10,7 @@ from olmo_earth.nn.flexihelios import Encoder, Predictor, Reconstructor
 from olmo_earth.nn.mae import MAE
 from olmo_earth.nn.utils import unpack_encoder_output
 from olmo_earth.train.loss import MAELoss, PatchDiscriminationLossNew
-from olmo_earth.train.masking import MaskedHeliosSample, MaskValue
+from olmo_earth.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def test_mae_with_loss(
         "worldcover_mask": worldcover_mask,
         "timestamps": timestamps,
     }
-    x = MaskedHeliosSample(**masked_sample_dict)
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
 
     patch_size = 2
     # input_res = 1

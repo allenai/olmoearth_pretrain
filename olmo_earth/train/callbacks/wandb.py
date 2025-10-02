@@ -14,8 +14,8 @@ from olmo_core.train.callbacks.wandb import WANDB_API_KEY_ENV_VAR, WandBCallback
 from tqdm import tqdm
 
 from olmo_earth.data.constants import IMAGE_TILE_SIZE, Modality
-from olmo_earth.data.dataloader import HeliosDataLoader
-from olmo_earth.data.dataset import GetItemArgs, HeliosDataset
+from olmo_earth.data.dataloader import OlmoEarthDataLoader
+from olmo_earth.data.dataset import GetItemArgs, OlmoEarthDataset
 from olmo_earth.data.utils import (
     plot_latlon_distribution,
     plot_modality_data_distribution,
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_sample_data_for_histogram(
-    dataset: HeliosDataset, num_samples: int = 100, num_values: int = 100
+    dataset: OlmoEarthDataset, num_samples: int = 100, num_values: int = 100
 ) -> dict[str, Any]:
     """Get the sample data per modality per band for showing the histogram.
 
@@ -70,7 +70,7 @@ def get_sample_data_for_histogram(
 
 
 @dataclass
-class HeliosWandBCallback(WandBCallback):
+class OlmoEarthWandBCallback(WandBCallback):
     """Helios specific wandb callback."""
 
     upload_dataset_distribution_pre_train: bool = True
@@ -111,7 +111,7 @@ class HeliosWandBCallback(WandBCallback):
 
             self._run_path = self.run.path  # type: ignore
             if self.upload_dataset_distribution_pre_train:
-                assert isinstance(self.trainer.data_loader, HeliosDataLoader)
+                assert isinstance(self.trainer.data_loader, OlmoEarthDataLoader)
                 dataset = self.trainer.data_loader.dataset
                 logger.info("Gathering locations of entire dataset")
                 latlons = dataset.latlon_distribution
@@ -145,3 +145,31 @@ class HeliosWandBCallback(WandBCallback):
                             }
                         )
                         plt.close(fig)
+
+
+# Backward compatibility alias
+import warnings as _warnings_wandb
+
+
+def _create_helios_alias_wandb(new_class, old_name):
+    """Create backward compatibility alias with deprecation warning."""
+
+    class _HeliosAlias(new_class):
+        def __init__(self, *args, **kwargs):
+            _warnings_wandb.warn(
+                f"'{old_name}' has been renamed to '{new_class.__name__}'. "
+                f"Please update your code to use '{new_class.__name__}' instead. "
+                f"The '{old_name}' alias will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init__(*args, **kwargs)
+
+    _HeliosAlias.__name__ = old_name
+    _HeliosAlias.__qualname__ = old_name
+    return _HeliosAlias
+
+
+HeliosWandBCallback = _create_helios_alias_wandb(
+    OlmoEarthWandBCallback, "HeliosWandBCallback"
+)

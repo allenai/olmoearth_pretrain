@@ -21,10 +21,10 @@ from olmo_earth.evals.models import (
     Satlas,
     Tessera,
 )
-from olmo_earth.nn.flexihelios import FlexiHeliosBase, PoolingType, TokensAndMasks
+from olmo_earth.nn.flexihelios import FlexiOlmoEarthBase, PoolingType, TokensAndMasks
 from olmo_earth.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from olmo_earth.nn.st_model import STBase
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = getLogger(__name__)
 
@@ -90,17 +90,17 @@ class EvalWrapper:
         return getattr(self.model, name)
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         raise NotImplementedError("Subclasses must implement this method")
 
 
-class HeliosEvalWrapper(EvalWrapper):
+class OlmoEarthEvalWrapper(EvalWrapper):
     """Wrapper for Helios models."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
@@ -143,7 +143,7 @@ class PanopticonEvalWrapper(EvalWrapper):
     """Wrapper for Panopticon models."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         if self.spatial_pool:
@@ -162,7 +162,7 @@ class GalileoEvalWrapper(EvalWrapper):
     """Wrapper for Galileo models."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         embeddings = self.model(
@@ -177,7 +177,7 @@ class AnySatEvalWrapper(EvalWrapper):
     """Wrapper for AnySat model."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         embeddings = self.model(
@@ -221,7 +221,7 @@ class PrithviV2EvalWrapper(EvalWrapper):
     """Wrapper for PrithviV2 model."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         embeddings = self.model(
@@ -236,7 +236,7 @@ class DINOv2EvalWrapper(EvalWrapper):
     """Wrapper for DINOv2 models."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         # i need to do the apply imagenet normalizer thing in here
@@ -259,7 +259,7 @@ class CromaEvalWrapper(EvalWrapper):
     """Wrapper for Croma models."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
@@ -274,7 +274,7 @@ class CopernicusFMWrapper(EvalWrapper):
     """Wrapper for CopernicusFM model."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
@@ -289,7 +289,7 @@ class PrestoEvalWrapper(EvalWrapper):
     """Wrapper for Presto model."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
@@ -304,7 +304,7 @@ class DINOv3EvalWrapper(EvalWrapper):
     """Wrapper for DINOv3 models."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         # i need to do the apply imagenet normalizer thing in here
@@ -327,7 +327,7 @@ class SatlasEvalWrapper(EvalWrapper):
     """Wrapper for Satlas models."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
@@ -342,7 +342,7 @@ class TesseraEvalWrapper(EvalWrapper):
     """Wrapper for Tessera models."""
 
     def __call__(
-        self, masked_helios_sample: MaskedHeliosSample, labels: torch.Tensor
+        self, masked_helios_sample: MaskedOlmoEarthSample, labels: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
@@ -363,9 +363,9 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     Returns:
         The appropriate eval wrapper for the given model.
     """
-    if isinstance(model, FlexiHeliosBase) or isinstance(model, STBase):
-        logger.info("Using HeliosEvalWrapper")
-        return HeliosEvalWrapper(model=model, **kwargs)
+    if isinstance(model, FlexiOlmoEarthBase) or isinstance(model, STBase):
+        logger.info("Using OlmoEarthEvalWrapper")
+        return OlmoEarthEvalWrapper(model=model, **kwargs)
     elif isinstance(model, Panopticon):
         logger.info("Using PanopticonEvalWrapper")
         return PanopticonEvalWrapper(model=model, **kwargs)
@@ -401,3 +401,31 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
         return PrithviV2EvalWrapper(model=model, **kwargs)
     else:
         raise NotImplementedError(f"No EvalWrapper for model type {type(model)}")
+
+
+# Backward compatibility alias
+import warnings as _warnings_eval
+
+
+def _create_helios_alias_eval(new_class, old_name):
+    """Create backward compatibility alias with deprecation warning."""
+
+    class _HeliosAlias(new_class):
+        def __init__(self, *args, **kwargs):
+            _warnings_eval.warn(
+                f"'{old_name}' has been renamed to '{new_class.__name__}'. "
+                f"Please update your code to use '{new_class.__name__}' instead. "
+                f"The '{old_name}' alias will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init__(*args, **kwargs)
+
+    _HeliosAlias.__name__ = old_name
+    _HeliosAlias.__qualname__ = old_name
+    return _HeliosAlias
+
+
+HeliosEvalWrapper = _create_helios_alias_eval(
+    OlmoEarthEvalWrapper, "HeliosEvalWrapper"
+)

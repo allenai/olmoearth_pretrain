@@ -5,22 +5,22 @@ import os
 
 import psutil
 
-from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
 
-def split_batch(batch: HeliosSample, microbatch_size: int) -> list[HeliosSample]:
-    """Split a 'batch' HeliosSample into a list of micro-batches.
+def split_batch(batch: OlmoEarthSample, microbatch_size: int) -> list[OlmoEarthSample]:
+    """Split a 'batch' OlmoEarthSample into a list of micro-batches.
 
     Each micro-batch has a batch dimension up to microbatch_size.
 
     Args:
-        batch (HeliosSample): A HeliosSample object whose first dimension (B) is the batch size.
+        batch (OlmoEarthSample): A OlmoEarthSample object whose first dimension (B) is the batch size.
         microbatch_size (int): The maximum batch size for each micro-batch.
 
     Returns:
-        list[HeliosSample]: List of HeliosSample objects.
+        list[OlmoEarthSample]: List of OlmoEarthSample objects.
     """
     batch_size = batch.batch_size
 
@@ -32,7 +32,7 @@ def split_batch(batch: HeliosSample, microbatch_size: int) -> list[HeliosSample]
     num_microbatches = (batch_size + microbatch_size - 1) // microbatch_size
     microbatches = []
 
-    # Convert the HeliosSample to a dictionary so we can slice each field if present.
+    # Convert the OlmoEarthSample to a dictionary so we can slice each field if present.
     batch_dict = batch.as_dict(ignore_nones=True)
 
     for mb_idx in range(num_microbatches):
@@ -46,8 +46,8 @@ def split_batch(batch: HeliosSample, microbatch_size: int) -> list[HeliosSample]
             # Otherwise, assume the first dimension is batch dimension and slice it
             microbatch_dict[field_name] = data[start:end]
 
-        # Create a new HeliosSample from the sliced fields
-        microbatches.append(HeliosSample(**microbatch_dict))
+        # Create a new OlmoEarthSample from the sliced fields
+        microbatches.append(OlmoEarthSample(**microbatch_dict))
 
     return microbatches
 

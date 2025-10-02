@@ -40,8 +40,8 @@ logger = getLogger(__name__)
 
 
 @dataclass
-class HeliosTrainModuleConfig(Config):
-    """A configuration class for building :class:`HeliosTrainModule` instances.
+class OlmoEarthTrainModuleConfig(Config):
+    """A configuration class for building :class:`OlmoEarthTrainModule` instances.
 
     Args:
         rank_microbatch_size: The micro batch size per rank in instances.
@@ -107,22 +107,22 @@ class HeliosTrainModuleConfig(Config):
         self,
         model: Any,
         device: torch.device | None = None,
-    ) -> "HeliosTrainModule":
-        """Build the corresponding :class:`HeliosTrainModule`.
+    ) -> "OlmoEarthTrainModule":
+        """Build the corresponding :class:`OlmoEarthTrainModule`.
 
         Args:
             model: The model to train.
             device: The device to train on.
         """
         kwargs = self.prepare_kwargs()
-        return HeliosTrainModule(
+        return OlmoEarthTrainModule(
             model=model,
             device=device,
             **kwargs,
         )
 
 
-class HeliosTrainModule(TrainModule):
+class OlmoEarthTrainModule(TrainModule):
     """A :class:`TrainModule`.
 
     Initialize the training module.
@@ -557,3 +557,32 @@ class HeliosTrainModule(TrainModule):
                     )
             else:
                 self.trainer.record_metric(f"{key}", value, reduce_type=reduce_type)
+
+
+# Backward compatibility aliases
+import warnings as _warnings_train_module
+
+
+def _create_helios_alias_tm(new_class, old_name):
+    """Create backward compatibility alias with deprecation warning."""
+
+    class _HeliosAlias(new_class):
+        def __init__(self, *args, **kwargs):
+            _warnings_train_module.warn(
+                f"'{old_name}' has been renamed to '{new_class.__name__}'. "
+                f"Please update your code to use '{new_class.__name__}' instead. "
+                f"The '{old_name}' alias will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init__(*args, **kwargs)
+
+    _HeliosAlias.__name__ = old_name
+    _HeliosAlias.__qualname__ = old_name
+    return _HeliosAlias
+
+
+HeliosTrainModuleConfig = _create_helios_alias_tm(
+    OlmoEarthTrainModuleConfig, "HeliosTrainModuleConfig"
+)
+HeliosTrainModule = _create_helios_alias_tm(OlmoEarthTrainModule, "HeliosTrainModule")

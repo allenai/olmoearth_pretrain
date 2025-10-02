@@ -5,8 +5,8 @@ from olmo_core.config import DType
 from olmo_core.optim.adamw import AdamWConfig
 from olmo_core.train import TrainerConfig
 
-from olmo_earth.data.dataloader import HeliosDataLoaderConfig
-from olmo_earth.data.dataset import HeliosDatasetConfig
+from olmo_earth.data.dataloader import OlmoEarthDataLoaderConfig
+from olmo_earth.data.dataset import OlmoEarthDatasetConfig
 from olmo_earth.data.transform import TransformConfig
 from olmo_earth.internal.experiment import (
     CommonComponents,
@@ -74,10 +74,10 @@ def minimal_model_config_builder(common: CommonComponents) -> LatentMIMConfig:
     return model_config
 
 
-def minimal_dataset_config_builder(common: CommonComponents) -> HeliosDatasetConfig:
-    """Return a minimal HeliosDatasetConfig."""
+def minimal_dataset_config_builder(common: CommonComponents) -> OlmoEarthDatasetConfig:
+    """Return a minimal OlmoEarthDatasetConfig."""
     h5py_dir = "test_tile_path"
-    return HeliosDatasetConfig(
+    return OlmoEarthDatasetConfig(
         h5py_dir=h5py_dir,
         training_modalities=common.training_modalities,
         dtype=DType.float32,
@@ -86,10 +86,10 @@ def minimal_dataset_config_builder(common: CommonComponents) -> HeliosDatasetCon
 
 def minimal_dataloader_config_builder(
     common: CommonComponents,
-) -> HeliosDataLoaderConfig:
-    """Return a minimal HeliosDataLoaderConfig."""
+) -> OlmoEarthDataLoaderConfig:
+    """Return a minimal OlmoEarthDataLoaderConfig."""
     GLOBAL_BATCH_SIZE = 16
-    dataloader_config = HeliosDataLoaderConfig(
+    dataloader_config = OlmoEarthDataLoaderConfig(
         global_batch_size=GLOBAL_BATCH_SIZE,
         seed=3622,
         work_dir=common.save_folder,

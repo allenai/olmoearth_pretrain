@@ -30,7 +30,7 @@ from olmo_earth.evals.eval_wrapper import Satlas, get_eval_wrapper
 from olmo_earth.evals.knn import run_knn
 from olmo_earth.evals.linear_probe import ProbeType, train_and_eval_probe
 from olmo_earth.nn.flexihelios import PoolingType
-from olmo_earth.train.callbacks.wandb import HeliosWandBCallback
+from olmo_earth.train.callbacks.wandb import OlmoEarthWandBCallback
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +310,7 @@ class DownstreamEvaluatorCallback(Callback):
             wandb_callback = next(
                 callback
                 for callback in self.trainer._iter_callbacks()
-                if isinstance(callback, HeliosWandBCallback)
+                if isinstance(callback, OlmoEarthWandBCallback)
             )
 
             for evaluator in self.evaluators:

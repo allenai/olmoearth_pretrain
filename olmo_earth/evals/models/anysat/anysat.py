@@ -1,4 +1,4 @@
-"""AnySat wrapper to ingest MaskedHeliosSample."""
+"""AnySat wrapper to ingest MaskedOlmoEarthSample."""
 
 import logging
 from dataclasses import dataclass
@@ -10,7 +10,7 @@ from torch import nn
 
 from olmo_earth.data.constants import Modality
 from olmo_earth.nn.flexihelios import PoolingType
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -159,9 +159,9 @@ class AnySat(nn.Module):
 
     def prepare_input(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
     ) -> dict[str, torch.Tensor]:
-        """Prepare input for the AnySat model from MaskedHeliosSample."""
+        """Prepare input for the AnySat model from MaskedOlmoEarthSample."""
         input_data: dict[str, dict[str, torch.Tensor]] = {}
 
         for modality in masked_helios_sample.modalities:
@@ -194,7 +194,7 @@ class AnySat(nn.Module):
 
     def forward(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
         spatial_pool: bool = False,
     ) -> torch.Tensor:

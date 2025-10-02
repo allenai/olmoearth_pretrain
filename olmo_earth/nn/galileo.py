@@ -16,7 +16,7 @@ from torch.distributed.fsdp import (
 
 from olmo_earth.nn.flexihelios import TokensAndMasks
 from olmo_earth.nn.utils import DistributedMixins, unpack_encoder_output
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class Galileo(nn.Module, DistributedMixins):
             p.requires_grad = False
 
     def forward_a(
-        self, x: MaskedHeliosSample, patch_size: int
+        self, x: MaskedOlmoEarthSample, patch_size: int
     ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
         """Forward pass for the Latent MIM Style.
 
@@ -71,7 +71,7 @@ class Galileo(nn.Module, DistributedMixins):
         return latent, decoded, latent_projected_and_pooled, reconstructed
 
     def forward_b(
-        self, x: MaskedHeliosSample, patch_size: int
+        self, x: MaskedOlmoEarthSample, patch_size: int
     ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
         """Forward pass for the Latent MIM Style.
 
@@ -95,7 +95,7 @@ class Galileo(nn.Module, DistributedMixins):
         return latent, decoded, latent_projected_and_pooled, reconstructed
 
     def forward(
-        self, input_a: MaskedHeliosSample, input_b: MaskedHeliosSample, patch_size: int
+        self, input_a: MaskedOlmoEarthSample, input_b: MaskedOlmoEarthSample, patch_size: int
     ) -> dict[
         str, tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]
     ]:

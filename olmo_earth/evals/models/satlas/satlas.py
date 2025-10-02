@@ -14,7 +14,7 @@ from upath import UPath
 
 from olmo_earth.data.constants import Modality
 from olmo_earth.nn.flexihelios import PoolingType
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ HELIOS_TO_SATLAS = {
 
 
 class Satlas(nn.Module):
-    """Class containing the Satlas model that can ingest MaskedHeliosSample objects."""
+    """Class containing the Satlas model that can ingest MaskedOlmoEarthSample objects."""
 
     patch_size: int = 8
     image_resolution: int = 512
@@ -153,9 +153,9 @@ class Satlas(nn.Module):
 
     def prepare_input(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
     ) -> tuple[list[torch.Tensor], str]:
-        """Prepare input for the Satlas model from MaskedHeliosSample."""
+        """Prepare input for the Satlas model from MaskedOlmoEarthSample."""
         if len(masked_helios_sample.modalities) != 1:
             raise RuntimeError(
                 f"Satlas only supports one modality. Received {len(masked_helios_sample.modalities)}: {masked_helios_sample.modalities}"
@@ -167,7 +167,7 @@ class Satlas(nn.Module):
 
     def forward(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
         spatial_pool: bool = False,
     ) -> torch.Tensor:

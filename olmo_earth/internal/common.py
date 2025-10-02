@@ -17,8 +17,8 @@ from upath import UPath
 from olmo_earth.data.constants import Modality
 from olmo_earth.internal.experiment import (
     CommonComponents,
-    HeliosBeakerLaunchConfig,
-    HeliosVisualizeConfig,
+    OlmoEarthBeakerLaunchConfig,
+    OlmoEarthVisualizeConfig,
     SubCmd,
 )
 
@@ -40,9 +40,9 @@ WEKA_CLUSTER_NAMES = [
 ]
 
 
-def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
+def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig:
     """Build the visualize config for an experiment."""
-    return HeliosVisualizeConfig(
+    return OlmoEarthVisualizeConfig(
         num_samples=50,
         output_dir=str(UPath(common.save_folder) / "visualizations"),
         std_multiplier=2.0,
@@ -78,7 +78,7 @@ def build_launch_config(
     workspace: str = WORKSPACE,
     budget: str = BUDGET,
     nccl_debug: bool = False,
-) -> HeliosBeakerLaunchConfig:
+) -> OlmoEarthBeakerLaunchConfig:
     """Build a launch config for a helios experiment.
 
     THis will be the default setup, any changes that are temporary should be overriden
@@ -126,7 +126,7 @@ def build_launch_config(
         logger.info(f"Propagating train script path to experiment: {train_script_path}")
         env_vars.append(BeakerEnvVar(name="TRAIN_SCRIPT_PATH", value=train_script_path))
 
-    return HeliosBeakerLaunchConfig(
+    return OlmoEarthBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",
         budget=budget,
         cmd=cmd,

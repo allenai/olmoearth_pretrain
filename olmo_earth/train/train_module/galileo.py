@@ -15,16 +15,16 @@ from olmo_core.train.common import ReduceType
 from olmo_earth.data.constants import (
     Modality,
 )
-from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
 from olmo_earth.data.transform import TransformConfig
 from olmo_earth.nn.flexihelios import TokensAndMasks
 from olmo_earth.nn.galileo import Galileo
 from olmo_earth.nn.utils import unpack_encoder_output
 from olmo_earth.train.loss import LossConfig
-from olmo_earth.train.masking import MaskedHeliosSample, MaskingConfig
+from olmo_earth.train.masking import MaskedOlmoEarthSample, MaskingConfig
 from olmo_earth.train.train_module.train_module import (
-    HeliosTrainModule,
-    HeliosTrainModuleConfig,
+    OlmoEarthTrainModule,
+    OlmoEarthTrainModuleConfig,
 )
 from olmo_earth.train.utils import split_batch
 
@@ -32,7 +32,7 @@ logger = getLogger(__name__)
 
 
 @dataclass
-class GalileoTrainModuleConfig(HeliosTrainModuleConfig):
+class GalileoTrainModuleConfig(OlmoEarthTrainModuleConfig):
     """A configuration class for building :class:`GalileoTrainModule` instances.
 
     Args:
@@ -83,7 +83,7 @@ class GalileoTrainModuleConfig(HeliosTrainModuleConfig):
         )
 
 
-class GalileoTrainModule(HeliosTrainModule):
+class GalileoTrainModule(OlmoEarthTrainModule):
     """A :class:`TrainModule`.
 
     Initialize the training module.
@@ -210,7 +210,7 @@ class GalileoTrainModule(HeliosTrainModule):
         return self.base_loss_b.compute(pred, targets)
 
     def train_batch(
-        self, batch: tuple[int, HeliosSample], dry_run: bool = False
+        self, batch: tuple[int, OlmoEarthSample], dry_run: bool = False
     ) -> None:
         """Train a batch.
 
@@ -335,8 +335,8 @@ class GalileoTrainModule(HeliosTrainModule):
 
     def model_forward(
         self,
-        batch_a: MaskedHeliosSample,
-        batch_b: MaskedHeliosSample,
+        batch_a: MaskedOlmoEarthSample,
+        batch_b: MaskedOlmoEarthSample,
         patch_size: int,
         token_exit_cfg_a: dict[str, int],
         token_exit_cfg_b: dict[str, int],

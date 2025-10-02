@@ -16,19 +16,19 @@ from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
-from olmo_earth.data.concat import HeliosConcatDatasetConfig
+from olmo_earth.data.concat import OlmoEarthConcatDatasetConfig
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataloader import HeliosDataLoaderConfig
-from olmo_earth.data.dataset import HeliosDatasetConfig
+from olmo_earth.data.dataloader import OlmoEarthDataLoaderConfig
+from olmo_earth.data.dataset import OlmoEarthDatasetConfig
 from olmo_earth.evals.models import DINOv2Config
 from olmo_earth.internal.common import build_common_components
-from olmo_earth.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
+from olmo_earth.internal.experiment import CommonComponents, OlmoEarthVisualizeConfig, main
 from olmo_earth.nn.flexihelios import PoolingType
 from olmo_earth.nn.latent_mim import LatentMIMConfig
 from olmo_earth.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
-    HeliosSpeedMonitorCallback,
-    HeliosWandBCallback,
+    OlmoEarthSpeedMonitorCallback,
+    OlmoEarthWandBCallback,
 )
 from olmo_earth.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from olmo_earth.train.loss import LossConfig
@@ -87,11 +87,11 @@ def build_train_module_config(
     )
 
 
-def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
+def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
     """Build the dataloader config for an experiment."""
     # things should be set during building
 
-    return HeliosDataLoaderConfig(
+    return OlmoEarthDataLoaderConfig(
         num_workers=0,
         global_batch_size=512,
         token_budget=1500,
@@ -104,17 +104,17 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     )
 
 
-def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
+def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     """Build the dataset config for an experiment."""
     dataset_configs = [
         # ENsure this is any existing dataset
-        HeliosDatasetConfig(
+        OlmoEarthDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928",
             training_modalities=common.training_modalities,
             dataset_percentage=common.dataset_percentage,
         ),
     ]
-    return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
+    return OlmoEarthConcatDatasetConfig(dataset_configs=dataset_configs)
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
@@ -128,7 +128,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
-    wandb_callback = HeliosWandBCallback(
+    wandb_callback = OlmoEarthWandBCallback(
         name=common.run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
@@ -169,7 +169,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             checkpointer=checkpointer_config,
         )
         .with_callback("wandb", wandb_callback)
-        .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
+        .with_callback("speed_monitor", OlmoEarthSpeedMonitorCallback())
         .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback(
@@ -191,9 +191,9 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     return trainer_config
 
 
-def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
+def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig:
     """Build the visualize config for an experiment."""
-    return HeliosVisualizeConfig(
+    return OlmoEarthVisualizeConfig(
         num_samples=None,
         output_dir=str(UPath(common.save_folder) / "visualizations"),
         std_multiplier=2.0,

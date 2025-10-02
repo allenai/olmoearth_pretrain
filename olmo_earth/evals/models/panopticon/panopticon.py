@@ -14,13 +14,13 @@ from torch import nn
 
 from olmo_earth.data.constants import Modality
 from olmo_earth.nn.flexihelios import PoolingType
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
 
 class Panopticon(nn.Module):
-    """Class containing the Panopticon model that can ingest MaskedHeliosSample objects."""
+    """Class containing the Panopticon model that can ingest MaskedOlmoEarthSample objects."""
 
     patch_size: int = 14
     supported_modalities: list[str] = [
@@ -124,9 +124,9 @@ class Panopticon(nn.Module):
         return chn_ids
 
     def prepare_input(
-        self, masked_helios_sample: MaskedHeliosSample
+        self, masked_helios_sample: MaskedOlmoEarthSample
     ) -> list[dict[str, torch.Tensor]]:
-        """Prepare input for the panopticon model from MaskedHeliosSample."""
+        """Prepare input for the panopticon model from MaskedOlmoEarthSample."""
         # Process each modality
         input_data_timesteps: dict[int, list[torch.Tensor]] = {}
         channel_ids_list: list[torch.Tensor] = []
@@ -168,7 +168,7 @@ class Panopticon(nn.Module):
 
     def forward(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
     ) -> torch.Tensor:
         """Forward pass through the panopticon model."""
@@ -188,7 +188,7 @@ class Panopticon(nn.Module):
 
     def forward_features(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
     ) -> torch.Tensor:
         """Forward pass through the panopticon model."""
@@ -213,7 +213,7 @@ class Panopticon(nn.Module):
 
     def __call__(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
     ) -> torch.Tensor:
         """Make the wrapper callable."""

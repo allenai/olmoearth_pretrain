@@ -22,7 +22,7 @@ from olmo_earth.nn.encodings import (
 )
 from olmo_earth.nn.flexi_patch_embed import FlexiPatchEmbed, FlexiPatchReconstruction
 from olmo_earth.nn.utils import get_cumulative_sequence_lengths
-from olmo_earth.train.masking import MaskedHeliosSample, MaskValue
+from olmo_earth.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -356,7 +356,7 @@ class ProjectAndAggregate(nn.Module):
         )
 
 
-class FlexiHeliosPatchEmbeddings(nn.Module):
+class FlexiOlmoEarthPatchEmbeddings(nn.Module):
     """Module that patchifies and encodes the input data."""
 
     def __init__(
@@ -448,7 +448,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
     def apply_embedding_to_modality(
         self,
         modality: str,
-        input_data: MaskedHeliosSample,
+        input_data: MaskedOlmoEarthSample,
         patch_size: int,
         fast_pass: bool = False,
     ) -> tuple[Tensor, Tensor]:
@@ -508,7 +508,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
 
     def forward(
         self,
-        input_data: MaskedHeliosSample,
+        input_data: MaskedOlmoEarthSample,
         patch_size: int,
         fast_pass: bool = False,
     ) -> dict[str, Tensor]:
@@ -718,7 +718,7 @@ class ReconstructorConfig(Config):
         return Reconstructor(**kwargs)
 
 
-class FlexiHeliosCompositeEncodings(nn.Module):
+class FlexiOlmoEarthCompositeEncodings(nn.Module):
     """Composite encodings for the FlexiHelios model."""
 
     def __init__(
@@ -947,8 +947,8 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         return output_dict
 
 
-class FlexiHeliosBase(nn.Module):
-    """FlexiHeliosBase is a base class for FlexiHelios models."""
+class FlexiOlmoEarthBase(nn.Module):
+    """FlexiOlmoEarthBase is a base class for FlexiHelios models."""
 
     cross_attn: bool = False
 
@@ -966,7 +966,7 @@ class FlexiHeliosBase(nn.Module):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
     ) -> None:
-        """Initialize the FlexiHeliosBase class."""
+        """Initialize the FlexiOlmoEarthBase class."""
         super().__init__()
 
         self.embedding_size = embedding_size
@@ -996,7 +996,7 @@ class FlexiHeliosBase(nn.Module):
             ]
         )
 
-        self.composite_encodings = FlexiHeliosCompositeEncodings(
+        self.composite_encodings = FlexiOlmoEarthCompositeEncodings(
             embedding_size,
             self.supported_modalities,
             max_sequence_length,
@@ -1037,7 +1037,7 @@ class FlexiHeliosBase(nn.Module):
             available_modalities, self.supported_modality_names
         )
         for modality in modalities_to_process:
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
             tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
@@ -1082,7 +1082,7 @@ class FlexiHeliosBase(nn.Module):
             x_modality = x[modality]
             tokens_only_dict[modality] = x_modality
             modalities_to_dims_dict[modality] = x_modality.shape
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             original_masks_dict[masked_modality_name] = x[masked_modality_name]
         return tokens_only_dict, original_masks_dict, modalities_to_dims_dict
 
@@ -1161,7 +1161,7 @@ class FlexiHeliosBase(nn.Module):
             block.apply_compile()
 
 
-class Encoder(FlexiHeliosBase):
+class Encoder(FlexiOlmoEarthBase):
     """Encoder module that processes masked input samples into token representations."""
 
     cross_attn: bool = False
@@ -1235,7 +1235,7 @@ class Encoder(FlexiHeliosBase):
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
-        self.patch_embeddings = FlexiHeliosPatchEmbeddings(
+        self.patch_embeddings = FlexiOlmoEarthPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
@@ -1621,7 +1621,7 @@ class Encoder(FlexiHeliosBase):
 
     def forward(
         self,
-        x: MaskedHeliosSample,
+        x: MaskedOlmoEarthSample,
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
@@ -1690,7 +1690,7 @@ class Encoder(FlexiHeliosBase):
         # torch.compile(self.patch_embeddings, dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
 
 
-class PredictorBase(FlexiHeliosBase):
+class PredictorBase(FlexiOlmoEarthBase):
     """Predictor module that generates predictions from encoded tokens."""
 
     cross_attn = True
@@ -1773,7 +1773,7 @@ class PredictorBase(FlexiHeliosBase):
         )
         for modality in modalities_to_process:
             x_modality = x[modality]
-            mask_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             mask_modality = x[mask_name]
             # A boolean mask: True where tokens must be replaced by the mask token
             kept_mask = mask_modality == MaskValue.DECODER.value
@@ -2057,7 +2057,7 @@ class Predictor(PredictorBase):
             available_modalities, self.supported_modality_names
         )
         for modality in modalities_to_process:
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             modality_mask = tokens_and_masks[masked_modality_name]
             # patchify masked data
             per_modality_output_tokens = []
@@ -2164,3 +2164,35 @@ class PredictorConfig(Config):
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Predictor kwargs: {kwargs}")
         return Predictor(**kwargs)
+
+
+# Backward compatibility aliases
+import warnings as _warnings_flexi
+
+
+def _create_helios_alias_flexi(new_class, old_name):
+    """Create backward compatibility alias with deprecation warning."""
+
+    class _HeliosAlias(new_class):
+        def __init__(self, *args, **kwargs):
+            _warnings_flexi.warn(
+                f"'{old_name}' has been renamed to '{new_class.__name__}'. "
+                f"Please update your code to use '{new_class.__name__}' instead. "
+                f"The '{old_name}' alias will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init__(*args, **kwargs)
+
+    _HeliosAlias.__name__ = old_name
+    _HeliosAlias.__qualname__ = old_name
+    return _HeliosAlias
+
+
+FlexiHeliosPatchEmbeddings = _create_helios_alias_flexi(
+    FlexiOlmoEarthPatchEmbeddings, "FlexiHeliosPatchEmbeddings"
+)
+FlexiHeliosCompositeEncodings = _create_helios_alias_flexi(
+    FlexiOlmoEarthCompositeEncodings, "FlexiHeliosCompositeEncodings"
+)
+FlexiHeliosBase = _create_helios_alias_flexi(FlexiOlmoEarthBase, "FlexiHeliosBase")

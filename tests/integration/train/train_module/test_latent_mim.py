@@ -10,7 +10,7 @@ from olmo_core.optim.adamw import AdamWConfig
 from olmo_core.train.config import TrainerConfig
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataset import HeliosSample, collate_helios
+from olmo_earth.data.dataset import OlmoEarthSample, collate_helios
 from olmo_earth.data.transform import TransformConfig
 from olmo_earth.nn.flexihelios import EncoderConfig, PredictorConfig
 from olmo_earth.nn.latent_mim import LatentMIM, LatentMIMConfig
@@ -149,7 +149,7 @@ class MockTrainer:
 
 
 def test_train_batch_without_missing_modalities(
-    samples_without_missing_modalities: list[tuple[int, HeliosSample]],
+    samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
     latent_mim_model: LatentMIM,
     train_module_config: LatentMIMTrainModuleConfig,
     set_random_seeds: None,
@@ -175,7 +175,7 @@ def test_train_batch_without_missing_modalities(
 
 
 def test_train_batch_with_missing_modalities(
-    samples_with_missing_modalities: list[tuple[int, HeliosSample]],
+    samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
     latent_mim_model: LatentMIM,
     train_module_config: LatentMIMTrainModuleConfig,
     set_random_seeds: None,

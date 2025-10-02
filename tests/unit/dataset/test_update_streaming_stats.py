@@ -1,4 +1,4 @@
-"""Test the HeliosDataset class compute_norm_stats method."""
+"""Test the OlmoEarthDataset class compute_norm_stats method."""
 
 import logging
 

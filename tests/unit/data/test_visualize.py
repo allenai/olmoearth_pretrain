@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataset import HeliosDataset
+from olmo_earth.data.dataset import OlmoEarthDataset
 from olmo_earth.data.visualize import visualize_sample
 
 
@@ -23,7 +23,7 @@ def test_visualize_sample(
         Modality.OPENSTREETMAP_RASTER.name,
         Modality.LATLON.name,
     ]
-    dataset = HeliosDataset(
+    dataset = OlmoEarthDataset(
         h5py_dir=setup_h5py_dir,
         dtype=np.float32,
         training_modalities=training_modalities,

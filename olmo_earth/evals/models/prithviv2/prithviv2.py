@@ -16,7 +16,7 @@ from upath import UPath
 from olmo_earth.data.constants import Modality
 from olmo_earth.evals.models.prithviv2.prithvi_mae import PrithviMAE
 from olmo_earth.nn.flexihelios import PoolingType
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 # for Prithvi, true values are ["B02", "B03", "B04", "B05", "B06", "B07"]
 PRITHVI_MEAN = [
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 class PrithviV2(nn.Module):
-    """Class containing the PrithviV2 model that can ingest MaskedHeliosSample objects."""
+    """Class containing the PrithviV2 model that can ingest MaskedOlmoEarthSample objects."""
 
     supported_modalities = [Modality.SENTINEL2_L2A.name]
 
@@ -148,9 +148,9 @@ class PrithviV2(nn.Module):
 
     def prepare_input(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
     ) -> torch.Tensor:
-        """Prepare input for the Prithvi model from MaskedHeliosSample."""
+        """Prepare input for the Prithvi model from MaskedOlmoEarthSample."""
         if len(masked_helios_sample.modalities) != 1:
             raise RuntimeError(
                 f"Prithvi only supports one modality. Received {len(masked_helios_sample.modalities)}: {masked_helios_sample.modalities}"
@@ -166,7 +166,7 @@ class PrithviV2(nn.Module):
 
     def forward(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
         spatial_pool: bool = False,
     ) -> torch.Tensor:

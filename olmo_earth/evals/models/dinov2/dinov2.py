@@ -14,7 +14,7 @@ from torchvision import transforms
 
 from olmo_earth.data.constants import Modality
 from olmo_earth.nn.flexihelios import PoolingType
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 # Use timm's names
@@ -40,7 +40,7 @@ HELIOS_LANDSAT_RGB_BANDS = [
 
 
 class DINOv2(nn.Module):
-    """Wrapper for the dinov2 model that can ingest MaskedHeliosSample objects."""
+    """Wrapper for the dinov2 model that can ingest MaskedOlmoEarthSample objects."""
 
     patch_size: int = 14
     supported_modalities: list[str] = [
@@ -128,9 +128,9 @@ class DINOv2(nn.Module):
 
     def prepare_input(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
     ) -> list[torch.Tensor]:
-        """Prepare input for the dinov2 model from MaskedHeliosSample."""
+        """Prepare input for the dinov2 model from MaskedOlmoEarthSample."""
         input_data_timesteps: dict[int, list[torch.Tensor]] = {}
         num_modalities = len(masked_helios_sample.modalities)
         for modality in masked_helios_sample.modalities:
@@ -171,7 +171,7 @@ class DINOv2(nn.Module):
     # pooling type is on the timesteps only right now
     def forward(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
     ) -> torch.Tensor:
         """Forward pass through dinov2 model for classification."""
@@ -196,7 +196,7 @@ class DINOv2(nn.Module):
 
     def forward_features(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
     ) -> torch.Tensor:
         """Forward pass through dinov2 model for segmentation."""
@@ -222,7 +222,7 @@ class DINOv2(nn.Module):
 
     def __call__(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
     ) -> torch.Tensor:
         """Make the wrapper callable."""

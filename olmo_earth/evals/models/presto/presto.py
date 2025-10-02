@@ -12,7 +12,7 @@ from upath import UPath
 
 from olmo_earth.data.constants import Modality
 from olmo_earth.nn.flexihelios import PoolingType
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 from .single_file_presto import (
     NUM_DYNAMIC_WORLD_CLASSES,
@@ -35,7 +35,7 @@ PRESTO_S2_DIV_VALUE = 1e4
 
 
 class PrestoWrapper(nn.Module):
-    """Class containing the Presto model that can ingest MaskedHeliosSample objects."""
+    """Class containing the Presto model that can ingest MaskedOlmoEarthSample objects."""
 
     supported_modalities = [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name]
     requires_timeseries: bool = True
@@ -166,7 +166,7 @@ class PrestoWrapper(nn.Module):
 
     def forward(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
         spatial_pool: bool = False,
     ) -> torch.Tensor:

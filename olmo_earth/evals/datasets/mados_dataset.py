@@ -14,8 +14,8 @@ from torch.utils.data import Dataset
 from upath import UPath
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataset import HeliosSample
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_HELIOS_S2_BANDS
 from .normalize import normalize_bands
@@ -289,7 +289,7 @@ class MADOSDataset(Dataset):
         """Lenth of the dataset."""
         return self.images.shape[0]
 
-    def __getitem__(self, idx: int) -> tuple[MaskedHeliosSample, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Return a single MADOS data instance."""
         image = self.images[idx]  # (80, 80, 13)
         label = self.labels[idx]  # (80, 80)
@@ -314,8 +314,8 @@ class MADOSDataset(Dataset):
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
 
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
-        masked_sample = MaskedHeliosSample.from_heliossample(
-            HeliosSample(
+        masked_sample = MaskedOlmoEarthSample.from_heliossample(
+            OlmoEarthSample(
                 sentinel2_l2a=torch.tensor(image).float(), timestamps=timestamp.long()
             )
         )

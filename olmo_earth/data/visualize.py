@@ -14,7 +14,7 @@ from matplotlib.figure import Figure
 from upath import UPath
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataset import GetItemArgs, HeliosDataset
+from olmo_earth.data.dataset import GetItemArgs, OlmoEarthDataset
 from olmo_earth.data.utils import convert_to_db
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ WORLDCOVER_LEGEND = {
 
 
 def visualize_sample(
-    dataset: HeliosDataset,
+    dataset: OlmoEarthDataset,
     sample_index: int,
     out_dir: str | Path | UPath,
 ) -> Figure:

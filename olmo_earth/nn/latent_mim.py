@@ -17,7 +17,7 @@ from torch.distributed.fsdp import (
 
 from olmo_earth.nn.flexihelios import TokensAndMasks
 from olmo_earth.nn.utils import DistributedMixins, unpack_encoder_output
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             p.requires_grad = False
 
     def forward(
-        self, x: MaskedHeliosSample, patch_size: int
+        self, x: MaskedOlmoEarthSample, patch_size: int
     ) -> tuple[
         TokensAndMasks,
         TokensAndMasks,

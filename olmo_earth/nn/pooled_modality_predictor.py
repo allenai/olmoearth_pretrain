@@ -23,7 +23,7 @@ from olmo_earth.nn.flexihelios import (
     return_modalities_from_dict,
 )
 from olmo_earth.nn.utils import get_cumulative_sequence_lengths
-from olmo_earth.train.masking import MaskedHeliosSample, MaskValue
+from olmo_earth.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -342,7 +342,7 @@ class EncodeEarlyAttnPool(Encoder):
             modality_spec = Modality.get(modality)
             if modality_spec.is_spatial and modality_spec.is_multitemporal:
                 logger.info(f"modality: {modality} is spatial and multitemporal")
-                masked_modality_name = MaskedHeliosSample.get_masked_modality_name(
+                masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
                     modality
                 )
                 logger.info(
@@ -621,7 +621,7 @@ class EncodeEarlyAttnPool(Encoder):
 
     def forward(
         self,
-        x: MaskedHeliosSample,
+        x: MaskedOlmoEarthSample,
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
@@ -870,7 +870,7 @@ class PooledModalityPredictor(PredictorBase):
             available_modalities, self.supported_modality_names
         )
         for modality in modalities_to_process:
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             modality_mask = tokens_and_masks[masked_modality_name]
             # patchify masked data
             per_modality_output_tokens = []

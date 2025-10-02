@@ -14,7 +14,7 @@ from torch import nn
 from olmo_earth.data.constants import Modality
 from olmo_earth.evals.models.tessera.tessera_model import build_inference_model
 from olmo_earth.nn.flexihelios import PoolingType
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ HELIOS_SENTINEL1_TESSERA_BANDS = [
 
 # Only makes sense for pixel time series data
 class Tessera(nn.Module):
-    """Wrapper for the Tessera model that can ingest MaskedHeliosSample objects."""
+    """Wrapper for the Tessera model that can ingest MaskedOlmoEarthSample objects."""
 
     # Pixel time series data
     patch_size: int = 1
@@ -167,9 +167,9 @@ class Tessera(nn.Module):
 
     def prepare_input(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Prepare input for the Tessera model from MaskedHeliosSample."""
+        """Prepare input for the Tessera model from MaskedOlmoEarthSample."""
         if (s2_x := masked_helios_sample.sentinel2_l2a) is None or (
             s1_x := masked_helios_sample.sentinel1
         ) is None:
@@ -199,7 +199,7 @@ class Tessera(nn.Module):
 
     def forward(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
         spatial_pool: bool = False,
     ) -> torch.Tensor:

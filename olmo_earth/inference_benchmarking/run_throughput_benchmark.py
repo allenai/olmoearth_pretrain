@@ -28,7 +28,7 @@ from olmo_earth.nn.flexihelios import (
     TokensAndMasks,
 )
 from olmo_earth.nn.latent_mim import LatentMIMConfig
-from olmo_earth.train.masking import MaskedHeliosSample, MaskValue
+from olmo_earth.train.masking import MaskedOlmoEarthSample, MaskValue
 
 NUM_S1_BANDS = Modality.SENTINEL1.num_bands
 NUM_S2_BANDS = Modality.SENTINEL2.num_bands
@@ -66,7 +66,7 @@ class MinimalTrainer:
         return target
 
 
-class Helios(torch.nn.Module):
+class OlmoEarth(torch.nn.Module):
     """Thin wrapper around Helios checkpoint that loads just the encoder."""
 
     def __init__(self, model_config: Config) -> None:
@@ -86,7 +86,7 @@ class Helios(torch.nn.Module):
 
     def forward(
         self,
-        x: MaskedHeliosSample,
+        x: MaskedOlmoEarthSample,
         patch_size: int,
         fast_pass: bool = True,
     ) -> TokensAndMasks:
@@ -177,7 +177,7 @@ class ThroughputBenchmarkRunner:
         uuid_str = str(uuid.uuid4())[:6]
         self.sweep_name = "_".join(self.sweep_dict.keys()) + "-" + uuid_str
 
-    def build_model(self, run_params: RunParams) -> Helios:
+    def build_model(self, run_params: RunParams) -> "OlmoEarth":
         """Builds a model based on the run parameters."""
         model_size = MODEL_SIZE_ARGS[run_params.model_size]
         training_modalities = self.training_modalities
@@ -348,7 +348,7 @@ class ThroughputBenchmarkRunner:
                 )
             return None
 
-        masked_sample = MaskedHeliosSample(
+        masked_sample = MaskedOlmoEarthSample(
             timestamps=timestamps,
             sentinel2_l2a=s2_tensor,
             sentinel2_l2a_mask=maybe_make_mask(s2_tensor),
@@ -489,3 +489,29 @@ class ThroughputBenchmarkRunner:
             f"Running {len(run_params_list)} benchmarking runs sweeping over {self.sweep_dict}"
         )
         self.run_benchmarking_sweep(run_params_list)
+
+
+# Backward compatibility alias
+import warnings as _warnings_bench
+
+
+def _create_helios_alias_bench(new_class, old_name):
+    """Create backward compatibility alias with deprecation warning."""
+
+    class _HeliosAlias(new_class):
+        def __init__(self, *args, **kwargs):
+            _warnings_bench.warn(
+                f"'{old_name}' has been renamed to '{new_class.__name__}'. "
+                f"Please update your code to use '{new_class.__name__}' instead. "
+                f"The '{old_name}' alias will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init__(*args, **kwargs)
+
+    _HeliosAlias.__name__ = old_name
+    _HeliosAlias.__qualname__ = old_name
+    return _HeliosAlias
+
+
+Helios = _create_helios_alias_bench(OlmoEarth, "Helios")

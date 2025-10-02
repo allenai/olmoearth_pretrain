@@ -15,15 +15,15 @@ from .dataset import GetItemArgs
 logger = logging.getLogger(__name__)
 
 
-class HeliosConcatDataset(ConcatDataset):
-    """Dataset based on ConcatDataset for concatenating multiple HeliosDatasets.
+class OlmoEarthConcatDataset(ConcatDataset):
+    """Dataset based on ConcatDataset for concatenating multiple OlmoEarthDatasets.
 
-    The resulting HeliosConcatDataset acts as a concatenated version of the individual
-    HeliosDatasets.
+    The resulting OlmoEarthConcatDataset acts as a concatenated version of the individual
+    OlmoEarthDatasets.
 
-    We need to use custom HeliosConcatDataset because we have a custom way to access
+    We need to use custom OlmoEarthConcatDataset because we have a custom way to access
     __getitem__ (instead of just integer index), and we need to support various
-    functions and attributes expected by the HeliosDataLoader and various callbacks.
+    functions and attributes expected by the OlmoEarthDataLoader and various callbacks.
     """
 
     def __getitem__(self, args: GetItemArgs) -> Any:
@@ -81,7 +81,7 @@ class HeliosConcatDataset(ConcatDataset):
     def prepare(self) -> None:
         """Prepare the dataset."""
         # The datasets should already be prepared before initializing
-        # HeliosConcatDataset since otherwise they would not have a length, but we
+        # OlmoEarthConcatDataset since otherwise they would not have a length, but we
         # prepare here just in case.
         for dataset in self.datasets:
             dataset.prepare()
@@ -100,8 +100,8 @@ class HeliosConcatDataset(ConcatDataset):
 
 
 @dataclass
-class HeliosConcatDatasetConfig(Config):
-    """Configuration for the HeliosConcatDataset."""
+class OlmoEarthConcatDatasetConfig(Config):
+    """Configuration for the OlmoEarthConcatDataset."""
 
     dataset_configs: list[Config]
 
@@ -114,7 +114,7 @@ class HeliosConcatDatasetConfig(Config):
         if len(self.dataset_configs) == 0:
             raise ValueError("at least one dataset config must be provided")
 
-    def build(self) -> HeliosConcatDataset:
+    def build(self) -> OlmoEarthConcatDataset:
         """Build the dataset."""
         self.validate()
         logging.info(f"concatenating {len(self.dataset_configs)} sub datasets")
@@ -125,8 +125,39 @@ class HeliosConcatDatasetConfig(Config):
             if self.seed is not None:
                 dataset_config.seed = self.seed
             dataset = dataset_config.build()
-            # Dataset must be prepared before passing to HeliosConcatDataset so it has
+            # Dataset must be prepared before passing to OlmoEarthConcatDataset so it has
             # a defined length.
             dataset.prepare()
             datasets.append(dataset)
-        return HeliosConcatDataset(datasets)
+        return OlmoEarthConcatDataset(datasets)
+
+
+# Backward compatibility aliases
+import warnings as _warnings_concat
+
+
+def _create_helios_alias_concat(new_class, old_name):
+    """Create backward compatibility alias with deprecation warning."""
+
+    class _HeliosAlias(new_class):
+        def __init__(self, *args, **kwargs):
+            _warnings_concat.warn(
+                f"'{old_name}' has been renamed to '{new_class.__name__}'. "
+                f"Please update your code to use '{new_class.__name__}' instead. "
+                f"The '{old_name}' alias will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init__(*args, **kwargs)
+
+    _HeliosAlias.__name__ = old_name
+    _HeliosAlias.__qualname__ = old_name
+    return _HeliosAlias
+
+
+HeliosConcatDataset = _create_helios_alias_concat(
+    OlmoEarthConcatDataset, "HeliosConcatDataset"
+)
+HeliosConcatDatasetConfig = _create_helios_alias_concat(
+    OlmoEarthConcatDatasetConfig, "HeliosConcatDatasetConfig"
+)

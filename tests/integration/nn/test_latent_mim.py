@@ -10,7 +10,7 @@ from olmo_earth.nn.flexihelios import Encoder, Predictor
 from olmo_earth.nn.latent_mim import LatentMIM
 from olmo_earth.nn.utils import unpack_encoder_output
 from olmo_earth.train.loss import PatchDiscriminationLoss
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def test_latentmim_with_loss(
         "latlon"
     ]
     B, H, W, T, C = masked_sample_dict["sentinel2_l2a"].shape
-    x = MaskedHeliosSample(**masked_sample_dict)
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
 
     patch_size = 4
     # Shared constants for encoder and predictor

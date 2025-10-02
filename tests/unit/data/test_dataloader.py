@@ -5,8 +5,8 @@ from pathlib import Path
 import numpy as np
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataloader import HeliosDataLoader, _IterableDatasetWrapper
-from olmo_earth.data.dataset import HeliosDataset, collate_helios
+from olmo_earth.data.dataloader import OlmoEarthDataLoader, _IterableDatasetWrapper
+from olmo_earth.data.dataset import OlmoEarthDataset, collate_helios
 
 
 def test_get_batch_item_params_iterator(tmp_path: Path, setup_h5py_dir: Path) -> None:
@@ -19,14 +19,14 @@ def test_get_batch_item_params_iterator(tmp_path: Path, setup_h5py_dir: Path) ->
         Modality.WORLDCOVER.name,
         Modality.OPENSTREETMAP_RASTER.name,
     ]
-    dataset = HeliosDataset(
+    dataset = OlmoEarthDataset(
         h5py_dir=setup_h5py_dir,
         training_modalities=training_modalities,
         dtype=np.float32,
     )
 
     dataset.prepare()
-    dataloader = HeliosDataLoader(
+    dataloader = OlmoEarthDataLoader(
         dataset=dataset,
         work_dir=tmp_path,
         global_batch_size=1,
@@ -105,10 +105,10 @@ def _create_test_dataloader(
     shuffle: bool = True,
     num_dataset_repeats_per_epoch: int = 1,
     global_batch_size: int = 2,
-) -> HeliosDataLoader:
+) -> OlmoEarthDataLoader:
     """Helper function to create a test dataloader with common parameters."""
 
-    class MockDataset(HeliosDataset):
+    class MockDataset(OlmoEarthDataset):
         def __init__(self, length: int) -> None:
             self.length = length
 
@@ -116,7 +116,7 @@ def _create_test_dataloader(
             return self.length
 
     dataset = MockDataset(length=20)
-    return HeliosDataLoader(
+    return OlmoEarthDataLoader(
         dataset=dataset,
         work_dir=tmp_path,
         global_batch_size=global_batch_size,

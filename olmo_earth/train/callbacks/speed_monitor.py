@@ -6,7 +6,7 @@ from typing import Any
 
 from olmo_core.train.callbacks.speed_monitor import SpeedMonitorCallback
 
-from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
 from olmo_earth.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModule,
 )
@@ -17,7 +17,7 @@ from olmo_earth.train.train_module.mae import MAETrainModule
 logger = logging.getLogger(__name__)
 
 
-class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
+class OlmoEarthSpeedMonitorCallback(SpeedMonitorCallback):
     """Speed monitor callback for the trainer for Helios."""
 
     priority = 10
@@ -87,7 +87,7 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
             return
         _, batch = batch
         # We need token budget times encoder ratio and token budget times decoder ratio
-        if isinstance(batch, HeliosSample):
+        if isinstance(batch, OlmoEarthSample):
             self._step_tokens_encoded = (
                 batch.batch_size * self._encoder_ratio * self._token_budget
             )
@@ -172,3 +172,31 @@ class HeliosSpeedMonitorCallback(SpeedMonitorCallback):
             "throughput/device/model duration (%)", self.model_duration / step_time
         )
         self.callback_start_time = time.perf_counter()
+
+
+# Backward compatibility alias
+import warnings as _warnings_speed
+
+
+def _create_helios_alias_speed(new_class, old_name):
+    """Create backward compatibility alias with deprecation warning."""
+
+    class _HeliosAlias(new_class):
+        def __init__(self, *args, **kwargs):
+            _warnings_speed.warn(
+                f"'{old_name}' has been renamed to '{new_class.__name__}'. "
+                f"Please update your code to use '{new_class.__name__}' instead. "
+                f"The '{old_name}' alias will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init__(*args, **kwargs)
+
+    _HeliosAlias.__name__ = old_name
+    _HeliosAlias.__qualname__ = old_name
+    return _HeliosAlias
+
+
+HeliosSpeedMonitorCallback = _create_helios_alias_speed(
+    OlmoEarthSpeedMonitorCallback, "HeliosSpeedMonitorCallback"
+)

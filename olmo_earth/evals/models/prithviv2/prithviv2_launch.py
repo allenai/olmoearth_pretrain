@@ -6,12 +6,12 @@ from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import WSD
 from upath import UPath
 
-from olmo_earth.data.concat import HeliosConcatDatasetConfig
+from olmo_earth.data.concat import OlmoEarthConcatDatasetConfig
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataloader import HeliosDataLoaderConfig
-from olmo_earth.data.dataset import HeliosDatasetConfig
+from olmo_earth.data.dataloader import OlmoEarthDataLoaderConfig
+from olmo_earth.data.dataset import OlmoEarthDatasetConfig
 from olmo_earth.evals.models.prithviv2.prithviv2 import PrithviV2Config
-from olmo_earth.internal.experiment import CommonComponents, HeliosVisualizeConfig
+from olmo_earth.internal.experiment import CommonComponents, OlmoEarthVisualizeConfig
 from olmo_earth.train.loss import LossConfig
 from olmo_earth.train.masking import MaskingConfig
 from olmo_earth.train.train_module.latent_mim import LatentMIMTrainModuleConfig
@@ -67,11 +67,11 @@ def build_train_module_config(
     )
 
 
-def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
+def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
     """Build the dataloader config for an experiment."""
     # things should be set during building
 
-    return HeliosDataLoaderConfig(
+    return OlmoEarthDataLoaderConfig(
         num_workers=0,
         global_batch_size=512,
         token_budget=1500,
@@ -84,21 +84,21 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     )
 
 
-def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
+def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     """Build the dataset config for an experiment."""
     dataset_configs = [
         # ENsure this is any existing dataset
-        HeliosDatasetConfig(
+        OlmoEarthDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928",
             training_modalities=common.training_modalities,
         ),
     ]
-    return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
+    return OlmoEarthConcatDatasetConfig(dataset_configs=dataset_configs)
 
 
-def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
+def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig:
     """Build the visualize config for an experiment."""
-    return HeliosVisualizeConfig(
+    return OlmoEarthVisualizeConfig(
         num_samples=None,
         output_dir=str(UPath(common.save_folder) / "visualizations"),
         std_multiplier=2.0,

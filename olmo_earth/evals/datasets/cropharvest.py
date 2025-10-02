@@ -10,9 +10,9 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
 from upath import UPath
 
-from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
 from olmo_earth.data.normalize import Normalizer, Strategy
-from olmo_earth.train.masking import MaskedHeliosSample, Modality
+from olmo_earth.train.masking import MaskedOlmoEarthSample, Modality
 
 from .configs import dataset_to_config
 from .constants import (
@@ -323,7 +323,7 @@ class CropHarvestDataset(Dataset):
                         break
         return np.stack(new_image_list, axis=-1)  # (h, w, 13)
 
-    def __getitem__(self, idx: int) -> tuple[MaskedHeliosSample, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Return the sample at idx."""
         x = self.array[idx]
         y = self.labels[idx]
@@ -383,4 +383,4 @@ class CropHarvestDataset(Dataset):
             input_dict[Modality.SRTM.name] = torch.tensor(srtm).float()
         if Modality.LATLON.name in self.input_modalities:
             input_dict[Modality.LATLON.name] = torch.tensor(latlon).float()
-        return MaskedHeliosSample.from_heliossample(HeliosSample(**input_dict)), y
+        return MaskedOlmoEarthSample.from_heliossample(OlmoEarthSample(**input_dict)), y

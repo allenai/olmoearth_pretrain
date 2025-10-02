@@ -26,7 +26,7 @@ from olmo_earth.nn.flexihelios import (
 )
 from olmo_earth.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
-    HeliosWandBCallback,
+    OlmoEarthWandBCallback,
 )
 from olmo_earth.train.callbacks.evaluator_callback import DownstreamTaskConfig
 
@@ -355,7 +355,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "helios_in_loop_evals"
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
-    wandb_callback = HeliosWandBCallback(
+    wandb_callback = OlmoEarthWandBCallback(
         name=common.run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,

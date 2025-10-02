@@ -24,14 +24,14 @@ from olmo_core.utils import get_default_device
 from torch.utils.data import default_collate
 from upath import UPath
 
-from olmo_earth.data.concat import HeliosConcatDataset
+from olmo_earth.data.concat import OlmoEarthConcatDataset
 from olmo_earth.data.constants import IMAGE_TILE_SIZE, Modality
-from olmo_earth.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
+from olmo_earth.data.dataset import GetItemArgs, OlmoEarthDataset, OlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
 
-class HeliosDataLoader(DataLoaderBase):
+class OlmoEarthDataLoader(DataLoaderBase):
     """Helios dataloader.
 
     This dataloader is adapted from OLMo-core's TextDataLoaderBase and NumpyDataLoaderBase,
@@ -40,7 +40,7 @@ class HeliosDataLoader(DataLoaderBase):
 
     def __init__(
         self,
-        dataset: HeliosDataset | HeliosConcatDataset,
+        dataset: OlmoEarthDataset | OlmoEarthConcatDataset,
         work_dir: UPath,
         global_batch_size: int,
         min_patch_size: int,
@@ -61,7 +61,7 @@ class HeliosDataLoader(DataLoaderBase):
         multiprocessing_context: str = "spawn",
         num_dataset_repeats_per_epoch: int = 1,
     ):
-        """Initialize the HeliosDataLoader."""
+        """Initialize the OlmoEarthDataLoader."""
         super().__init__(
             work_dir=work_dir,
             global_batch_size=global_batch_size,
@@ -199,7 +199,7 @@ class HeliosDataLoader(DataLoaderBase):
             )
         return np.memmap(self._global_indices_file, mode="r", dtype=np.uint32)
 
-    def _iter_batches(self) -> Iterable[HeliosSample]:
+    def _iter_batches(self) -> Iterable[OlmoEarthSample]:
         """Iterate over the dataset in batches."""
         return torch.utils.data.DataLoader(
             _IterableDatasetWrapper(self),
@@ -240,7 +240,7 @@ class HeliosDataLoader(DataLoaderBase):
 
     def _get_dataset_item(
         self, idx: int, patch_size: int, sampled_hw_p: int
-    ) -> tuple[int, HeliosSample]:
+    ) -> tuple[int, OlmoEarthSample]:
         """Get a dataset item."""
         args = GetItemArgs(
             idx=idx,
@@ -294,7 +294,7 @@ class HeliosDataLoader(DataLoaderBase):
                 parts.append(f"{key}{value}")
         return "_".join(parts)
 
-    def _get_mock_sample(self, rng: np.random.Generator) -> HeliosSample:
+    def _get_mock_sample(self, rng: np.random.Generator) -> OlmoEarthSample:
         output_dict = {}
         standard_hw = 64
         if Modality.SENTINEL2_L2A.name in self.dataset.training_modalities:
@@ -366,9 +366,9 @@ class HeliosDataLoader(DataLoaderBase):
         timestamps = np.concatenate([days, months, years], axis=1)  # shape: (12, 3)
 
         output_dict["timestamps"] = timestamps
-        return HeliosSample(**output_dict)
+        return OlmoEarthSample(**output_dict)
 
-    def get_mock_batch(self) -> HeliosSample:
+    def get_mock_batch(self) -> OlmoEarthSample:
         """Get a mock batch, for dry-run of forward and backward pass."""
         logger.info("Getting mock batch NOT FROM DATASET")
         logger.info(f"Training modalities: {self.dataset.training_modalities}")
@@ -411,10 +411,10 @@ class HeliosDataLoader(DataLoaderBase):
 
 
 def iter_batched(
-    iterable: Iterable[tuple[int, HeliosSample]],
+    iterable: Iterable[tuple[int, OlmoEarthSample]],
     batch_size: int,
     drop_last: bool = True,
-) -> Iterable[tuple[tuple[int, HeliosSample], ...]]:
+) -> Iterable[tuple[tuple[int, OlmoEarthSample], ...]]:
     """Iterate over the dataset in batches.
 
     This is a modified version of olmo_core.data.data_loader.iter_batched that creates batches
@@ -430,7 +430,7 @@ def iter_batched(
         An iterator of batches of items.
     """
     assert batch_size > 0
-    batch: list[tuple[int, HeliosSample]] = []
+    batch: list[tuple[int, OlmoEarthSample]] = []
     for item in iterable:
         batch.append(item)
         if len(batch) == batch_size:
@@ -442,13 +442,13 @@ def iter_batched(
         yield tuple(batch)
 
 
-class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
+class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample]):
     """Iterable dataset wrapper.
 
     This is a modified version of olmo_core.data.data_loader._IterableDatasetWrapper
     """
 
-    def __init__(self, data_loader: HeliosDataLoader):
+    def __init__(self, data_loader: OlmoEarthDataLoader):
         """Initialize the IterableDatasetWrapper."""
         self.data_loader = data_loader
         workers = data_loader.num_workers or 1
@@ -493,7 +493,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
             instances_processed += 1
 
     @property
-    def dataset(self) -> HeliosDataset:
+    def dataset(self) -> OlmoEarthDataset:
         """Get the dataset."""
         return self.data_loader.dataset
 
@@ -502,7 +502,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
         """Get worker info."""
         return torch.utils.data.get_worker_info()
 
-    def __iter__(self) -> Iterator[HeliosSample]:
+    def __iter__(self) -> Iterator[OlmoEarthSample]:
         """Iterate over the dataset."""
         global_indices = self.data_loader.get_global_indices()
         indices = self.data_loader._get_local_instance_indices(global_indices)
@@ -527,8 +527,8 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[HeliosSample]):
 
 
 @dataclass
-class HeliosDataLoaderConfig(Config):
-    """Configuration for the HeliosDataLoader."""
+class OlmoEarthDataLoaderConfig(Config):
+    """Configuration for the OlmoEarthDataLoader."""
 
     work_dir: str
     global_batch_size: int
@@ -558,15 +558,15 @@ class HeliosDataLoaderConfig(Config):
 
     def build(
         self,
-        dataset: HeliosDataset,
+        dataset: OlmoEarthDataset,
         collator: Callable,
         dp_process_group: dist.ProcessGroup | None = None,
-    ) -> "HeliosDataLoader":
-        """Build the HeliosDataLoader."""
+    ) -> "OlmoEarthDataLoader":
+        """Build the OlmoEarthDataLoader."""
         self.validate()
         dataset.prepare()
 
-        return HeliosDataLoader(
+        return OlmoEarthDataLoader(
             dataset=dataset,
             work_dir=self.work_dir_upath,
             global_batch_size=self.global_batch_size,
@@ -586,3 +586,32 @@ class HeliosDataLoaderConfig(Config):
             token_budget=self.token_budget,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
         )
+
+
+# Backward compatibility aliases
+import warnings as _warnings_dataloader
+
+
+def _create_helios_alias_dl(new_class, old_name):
+    """Create backward compatibility alias with deprecation warning."""
+
+    class _HeliosAlias(new_class):
+        def __init__(self, *args, **kwargs):
+            _warnings_dataloader.warn(
+                f"'{old_name}' has been renamed to '{new_class.__name__}'. "
+                f"Please update your code to use '{new_class.__name__}' instead. "
+                f"The '{old_name}' alias will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init__(*args, **kwargs)
+
+    _HeliosAlias.__name__ = old_name
+    _HeliosAlias.__qualname__ = old_name
+    return _HeliosAlias
+
+
+HeliosDataLoader = _create_helios_alias_dl(OlmoEarthDataLoader, "HeliosDataLoader")
+HeliosDataLoaderConfig = _create_helios_alias_dl(
+    OlmoEarthDataLoaderConfig, "HeliosDataLoaderConfig"
+)

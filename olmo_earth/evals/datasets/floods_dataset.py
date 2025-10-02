@@ -13,8 +13,8 @@ from tqdm import tqdm
 from upath import UPath
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataset import HeliosSample
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 from .constants import EVAL_S1_BAND_NAMES, EVAL_TO_HELIOS_S1_BANDS
 from .normalize import normalize_bands
@@ -285,7 +285,7 @@ class Sen1Floods11Dataset(Dataset):
         """Length of eval set."""
         return self.s1.shape[0]
 
-    def __getitem__(self, idx: int) -> tuple[MaskedHeliosSample, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Return an instance of the sen1floods11 eval set."""
         image = self.s1[idx]  # (64, 64, 2)
         label = self.labels[idx][0]  # (64, 64)
@@ -309,8 +309,8 @@ class Sen1Floods11Dataset(Dataset):
             image = self.normalizer_computed.normalize(Modality.SENTINEL1, image)
 
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
-        masked_sample = MaskedHeliosSample.from_heliossample(
-            HeliosSample(
+        masked_sample = MaskedOlmoEarthSample.from_heliossample(
+            OlmoEarthSample(
                 sentinel1=torch.tensor(image).float(), timestamps=timestamp.long()
             )
         )

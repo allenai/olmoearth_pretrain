@@ -17,7 +17,7 @@ from rasterio.transform import from_origin
 from upath import UPath
 
 from olmo_earth.data.constants import MISSING_VALUE, BandSet, Modality, ModalitySpec
-from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
 from olmo_earth.dataset.convert_to_h5py import ConvertToH5py
 from olmo_earth.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
 from olmo_earth.dataset.sample import SampleInformation
@@ -329,7 +329,7 @@ def masked_sample_dict(
 
 
 @pytest.fixture
-def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
+def samples_with_missing_modalities() -> list[tuple[int, OlmoEarthSample]]:
     """Samples with missing modalities."""
     s2_H, s2_W, s2_T, s2_C = 8, 8, 12, 13
     s1_H, s1_W, s1_T, s1_C = 8, 8, 12, 2
@@ -367,7 +367,7 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
         dtype=np.int32,
     )
 
-    sample1 = HeliosSample(
+    sample1 = OlmoEarthSample(
         sentinel2_l2a=example_s2_data,
         sentinel1=example_s1_data,
         worldcover=example_wc_data,
@@ -376,7 +376,7 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
         timestamps=timestamps,
     )
 
-    sample2 = HeliosSample(
+    sample2 = OlmoEarthSample(
         sentinel2_l2a=example_s2_data,
         sentinel1=missing_s1_data,
         worldcover=example_wc_data,
@@ -385,7 +385,7 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
         timestamps=timestamps,
     )
 
-    sample_3 = HeliosSample(
+    sample_3 = OlmoEarthSample(
         sentinel2_l2a=example_s2_data,
         sentinel1=example_s1_data,
         worldcover=missing_wc_data,
@@ -401,7 +401,7 @@ def samples_with_missing_modalities() -> list[tuple[int, HeliosSample]]:
 @pytest.fixture
 def samples_without_missing_modalities(
     set_random_seeds: None,
-) -> list[tuple[int, HeliosSample]]:
+) -> list[tuple[int, OlmoEarthSample]]:
     """Samples without missing modalities."""
     s2_H, s2_W, s2_T, s2_C = 8, 8, 12, 13
     s1_H, s1_W, s1_T, s1_C = 8, 8, 12, 2
@@ -430,7 +430,7 @@ def samples_without_missing_modalities(
         dtype=np.int32,
     )
 
-    sample1 = HeliosSample(
+    sample1 = OlmoEarthSample(
         sentinel2_l2a=example_s2_data,
         sentinel1=example_s1_data,
         worldcover=example_wc_data,
@@ -439,7 +439,7 @@ def samples_without_missing_modalities(
         timestamps=timestamps,
     )
 
-    sample2 = HeliosSample(
+    sample2 = OlmoEarthSample(
         sentinel2_l2a=example_s2_data,
         sentinel1=example_s1_data,
         worldcover=example_wc_data,
@@ -448,7 +448,7 @@ def samples_without_missing_modalities(
         timestamps=timestamps,
     )
 
-    sample_3 = HeliosSample(
+    sample_3 = OlmoEarthSample(
         sentinel2_l2a=example_s2_data,
         sentinel1=example_s1_data,
         worldcover=example_wc_data,

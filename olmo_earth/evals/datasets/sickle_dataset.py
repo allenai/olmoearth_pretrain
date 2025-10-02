@@ -23,7 +23,7 @@ from torch.utils.data import Dataset
 from upath import UPath
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
 from olmo_earth.evals.datasets.constants import (
     EVAL_L8_BAND_NAMES,
     EVAL_S1_BAND_NAMES,
@@ -34,7 +34,7 @@ from olmo_earth.evals.datasets.constants import (
 )
 from olmo_earth.evals.datasets.normalize import normalize_bands
 from olmo_earth.evals.datasets.utils import load_min_max_stats
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -645,7 +645,7 @@ class SICKLEDataset(Dataset):
         """Length of the dataset."""
         return len(self.indices)
 
-    def __getitem__(self, idx: int) -> tuple[MaskedHeliosSample, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Return a single SICKLE data instance."""
         idx = self.indices[idx]
 
@@ -719,8 +719,8 @@ class SICKLEDataset(Dataset):
         if not sample_dict:
             raise ValueError(f"No modalities requested in {self.input_modalities}")
 
-        masked_sample = MaskedHeliosSample.from_heliossample(
-            HeliosSample(**sample_dict)
+        masked_sample = MaskedOlmoEarthSample.from_heliossample(
+            OlmoEarthSample(**sample_dict)
         )
 
         return masked_sample, labels.long()

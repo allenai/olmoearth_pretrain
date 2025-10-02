@@ -13,7 +13,7 @@ from upath import UPath
 from olmo_earth.data.constants import Modality
 from olmo_earth.evals.models.copernicusfm.src.model_vit import vit_base_patch16
 from olmo_earth.nn.flexihelios import PoolingType
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -144,9 +144,9 @@ class CopernicusFM(torch.nn.Module):
 
     def prepare_input(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
     ) -> tuple[list[torch.Tensor], list[int], list[int]]:
-        """Prepare input for the CopernicusFM model from MaskedHeliosSample."""
+        """Prepare input for the CopernicusFM model from MaskedOlmoEarthSample."""
         wavelengths: list[int] = []
         bandwidths: list[int] = []
         all_processed_data: list[list[torch.Tensor]] = []
@@ -179,7 +179,7 @@ class CopernicusFM(torch.nn.Module):
 
     def forward(
         self,
-        masked_helios_sample: MaskedHeliosSample,
+        masked_helios_sample: MaskedOlmoEarthSample,
         pooling: PoolingType = PoolingType.MEAN,
         spatial_pool: bool = False,
     ) -> torch.Tensor:

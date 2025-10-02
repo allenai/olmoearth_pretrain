@@ -17,14 +17,14 @@ from olmo_earth.dataset.utils import get_modality_specs_from_names
 from olmo_earth.nn.attention import Block
 from olmo_earth.nn.flexihelios import (
     BASE_GSD,
-    FlexiHeliosCompositeEncodings,
-    FlexiHeliosPatchEmbeddings,
+    FlexiOlmoEarthCompositeEncodings,
+    FlexiOlmoEarthPatchEmbeddings,
     ProjectAndAggregate,
     TokensAndMasks,
     get_modalities_to_process,
     return_modalities_from_dict,
 )
-from olmo_earth.train.masking import MaskedHeliosSample, MaskValue
+from olmo_earth.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ class STBase(nn.Module):
             ]
         )
 
-        self.composite_encodings = FlexiHeliosCompositeEncodings(
+        self.composite_encodings = FlexiOlmoEarthCompositeEncodings(
             embedding_size,
             self.supported_modalities,
             max_sequence_length,
@@ -150,7 +150,7 @@ class STBase(nn.Module):
             available_modalities, self.supported_modality_names
         )
         for modality in modalities_to_process:
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
             tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
@@ -199,7 +199,7 @@ class STBase(nn.Module):
 
         tokens, masks = [], []
         for modality in modalities_to_process:
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
 
@@ -277,7 +277,7 @@ class STBase(nn.Module):
 
         tokens, masks = [], []
         for modality in modalities_to_process:
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
 
@@ -352,7 +352,7 @@ class STBase(nn.Module):
         # with the number of timesteps and the number of band sets.
         tokens, masks = [], []
         for modality in modalities_to_process:
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
 
@@ -448,7 +448,7 @@ class STBase(nn.Module):
             x_modality = x[modality]
             tokens_only_dict[modality] = x_modality
             modalities_to_dims_dict[modality] = x_modality.shape
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             original_masks_dict[masked_modality_name] = x[masked_modality_name]
         return tokens_only_dict, original_masks_dict, modalities_to_dims_dict
 
@@ -774,7 +774,7 @@ class STEncoder(STBase):
         self.fuse_layers = fuse_layers
         self.layer_attention_modes = layer_attention_modes
         self.fuse_using_cross_attn = fuse_using_cross_attn
-        self.patch_embeddings = FlexiHeliosPatchEmbeddings(
+        self.patch_embeddings = FlexiOlmoEarthPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
@@ -1084,7 +1084,7 @@ class STEncoder(STBase):
 
     def forward(
         self,
-        x: MaskedHeliosSample,
+        x: MaskedOlmoEarthSample,
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
@@ -1208,7 +1208,7 @@ class STPredictor(STBase):
         )
         for modality in modalities_to_process:
             x_modality = x[modality]
-            mask_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             mask_modality = x[mask_name]
             # A boolean mask: True where tokens must be replaced by the mask token
             kept_mask = mask_modality == MaskValue.DECODER.value
@@ -1440,7 +1440,7 @@ class STPredictor(STBase):
         )
 
         for modality in modalities_to_process:
-            masked_modality_name = MaskedHeliosSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
             modality_mask = tokens_and_masks[masked_modality_name]
             # patchify masked data
             per_modality_output_tokens = []

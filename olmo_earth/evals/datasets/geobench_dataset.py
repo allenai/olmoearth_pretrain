@@ -15,8 +15,8 @@ from torch.utils.data import Dataset
 from upath import UPath
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataset import HeliosSample
-from olmo_earth.train.masking import MaskedHeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
+from olmo_earth.train.masking import MaskedOlmoEarthSample
 
 from .configs import dataset_to_config
 from .constants import (
@@ -212,7 +212,7 @@ class GeobenchDataset(Dataset):
                         break
         return new_image_list
 
-    def __getitem__(self, idx: int) -> tuple[MaskedHeliosSample, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Return a single GeoBench data instance."""
         sample = self.dataset[idx]
         label = sample.label
@@ -301,8 +301,8 @@ class GeobenchDataset(Dataset):
             sample_dict["sentinel2_l2a"] = torch.tensor(s2).float()
 
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
-        masked_sample = MaskedHeliosSample.from_heliossample(
-            HeliosSample(**sample_dict, timestamps=timestamp.long())
+        masked_sample = MaskedOlmoEarthSample.from_heliossample(
+            OlmoEarthSample(**sample_dict, timestamps=timestamp.long())
         )
         return masked_sample, target
 

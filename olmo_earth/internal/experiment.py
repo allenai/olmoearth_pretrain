@@ -20,19 +20,19 @@ from olmo_core.train.callbacks import ConfigSaverCallback, WandBCallback
 from olmo_core.utils import get_default_device, prepare_cli_environment, seed_all
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataloader import HeliosDataLoaderConfig
-from olmo_earth.data.dataset import HeliosDatasetConfig, collate_helios
+from olmo_earth.data.dataloader import OlmoEarthDataLoaderConfig
+from olmo_earth.data.dataset import OlmoEarthDatasetConfig, collate_helios
 from olmo_earth.data.visualize import visualize_sample
 from olmo_earth.inference_benchmarking.run_throughput_benchmark import (
     ThroughputBenchmarkRunnerConfig,
 )
-from olmo_earth.train.train_module.train_module import HeliosTrainModuleConfig
+from olmo_earth.train.train_module.train_module import OlmoEarthTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class HeliosBeakerLaunchConfig(BeakerLaunchConfig):
+class OlmoEarthBeakerLaunchConfig(BeakerLaunchConfig):
     """Extend BeakerLaunchConfig with hostnames option.
 
     This enables targeting specific Beaker hosts.
@@ -61,7 +61,7 @@ class CommonComponents(Config):
 
     run_name: str
     save_folder: str
-    launch: HeliosBeakerLaunchConfig
+    launch: OlmoEarthBeakerLaunchConfig
     training_modalities: list[str]
     nccl_debug: bool = False
     # callbacks: dict[str, Callback]
@@ -79,7 +79,7 @@ class CommonComponents(Config):
 
 
 @dataclass
-class HeliosVisualizeConfig(Config):
+class OlmoEarthVisualizeConfig(Config):
     """Configuration for visualizing the dataset."""
 
     output_dir: str
@@ -89,17 +89,17 @@ class HeliosVisualizeConfig(Config):
 
 
 @dataclass
-class HeliosExperimentConfig(Config):
+class OlmoEarthExperimentConfig(Config):
     """Configuration for a Helios experiment."""
 
     run_name: str
-    launch: HeliosBeakerLaunchConfig
+    launch: OlmoEarthBeakerLaunchConfig
     model: Config
     dataset: Config  # will likely be fixed for us
-    data_loader: HeliosDataLoaderConfig  # will likely be fixed for us
-    train_module: HeliosTrainModuleConfig
+    data_loader: OlmoEarthDataLoaderConfig  # will likely be fixed for us
+    train_module: OlmoEarthTrainModuleConfig
     trainer: TrainerConfig
-    visualize: HeliosVisualizeConfig | None = None
+    visualize: OlmoEarthVisualizeConfig | None = None
     init_seed: int = 12536
 
 
@@ -107,7 +107,7 @@ class HeliosExperimentConfig(Config):
 class BenchmarkExperimentConfig(Config):
     """Configuration for a throughput benchmarking run."""
 
-    launch: HeliosBeakerLaunchConfig
+    launch: OlmoEarthBeakerLaunchConfig
     benchmark: ThroughputBenchmarkRunnerConfig
 
 
@@ -127,18 +127,18 @@ def split_common_overrides(overrides: list[str]) -> tuple[list[str], list[str]]:
 def build_config(
     common: CommonComponents,
     model_config_builder: Callable[[CommonComponents], Config],
-    dataset_config_builder: Callable[[CommonComponents], HeliosDatasetConfig],
-    dataloader_config_builder: Callable[[CommonComponents], HeliosDataLoaderConfig],
+    dataset_config_builder: Callable[[CommonComponents], OlmoEarthDatasetConfig],
+    dataloader_config_builder: Callable[[CommonComponents], OlmoEarthDataLoaderConfig],
     trainer_config_builder: Callable[[CommonComponents], TrainerConfig],
     train_module_config_builder: Callable[
         [CommonComponents],
-        HeliosTrainModuleConfig,
+        OlmoEarthTrainModuleConfig,
     ],
     overrides: list[str],
     visualize_config_builder: (
-        Callable[[CommonComponents], HeliosVisualizeConfig] | None
+        Callable[[CommonComponents], OlmoEarthVisualizeConfig] | None
     ) = None,
-) -> HeliosExperimentConfig:
+) -> OlmoEarthExperimentConfig:
     """Build a Helios experiment configuration."""
     # Overide common components
     common_overrides, overrides = split_common_overrides(overrides)
@@ -153,7 +153,7 @@ def build_config(
     visualize_config = (
         visualize_config_builder(common) if visualize_config_builder else None
     )
-    config = HeliosExperimentConfig(
+    config = OlmoEarthExperimentConfig(
         run_name=common.run_name,
         model=model_config,
         dataset=dataset_config,
@@ -197,7 +197,7 @@ def launch_benchmark(config: BenchmarkExperimentConfig) -> None:
     config.launch.launch(follow=False, torchrun=False)
 
 
-def train(config: HeliosExperimentConfig) -> None:
+def train(config: OlmoEarthExperimentConfig) -> None:
     """Train an experiment."""
     # Set RNG states on all devices. Also, done in prepare_training_environment
     seed_all(config.init_seed)
@@ -222,7 +222,7 @@ def train(config: HeliosExperimentConfig) -> None:
     trainer.fit()
 
 
-def visualize(config: HeliosExperimentConfig) -> None:
+def visualize(config: OlmoEarthExperimentConfig) -> None:
     """Visualize the dataset for an experiment."""
     logger.info("Visualizing the dataset")
     if config.visualize is None:
@@ -244,7 +244,7 @@ def visualize(config: HeliosExperimentConfig) -> None:
     logger.info("Done visualizing the dataset")
 
 
-def launch(config: HeliosExperimentConfig) -> None:
+def launch(config: OlmoEarthExperimentConfig) -> None:
     """Launch an experiment."""
     logger.info("Launching the experiment")
     logger.info(config)
@@ -252,7 +252,7 @@ def launch(config: HeliosExperimentConfig) -> None:
     config.launch.launch(follow=False)
 
 
-def prep(config: HeliosExperimentConfig) -> None:
+def prep(config: OlmoEarthExperimentConfig) -> None:
     """Prepare the dataset for an experiment."""
     dataset = config.dataset.build()
     # TODO: akward harcoding of the collator here
@@ -263,7 +263,7 @@ def prep(config: HeliosExperimentConfig) -> None:
     # Also may want to create the first index of shuffling here for starters
 
 
-def launch_prep(config: HeliosExperimentConfig) -> None:
+def launch_prep(config: OlmoEarthExperimentConfig) -> None:
     """Launch the preparation of the dataset for an experiment."""
     assert config.launch is not None
     config.launch.num_gpus = 0
@@ -313,7 +313,7 @@ class SubCmd(StrEnum):
 
     def run(
         self,
-        config: HeliosExperimentConfig | BenchmarkExperimentConfig,
+        config: OlmoEarthExperimentConfig | BenchmarkExperimentConfig,
     ) -> None:
         """Run the given subcommand."""
         if get_local_rank() == 0:
@@ -366,14 +366,14 @@ def main(
     model_config_builder: Callable[[CommonComponents], Config] | None = None,
     dataset_config_builder: Callable[[CommonComponents], Config] | None = None,
     dataloader_config_builder: (
-        Callable[[CommonComponents], HeliosDataLoaderConfig] | None
+        Callable[[CommonComponents], OlmoEarthDataLoaderConfig] | None
     ) = None,
     trainer_config_builder: Callable[[CommonComponents], TrainerConfig] | None = None,
     train_module_config_builder: (
-        Callable[[CommonComponents], HeliosTrainModuleConfig] | None
+        Callable[[CommonComponents], OlmoEarthTrainModuleConfig] | None
     ) = None,
     visualize_config_builder: (
-        Callable[[CommonComponents], HeliosVisualizeConfig] | None
+        Callable[[CommonComponents], OlmoEarthVisualizeConfig] | None
     ) = None,
     inference_benchmarking_config_builder: (
         Callable[[], ThroughputBenchmarkRunnerConfig] | None
@@ -443,3 +443,37 @@ If running command on a local machine ie from a session, you can use the [b]loca
         )
 
     cmd.run(config)
+
+
+# Backward compatibility aliases
+import warnings as _warnings_experiment
+
+
+def _create_helios_alias_exp(new_class, old_name):
+    """Create backward compatibility alias with deprecation warning."""
+
+    class _HeliosAlias(new_class):
+        def __init__(self, *args, **kwargs):
+            _warnings_experiment.warn(
+                f"'{old_name}' has been renamed to '{new_class.__name__}'. "
+                f"Please update your code to use '{new_class.__name__}' instead. "
+                f"The '{old_name}' alias will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            super().__init__(*args, **kwargs)
+
+    _HeliosAlias.__name__ = old_name
+    _HeliosAlias.__qualname__ = old_name
+    return _HeliosAlias
+
+
+HeliosBeakerLaunchConfig = _create_helios_alias_exp(
+    OlmoEarthBeakerLaunchConfig, "HeliosBeakerLaunchConfig"
+)
+HeliosVisualizeConfig = _create_helios_alias_exp(
+    OlmoEarthVisualizeConfig, "HeliosVisualizeConfig"
+)
+HeliosExperimentConfig = _create_helios_alias_exp(
+    OlmoEarthExperimentConfig, "HeliosExperimentConfig"
+)

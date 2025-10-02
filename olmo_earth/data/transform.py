@@ -1,4 +1,4 @@
-"""Transformations for the HeliosSample."""
+"""Transformations for the OlmoEarthSample."""
 
 import random
 from abc import ABC, abstractmethod
@@ -13,15 +13,15 @@ from olmo_core.config import Config
 from torch.distributions import Beta
 
 from olmo_earth.data.constants import Modality
-from olmo_earth.data.dataset import HeliosSample
+from olmo_earth.data.dataset import OlmoEarthSample
 from olmo_earth.types import ArrayTensor
 
 
 class Transform(ABC):
-    """A transform that can be applied to a HeliosSample."""
+    """A transform that can be applied to a OlmoEarthSample."""
 
     @abstractmethod
-    def apply(self, batch: HeliosSample) -> "HeliosSample":
+    def apply(self, batch: OlmoEarthSample) -> "OlmoEarthSample":
         """Apply the transform to the batch."""
         pass
 
@@ -33,7 +33,7 @@ TRANSFORM_REGISTRY = ClassRegistry[Transform]()
 class NoTransform(Transform):
     """No transformation."""
 
-    def apply(self, batch: HeliosSample) -> "HeliosSample":
+    def apply(self, batch: OlmoEarthSample) -> "OlmoEarthSample":
         """Apply the transform to the batch."""
         return batch
 
@@ -89,8 +89,8 @@ class FlipAndRotateSpace(Transform):
 
     def apply(
         self,
-        batch: HeliosSample,
-    ) -> "HeliosSample":
+        batch: OlmoEarthSample,
+    ) -> "OlmoEarthSample":
         """Apply a random transformation to the space varying data."""
         # Choose a random transformation
         transformation = random.choice(self.transformations)
@@ -110,7 +110,7 @@ class FlipAndRotateSpace(Transform):
                     modality_data = rearrange(modality_data, "b t c h w -> b h w t c")
                 new_data_dict[attribute] = modality_data
         # Return the transformed sample
-        return HeliosSample(**new_data_dict)
+        return OlmoEarthSample(**new_data_dict)
 
 
 @TRANSFORM_REGISTRY.register("mixup")
@@ -133,7 +133,7 @@ class Mixup(Transform):
         self.alpha = alpha
         self.dist = Beta(torch.tensor([alpha]), torch.tensor([alpha]))
 
-    def apply(self, batch: HeliosSample) -> HeliosSample:
+    def apply(self, batch: OlmoEarthSample) -> OlmoEarthSample:
         """Apply mixup."""
         other_microbatch = batch.rotate()
 
