@@ -1,14 +1,38 @@
 # OlmoEarth (formerly HELIOS)
 
-**Note: This repository has been renamed from HELIOS to OlmoEarth. The package is now `olmo-earth` and all imports should use `olmo_earth` instead of `helios`. The old `helios` imports are still supported with deprecation warnings for backward compatibility with existing checkpoints.**
+**Note: This repository has been renamed from HELIOS to OlmoEarth.**
 
 Earth system foundation model: data, training, and evaluation
 
-launching training runs on beaker
+## Naming Changes
+
+The package has been renamed from `helios` to `olmo-earth`:
+- **Package name**: `olmo-earth` (install with `pip install -e .`)
+- **Import path**: `olmo_earth` (use `from olmo_earth.data.dataset import OlmoEarthDataset`)
+- **Class names**: All classes have been renamed from `Helios*` to `OlmoEarth*`
+  - `HeliosDataset` → `OlmoEarthDataset`
+  - `HeliosDataLoader` → `OlmoEarthDataLoader`
+  - `FlexiHeliosBase` → `FlexiOlmoEarthBase`
+  - `HeliosTrainModule` → `OlmoEarthTrainModule`
+  - `HeliosExperimentConfig` → `OlmoEarthExperimentConfig`
+  - And more...
+
+### Backward Compatibility
+
+Old class names (like `HeliosDataset`, `FlexiHeliosBase`, etc.) are still supported as **deprecated aliases** with warnings:
+```python
+from olmo_earth.data.dataset import HeliosDataset  # Works but shows deprecation warning
+from olmo_earth.data.dataset import OlmoEarthDataset  # Preferred new name
+```
+
+This ensures old checkpoints with class references like `"_CLASS_": "olmo_earth.data.dataset.HeliosDataset"` continue to work.
+
+**Note**: Old import paths like `import helios` or `from helios.data import ...` are **NOT** supported and will raise `ImportError`.
+
 ## General Setup
 
-1. Create a virtual environment in prefered directory with python 3.12 `python3.12 -m venv .venv-helios`
-2. Activate the virtual environment `source .venv-helios/bin/activate`
+1. Create a virtual environment in preferred directory with python 3.12 `python3.12 -m venv .venv-olmo-earth`
+2. Activate the virtual environment `source .venv-olmo-earth/bin/activate`
 3. Navigate to root directory of this repo and run `pip install -e .`
 4. Run `pip install pre-commit`
 5. Run `pre-commit install`
@@ -73,7 +97,7 @@ budget: `ai2/es-platform` \
 workspace: `ai2/earth-systems` \
 weka: `weka://dfive-default`
 
-## Helios Dataset
+## OlmoEarth Dataset
 
 The dataset for training is stored in h5 datasets. A trainining datset can be created from tiles via `python3 internal/run_h5_conversion.py` script.
 
