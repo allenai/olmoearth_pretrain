@@ -70,9 +70,9 @@ def my_build_common_components(
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
-        Modality.WORLDCOVER.name,
-        Modality.SRTM.name,
-        Modality.OPENSTREETMAP_RASTER.name,
+        # Modality.WORLDCOVER.name,
+        # Modality.SRTM.name,
+        # Modality.OPENSTREETMAP_RASTER.name,
     ]
     config.launch.num_gpus = 8
     return config
@@ -121,11 +121,11 @@ def build_train_module_config(
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
-                "only_decode_modalities": [
-                    "worldcover",
-                    "srtm",
-                    "openstreetmap_raster",
-                ],
+                # "only_decode_modalities": [
+                #     "worldcover",
+                #     "srtm",
+                #     "openstreetmap_raster",
+                # ],
             }
         ),
         loss_config=LossConfig(
