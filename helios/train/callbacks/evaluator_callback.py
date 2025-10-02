@@ -44,7 +44,10 @@ class DownstreamTaskConfig:
     num_workers: int = 8
     pooling_type: str = PoolingType.MEAN
     norm_stats_from_pretrained: bool = True
+    # Only for multimodal tasks, e.g. pastis, sickle, nandi, awf, cropharvest
     input_modalities: list[str] = field(default_factory=list)
+    # Only for rslearn datasets, e.g. nandi, awf
+    input_layers: list[str] = field(default_factory=list)
     # Sweep across lrs for segmentation tasks
     probe_lr: float | None = None
     patch_size: int = 4
@@ -91,6 +94,7 @@ class DownstreamEvaluator:
         self.pooling_type = task.pooling_type
         self.norm_stats_from_pretrained = task.norm_stats_from_pretrained
         self.input_modalities = task.input_modalities
+        self.input_layers = task.input_layers
         self.probe_lr = task.probe_lr
         self.patch_size = task.patch_size
         self.probe_batch_size = task.probe_batch_size
@@ -146,6 +150,7 @@ class DownstreamEvaluator:
                 partition=self.partition,
                 norm_stats_from_pretrained=self.norm_stats_from_pretrained,
                 input_modalities=self.input_modalities,
+                input_layers=self.input_layers,
                 norm_method=self.norm_method,
             ),
             collate_fn=eval_collate_fn,
@@ -173,7 +178,7 @@ class DownstreamEvaluator:
             self.patch_size = model.patch_size
         else:
             logger.info(
-                f"No patch size found for {self.dataset}, using patch size {self.patch_size}"
+                f"No patch size found from model, using patch size {self.patch_size}"
             )
 
         # Superset of the kwargs the wrapper may need
@@ -396,7 +401,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
         # Check that input_modalities is only set for multimodal tasks
         if (
             not (
-                (task.dataset in ["pastis", "pastis128", "sickle"])
+                (task.dataset in ["pastis", "pastis128", "sickle", "nandi", "awf"])
                 or task.dataset.startswith("cropharvest")
             )
             and len(task.input_modalities) > 0
@@ -413,6 +418,21 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             raise ValueError(
                 f"input_modalities must be a subset of supported_modalities, got {task.input_modalities} and {config.supported_modalities}"
             )
+
+    def verify_input_layers(self, task: DownstreamTaskConfig) -> None:
+        """Check input_layers config."""
+        rslearn_datasets = {"nandi", "awf"}
+        layers = task.input_layers or []
+
+        # input_layers not allowed on non-rslearn datasets
+        if task.dataset not in rslearn_datasets and layers:
+            raise ValueError(
+                f"`input_layers` not supported for dataset '{task.dataset}'."
+            )
+
+        # input_layers must be unique
+        if len(layers) != len(set(layers)):
+            raise ValueError(f"`input_layers` must be unique, got {layers}")
 
     def build(self, trainer: Trainer) -> Callback | None:
         """Build the downstream evaluator callback."""
@@ -438,6 +458,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             self.verify_input_modalities(task, config)
             # Sort to ensure consistent order
             task.input_modalities.sort()
+            self.verify_input_layers(task)
 
             evaluators.append(
                 DownstreamEvaluator(
