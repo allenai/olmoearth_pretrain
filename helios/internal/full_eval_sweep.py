@@ -295,7 +295,7 @@ def _get_sub_command(args: argparse.Namespace) -> str:
         return SubCmd.launch
 
 
-def _get_base_run_name(args: argparse.Namespace) -> str:
+def _get_base_run_name(args: argparse.Namespace, size: str | None = None) -> str:
     """Generate the base run name from checkpoint path or model name."""
     if args.model_name is not None:
         logger.info(f"Overiding checkpoint name with {args.model_name}")
@@ -306,7 +306,11 @@ def _get_base_run_name(args: argparse.Namespace) -> str:
         run_name = f"{parent_dir}_{step_num}"
     elif args.model is not None:
         uuid_str = str(uuid.uuid4())[:8]
-        run_name = args.model + "_" + uuid_str
+        if size is not None:
+            size_str = f"_{size}"
+        else:
+            size_str = ""
+        run_name = args.model + size_str + "_" + uuid_str
     else:
         logger.warning(
             "No model name provided or checkpoint path, using random run name"
@@ -500,12 +504,12 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                 BaselineModelName.COPERNICUSFM,
                 BaselineModelName.TESSERA,
             }
-            base_run_name = _get_base_run_name(args)
             model_sizes = MODELS_WITH_MULTIPLE_SIZES.get(
                 args.model,
                 [None],  # type: ignore # TODO: Fix this
             )
             for size in model_sizes:
+                base_run_name = _get_base_run_name(args, size)
                 hp_params = loop_through_params(
                     no_norm=(args.model in dataset_norm_only_models)
                 )
