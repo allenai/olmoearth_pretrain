@@ -1,8 +1,8 @@
 """Callbacks for the trainer specific to Helios."""
 
 from .evaluator_callback import DownstreamEvaluatorCallbackConfig
-from .speed_monitor import OlmoEarthSpeedMonitorCallback, HeliosSpeedMonitorCallback
-from .wandb import OlmoEarthWandBCallback, HeliosWandBCallback
+from .speed_monitor import HeliosSpeedMonitorCallback, OlmoEarthSpeedMonitorCallback
+from .wandb import HeliosWandBCallback, OlmoEarthWandBCallback
 
 __all__ = [
     "DownstreamEvaluatorCallbackConfig",
