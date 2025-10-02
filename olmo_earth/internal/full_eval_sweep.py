@@ -387,7 +387,7 @@ def _build_default_command(
     logger.info(f"Using module path {module_path}")
 
     return (
-        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} helios/internal/all_evals.py "
+        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} olmo_earth/internal/all_evals.py "
         f"{sub_command} {run_name} {args.cluster} --launch.priority=high "
         f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
     )
@@ -427,7 +427,7 @@ def _build_hyperparameter_command(
     cmd_args += _get_normalization_args(args, norm_mode)
 
     return (
-        f"TRAIN_SCRIPT_PATH={args.module_path} {launch_command} helios/internal/all_evals.py "
+        f"TRAIN_SCRIPT_PATH={args.module_path} {launch_command} olmo_earth/internal/all_evals.py "
         f"{sub_command} {run_name} {args.cluster} --launch.priority=high {cmd_args} "
         f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
     )
