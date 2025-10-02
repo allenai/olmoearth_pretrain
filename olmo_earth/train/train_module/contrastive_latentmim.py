@@ -269,7 +269,10 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         del masked_batch_a, masked_batch_b
 
     def model_forward(
-        self, batch: MaskedOlmoEarthSample, patch_size: int, token_exit_cfg: dict[str, int]
+        self,
+        batch: MaskedOlmoEarthSample,
+        patch_size: int,
+        token_exit_cfg: dict[str, int],
     ) -> tuple[
         torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
     ]:

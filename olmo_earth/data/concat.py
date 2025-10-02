@@ -136,7 +136,7 @@ class OlmoEarthConcatDatasetConfig(Config):
 import warnings as _warnings_concat
 
 
-def _create_helios_alias_concat(new_class, old_name):
+def _create_helios_alias_concat(new_class: type, old_name: str) -> type:
     """Create backward compatibility alias with deprecation warning."""
 
     class _HeliosAlias(new_class):

@@ -604,9 +604,9 @@ class SpaceMaskingStrategy(MaskingStrategy):
 
             # Keep data as is
             output_dict[modality_name] = instance
-            output_dict[MaskedOlmoEarthSample.get_masked_modality_name(modality_name)] = (
-                mask
-            )
+            output_dict[
+                MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+            ] = mask
         return MaskedOlmoEarthSample(**output_dict)
 
 
@@ -679,9 +679,9 @@ class ModalityMaskingStrategy(MaskingStrategy):
             # Ensure we don't do index_put_ on expanded tensors is deprecated.
             mask = mask.view(*shape[:-1], b_s).contiguous()
             mask = self.fill_mask_with_missing_values(instance, mask, modality)
-            output_dict[MaskedOlmoEarthSample.get_masked_modality_name(modality_name)] = (
-                mask
-            )
+            output_dict[
+                MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+            ] = mask
 
         return MaskedOlmoEarthSample(**output_dict)
 
@@ -852,7 +852,9 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         for modality in batch.modalities:
             if modality == "timestamps":
                 continue
-            modality_mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+            modality_mask_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                modality
+            )
             modality_mask = masked_sample_dict[modality_mask_name]
             missing_values_mask = modality_mask == MaskValue.MISSING.value
             # Find the samples where the modality is completely missing
@@ -1026,7 +1028,9 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         for modality in masked_batch.modalities:
             if modality == "timestamps":
                 continue
-            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                modality
+            )
             modality_spec = Modality.get(modality)
             modality_mask = masked_batch_dict[masked_modality_name]
             # with 1-12 patch size I got a run time aliasing error when writing to the modality mask
@@ -1629,7 +1633,8 @@ class SelectableRandomRangeModalityMaskingStrategy(MaskingStrategy):
                 else:
                     value = MaskValue.MISSING.value
                 getattr(
-                    masked_sample, MaskedOlmoEarthSample.get_masked_modality_name(modality)
+                    masked_sample,
+                    MaskedOlmoEarthSample.get_masked_modality_name(modality),
                 )[batch_idx] = value
 
         return masked_sample

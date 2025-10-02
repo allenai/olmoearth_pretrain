@@ -407,7 +407,7 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
 import warnings as _warnings_eval
 
 
-def _create_helios_alias_eval(new_class, old_name):
+def _create_helios_alias_eval(new_class: type, old_name: str) -> type:
     """Create backward compatibility alias with deprecation warning."""
 
     class _HeliosAlias(new_class):
@@ -426,6 +426,4 @@ def _create_helios_alias_eval(new_class, old_name):
     return _HeliosAlias
 
 
-HeliosEvalWrapper = _create_helios_alias_eval(
-    OlmoEarthEvalWrapper, "HeliosEvalWrapper"
-)
+HeliosEvalWrapper = _create_helios_alias_eval(OlmoEarthEvalWrapper, "HeliosEvalWrapper")

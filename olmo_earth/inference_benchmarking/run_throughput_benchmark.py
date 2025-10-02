@@ -495,7 +495,7 @@ class ThroughputBenchmarkRunner:
 import warnings as _warnings_bench
 
 
-def _create_helios_alias_bench(new_class, old_name):
+def _create_helios_alias_bench(new_class: type, old_name: str) -> type:
     """Create backward compatibility alias with deprecation warning."""
 
     class _HeliosAlias(new_class):

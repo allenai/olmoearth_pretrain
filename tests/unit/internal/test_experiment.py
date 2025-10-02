@@ -10,9 +10,9 @@ from olmo_earth.data.dataset import OlmoEarthDatasetConfig
 from olmo_earth.data.transform import TransformConfig
 from olmo_earth.internal.experiment import (
     CommonComponents,
-    HeliosBeakerLaunchConfig,
-    HeliosExperimentConfig,
-    HeliosVisualizeConfig,
+    OlmoEarthBeakerLaunchConfig,
+    OlmoEarthExperimentConfig,
+    OlmoEarthVisualizeConfig,
     build_config,
 )
 from olmo_earth.nn.flexihelios import EncoderConfig, PredictorConfig
@@ -30,7 +30,7 @@ def minimal_common_components() -> CommonComponents:
         run_name="test_run",
         save_folder="test_save_folder",
         training_modalities=["sentinel2", "sentinel1", "worldcover", "naip"],
-        launch=HeliosBeakerLaunchConfig(
+        launch=OlmoEarthBeakerLaunchConfig(
             name="test_run",
             cmd=["dummy_cmd"],
             clusters=["dummy_cluster"],
@@ -152,13 +152,15 @@ def minimal_train_module_config_builder(
     return train_module_config
 
 
-def minimal_visualize_config_builder(common: CommonComponents) -> HeliosVisualizeConfig:
-    """Return a minimal HeliosVisualizeConfig."""
-    return HeliosVisualizeConfig(output_dir="dummy_visuals")
+def minimal_visualize_config_builder(
+    common: CommonComponents,
+) -> OlmoEarthVisualizeConfig:
+    """Return a minimal OlmoEarthVisualizeConfig."""
+    return OlmoEarthVisualizeConfig(output_dir="dummy_visuals")
 
 
 def test_build_config_no_overrides() -> None:
-    """Test that build_config produces a valid HeliosExperimentConfig."""
+    """Test that build_config produces a valid OlmoEarthExperimentConfig."""
     common = minimal_common_components()
     config = build_config(
         common=common,
@@ -171,7 +173,7 @@ def test_build_config_no_overrides() -> None:
         overrides=[],
     )
 
-    assert isinstance(config, HeliosExperimentConfig)
+    assert isinstance(config, OlmoEarthExperimentConfig)
     assert config.run_name == "test_run"
     assert config.data_loader.global_batch_size == 16
     assert config.visualize is not None
@@ -225,7 +227,7 @@ def test_build_config_with_trainer_overrides(
         overrides=overrides,
     )
 
-    assert isinstance(config, HeliosExperimentConfig)
+    assert isinstance(config, OlmoEarthExperimentConfig)
     # Confirm that the overrides took effect
     assert config.trainer.cancel_check_interval == expected_cancel_check
     assert config.trainer.metrics_collect_interval == expected_metrics_collect
@@ -246,7 +248,7 @@ def test_overrides_with_common_prefix() -> None:
         overrides=["common.training_modalities=[sentinel2, sentinel1]"],
     )
 
-    assert isinstance(config, HeliosExperimentConfig)
+    assert isinstance(config, OlmoEarthExperimentConfig)
     assert config.dataset.training_modalities == ["sentinel2", "sentinel1"]
 
 

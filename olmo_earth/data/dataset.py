@@ -527,7 +527,9 @@ class OlmoEarthSample(NamedTuple):
         return OlmoEarthSample(**output_dict)
 
 
-def collate_helios(batch: list[tuple[int, OlmoEarthSample]]) -> tuple[int, OlmoEarthSample]:
+def collate_helios(
+    batch: list[tuple[int, OlmoEarthSample]],
+) -> tuple[int, OlmoEarthSample]:
     """Collate function that automatically handles any modalities present in the samples."""
 
     # Stack tensors while handling None values
@@ -1095,7 +1097,7 @@ class OlmoEarthDatasetConfig(Config):
 import warnings as _warnings_dataset
 
 
-def _create_helios_alias(new_class, old_name):
+def _create_helios_alias(new_class: type, old_name: str) -> type:
     """Create backward compatibility alias with deprecation warning."""
 
     class _HeliosAlias(new_class):

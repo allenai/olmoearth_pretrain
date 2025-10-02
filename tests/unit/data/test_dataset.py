@@ -82,7 +82,9 @@ class TestOlmoEarthSample:
             }
             max_t = 2
             current_length = 6
-            OlmoEarthSample._get_valid_start_ts(missing_timesteps, max_t, current_length)
+            OlmoEarthSample._get_valid_start_ts(
+                missing_timesteps, max_t, current_length
+            )
 
     def test_get_valid_start_ts_with_cropped_timesteps(self) -> None:
         """Test the get_valid_start_ts function with properly cropped timesteps."""

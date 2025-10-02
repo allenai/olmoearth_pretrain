@@ -18,7 +18,11 @@ from olmo_earth.data.constants import (
     MISSING_VALUE,
     Modality,
 )
-from olmo_earth.data.dataset import GetItemArgs, OlmoEarthDataset, OlmoEarthDatasetConfig
+from olmo_earth.data.dataset import (
+    GetItemArgs,
+    OlmoEarthDataset,
+    OlmoEarthDatasetConfig,
+)
 from olmo_earth.data.utils import update_streaming_stats
 
 logger = logging.getLogger(__name__)

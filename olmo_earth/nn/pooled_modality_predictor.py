@@ -870,7 +870,9 @@ class PooledModalityPredictor(PredictorBase):
             available_modalities, self.supported_modality_names
         )
         for modality in modalities_to_process:
-            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                modality
+            )
             modality_mask = tokens_and_masks[masked_modality_name]
             # patchify masked data
             per_modality_output_tokens = []

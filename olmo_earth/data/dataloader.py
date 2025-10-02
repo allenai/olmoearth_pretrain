@@ -592,7 +592,7 @@ class OlmoEarthDataLoaderConfig(Config):
 import warnings as _warnings_dataloader
 
 
-def _create_helios_alias_dl(new_class, old_name):
+def _create_helios_alias_dl(new_class: type, old_name: str) -> type:
     """Create backward compatibility alias with deprecation warning."""
 
     class _HeliosAlias(new_class):

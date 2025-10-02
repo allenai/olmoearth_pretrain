@@ -255,7 +255,10 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         del latent, decoded, target_output
 
     def model_forward(
-        self, batch: MaskedOlmoEarthSample, patch_size: int, token_exit_cfg: dict[str, int]
+        self,
+        batch: MaskedOlmoEarthSample,
+        patch_size: int,
+        token_exit_cfg: dict[str, int],
     ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():

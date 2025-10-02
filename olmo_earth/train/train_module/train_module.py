@@ -563,7 +563,7 @@ class OlmoEarthTrainModule(TrainModule):
 import warnings as _warnings_train_module
 
 
-def _create_helios_alias_tm(new_class, old_name):
+def _create_helios_alias_tm(new_class: type, old_name: str) -> type:
     """Create backward compatibility alias with deprecation warning."""
 
     class _HeliosAlias(new_class):

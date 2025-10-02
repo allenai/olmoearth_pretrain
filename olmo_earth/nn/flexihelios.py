@@ -1037,7 +1037,9 @@ class FlexiOlmoEarthBase(nn.Module):
             available_modalities, self.supported_modality_names
         )
         for modality in modalities_to_process:
-            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                modality
+            )
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
             tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
@@ -1082,7 +1084,9 @@ class FlexiOlmoEarthBase(nn.Module):
             x_modality = x[modality]
             tokens_only_dict[modality] = x_modality
             modalities_to_dims_dict[modality] = x_modality.shape
-            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                modality
+            )
             original_masks_dict[masked_modality_name] = x[masked_modality_name]
         return tokens_only_dict, original_masks_dict, modalities_to_dims_dict
 
@@ -2057,7 +2061,9 @@ class Predictor(PredictorBase):
             available_modalities, self.supported_modality_names
         )
         for modality in modalities_to_process:
-            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                modality
+            )
             modality_mask = tokens_and_masks[masked_modality_name]
             # patchify masked data
             per_modality_output_tokens = []
@@ -2170,7 +2176,7 @@ class PredictorConfig(Config):
 import warnings as _warnings_flexi
 
 
-def _create_helios_alias_flexi(new_class, old_name):
+def _create_helios_alias_flexi(new_class: type, old_name: str) -> type:
     """Create backward compatibility alias with deprecation warning."""
 
     class _HeliosAlias(new_class):

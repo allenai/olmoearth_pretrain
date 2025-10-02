@@ -8,7 +8,11 @@ import pytest
 from olmo_earth.data.concat import OlmoEarthConcatDatasetConfig
 from olmo_earth.data.constants import Modality
 from olmo_earth.data.dataloader import OlmoEarthDataLoader, OlmoEarthDataLoaderConfig
-from olmo_earth.data.dataset import OlmoEarthDataset, OlmoEarthDatasetConfig, collate_helios
+from olmo_earth.data.dataset import (
+    OlmoEarthDataset,
+    OlmoEarthDatasetConfig,
+    collate_helios,
+)
 
 
 def test_helios_dataloader(tmp_path: Path, setup_h5py_dir: Path) -> None:

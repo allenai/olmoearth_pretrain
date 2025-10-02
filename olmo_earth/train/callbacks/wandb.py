@@ -151,7 +151,7 @@ class OlmoEarthWandBCallback(WandBCallback):
 import warnings as _warnings_wandb
 
 
-def _create_helios_alias_wandb(new_class, old_name):
+def _create_helios_alias_wandb(new_class: type, old_name: str) -> type:
     """Create backward compatibility alias with deprecation warning."""
 
     class _HeliosAlias(new_class):

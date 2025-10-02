@@ -95,7 +95,10 @@ class Galileo(nn.Module, DistributedMixins):
         return latent, decoded, latent_projected_and_pooled, reconstructed
 
     def forward(
-        self, input_a: MaskedOlmoEarthSample, input_b: MaskedOlmoEarthSample, patch_size: int
+        self,
+        input_a: MaskedOlmoEarthSample,
+        input_b: MaskedOlmoEarthSample,
+        patch_size: int,
     ) -> dict[
         str, tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]
     ]:

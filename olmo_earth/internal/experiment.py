@@ -449,7 +449,7 @@ If running command on a local machine ie from a session, you can use the [b]loca
 import warnings as _warnings_experiment
 
 
-def _create_helios_alias_exp(new_class, old_name):
+def _create_helios_alias_exp(new_class: type, old_name: str) -> type:
     """Create backward compatibility alias with deprecation warning."""
 
     class _HeliosAlias(new_class):
