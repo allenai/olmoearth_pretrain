@@ -8,16 +8,14 @@ import os
 import subprocess  # nosec
 import uuid
 from collections.abc import Generator
-from enum import StrEnum
 from logging import getLogger
 from typing import Any
 
 from helios.evals.datasets.configs import dataset_to_config, get_eval_mode
-from helios.evals.models import get_launch_script_path
-from helios.evals.models.croma.croma import CHROMA_SIZES
-from helios.evals.models.dinov3.constants import DinoV3Models
-from helios.evals.models.galileo.single_file_galileo import (
-    MODEL_SIZE_TO_WEKA_PATH as GALILEO_MODEL_SIZE_TO_WEKA_PATH,
+from helios.evals.models import (
+    MODELS_WITH_MULTIPLE_SIZES,
+    BaselineModelName,
+    get_launch_script_path,
 )
 from helios.internal.all_evals import EVAL_TASKS
 from helios.internal.experiment import SubCmd
@@ -30,26 +28,7 @@ pooling_types = [PoolingType.MEAN, PoolingType.MAX]
 logger = getLogger(__name__)
 
 
-class BaselineModelName(StrEnum):
-    """Enum for baseline model names."""
-
-    DINO_V3 = "dino_v3"
-    PANOPTICON = "panopticon"
-    GALILEO = "galileo"
-    SATLAS = "satlas"
-    CROMA = "croma"
-    COPERNICUSFM = "copernicusfm"
-    PRESTO = "presto"
-    ANYSAT = "anysat"
-    TESSERA = "tessera"
-    PRITHVI_V2 = "prithvi_v2"
-
-
-MODELS_WITH_MULTIPLE_SIZES: dict[BaselineModelName, Any] = {
-    BaselineModelName.CROMA: CHROMA_SIZES,
-    BaselineModelName.DINO_V3: DinoV3Models.values(),
-    BaselineModelName.GALILEO: GALILEO_MODEL_SIZE_TO_WEKA_PATH.keys(),
-}
+logger.info(f"MODELS_WITH_MULTIPLE_SIZES: {MODELS_WITH_MULTIPLE_SIZES}")
 
 
 def create_linear_probe_arg(task_name: str, field_name: str) -> str:
@@ -327,7 +306,7 @@ def _get_base_run_name(args: argparse.Namespace) -> str:
         run_name = f"{parent_dir}_{step_num}"
     elif args.model is not None:
         uuid_str = str(uuid.uuid4())[:8]
-        run_name = args.model.value + "_" + uuid_str
+        run_name = args.model + "_" + uuid_str
     else:
         logger.warning(
             "No model name provided or checkpoint path, using random run name"
@@ -389,7 +368,7 @@ def _get_model_size_args(model: BaselineModelName | None, size: str | None) -> s
     """Get the model size arguments."""
     if model in MODELS_WITH_MULTIPLE_SIZES:
         if size is not None:
-            return f"--model.size={size}"
+            return f" --model.size={size}"
     return ""
 
 
@@ -460,11 +439,15 @@ def _build_hyperparameter_command(
     # Add normalization-specific args
     # These args will override the model-specific args
     cmd_args += _get_normalization_args(args.model, norm_mode)
-
+    module_path = (
+        args.module_path
+        if args.module_path is not None
+        else _get_module_path(args.model)
+    )
     cmd_args += _get_model_size_args(args.model, size)
 
     return (
-        f"TRAIN_SCRIPT_PATH={args.module_path} {launch_command} helios/internal/all_evals.py "
+        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} helios/internal/all_evals.py "
         f"{sub_command} {run_name} {args.cluster} --launch.priority=high {cmd_args} "
         f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
     )
@@ -474,7 +457,7 @@ def _get_module_path(model: BaselineModelName | None) -> str:
     """Get the module path for the launch script."""
     if model is None:
         raise ValueError("Model must be specified when module_path is not provided")
-    return get_launch_script_path(model.value)
+    return get_launch_script_path(model)
 
 
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
@@ -483,7 +466,6 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     extra = " " + " ".join(extra_cli) if extra_cli else ""
 
     sub_command = _get_sub_command(args)
-    base_run_name = _get_base_run_name(args)
     launch_command = "python3" if not sub_command == SubCmd.train else "torchrun"
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
 
@@ -493,6 +475,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         if args.model == "all":
             raise ValueError("Cannot run defaults with all models")
         # Just run with the first/default values
+        base_run_name = _get_base_run_name(args)
         cmd = _build_default_command(
             args,
             base_run_name,
@@ -517,7 +500,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                 BaselineModelName.COPERNICUSFM,
                 BaselineModelName.TESSERA,
             }
-
+            base_run_name = _get_base_run_name(args)
             model_sizes = MODELS_WITH_MULTIPLE_SIZES.get(
                 args.model,
                 [None],  # type: ignore # TODO: Fix this

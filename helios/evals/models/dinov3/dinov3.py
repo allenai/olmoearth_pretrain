@@ -260,7 +260,7 @@ class DINOv3(nn.Module):
 class DINOv3Config(Config):
     """olmo_core style config for DINOv2Wrapper."""
 
-    size: DinoV3Models = DinoV3Models.LARGE_SATELLITE
+    size: str | DinoV3Models = DinoV3Models.LARGE_SATELLITE
     use_cls_token: bool = False
     apply_normalization: bool = False
 
