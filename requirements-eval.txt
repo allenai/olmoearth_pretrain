@@ -1,6 +1,6 @@
 albumentations
 breizhcrops==0.0.4.1 # Force the latest available
-claymodel @ git+https://github.com/Clay-foundation/model.git@7729e98eb9008489bd5ba7900cf105c1e02b271c
+claymodel @ git+https://github.com/Clay-foundation/model.git
 geobench @ git+https://github.com/ServiceNow/geo-bench.git  # Unreleased relaxed dependencies
 geopandas
 PyYAML>=6.0
