@@ -106,9 +106,13 @@ class Satlas(nn.Module):
         if modality == Modality.SENTINEL2_L2A.name:
             assert image.shape[1] == 9
             print(image.min(), image.max())
-            image[:, 0:3, :, :] = torch.clip(image[:, 0:3, :, :] / 3000, 0, 1)
-            image[:, 3:9, :, :] = torch.clip(image[:, 3:9, :, :] / 8160, 0, 1)
-            return image
+            return torch.cat(
+                [
+                    torch.clip(image[:, 0:3, :, :] / 3000, 0, 1),
+                    torch.clip(image[:, 3:9, :, :] / 8160, 0, 1),
+                ],
+                dim=1,
+            )
         elif modality == Modality.LANDSAT.name:
             return torch.clip((image - 4000) / 16320, 0, 1)
         elif modality == Modality.SENTINEL1.name:
@@ -192,8 +196,11 @@ class Satlas(nn.Module):
                 output = rearrange(output, "b c h w -> b h w c")
             outputs_list.append(output.unsqueeze(0))
 
-        # always temporal max pool for satlas
-        output_features = torch.max(torch.cat(outputs_list, dim=0), dim=0)[0]
+        # stack in the timestep dimension and take the mean or maybe the max?
+        if pooling == PoolingType.MEAN:
+            output_features = torch.cat(outputs_list, dim=0).mean(dim=0)
+        elif pooling == PoolingType.MAX:
+            output_features = torch.max(torch.cat(outputs_list, dim=0), dim=0)[0]
         return output_features
 
 
