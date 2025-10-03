@@ -155,7 +155,6 @@ def get_terramind_args(pretrained_normalizer: bool = True) -> str:
     terramind_args = dataset_args
     if pretrained_normalizer:
         # To use terramind pretrained normalizer we want to leave normalization to the terramind wrapper
-        terramind_args = dataset_args
         terramind_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
@@ -165,6 +164,12 @@ def get_terramind_args(pretrained_normalizer: bool = True) -> str:
         terramind_args += " " + "--model.use_pretrained_normalizer=True"
     else:
         # IF we use dataset stats we want to turn off the pretrained normalizer
+        terramind_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
         terramind_args += " " + "--model.use_pretrained_normalizer=False"
     return terramind_args
 
@@ -174,7 +179,6 @@ def get_clay_args(pretrained_normalizer: bool = True) -> str:
     clay_args = dataset_args
     if pretrained_normalizer:
         # To use clay pretrained normalizer we want to leave normalization to the clay wrapper
-        clay_args = dataset_args
         clay_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
@@ -184,6 +188,12 @@ def get_clay_args(pretrained_normalizer: bool = True) -> str:
         clay_args += " " + "--model.use_pretrained_normalizer=True"
     else:
         # IF we use dataset stats we want to turn off the pretrained normalizer
+        clay_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
         clay_args += " " + "--model.use_pretrained_normalizer=False"
     return clay_args
 
