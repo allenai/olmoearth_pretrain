@@ -159,7 +159,7 @@ EVAL_TASKS = {
     ),
     "pastis_sentinel1_sentinel2": DownstreamTaskConfig(
         dataset="pastis",
-        embedding_batch_size=512,
+        embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=2,
         pooling_type=PoolingType.MEAN,
