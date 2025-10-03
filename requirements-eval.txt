@@ -11,4 +11,5 @@ satlaspretrain-models
 scikit-learn
 terratorch
 timm==1.0.20
+torchmetrics==1.7.1
 xarray
