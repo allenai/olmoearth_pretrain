@@ -574,22 +574,6 @@ def _parse_model_arg(value: str) -> BaselineModelName | str:
         )
 
 
-def get_checkpoint_path_from_wandb_run_name_and_step(
-    wandb_project: str, wandb_run_name: str, step: int
-) -> str:
-    """Get the checkpoint path from the wandb run name and step."""
-    import wandb
-
-    api = wandb.Api()
-    try:
-        run = api.run(f"{wandb_project}/{wandb_run_name}")
-    except Exception as e:
-        raise RuntimeError(f"Could not fetch wandb run {wandb_run_name}: {e}")
-
-    work_dir = run.config["trainer"]["checkpointer"]["work_dir"]
-    return f"{work_dir}/step{step}"
-
-
 def main() -> None:
     """Run the full evaluation sweep or just the defaults."""
     parser = argparse.ArgumentParser()
@@ -600,24 +584,6 @@ def main() -> None:
         default=None,
         required=False,
         help="Checkpoint path",
-    )
-    parser.add_argument(
-        "--wandb_project",
-        type=str,
-        required=False,
-        help="Wandb project name",
-    )
-    parser.add_argument(
-        "--wandb_run_name",
-        type=str,
-        required=False,
-        help="Wandb run name",
-    )
-    parser.add_argument(
-        "--wandb_step",
-        type=int,
-        required=False,
-        help="Wandb step",
     )
     parser.add_argument(
         "--module_path",
@@ -663,16 +629,6 @@ def main() -> None:
         help="If set, only run with default values (no sweep)",
     )
     args, extra_cli = parser.parse_known_args()
-
-    if args.checkpoint_path is None:
-        if (
-            args.wandb_project is not None
-            and args.wandb_run_name is not None
-            and args.wandb_step is not None
-        ):
-            args.checkpoint_path = get_checkpoint_path_from_wandb_run_name_and_step(
-                args.wandb_project, args.wandb_run_name, args.wandb_step
-            )
 
     commands_to_run = build_commands(args, extra_cli)
 

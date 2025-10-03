@@ -17,6 +17,7 @@ import wandb
 from olmo_core.utils import prepare_cli_environment
 
 logger = getLogger(__name__)
+WANDB_ENTITY = "eai-ai2"
 
 
 def get_runs_with_min_steps(
@@ -24,11 +25,11 @@ def get_runs_with_min_steps(
     min_steps: int,
     filter_tag: str | None = None,
     filter_name_prefix: str | None = None,
-) -> list[tuple[str, int]]:
+) -> list[tuple[str, str, str, int]]:
     """Get all runs that have completed at least min_steps.
 
     Returns:
-        List of tuples (run_name, max_step) where max_step is the highest logged step.
+        List of tuples (run_name, run_id, run_project, max_step).
     """
     api = wandb.Api()
 
@@ -43,6 +44,7 @@ def get_runs_with_min_steps(
     qualifying_runs = []
     for run in runs:
         run_name = run.name
+        run_id = run.id  # This is the unique identifier
 
         # Apply name prefix filter if specified
         if filter_name_prefix and not run_name.startswith(filter_name_prefix):
@@ -52,8 +54,11 @@ def get_runs_with_min_steps(
         max_step = run.summary.get("_step", 0)
 
         if max_step >= min_steps:
-            qualifying_runs.append((run_name, max_step))
-            logger.info(f"Found qualifying run: {run_name} (max_step={max_step})")
+            run_project = run.project
+            qualifying_runs.append((run_id, run_project, max_step))
+            logger.info(
+                f"Found qualifying run: {run_name} (id={run_id}) in {run_project} (max_step={max_step})"
+            )
         else:
             logger.debug(f"Skipping {run_name}: only {max_step} steps")
 
@@ -65,16 +70,32 @@ def get_eval_step_for_run(max_step: int, target_step: int) -> int:
     if max_step >= target_step:
         return target_step
     else:
-        # Return the highest step available
+        # Return the highest step available that is divisible by 5000
         logger.warning(
             f"Run only has {max_step} steps, using that instead of {target_step}"
         )
-        return max_step
+        return max_step - (max_step % 5000)
+
+
+def get_checkpoint_path_from_wandb_run_name_and_step(
+    wandb_project: str, wandb_run_name: str, step: int
+) -> str:
+    """Get the checkpoint path from the wandb run name and step."""
+    import wandb
+
+    api = wandb.Api()
+    try:
+        run = api.run(f"{WANDB_ENTITY}/{wandb_project}/{wandb_run_name}")
+    except Exception as e:
+        raise RuntimeError(f"Could not fetch wandb run {wandb_run_name}: {e}")
+
+    work_dir = run.config["trainer"]["checkpointer"]["work_dir"]
+    return f"{work_dir}/step{step}"
 
 
 def run_eval_for_checkpoint(
-    wandb_project: str,
-    run_name: str,
+    run_project: str,
+    run_id: str,
     step: int,
     cluster: str,
     extra_args: list[str],
@@ -85,9 +106,7 @@ def run_eval_for_checkpoint(
         "python3",
         "helios/internal/full_eval_sweep.py",
         f"--cluster={cluster}",
-        f"--wandb_project={wandb_project}",
-        f"--wandb_run_name={run_name}",
-        f"--wandb_step={step}",
+        f"--checkpoint_path={get_checkpoint_path_from_wandb_run_name_and_step(run_project, run_id, step)}",
     ]
 
     # Add any extra arguments passed through
@@ -162,13 +181,13 @@ def main() -> None:
     logger.info(f"Found {len(runs)} qualifying runs")
 
     # Process each run
-    for run_name, max_step in runs:
+    for run_id, run_project, max_step in runs:
         eval_step = get_eval_step_for_run(max_step, args.eval_step)
-        logger.info(f"Processing {run_name} at step {eval_step}")
+        logger.info(f"Processing {run_id} at step {eval_step}")
 
         run_eval_for_checkpoint(
-            args.wandb_project,
-            run_name,
+            run_project,
+            run_id,
             eval_step,
             args.cluster,
             extra_args,
