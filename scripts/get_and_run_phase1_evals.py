@@ -93,6 +93,21 @@ def get_checkpoint_path_from_wandb_run_name_and_step(
     return f"{work_dir}/step{step}"
 
 
+def get_module_path_from_wandb(
+    wandb_project: str,
+    wandb_run_name: str,
+) -> str:
+    """Get the module path from the run project."""
+    import wandb
+
+    api = wandb.Api()
+    try:
+        run = api.run(f"{WANDB_ENTITY}/{wandb_project}/{wandb_run_name}")
+    except Exception as e:
+        raise RuntimeError(f"Could not fetch wandb run {wandb_run_name}: {e}")
+    return run.config["launch"]["cmd"][0]
+
+
 def run_eval_for_checkpoint(
     run_project: str,
     run_id: str,
@@ -107,6 +122,7 @@ def run_eval_for_checkpoint(
         "helios/internal/full_eval_sweep.py",
         f"--cluster={cluster}",
         f"--checkpoint_path={get_checkpoint_path_from_wandb_run_name_and_step(run_project, run_id, step)}",
+        f"--module_path={get_module_path_from_wandb(run_project, run_id)}",
     ]
 
     # Add any extra arguments passed through
