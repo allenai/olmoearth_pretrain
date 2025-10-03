@@ -310,7 +310,7 @@ def _get_base_run_name(args: argparse.Namespace, size: str | None = None) -> str
         step_num = os.path.basename(args.checkpoint_path)
         run_name = f"{parent_dir}_{step_num}"
     elif args.model is not None:
-        uuid_str = str(uuid.uuid4())[:8]
+        uuid_str = str(uuid.uuid4())[:4]
         if size is not None:
             size_str = f"_{size}"
         else:
@@ -320,7 +320,7 @@ def _get_base_run_name(args: argparse.Namespace, size: str | None = None) -> str
         logger.warning(
             "No model name provided or checkpoint path, using random run name"
         )
-        run_name = str(uuid.uuid4())[:8]
+        run_name = str(uuid.uuid4())[:4]
     return run_name
 
 
@@ -406,7 +406,7 @@ def _build_default_command(
     logger.info(
         f"Running defaults: {norm_mode} normalization, lr={lr}, pooling={pooling_type}"
     )
-    run_name = f"{base_run_name}_defaults"
+    run_name = f"{base_run_name}_df"
 
     cmd_args = _get_model_specific_args(args.model)
     module_path = (
@@ -444,8 +444,16 @@ def _build_hyperparameter_command(
     logger.info(
         f"Running with module path {args.module_path} on cluster {args.cluster}"
     )
-
-    run_name = f"{base_run_name}_{norm_mode}_lr{lr}_pooling{pooling_type}"
+    # map default to df
+    if norm_mode == "default":
+        norm_mode_str = "df"
+    else:
+        norm_mode_str = norm_mode
+    if pooling_type == "default":
+        pooling_type_str = "df"
+    else:
+        pooling_type_str = pooling_type
+    run_name = f"{base_run_name}_{norm_mode_str}_lr{lr}_pt{pooling_type_str}"
     cmd_args = lr_args.format(arg=lr)
 
     if pooling_type != "default":
