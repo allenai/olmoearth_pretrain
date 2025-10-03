@@ -94,7 +94,7 @@ class Satlas(nn.Module):
             num_channels=len(HELIOS_TO_SATLAS[modality]),
             multi_image=False,
             backbone=self.size_to_backbone[self.size],
-            fpn=False,
+            fpn=True,
             head=None,
             num_categories=None,
             weights=weights,
@@ -104,8 +104,8 @@ class Satlas(nn.Module):
     def normalize(image: torch.Tensor, modality: str) -> torch.Tensor:
         """https://github.com/allenai/satlas/blob/main/Normalization.md."""
         if modality == Modality.SENTINEL2_L2A.name:
-            assert image.shape[1] == 9
-            print(image.min(), image.max())
+            if image.shape[1] != 9:
+                raise ValueError("expected 9 bands for Sentinel-2")
             return torch.cat(
                 [
                     torch.clip(image[:, 0:3, :, :] / 3000, 0, 1),
@@ -187,6 +187,7 @@ class Satlas(nn.Module):
             # may be preferred. An example of this is in
             # https://github.com/allenai/rslearn/blob/master/rslearn/models/swin.py
             output = self.models[modality](per_t_input)[-1]
+            print(output.shape)
             # output shape for atto: (bsz, 320, 7, 7)
             # output shape for tiny: (bsz, 768, 6, 6)
             if not spatial_pool:
