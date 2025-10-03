@@ -384,7 +384,8 @@ def _get_model_size_args(model: BaselineModelName | None, size: str | None) -> s
 def _get_load_checkpoints_args(model: BaselineModelName | None) -> str:
     """Get the no checkpoints arguments."""
     if model is None:
-        return " --trainer.no_checkpoints=True"
+        # Allow load model for helios checkpoints
+        return " --trainer.no_checkpoints=False"
     return ""
 
 
