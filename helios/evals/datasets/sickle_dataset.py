@@ -33,6 +33,7 @@ from helios.evals.datasets.constants import (
     EVAL_TO_HELIOS_S2_L2A_BANDS,
 )
 from helios.evals.datasets.normalize import normalize_bands
+from helios.evals.datasets.utils import load_min_max_stats
 from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
@@ -532,14 +533,66 @@ class SICKLEDataset(Dataset):
 
         self.input_modalities = input_modalities
 
-        self.s2_means, self.s2_stds = self._get_norm_stats(
-            S2_BAND_STATS, EVAL_S2_L2A_BAND_NAMES
+        # Load min/max stats and merge with band stats
+        self.min_max_stats = load_min_max_stats()["sickle"]
+        s2_minmax = self.min_max_stats["sentinel2_l2a"]
+        s1_minmax = self.min_max_stats["sentinel1"]
+        l8_minmax = self.min_max_stats["landsat"]
+
+        merged_s2_stats = {
+            band_name: {
+                **(
+                    {k: S2_BAND_STATS[band_name][k] for k in ("mean", "std")}
+                    if band_name in S2_BAND_STATS
+                    else {}
+                ),
+                **(
+                    {k: s2_minmax[band_name][k] for k in ("min", "max")}
+                    if band_name in s2_minmax
+                    else {}
+                ),
+            }
+            for band_name in EVAL_S2_L2A_BAND_NAMES
+        }
+        merged_s1_stats = {
+            band_name: {
+                **(
+                    {k: S1_BAND_STATS[band_name][k] for k in ("mean", "std")}
+                    if band_name in S1_BAND_STATS
+                    else {}
+                ),
+                **(
+                    {k: s1_minmax[band_name][k] for k in ("min", "max")}
+                    if band_name in s1_minmax
+                    else {}
+                ),
+            }
+            for band_name in EVAL_S1_BAND_NAMES
+        }
+        merged_l8_stats = {
+            band_name: {
+                **(
+                    {k: L8_BAND_STATS[band_name][k] for k in ("mean", "std")}
+                    if band_name in L8_BAND_STATS
+                    else {}
+                ),
+                **(
+                    {k: l8_minmax[band_name][k] for k in ("min", "max")}
+                    if band_name in l8_minmax
+                    else {}
+                ),
+            }
+            for band_name in EVAL_L8_BAND_NAMES
+        }
+
+        self.s2_means, self.s2_stds, self.s2_mins, self.s2_maxs = self._get_norm_stats(
+            merged_s2_stats, EVAL_S2_L2A_BAND_NAMES
         )
-        self.s1_means, self.s1_stds = self._get_norm_stats(
-            S1_BAND_STATS, EVAL_S1_BAND_NAMES
+        self.s1_means, self.s1_stds, self.s1_mins, self.s1_maxs = self._get_norm_stats(
+            merged_s1_stats, EVAL_S1_BAND_NAMES
         )
-        self.l8_means, self.l8_stds = self._get_norm_stats(
-            L8_BAND_STATS, EVAL_L8_BAND_NAMES
+        self.l8_means, self.l8_stds, self.l8_mins, self.l8_maxs = self._get_norm_stats(
+            merged_l8_stats, EVAL_L8_BAND_NAMES
         )
 
         self.norm_method = norm_method
@@ -575,14 +628,18 @@ class SICKLEDataset(Dataset):
     def _get_norm_stats(
         imputed_band_info: dict[str, dict[str, float]],
         band_names: list[str],
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         means = []
         stds = []
+        mins = []
+        maxs = []
         for band_name in band_names:
             assert band_name in imputed_band_info, f"{band_name} not found in band_info"
             means.append(imputed_band_info[band_name]["mean"])  # type: ignore
             stds.append(imputed_band_info[band_name]["std"])  # type: ignore
-        return np.array(means), np.array(stds)
+            mins.append(imputed_band_info[band_name]["min"])  # type: ignore
+            maxs.append(imputed_band_info[band_name]["max"])  # type: ignore
+        return np.array(means), np.array(stds), np.array(mins), np.array(maxs)
 
     def __len__(self) -> int:
         """Length of the dataset."""
@@ -609,13 +666,28 @@ class SICKLEDataset(Dataset):
 
         if not self.norm_stats_from_pretrained:
             l8_image = normalize_bands(
-                l8_image.numpy(), self.l8_means, self.l8_stds, self.norm_method
+                l8_image.numpy(),
+                self.l8_means,
+                self.l8_stds,
+                self.l8_mins,
+                self.l8_maxs,
+                self.norm_method,
             )
             s2_image = normalize_bands(
-                s2_image.numpy(), self.s2_means, self.s2_stds, self.norm_method
+                s2_image.numpy(),
+                self.s2_means,
+                self.s2_stds,
+                self.s2_mins,
+                self.s2_maxs,
+                self.norm_method,
             )
             s1_image = normalize_bands(
-                s1_image.numpy(), self.s1_means, self.s1_stds, self.norm_method
+                s1_image.numpy(),
+                self.s1_means,
+                self.s1_stds,
+                self.s1_mins,
+                self.s1_maxs,
+                self.norm_method,
             )
         else:
             l8_image = self.normalizer_computed.normalize(Modality.LANDSAT, l8_image)

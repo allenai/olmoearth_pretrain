@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Any, NamedTuple
 
 import torch
-from einops import rearrange, repeat
+from einops import rearrange, reduce, repeat
 from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
@@ -185,6 +185,74 @@ class TokensAndMasks(NamedTuple):
         masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
         return x, masks
 
+    def pool_spatially_and_concat_modalities(self) -> Tensor:
+        """Pool the modalities  across time to get spatial features and concatenate the features."""
+        spatial_stacked_features = []
+        for attr_name in self.modalities:
+            if Modality.get(attr_name).is_spatial:
+                mask_attr_name = self.get_masked_modality_name(attr_name)
+                masked_attr = getattr(self, mask_attr_name)
+                if masked_attr is None:
+                    continue
+                if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
+                    attr = getattr(self, attr_name)
+                    # only mean in temporal dimension
+                    pooled_attr = torch.mean(attr, dim=(-3))
+                    spatial_stacked_features.append(pooled_attr)
+        if len(spatial_stacked_features) == 0:
+            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
+        # Concatenate along the band sets dimension instead of stacking
+        spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
+        return spatial_stacked_features
+
+    def pool_spatially(self, pooling_type: PoolingType) -> Tensor:
+        """Pool the modalities across time to get spatial features."""
+        spatial_average = []
+        for attr_name in self.modalities:
+            if Modality.get(attr_name).is_spatial:
+                mask_attr_name = self.get_masked_modality_name(attr_name)
+                masked_attr = getattr(self, mask_attr_name)
+                if masked_attr is None:
+                    continue
+                if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
+                    attr = getattr(self, attr_name)
+                    # pool across time and bandset dimensions
+                    if pooling_type == PoolingType.MEAN:
+                        spatial_average.append(torch.mean(attr, dim=(-2, -3)))
+                    else:
+                        spatial_average.append(
+                            torch.max(torch.max(attr, dim=-2).values, dim=-2).values
+                        )
+        if len(spatial_average) == 0:
+            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
+        spatial_average_t = torch.stack(spatial_average, dim=-1)
+        if pooling_type == PoolingType.MEAN:
+            return spatial_average_t.mean(dim=-1)
+        else:
+            return spatial_average_t.max(dim=-1).values
+
+    def pool_instance_wise(self, pooling_type: PoolingType) -> Tensor:
+        """Pool all the tokens in the instance."""
+        x, mask = self.flatten_tokens_and_masks()
+        # 1s for online encoder, 0s elsewhere
+        mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
+        x_for_pooling = x * mask.unsqueeze(-1)
+        if pooling_type == PoolingType.MAX:
+            x_for_pooling = x_for_pooling.masked_fill(
+                ~mask.bool().unsqueeze(-1), -float("inf")
+            )
+            return x_for_pooling.max(dim=1).values
+        elif pooling_type == PoolingType.MEAN:
+            num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
+            logger.debug(f"num_encoded_tokens: {num_encoded_tokens}")
+            if (num_encoded_tokens == 0).any():
+                raise ValueError(
+                    f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
+                )
+            return x_for_pooling.sum(dim=1) / num_encoded_tokens
+        else:
+            raise ValueError(f"Invalid pooling type: {pooling_type}")
+
     def pool_unmasked_tokens(
         self,
         pooling_type: PoolingType = PoolingType.MAX,
@@ -202,74 +270,13 @@ class TokensAndMasks(NamedTuple):
             requires no masked out tokens
         """
         if concat_features and spatial_pooling:
-            spatial_stacked_features = []
-            for attr_name in self.modalities:
-                if Modality.get(attr_name).is_spatial:
-                    mask_attr_name = self.get_masked_modality_name(attr_name)
-                    masked_attr = getattr(self, mask_attr_name)
-                    if masked_attr is None:
-                        continue
-                    if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
-                        attr = getattr(self, attr_name)
-                        # only mean in temporal dimension
-                        pooled_attr = torch.mean(attr, dim=(-3))
-                        spatial_stacked_features.append(pooled_attr)
-            if len(spatial_stacked_features) == 0:
-                raise ValueError(
-                    "Missing unmasked spatial modalities for spatial pooling."
-                )
-            # Concatenate along the band sets dimension instead of stacking
-            spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
-            # flatten the last 3 dimensions
-            return rearrange(spatial_stacked_features, "b h w c d-> b h w c d")
+            return self.pool_spatially_and_concat_modalities()
         if concat_features:
             raise ValueError("concat_features is not supported for non-spatial pooling")
         if not spatial_pooling:
-            x, mask = self.flatten_tokens_and_masks()
-            # 1s for online encoder, 0s elsewhere
-            mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
-            x_for_pooling = x * mask.unsqueeze(-1)
-            if pooling_type == PoolingType.MAX:
-                x_for_pooling = x_for_pooling.masked_fill(
-                    ~mask.bool().unsqueeze(-1), -float("inf")
-                )
-                return x_for_pooling.max(dim=1).values
-            elif pooling_type == PoolingType.MEAN:
-                num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
-                logger.debug(f"num_encoded_tokens: {num_encoded_tokens}")
-                if (num_encoded_tokens == 0).any():
-                    raise ValueError(
-                        f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
-                    )
-                return x_for_pooling.sum(dim=1) / num_encoded_tokens
-            else:
-                raise ValueError(f"Invalid pooling type: {pooling_type}")
+            return self.pool_instance_wise(pooling_type)
         else:
-            spatial_average = []
-            for attr_name in self.modalities:
-                if Modality.get(attr_name).is_spatial:
-                    mask_attr_name = self.get_masked_modality_name(attr_name)
-                    masked_attr = getattr(self, mask_attr_name)
-                    if masked_attr is None:
-                        continue
-                    if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
-                        attr = getattr(self, attr_name)
-                        # pool across time and bandset dimensions
-                        if pooling_type == PoolingType.MEAN:
-                            spatial_average.append(torch.mean(attr, dim=(-2, -3)))
-                        else:
-                            spatial_average.append(
-                                torch.max(torch.max(attr, dim=-2).values, dim=-2).values
-                            )
-            if len(spatial_average) == 0:
-                raise ValueError(
-                    "Missing unmasked spatial modalities for spatial pooling."
-                )
-            spatial_average_t = torch.stack(spatial_average, dim=-1)
-            if pooling_type == PoolingType.MEAN:
-                return spatial_average_t.mean(dim=-1)
-            else:
-                return spatial_average_t.max(dim=-1).values
+            return self.pool_spatially(pooling_type)
 
 
 class ProjectAndAggregate(nn.Module):
@@ -297,17 +304,25 @@ class ProjectAndAggregate(nn.Module):
         self.projection = nn.Sequential(*projections)
         self.aggregate_then_project = aggregate_then_project
 
-    def forward(self, x: TokensAndMasks) -> torch.Tensor:
-        """Apply a (non)linear projection to an input TokensAndMasks.
-
-        This can be applied either before or after pooling the tokens.
-        """
-        if self.aggregate_then_project:
+    def apply_aggregate_then_project(
+        self, x: TokensAndMasks | torch.Tensor
+    ) -> torch.Tensor:
+        """Apply the aggregate operation to the input."""
+        if isinstance(x, TokensAndMasks):
             pooled_for_contrastive = x.pool_unmasked_tokens(
                 PoolingType.MEAN, spatial_pooling=False
             )
-            return self.projection(pooled_for_contrastive)
+        elif isinstance(x, torch.Tensor):
+            pooled_for_contrastive = reduce(x, "b ... d -> b  d", "mean")
         else:
+            raise ValueError(f"Invalid input type: {type(x)}")
+        return self.projection(pooled_for_contrastive)
+
+    def apply_project_then_aggregate(
+        self, x: TokensAndMasks | torch.Tensor
+    ) -> torch.Tensor:
+        """Apply the project operation to the input then aggregate."""
+        if isinstance(x, TokensAndMasks):
             decoder_emedded_dict = x._asdict()
             for modality in x.modalities:
                 x_modality = getattr(x, modality)
@@ -319,9 +334,26 @@ class ProjectAndAggregate(nn.Module):
                     x, masked_modality_name
                 )
             x_projected = TokensAndMasks(**decoder_emedded_dict)
-            return x_projected.pool_unmasked_tokens(
+            projected_pooled = x_projected.pool_unmasked_tokens(
                 PoolingType.MEAN, spatial_pooling=False
             )
+        elif isinstance(x, torch.Tensor):
+            x_projected = self.projection(x)
+            projected_pooled = reduce(x_projected, "b ... d -> b  d", "mean")
+        else:
+            raise ValueError(f"Invalid input type: {type(x)}")
+        return projected_pooled
+
+    def forward(self, x: TokensAndMasks | torch.Tensor) -> torch.Tensor:
+        """Apply a (non)linear projection to an input TokensAndMasks.
+
+        This can be applied either before or after pooling the tokens.
+        """
+        return (
+            self.apply_aggregate_then_project(x)
+            if self.aggregate_then_project
+            else self.apply_project_then_aggregate(x)
+        )
 
 
 class FlexiHeliosPatchEmbeddings(nn.Module):
@@ -347,10 +379,29 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         self.supported_modality_names = supported_modality_names
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
+
         for modality in self.supported_modality_names:
             self.per_modality_embeddings[modality] = (
                 self._get_patch_embedding_module_for_modality(modality)
             )
+
+        # For every patch embedding module we want to create a unique
+        for modality in self.supported_modality_names:
+            for idx, bandset_indices in enumerate(
+                Modality.get(modality).bandsets_as_indices()
+            ):
+                buffer_name = self._get_buffer_name(modality, idx)
+                banset_indices_tensor = torch.tensor(bandset_indices, dtype=torch.long)
+                self.register_buffer(
+                    buffer_name, banset_indices_tensor, persistent=False
+                )
+
+        # Create a dictionary of per modality index tensors to do  index select with registered buffer
+
+    @staticmethod
+    def _get_buffer_name(modality: str, idx: int) -> str:
+        """Get the buffer name."""
+        return f"{modality}__{idx}_buffer"
 
     @staticmethod
     def _get_embedding_module_name(modality: str, idx: int) -> str:
@@ -395,7 +446,11 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
             )
 
     def apply_embedding_to_modality(
-        self, modality: str, input_data: MaskedHeliosSample, patch_size: int
+        self,
+        modality: str,
+        input_data: MaskedHeliosSample,
+        patch_size: int,
+        fast_pass: bool = False,
     ) -> tuple[Tensor, Tensor]:
         """Apply embedding to a modality."""
         logger.debug(f"applying embedding to modality:{modality}")
@@ -406,7 +461,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         modality_spec = Modality.get(modality)
 
         modality_tokens, modality_masks = [], []
-        for idx, channel_set_indices in enumerate(modality_spec.bandsets_as_indices()):
+        for idx in range(modality_spec.num_band_sets):
             modality_specific_kwargs = {}
             if not modality_spec.is_spatial:
                 # static in time
@@ -420,9 +475,12 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
                     idx,
                 ]
                 modality_specific_kwargs = {"patch_size": patch_size}
-            # Now apply the embedding to the patchified data
-            if (token_mask == MaskValue.ONLINE_ENCODER.value).any():
-                patchified_data = modality_data[..., channel_set_indices]
+            # In the fast pass we want to the sync that comes with checking for online encoder
+            if fast_pass or (token_mask == MaskValue.ONLINE_ENCODER.value).any():
+                buffer_name = self._get_buffer_name(modality, idx)
+                patchified_data = torch.index_select(
+                    modality_data, -1, getattr(self, buffer_name)
+                )
                 embedding_module = self.per_modality_embeddings[modality][
                     self._get_embedding_module_name(modality, idx)
                 ]
@@ -444,10 +502,15 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         """Check if any data is seen by the encoder."""
         return (MaskValue.ONLINE_ENCODER.value == modality_mask).any()
 
+    def apply_compile(self) -> None:
+        """Apply torch.compile to the model."""
+        self.compile(dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
+
     def forward(
         self,
         input_data: MaskedHeliosSample,
         patch_size: int,
+        fast_pass: bool = False,
     ) -> dict[str, Tensor]:
         """Return flexibly patchified embeddings for each modality of the input data.
 
@@ -467,7 +530,7 @@ class FlexiHeliosPatchEmbeddings(nn.Module):
         )
         for modality in modalities_to_process:
             modality_tokens, modality_masks = self.apply_embedding_to_modality(
-                modality, input_data, patch_size
+                modality, input_data, patch_size, fast_pass
             )
             output_dict[modality] = modality_tokens
             modality_mask_name = input_data.get_masked_modality_name(modality)
@@ -765,7 +828,7 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         Returns:
             Tensor with encodings applied based on modality type
         """
-        logger.info(
+        logger.debug(
             f"use_modality_encodings: {use_modality_encodings}, use_temporal_encodings: {use_temporal_encodings}"
         )
         # TODO: Improve this implementation it is quite bad
@@ -984,31 +1047,6 @@ class FlexiHeliosBase(nn.Module):
 
         return tokens, masks
 
-    def stack_spatial_modalities_and_masks(
-        self, tokens_dict: dict[str, Tensor]
-    ) -> Tensor:
-        """Stack the spatial modalities together."""
-        available_modalities = return_modalities_from_dict(tokens_dict)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
-        )
-        mask_list = []
-        data_list = []
-        for modality in modalities_to_process:
-            if Modality.get(modality).is_spatial:
-                masked_modality_name = MaskedHeliosSample.get_masked_modality_name(
-                    modality
-                )
-                logger.info(
-                    f"modality: {modality}, masked_modality_name: {masked_modality_name}"
-                )
-                data = tokens_dict[modality]
-                mask = tokens_dict[masked_modality_name]
-                data_list.append(data)
-                mask_list.append(mask)
-        # stack in the modality dimension
-        return torch.cat(data_list, dim=4), torch.cat(mask_list, dim=4)
-
     @staticmethod
     def _construct_einops_pattern(
         spatial_dims: tuple[int, ...],
@@ -1036,7 +1074,6 @@ class FlexiHeliosBase(nn.Module):
         tokens_only_dict = {}
         original_masks_dict = {}
         modalities_to_dims_dict = {}
-        # TODO: Should I have a dict like object that has methods that can return a mask or atoken here?
         available_modalities = return_modalities_from_dict(x)
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
@@ -1140,6 +1177,7 @@ class Encoder(FlexiHeliosBase):
         drop_path: float,
         supported_modalities: list[ModalitySpec],
         max_sequence_length: int,
+        num_register_tokens: int = 0,
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         num_projection_layers: int = 1,
@@ -1147,6 +1185,7 @@ class Encoder(FlexiHeliosBase):
         use_flash_attn: bool = False,
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
+        log_token_norm_stats: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1160,6 +1199,7 @@ class Encoder(FlexiHeliosBase):
             drop_path: Drop path rate
             supported_modalities: list documenting modalities used in a given model instantiation
             max_sequence_length: Maximum sequence length
+            num_register_tokens: Number of register tokens to use
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
             num_projection_layers: The number of layers to use in the projection. If >1, then
@@ -1170,6 +1210,7 @@ class Encoder(FlexiHeliosBase):
             frozen_patch_embeddings: If True, we freeze the embedding layer, as recommended in
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
+            log_token_norm_stats: Whether to log the token norm stats
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1184,6 +1225,13 @@ class Encoder(FlexiHeliosBase):
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
         )
+        self.num_register_tokens = num_register_tokens
+        self.has_register_tokens = num_register_tokens > 0
+        self.log_token_norm_stats = log_token_norm_stats
+        if self.has_register_tokens:
+            self.register_tokens = nn.Parameter(
+                torch.zeros(num_register_tokens, embedding_size)
+            )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
@@ -1203,6 +1251,12 @@ class Encoder(FlexiHeliosBase):
         if frozen_patch_embeddings:
             for p in self.patch_embeddings.parameters():
                 p.requires_grad = False
+        if self.has_register_tokens:
+            self._init_register_tokens()
+
+    def _init_register_tokens(self) -> None:
+        """Initialize the register tokens."""
+        nn.init.xavier_uniform_(self.register_tokens)
 
     def create_token_exit_ids(
         self, x: dict[str, Tensor], token_exit_cfg: dict[str, int]
@@ -1327,16 +1381,121 @@ class Encoder(FlexiHeliosBase):
             exit_ids_seq = None
         return exit_ids_seq
 
-    def get_attn_or_none_mask(
+    def _maybe_get_attn_mask(
         self,
         new_mask: Tensor,
-        always_pass_none_mask_to_transformer: bool,
+        fast_pass: bool,
     ) -> Tensor | None:
         """Get the attention mask or None if we should pass None to the transformer."""
-        if always_pass_none_mask_to_transformer or not self.training:
+        if fast_pass or not self.training:
             return None
         else:
             return new_mask
+
+    def add_register_tokens_and_masks(
+        self,
+        tokens: Tensor,
+        attn_mask: Tensor | None,
+        processed_register_tokens: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor | None]:
+        """Concatenate register tokens to the tokens."""
+        batch_size = tokens.shape[0]
+        # Expand register tokens to match batch size: [num_register_tokens, embedding_size] -> [batch_size, num_register_tokens, embedding_size]
+        if processed_register_tokens is None:
+            reg_tokens = self.register_tokens.unsqueeze(0).expand(batch_size, -1, -1)
+        else:
+            reg_tokens = processed_register_tokens
+        # Concatenate register tokens at the beginning: [batch_size, seq_len, embedding_size] -> [batch_size, num_register_tokens + seq_len, embedding_size]
+        tokens = torch.cat([reg_tokens, tokens], dim=1)
+        if attn_mask is not None:
+            # Create mask for register tokens (all True - they should participate in attention)
+            reg_mask = torch.ones(
+                batch_size,
+                self.num_register_tokens,
+                dtype=attn_mask.dtype,
+                device=attn_mask.device,
+            )
+            attn_mask = torch.cat([reg_mask, attn_mask], dim=1)
+        else:
+            reg_mask = None
+        return tokens, attn_mask
+
+    def pop_register_tokens(self, tokens: Tensor) -> tuple[Tensor, Tensor]:
+        """Pop the register tokens from the tokens."""
+        register_tokens = tokens[:, : self.num_register_tokens, :]
+        tokens = tokens[:, self.num_register_tokens :, :]
+        return tokens, register_tokens
+
+    def get_token_norm_stats(
+        self, tokens: Tensor, register_tokens: Tensor
+    ) -> dict[str, float]:
+        """Get the token norm stats."""
+        # Compute norms for register tokens: [batch_size, num_register_tokens]
+        register_tokens_norms = torch.norm(register_tokens, dim=2)
+        reg_norms_flat = register_tokens_norms.flatten()
+        reg_stats = {
+            "register_mean": reg_norms_flat.mean().item(),
+            "register_min": reg_norms_flat.min().item(),
+            "register_max": reg_norms_flat.max().item(),
+        }
+
+        # Compute norms for non-register tokens: [batch_size, seq_len]
+        nonreg_tokens_norms = torch.norm(tokens, dim=2)
+        nonreg_norms_flat = nonreg_tokens_norms.flatten()
+        percentiles = [25.0, 75.0, 90.0, 95.0, 99.0]
+        nonreg_percentiles = torch.quantile(
+            nonreg_norms_flat.float(),
+            torch.tensor(
+                [p / 100.0 for p in percentiles], device=nonreg_norms_flat.device
+            ),
+        ).tolist()
+        nonreg_stats = {
+            "nonregister_mean": nonreg_norms_flat.mean().item(),
+            "nonregister_min": nonreg_norms_flat.min().item(),
+            "nonregister_max": nonreg_norms_flat.max().item(),
+            "nonregister_std": nonreg_norms_flat.std().item(),
+            "nonregister_25th": nonreg_percentiles[0],
+            "nonregister_75th": nonreg_percentiles[1],
+            "nonregister_90th": nonreg_percentiles[2],
+            "nonregister_95th": nonreg_percentiles[3],
+            "nonregister_99th": nonreg_percentiles[4],
+        }
+
+        token_norm_stats = {**reg_stats, **nonreg_stats}
+        return token_norm_stats
+
+    def _maybe_remove_masked_tokens(
+        self,
+        tokens: Tensor,
+        mask: Tensor,
+        fast_pass: bool,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Remove masked tokens from the tokens and masks."""
+        if fast_pass:
+            # This is the inference fast pass
+            indices = None
+            new_mask = None
+            seq_lengths = None
+            max_seqlen = None
+            bool_mask = None
+        else:
+            bool_mask = mask == MaskValue.ONLINE_ENCODER.value
+            tokens, indices, new_mask, seq_lengths, max_seqlen = (
+                self.remove_masked_tokens(tokens, bool_mask)
+            )
+        return tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask
+
+    def _maybe_add_removed_tokens(
+        self,
+        tokens: Tensor,
+        indices: Tensor,
+        mask: Tensor,
+        fast_pass: bool,
+    ) -> Tensor:
+        """Add removed tokens to the tokens and masks."""
+        if not fast_pass:
+            tokens, _ = self.add_removed_tokens(tokens, indices, mask)
+        return tokens
 
     def apply_attn(
         self,
@@ -1345,12 +1504,13 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
-        always_pass_none_mask_to_transformer: bool = False,
-    ) -> dict[str, Tensor]:
+        fast_pass: bool = False,
+    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
+        # already a no-op but we could remove entirely
         exit_ids_seq = self.create_exit_seqs(
             tokens_only_dict, original_masks_dict, token_exit_cfg
         )
@@ -1366,11 +1526,10 @@ class Encoder(FlexiHeliosBase):
         tokens_dict.update(original_masks_dict)
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
-        bool_mask = mask == MaskValue.ONLINE_ENCODER.value
-
-        tokens, indices, new_mask, seq_lengths, max_seqlen = self.remove_masked_tokens(
-            tokens, bool_mask
+        tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
+            self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
         )
+
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
                 exit_ids_seq, bool_mask
@@ -1379,15 +1538,23 @@ class Encoder(FlexiHeliosBase):
             exited_tokens, _, _, _, _ = self.remove_masked_tokens(
                 exited_tokens, bool_mask
             )
-        cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
+
         # Pack x tokens
-        if self.use_flash_attn:
+        if self.use_flash_attn and not fast_pass:
+            cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
             og_shape = tokens.shape
             tokens = self.pack_tokens(tokens, new_mask)
+        else:
+            cu_seqlens = None
 
-        attn_mask = self.get_attn_or_none_mask(
-            new_mask, always_pass_none_mask_to_transformer
+        attn_mask = self._maybe_get_attn_mask(
+            new_mask,
+            fast_pass=fast_pass,
         )
+
+        if self.has_register_tokens:
+            tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
+
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -1405,6 +1572,7 @@ class Encoder(FlexiHeliosBase):
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
+
             tokens = blk(
                 x=tokens,
                 cu_seqlens=cu_seqlens,
@@ -1413,7 +1581,17 @@ class Encoder(FlexiHeliosBase):
                 attn_mask=attn_mask,
             )
 
-        if self.use_flash_attn:
+        if self.has_register_tokens:
+            tokens, register_tokens = self.pop_register_tokens(tokens)
+            token_norm_stats = (
+                self.get_token_norm_stats(tokens, register_tokens)
+                if self.log_token_norm_stats
+                else None
+            )
+        else:
+            token_norm_stats = None
+
+        if self.use_flash_attn and not fast_pass:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
 
         if exit_ids_seq is not None:
@@ -1432,13 +1610,14 @@ class Encoder(FlexiHeliosBase):
         tokens = self.norm(tokens)
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
-        tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
+        tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
+
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
         )
         # merge original masks and the processed tokens
         tokens_per_modality_dict.update(original_masks_dict)
-        return tokens_per_modality_dict
+        return tokens_per_modality_dict, token_norm_stats
 
     def forward(
         self,
@@ -1446,7 +1625,7 @@ class Encoder(FlexiHeliosBase):
         patch_size: int,
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
-        always_pass_none_mask_to_transformer: bool = False,
+        fast_pass: bool = False,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -1455,30 +1634,39 @@ class Encoder(FlexiHeliosBase):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
-            always_pass_none_mask_to_transformer: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
+            fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
         """
-        # TODO: Add step to validate the exit config is valid
-        patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
+        if fast_pass and token_exit_cfg is not None:
+            raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
+
+        patchified_tokens_and_masks = self.patch_embeddings.forward(
+            x, patch_size, fast_pass=fast_pass
+        )
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
-            patchified_tokens_and_masks = self.apply_attn(
+            patchified_tokens_and_masks, token_norm_stats = self.apply_attn(
                 x=patchified_tokens_and_masks,
                 timestamps=x.timestamps,
                 patch_size=patch_size,
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
-                always_pass_none_mask_to_transformer=always_pass_none_mask_to_transformer,
+                fast_pass=fast_pass,
             )
+        else:
+            token_norm_stats = {}
         output = TokensAndMasks(**patchified_tokens_and_masks)
-        # TODO: we should probably switch this to a dict
-        output_dict = {
+        output_dict: dict[str, Any] = {
             "tokens_and_masks": output,
-            "project_aggregated": self.project_and_aggregate(output),
         }
+        if token_norm_stats:
+            output_dict["token_norm_stats"] = token_norm_stats
+
+        if not fast_pass:
+            output_dict["project_aggregated"] = self.project_and_aggregate(output)
         return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
@@ -1490,6 +1678,16 @@ class Encoder(FlexiHeliosBase):
         # fully_shard(self.project_and_aggregate, **fsdp_kwargs)
         # register_fsdp_forward_method(self.project_and_aggregate, "forward")
         fully_shard(self, **fsdp_kwargs)
+
+    def apply_compile(self) -> None:
+        """Apply torch.compile to the model."""
+        # self.compile(mode="max-autotune", dynamic=False, fullgraph=True)
+        logger.info("Compiling blocks")
+        # torch.compile(self.blocks, dynamic=False, mode="max-autotune", fullgraph=True)
+        # individual block compile is still a lot slower
+        for block in self.blocks:
+            block.apply_compile()
+        # torch.compile(self.patch_embeddings, dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
 
 
 class PredictorBase(FlexiHeliosBase):
@@ -1880,6 +2078,7 @@ class EncoderConfig(Config):
     """Configuration for the Encoder."""
 
     supported_modality_names: list[str]
+
     embedding_size: int = 16
     # This is the base patch size for the patch embedder
     max_patch_size: int = 8
@@ -1889,6 +2088,7 @@ class EncoderConfig(Config):
     depth: int = 2
     drop_path: float = 0.1
     max_sequence_length: int = 12
+    num_register_tokens: int = 0
     learnable_channel_embeddings: bool = True
     random_channel_embeddings: bool = False
     num_projection_layers: int = 1
@@ -1896,6 +2096,7 @@ class EncoderConfig(Config):
     use_flash_attn: bool = False
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
+    log_token_norm_stats: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""

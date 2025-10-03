@@ -18,6 +18,7 @@ from helios.train.masking import MaskedHeliosSample
 
 from .constants import EVAL_S1_BAND_NAMES, EVAL_TO_HELIOS_S1_BANDS
 from .normalize import normalize_bands
+from .utils import load_min_max_stats
 
 BAND_STATS = {
     "vv": {"mean": -11.27174944, "std": 4.81716083},
@@ -196,7 +197,27 @@ class Sen1Floods11Dataset(Dataset):
         if split == "val":
             split = "valid"
 
-        self.means, self.stds = self._get_norm_stats(BAND_STATS)
+        self.min_max_stats = load_min_max_stats()["sen1floods11"]
+        # Merge BAND_STATS and min/max stats
+        minmax = self.min_max_stats["sentinel1"]
+        merged_band_stats = {
+            band_name: {
+                **(
+                    {k: BAND_STATS[band_name][k] for k in ("mean", "std")}
+                    if band_name in BAND_STATS
+                    else {}
+                ),
+                **(
+                    {k: minmax[band_name][k] for k in ("min", "max")}
+                    if band_name in minmax
+                    else {}
+                ),
+            }
+            for band_name in EVAL_S1_BAND_NAMES
+        }
+        self.means, self.stds, self.mins, self.maxs = self._get_norm_stats(
+            merged_band_stats
+        )
 
         self.split = split
 
@@ -247,14 +268,18 @@ class Sen1Floods11Dataset(Dataset):
     @staticmethod
     def _get_norm_stats(
         imputed_band_info: dict[str, dict[str, float]],
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         means = []
         stds = []
+        mins = []
+        maxs = []
         for band_name in EVAL_S1_BAND_NAMES:
             assert band_name in imputed_band_info, f"{band_name} not found in band_info"
             means.append(imputed_band_info[band_name]["mean"])  # type: ignore
             stds.append(imputed_band_info[band_name]["std"])  # type: ignore
-        return np.array(means), np.array(stds)
+            mins.append(imputed_band_info[band_name]["min"])  # type: ignore
+            maxs.append(imputed_band_info[band_name]["max"])  # type: ignore
+        return np.array(means), np.array(stds), np.array(mins), np.array(maxs)
 
     def __len__(self) -> int:
         """Length of eval set."""
@@ -267,7 +292,12 @@ class Sen1Floods11Dataset(Dataset):
 
         if not self.norm_stats_from_pretrained:
             image = normalize_bands(
-                image.numpy(), self.means, self.stds, self.norm_method
+                image.numpy(),
+                self.means,
+                self.stds,
+                self.mins,
+                self.maxs,
+                self.norm_method,
             )
         image = repeat(image, "h w c -> h w t c", t=1)[
             :,

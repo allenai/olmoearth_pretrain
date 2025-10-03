@@ -23,6 +23,7 @@ from helios.evals.datasets.constants import (
     EVAL_TO_HELIOS_S2_BANDS,
 )
 from helios.evals.datasets.normalize import normalize_bands
+from helios.evals.datasets.utils import load_min_max_stats
 from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ torch.multiprocessing.set_sharing_strategy("file_system")
 
 DATA_DIR = UPath("/weka/dfive-default/helios/evaluation/PASTIS-R")
 PASTIS_DIR = UPath("/weka/dfive-default/presto_eval_sets/pastis_r")
+PASTIS_DIR_ORIG = UPath("/weka/dfive-default/presto_eval_sets/pastis_r_origsize")
 PASTIS_DIR_PARTITION = UPath("/weka/dfive-default/presto_eval_sets/pastis")
 
 
@@ -64,12 +66,14 @@ class PASTISRProcessor:
     It also imputes the missing bands in the S2 images.
     """
 
-    def __init__(self, data_dir: str, output_dir: str):
+    def __init__(self, data_dir: str, output_dir: str, resize_to_64: bool = True):
         """Initialize PASTIS-R processor.
 
         Args:
             data_dir: Path to PASTIS-R dataset
             output_dir: Path to output directory
+            resize_to_64: Whether or not to resize the pastis dataset into 64x64 tiles
+                from 128x128 tiles
         """
         self.data_dir = UPath(data_dir)
         self.output_dir = UPath(output_dir)
@@ -91,6 +95,7 @@ class PASTISRProcessor:
             "201909",
             "201910",
         ]
+        self.resize_to_64 = resize_to_64
 
     def impute(self, img: torch.Tensor) -> torch.Tensor:
         """Impute missing bands in Sentinel-2 images."""
@@ -134,7 +139,7 @@ class PASTISRProcessor:
             img = torch.tensor(images[int(idx)], dtype=torch.float32)
             # S2 in PASTIS has 10 bands, so imputation is always needed
             if modality_name == Modality.SENTINEL2_L2A.name:
-                if img.shape[1] == 10:
+                if img.shape[0] == 10:
                     img = self.impute(img)
                 else:
                     raise ValueError(
@@ -197,20 +202,29 @@ class PASTISRProcessor:
                 ]
             )
 
-        return {
-            "fold": f"fold_{properties['Fold']}",
-            "s2_images": split_images(s2_images),
-            "s1_images": split_images(s1_images),
-            "months": torch.stack([months] * 4),
-            "targets": torch.stack(
-                [
-                    targets[:64, :64],
-                    targets[64:, :64],
-                    targets[:64, 64:],
-                    targets[64:, 64:],
-                ]
-            ),
-        }
+        if self.resize_to_64:
+            return {
+                "fold": f"fold_{properties['Fold']}",
+                "s2_images": split_images(s2_images),
+                "s1_images": split_images(s1_images),
+                "months": torch.stack([months] * 4),
+                "targets": torch.stack(
+                    [
+                        targets[:64, :64],
+                        targets[64:, :64],
+                        targets[:64, 64:],
+                        targets[64:, 64:],
+                    ]
+                ),
+            }
+        else:
+            return {
+                "fold": f"fold_{properties['Fold']}",
+                "s2_images": s2_images.unsqueeze(0),
+                "s1_images": s1_images.unsqueeze(0),
+                "months": months.unsqueeze(0),
+                "targets": targets.unsqueeze(0),
+            }
 
     def process(self) -> None:
         """Process the PASTIS-R dataset."""
@@ -322,6 +336,17 @@ def process_pastis(
     processor.process()
 
 
+def process_pastis_orig_size(
+    data_dir: str = DATA_DIR,
+    output_dir: str = PASTIS_DIR_ORIG,
+) -> None:
+    """Process PASTIS-R dataset."""
+    processor = PASTISRProcessor(
+        data_dir=data_dir, output_dir=output_dir, resize_to_64=False
+    )
+    processor.process()
+
+
 class PASTISRDataset(Dataset):
     """PASTIS-R dataset class."""
 
@@ -355,12 +380,47 @@ class PASTISRDataset(Dataset):
 
         self.input_modalities = input_modalities
 
-        # Does not support 12 band L2A data
-        self.s2_means, self.s2_stds = self._get_norm_stats(
-            S2_BAND_STATS, EVAL_S2_BAND_NAMES
+        # Load min/max stats and merge with band stats
+        self.min_max_stats = load_min_max_stats()["pastis"]
+        s2_minmax = self.min_max_stats["sentinel2_l2a"]
+        s1_minmax = self.min_max_stats["sentinel1"]
+
+        merged_s2_stats = {
+            band_name: {
+                **(
+                    {k: S2_BAND_STATS[band_name][k] for k in ("mean", "std")}
+                    if band_name in S2_BAND_STATS
+                    else {}
+                ),
+                **(
+                    {k: s2_minmax[band_name][k] for k in ("min", "max")}
+                    if band_name in s2_minmax
+                    else {}
+                ),
+            }
+            for band_name in EVAL_S2_BAND_NAMES
+        }
+        merged_s1_stats = {
+            band_name: {
+                **(
+                    {k: S1_BAND_STATS[band_name][k] for k in ("mean", "std")}
+                    if band_name in S1_BAND_STATS
+                    else {}
+                ),
+                **(
+                    {k: s1_minmax[band_name][k] for k in ("min", "max")}
+                    if band_name in s1_minmax
+                    else {}
+                ),
+            }
+            for band_name in EVAL_S1_BAND_NAMES
+        }
+
+        self.s2_means, self.s2_stds, self.s2_mins, self.s2_maxs = self._get_norm_stats(
+            merged_s2_stats, EVAL_S2_BAND_NAMES
         )
-        self.s1_means, self.s1_stds = self._get_norm_stats(
-            S1_BAND_STATS, EVAL_S1_BAND_NAMES
+        self.s1_means, self.s1_stds, self.s1_mins, self.s1_maxs = self._get_norm_stats(
+            merged_s1_stats, EVAL_S1_BAND_NAMES
         )
         self.split = split
         self.norm_method = norm_method
@@ -392,14 +452,18 @@ class PASTISRDataset(Dataset):
     def _get_norm_stats(
         imputed_band_info: dict[str, dict[str, float]],
         band_names: list[str],
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         means = []
         stds = []
+        mins = []
+        maxs = []
         for band_name in band_names:
             assert band_name in imputed_band_info, f"{band_name} not found in band_info"
             means.append(imputed_band_info[band_name]["mean"])  # type: ignore
             stds.append(imputed_band_info[band_name]["std"])  # type: ignore
-        return np.array(means), np.array(stds)
+            mins.append(imputed_band_info[band_name]["min"])  # type: ignore
+            maxs.append(imputed_band_info[band_name]["max"])  # type: ignore
+        return np.array(means), np.array(stds), np.array(mins), np.array(maxs)
 
     def __len__(self) -> int:
         """Length of the dataset."""
@@ -424,10 +488,20 @@ class PASTISRDataset(Dataset):
         # If using norm stats from pretrained we should normalize before we rearrange
         if not self.norm_stats_from_pretrained:
             s2_image = normalize_bands(
-                s2_image, self.s2_means, self.s2_stds, self.norm_method
+                s2_image,
+                self.s2_means,
+                self.s2_stds,
+                self.s2_mins,
+                self.s2_maxs,
+                self.norm_method,
             )
             s1_image = normalize_bands(
-                s1_image, self.s1_means, self.s1_stds, self.norm_method
+                s1_image,
+                self.s1_means,
+                self.s1_stds,
+                self.s1_mins,
+                self.s1_maxs,
+                self.norm_method,
             )
 
         s2_image = s2_image[:, :, :, EVAL_TO_HELIOS_S2_BANDS]

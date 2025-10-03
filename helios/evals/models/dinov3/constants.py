@@ -12,7 +12,7 @@ class DinoV3Models(StrEnum):
     BASE_WEB = "dinov3_vitb16"
     LARGE_WEB = "dinov3_vitl16"
     HUGE_PLUS_WEB = "dinov3_vith16plus"
-    FUll_7B_WEB = "dinov3_vit7b16"
+    FULL_7B_WEB = "dinov3_vit7b16"
     LARGE_SATELLITE = "dinov3_vitl16_sat"  # just the name I copied too
     FULL_7B_SATELLITE = "dinov3_vit7b16_sat"
     # Not yet clear how to download the satelite models
@@ -42,8 +42,8 @@ MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL = {
         DinoV3Models.HUGE_PLUS_WEB,
         f"{CHECKPOINT_DIR}/dinov3_vith16plus_pretrain_lvd1689m-7c1da9a5.pth",
     ),
-    DinoV3Models.FUll_7B_WEB: (
-        DinoV3Models.FUll_7B_WEB,
+    DinoV3Models.FULL_7B_WEB: (
+        DinoV3Models.FULL_7B_WEB,
         f"{CHECKPOINT_DIR}/dinov3_vit7b16_pretrain_lvd1689m-a955f4.pth",
     ),
     DinoV3Models.FULL_7B_SATELLITE: (

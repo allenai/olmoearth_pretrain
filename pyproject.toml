@@ -34,6 +34,7 @@ all = { file = ["requirements.txt", "requirements-dev.txt", "requirements-eval.t
 
 [tool.setuptools.package-data]
 "helios.data.norm_configs" = ["*.json"]
+"helios.evals.datasets.config" = ["*.json"]
 
 [tool.ruff]
 fix = true
@@ -54,3 +55,4 @@ addopts = [
 
 [tool.ruff.lint.per-file-ignores]
 "helios/evals/datasets/cropharvest_package/*" = ["D"]
+"helios/evals/models/copernicusfm/src/*" = ["D", "UP", "E", "F"]

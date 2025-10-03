@@ -556,4 +556,4 @@ class Block(nn.Module):
 
     def apply_compile(self) -> None:
         """Apply torch.compile to the model."""
-        self.compile()
+        self.compile(dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)

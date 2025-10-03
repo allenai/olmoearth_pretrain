@@ -7,7 +7,9 @@ import torch
 from helios.data.constants import MISSING_VALUE, Modality
 from helios.data.dataset import HeliosSample
 from helios.train.masking import (
+    MaskedHeliosSample,
     MaskValue,
+    ModalityCrossRandomMaskingStrategy,
     ModalityCrossSpaceMaskingStrategy,
     ModalityMaskingStrategy,
     ModalitySpaceTimeMaskingStrategy,
@@ -890,7 +892,7 @@ def test_random_range_masking() -> None:
 
 def test_space_cross_modality_masking(set_random_seeds: None) -> None:
     """Test space cross modality masking."""
-    b, h, w, t = 4, 4, 4, 3
+    b, h, w, t = 100, 4, 4, 3
 
     patch_size = 1
 
@@ -910,47 +912,52 @@ def test_space_cross_modality_masking(set_random_seeds: None) -> None:
     )
 
     strategy = ModalityCrossSpaceMaskingStrategy(
-        encode_ratio=0.1,
-        decode_ratio=0.75,
+        encode_ratio=0.5,
+        decode_ratio=0.5,
         allow_encoding_decoding_same_bandset=False,
     )
     masked_sample = strategy.apply_mask(batch, patch_size=patch_size)
     logger.info(f"masked_sample: {masked_sample}")
-    # Check that the worldcover mask has the expected values
-    # Check that latlon mask has the expected values
-    expected_latlon_mask = torch.tensor([[0], [2], [0], [0]])
-    expected_worldcover_mask = torch.tensor(
-        [
-            [
-                [[[2]], [[2]], [[2]], [[1]]],
-                [[[2]], [[2]], [[1]], [[2]]],
-                [[[2]], [[2]], [[1]], [[2]]],
-                [[[2]], [[2]], [[1]], [[2]]],
-            ],
-            [
-                [[[1]], [[2]], [[2]], [[1]]],
-                [[[2]], [[2]], [[2]], [[2]]],
-                [[[2]], [[1]], [[2]], [[2]]],
-                [[[2]], [[2]], [[1]], [[2]]],
-            ],
-            [
-                [[[1]], [[1]], [[1]], [[1]]],
-                [[[1]], [[1]], [[1]], [[0]]],
-                [[[1]], [[1]], [[1]], [[1]]],
-                [[[1]], [[1]], [[1]], [[1]]],
-            ],
-            [
-                [[[2]], [[2]], [[2]], [[2]]],
-                [[[2]], [[1]], [[2]], [[2]]],
-                [[[2]], [[2]], [[1]], [[1]]],
-                [[[1]], [[2]], [[2]], [[2]]],
-            ],
-        ]
-    )
 
-    # Assert that the masks match the expected values
-    assert torch.equal(masked_sample.worldcover_mask, expected_worldcover_mask)
-    assert torch.equal(masked_sample.latlon_mask, expected_latlon_mask)
+    # 50% of the latlons will be masked via space masking.
+    # For the remaining 50%, cross modality will pick 2, 3, 4, or 5 band sets to encode.
+    # We provided six band sets total.
+    # This means 0.5 + 0.5 * 1/4 (4/6 + 3/6 + 2/6 + 1/6) = 0.7083 of latlons should be masked.
+    latlon_masked_fraction = torch.count_nonzero(
+        masked_sample.latlon_mask == MaskValue.DECODER.value
+    ) / torch.numel(masked_sample.latlon_mask)
+    assert 0.65 <= latlon_masked_fraction <= 0.75
+
+    # We also verify that, for the first band of SENTINEL2_L2A, there should both be
+    # samples where ~50% are encoded and 50% target encoder only, and ~50% decoded and
+    # 50% target encoder only.
+    # And nothing else.
+    saw_encode_sample = False
+    saw_decode_sample = False
+    for sample_idx in range(b):
+        assert masked_sample.sentinel2_l2a_mask is not None
+        cur_mask = masked_sample.sentinel2_l2a_mask[sample_idx, :, :, :, 0]
+        encode_fraction = torch.count_nonzero(
+            cur_mask == MaskValue.ONLINE_ENCODER.value
+        ) / torch.numel(cur_mask)
+        decode_fraction = torch.count_nonzero(
+            cur_mask == MaskValue.DECODER.value
+        ) / torch.numel(cur_mask)
+        target_encoder_fraction = torch.count_nonzero(
+            cur_mask == MaskValue.TARGET_ENCODER_ONLY.value
+        ) / torch.numel(cur_mask)
+        if 0.4 <= encode_fraction <= 0.6 and 0.4 <= target_encoder_fraction <= 0.6:
+            saw_encode_sample = True
+            continue
+        elif 0.4 <= decode_fraction <= 0.6 and 0.4 <= target_encoder_fraction <= 0.6:
+            saw_decode_sample = True
+            continue
+        else:
+            raise AssertionError(
+                f"got unexpected sample with encode_fraction={encode_fraction}, decode_fraction={decode_fraction}, target_encoder_fraction={target_encoder_fraction}"
+            )
+    assert saw_encode_sample
+    assert saw_decode_sample
 
 
 def test_space_cross_modality_masking_with_missing_data(set_random_seeds: None) -> None:
@@ -992,8 +999,7 @@ def test_space_cross_modality_masking_with_missing_data(set_random_seeds: None) 
     )
     # Check that the worldcover mask has the expected values
     # Check that latlon mask has the expected values
-    expected_latlon_mask = torch.tensor([[0], [0], [0], [0]])
-
+    expected_latlon_mask = torch.tensor([[2], [2], [1], [2]])
     # Assert that the masks match the expected values
     assert (masked_sample_allow_false.worldcover_mask == MaskValue.MISSING.value).all()  # type: ignore
     assert torch.equal(masked_sample_allow_false.latlon_mask, expected_latlon_mask)
@@ -1007,3 +1013,360 @@ def test_space_cross_modality_masking_with_missing_data(set_random_seeds: None) 
         masked_sample_allow_false.sentinel1_mask,
         masked_sample_allow_true.sentinel1_mask,
     )
+
+
+def test_modality_cross_random_masking() -> None:
+    """Test modality cross random masking."""
+    b, h, w, t = 4, 4, 4, 3
+
+    patch_size = 1
+
+    days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
+    months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
+    years = torch.randint(2018, 2020, (b, 1, t), dtype=torch.long)
+    timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
+    sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
+    worldcover_num_bands = Modality.WORLDCOVER.num_bands
+    latlon_num_bands = Modality.LATLON.num_bands
+    batch = HeliosSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
+        sentinel1=torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands)),
+        latlon=torch.ones((b, latlon_num_bands)),
+        timestamps=timestamps,
+        worldcover=torch.full((b, h, w, 1, worldcover_num_bands), MISSING_VALUE),
+    )
+
+    masking_strategy = ModalityCrossRandomMaskingStrategy(
+        encode_ratio=0.5,
+        decode_ratio=0.5,
+        allow_encoding_decoding_same_bandset=True,
+        only_decode_modalities=[Modality.WORLDCOVER.name],
+    )
+    masked_sample = masking_strategy.apply_mask(batch, patch_size=patch_size)
+    logger.info(f"masked_sample: {masked_sample.sentinel2_l2a_mask}")
+
+    expected_sentinel2_l2a_mask = torch.tensor(
+        [
+            [
+                [
+                    [[0, 2, 0], [2, 2, 0], [2, 2, 2]],
+                    [[2, 2, 2], [0, 2, 0], [0, 0, 0]],
+                    [[2, 2, 2], [0, 0, 2], [0, 0, 2]],
+                    [[0, 0, 2], [0, 0, 0], [2, 2, 0]],
+                ],
+                [
+                    [[0, 0, 0], [0, 0, 0], [2, 0, 0]],
+                    [[0, 2, 0], [2, 2, 0], [2, 0, 2]],
+                    [[2, 2, 2], [2, 2, 2], [2, 2, 0]],
+                    [[0, 0, 2], [0, 2, 2], [2, 0, 0]],
+                ],
+                [
+                    [[2, 2, 0], [2, 0, 2], [2, 0, 2]],
+                    [[0, 2, 0], [0, 0, 0], [0, 2, 0]],
+                    [[2, 2, 2], [0, 2, 2], [2, 2, 2]],
+                    [[2, 0, 2], [2, 0, 0], [2, 0, 2]],
+                ],
+                [
+                    [[0, 0, 0], [2, 2, 0], [0, 0, 0]],
+                    [[2, 0, 0], [2, 2, 0], [2, 0, 0]],
+                    [[0, 2, 0], [2, 0, 0], [2, 0, 2]],
+                    [[0, 0, 2], [2, 2, 2], [0, 0, 2]],
+                ],
+            ],
+            [
+                [
+                    [[2, 1, 2], [2, 2, 2], [2, 1, 0]],
+                    [[0, 2, 2], [0, 2, 2], [2, 2, 0]],
+                    [[2, 1, 2], [2, 2, 2], [0, 1, 0]],
+                    [[2, 1, 2], [2, 1, 2], [0, 1, 2]],
+                ],
+                [
+                    [[2, 1, 2], [0, 2, 2], [0, 1, 2]],
+                    [[2, 1, 0], [2, 2, 0], [0, 1, 0]],
+                    [[2, 2, 2], [0, 2, 2], [0, 1, 0]],
+                    [[0, 1, 0], [2, 2, 2], [2, 1, 0]],
+                ],
+                [
+                    [[0, 1, 0], [0, 1, 2], [0, 2, 0]],
+                    [[2, 2, 0], [0, 2, 2], [2, 1, 0]],
+                    [[0, 1, 0], [0, 2, 2], [0, 2, 0]],
+                    [[0, 2, 2], [2, 2, 0], [2, 2, 0]],
+                ],
+                [
+                    [[0, 1, 2], [2, 2, 0], [0, 2, 2]],
+                    [[0, 1, 0], [0, 1, 0], [2, 1, 0]],
+                    [[0, 2, 2], [2, 1, 0], [0, 2, 2]],
+                    [[2, 1, 0], [2, 2, 0], [2, 2, 2]],
+                ],
+            ],
+            [
+                [
+                    [[1, 2, 0], [0, 2, 2], [0, 1, 2]],
+                    [[0, 1, 2], [0, 2, 2], [1, 1, 2]],
+                    [[0, 2, 2], [1, 1, 2], [1, 1, 2]],
+                    [[1, 1, 2], [0, 1, 0], [1, 1, 0]],
+                ],
+                [
+                    [[1, 1, 0], [0, 1, 0], [0, 2, 2]],
+                    [[0, 2, 2], [1, 2, 0], [1, 1, 2]],
+                    [[1, 1, 0], [1, 1, 0], [1, 2, 0]],
+                    [[1, 1, 2], [0, 2, 2], [1, 1, 2]],
+                ],
+                [
+                    [[0, 1, 0], [1, 2, 2], [0, 2, 0]],
+                    [[0, 1, 2], [1, 1, 0], [1, 2, 0]],
+                    [[1, 1, 2], [0, 1, 2], [1, 1, 0]],
+                    [[0, 1, 0], [0, 2, 0], [1, 2, 0]],
+                ],
+                [
+                    [[0, 1, 0], [1, 1, 2], [1, 2, 0]],
+                    [[0, 2, 2], [1, 1, 0], [0, 2, 2]],
+                    [[1, 1, 2], [0, 2, 0], [0, 2, 0]],
+                    [[0, 2, 2], [0, 2, 2], [1, 2, 0]],
+                ],
+            ],
+            [
+                [
+                    [[0, 0, 1], [1, 0, 1], [0, 0, 1]],
+                    [[1, 0, 1], [1, 0, 1], [0, 0, 0]],
+                    [[1, 0, 1], [1, 2, 1], [0, 0, 0]],
+                    [[0, 2, 0], [1, 0, 1], [0, 2, 0]],
+                ],
+                [
+                    [[0, 0, 0], [1, 2, 1], [0, 2, 0]],
+                    [[0, 2, 0], [1, 2, 1], [0, 0, 0]],
+                    [[0, 0, 1], [1, 0, 0], [1, 2, 1]],
+                    [[0, 0, 0], [1, 0, 0], [0, 2, 1]],
+                ],
+                [
+                    [[1, 0, 1], [0, 0, 1], [1, 2, 0]],
+                    [[1, 2, 1], [1, 0, 1], [0, 2, 1]],
+                    [[0, 2, 0], [0, 2, 1], [0, 0, 1]],
+                    [[0, 2, 0], [1, 0, 1], [0, 0, 0]],
+                ],
+                [
+                    [[1, 2, 1], [0, 2, 1], [0, 2, 0]],
+                    [[0, 0, 1], [0, 2, 1], [0, 2, 1]],
+                    [[0, 0, 1], [0, 2, 1], [0, 0, 1]],
+                    [[1, 2, 1], [0, 0, 0], [1, 2, 0]],
+                ],
+            ],
+        ]
+    )
+    # ensure none of the worldcover mask is encoded
+    assert (masked_sample.worldcover_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0  # type: ignore
+    assert (masked_sample.sentinel2_l2a_mask == expected_sentinel2_l2a_mask).all()
+
+
+class TestModalityCrossMaskingStrategy:
+    """Test class for ModalityCrossMaskingStrategy."""
+
+    def test_get_sample_present_modalities_bandsets(self) -> None:
+        """Test get sample present modalities bandsets."""
+        # 2 samples, 2 modalities, 2 bandsets each
+        b, h, w, t = 2, 2, 2, 2
+        s2_bands = Modality.SENTINEL2_L2A.num_bands
+        wc_bands = Modality.WORLDCOVER.num_bands
+        # All tokens encoded for s2, none for worldcover in sample 0, both encoded in sample 1
+        s2_mask = torch.full((b, h, w, t, 2), MaskValue.ONLINE_ENCODER.value)
+        wc_mask = torch.full((b, h, w, 1, 1), MaskValue.ONLINE_ENCODER.value)
+        wc_mask[0] = MaskValue.MISSING.value  # worldcover missing for sample 0
+        batch = MaskedHeliosSample(
+            sentinel2_l2a=torch.ones((b, h, w, t, s2_bands)),
+            sentinel2_l2a_mask=s2_mask,
+            worldcover=torch.ones((b, h, w, 1, wc_bands)),
+            worldcover_mask=wc_mask,
+            latlon=torch.ones((b, Modality.LATLON.num_bands)),
+            latlon_mask=torch.full(
+                (b, Modality.LATLON.num_bands), MaskValue.ONLINE_ENCODER.value
+            ),
+            timestamps=torch.ones((b, 3, t), dtype=torch.long),
+        )
+        strat = ModalityCrossRandomMaskingStrategy()
+        expected_present = [
+            [
+                (Modality.SENTINEL2_L2A.name, 0),
+                (Modality.SENTINEL2_L2A.name, 1),
+                (Modality.LATLON.name, 0),
+                (Modality.LATLON.name, 1),
+            ],
+            [
+                (Modality.SENTINEL2_L2A.name, 0),
+                (Modality.SENTINEL2_L2A.name, 1),
+                (Modality.WORLDCOVER.name, 0),
+                (Modality.LATLON.name, 0),
+                (Modality.LATLON.name, 1),
+            ],
+        ]
+        present = strat.get_sample_present_modalities_bandsets(batch)
+        assert present == expected_present
+
+    def test_get_sample_present_modalities_bandsets_no_encoded(self) -> None:
+        """Test get sample present modalities bandsets with no encoded tokens."""
+        # If a modality has no encoded tokens for a sample, it should not be present
+        # Test with batch size 2: sample 0 has no encoded tokens, sample 1 does
+
+        b, h, w, t = 2, 2, 2, 2
+        s2_bands = Modality.SENTINEL2_L2A.num_bands
+        # sample 0: all decoder, sample 1: all encoder
+        s2_mask = torch.full((b, h, w, t, 2), MaskValue.DECODER.value)
+        s2_mask[1] = MaskValue.ONLINE_ENCODER.value
+        batch = MaskedHeliosSample(
+            sentinel2_l2a=torch.ones((b, h, w, t, s2_bands)),
+            sentinel2_l2a_mask=s2_mask,
+            worldcover=torch.ones((b, h, w, 1, Modality.WORLDCOVER.num_bands)),
+            worldcover_mask=torch.full((b, h, w, 1, 1), MaskValue.ONLINE_ENCODER.value),
+            latlon=torch.ones((b, Modality.LATLON.num_bands)),
+            latlon_mask=torch.full(
+                (b, Modality.LATLON.num_bands), MaskValue.ONLINE_ENCODER.value
+            ),
+            timestamps=torch.ones((b, 3, t), dtype=torch.long),
+        )
+        strat = ModalityCrossRandomMaskingStrategy()
+        present = strat.get_sample_present_modalities_bandsets(batch)
+        logger.info(f"present: {present}")
+        expected_present = [
+            [
+                (Modality.WORLDCOVER.name, 0),
+                (Modality.LATLON.name, 0),
+                (Modality.LATLON.name, 1),
+            ],
+            [
+                (Modality.SENTINEL2_L2A.name, 0),
+                (Modality.SENTINEL2_L2A.name, 1),
+                (Modality.WORLDCOVER.name, 0),
+                (Modality.LATLON.name, 0),
+                (Modality.LATLON.name, 1),
+            ],
+        ]
+        assert expected_present == present
+
+    def test_sample_present_with_missing_for_member(self) -> None:
+        """Test sample present with missing for member."""
+        b, h, w, t = 2, 2, 2, 2
+        s2_bands = Modality.SENTINEL2_L2A.num_bands
+        wc_bands = Modality.WORLDCOVER.num_bands
+        s2_mask = torch.full((b, h, w, t, 2), MaskValue.ONLINE_ENCODER.value)
+        wc_mask = torch.full((b, h, w, 1, 1), MaskValue.ONLINE_ENCODER.value)
+        wc_mask[0] = MaskValue.MISSING.value  # missing for sample 0
+        batch = MaskedHeliosSample(
+            sentinel2_l2a=torch.ones((b, h, w, t, s2_bands)),
+            sentinel2_l2a_mask=s2_mask,
+            worldcover=torch.ones((b, h, w, 1, wc_bands)),
+            worldcover_mask=wc_mask,
+            latlon=torch.ones((b, Modality.LATLON.num_bands)),
+            latlon_mask=torch.full(
+                (b, Modality.LATLON.num_bands), MaskValue.ONLINE_ENCODER.value
+            ),
+            timestamps=torch.ones((b, 3, t), dtype=torch.long),
+        )
+        strat = ModalityCrossRandomMaskingStrategy()
+        present = strat.get_sample_present_modalities_bandsets(batch)
+        expected_present = [
+            [
+                (Modality.SENTINEL2_L2A.name, 0),
+                (Modality.SENTINEL2_L2A.name, 1),
+                (Modality.LATLON.name, 0),
+                (Modality.LATLON.name, 1),
+            ],
+            [
+                (Modality.SENTINEL2_L2A.name, 0),
+                (Modality.SENTINEL2_L2A.name, 1),
+                (Modality.WORLDCOVER.name, 0),
+                (Modality.LATLON.name, 0),
+                (Modality.LATLON.name, 1),
+            ],
+        ]
+        assert expected_present == present
+
+    def test_select_encoded_decoded_bandsets(self) -> None:
+        """Test select encoded decoded bandsets."""
+        present_modalities_bandsets = [
+            [
+                (Modality.SENTINEL2_L2A.name, 0),
+                (Modality.SENTINEL2_L2A.name, 1),
+                (Modality.SENTINEL2_L2A.name, 2),
+                (Modality.WORLDCOVER.name, 0),
+                (Modality.LATLON.name, 0),
+            ],
+        ] * 64
+        strat = ModalityCrossRandomMaskingStrategy(
+            allow_encoding_decoding_same_bandset=False
+        )
+        encoded_decoded_bandsets = strat.select_encoded_decoded_bandsets(
+            present_modalities_bandsets
+        )
+        # Make sure all the different numbers of encode band sets are captured.
+        # Could be 2, 3, or 4.
+        # 1 encoded band set should not occur, since ModalityCrossMaskingStrategy enforces
+        # it to be at least 2 so that we don't try to encode only latlon (which could get
+        # masked entirely for some samples since it is masked on batch dimension).
+        # 5 encoded band sets should not occur, since we need at least one decode band set
+        # with allow_encoding_decoding_same_bandset is False.
+        counts = {
+            len(encoded_decoded_tuple[0])
+            for encoded_decoded_tuple in encoded_decoded_bandsets
+        }
+        assert counts == {2, 3, 4}
+
+    def test_select_encoded_decoded_bandsets_only_decode_modalities(self) -> None:
+        """Test select encoded decoded bandsets with only decode modalities."""
+        present_modalities_bandsets = [
+            [
+                (Modality.SENTINEL2_L2A.name, 0),
+                (Modality.SENTINEL2_L2A.name, 1),
+                (Modality.SENTINEL2_L2A.name, 2),
+                (Modality.SENTINEL1.name, 0),
+                (Modality.LATLON.name, 0),
+                (Modality.OPENSTREETMAP_RASTER.name, 0),
+            ],
+            [
+                (Modality.SENTINEL2_L2A.name, 0),
+                (Modality.SENTINEL2_L2A.name, 1),
+                (Modality.SENTINEL2_L2A.name, 2),
+                (Modality.WORLDCOVER.name, 0),
+                (Modality.SENTINEL1.name, 0),
+                (Modality.LATLON.name, 0),
+            ],
+        ]
+        strat = ModalityCrossRandomMaskingStrategy(
+            only_decode_modalities=[Modality.WORLDCOVER.name]
+        )
+        encoded_decoded_bandsets = strat.select_encoded_decoded_bandsets(
+            present_modalities_bandsets
+        )
+        logger.info(f"encoded_decoded_bandsets: {encoded_decoded_bandsets}")
+        # WorldCover should not be encoded for either sample since it is only decode.
+        assert (Modality.WORLDCOVER.name, 0) not in encoded_decoded_bandsets[0][0]
+        assert (Modality.WORLDCOVER.name, 0) not in encoded_decoded_bandsets[1][0]
+        # WorldCover should not be decoded for first sample since it isn't present.
+        assert (Modality.WORLDCOVER.name, 0) not in encoded_decoded_bandsets[0][1]
+        # WorldCover should be decoded for second sample.
+        assert (Modality.WORLDCOVER.name, 0) in encoded_decoded_bandsets[1][1]
+
+    def test_select_encoded_decoded_bandsets_no_overlap(self) -> None:
+        """Test select encoded decoded bandsets with no overlap."""
+        present_modalities_bandsets = [
+            [
+                (Modality.SENTINEL2_L2A.name, 0),
+                (Modality.SENTINEL2_L2A.name, 1),
+                (Modality.SENTINEL2_L2A.name, 2),
+                (Modality.WORLDCOVER.name, 0),
+                (Modality.SENTINEL1.name, 0),
+                (Modality.LATLON.name, 0),
+            ],
+        ] * 64
+        strat = ModalityCrossRandomMaskingStrategy(
+            allow_encoding_decoding_same_bandset=False
+        )
+        encoded_decoded_bandsets = strat.select_encoded_decoded_bandsets(
+            present_modalities_bandsets
+        )
+
+        # Now we should see 2, 3, 4, and 5 band sets being encoded in different samples.
+        # 5 band sets encoded is possible since we can decode portions of each one.
+        counts = {
+            len(encoded_decoded_tuple[0])
+            for encoded_decoded_tuple in encoded_decoded_bandsets
+        }
+        assert counts == {2, 3, 4, 5}

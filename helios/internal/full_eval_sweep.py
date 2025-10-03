@@ -113,6 +113,31 @@ def get_croma_args() -> str:
     return croma_args
 
 
+def get_tessera_args(pretrained_normalizer: bool = True) -> str:
+    """Get the tessera arguments."""
+    tessera_args = dataset_args
+    if pretrained_normalizer:
+        # To use galileo pretrained normalizer we want to leave normalization to the galileo wrapper
+        tessera_args = dataset_args
+        tessera_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        tessera_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        tessera_args += " " + "--model.use_pretrained_normalizer=False"
+        tessera_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+    return tessera_args
+
+
 def get_panopticon_args() -> str:
     """Get the panopticon arguments."""
     panopticon_args = dataset_args
@@ -137,12 +162,60 @@ def get_terramind_args(pretrained_normalizer: bool = True) -> str:
                 for task_name in EVAL_TASKS.keys()
             ]
         )
-
         terramind_args += " " + "--model.use_pretrained_normalizer=True"
     else:
         # IF we use dataset stats we want to turn off the pretrained normalizer
         terramind_args += " " + "--model.use_pretrained_normalizer=False"
     return terramind_args
+
+
+def get_clay_args(pretrained_normalizer: bool = True) -> str:
+    """Get the clay arguments."""
+    clay_args = dataset_args
+    if pretrained_normalizer:
+        # To use clay pretrained normalizer we want to leave normalization to the clay wrapper
+        clay_args = dataset_args
+        clay_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+        clay_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        # IF we use dataset stats we want to turn off the pretrained normalizer
+        clay_args += " " + "--model.use_pretrained_normalizer=False"
+    return clay_args
+
+
+def get_copernicusfm_args() -> str:
+    """Get the copernicusfm arguments."""
+    copernicusfm_args = dataset_args
+    copernicusfm_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return copernicusfm_args
+
+
+def get_anysat_args() -> str:
+    """Get the anysat arguments."""
+    anysat_args = dataset_args
+    anysat_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    anysat_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=4"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return anysat_args
 
 
 def get_galileo_args(pretrained_normalizer: bool = True) -> str:
@@ -169,6 +242,84 @@ def get_galileo_args(pretrained_normalizer: bool = True) -> str:
         ]
     )
     return galileo_args
+
+
+def get_satlas_args(pretrained_normalizer: bool = True) -> str:
+    """Get the satlas arguments."""
+    satlas_args = dataset_args
+    if pretrained_normalizer:
+        # To use satlas pretrained normalizer we want to leave normalization to the satlas wrapper
+        satlas_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        satlas_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        satlas_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+        # IF we use dataset stats we want to turn off the pretrained normalizer
+        satlas_args += " " + "--model.use_pretrained_normalizer=False"
+    return satlas_args
+
+
+def get_presto_args(pretrained_normalizer: bool = True) -> str:
+    """Get the presto arguments."""
+    presto_args = dataset_args
+    if pretrained_normalizer:
+        # To use presto pretrained normalizer we want to leave normalization to the presto wrapper
+        presto_args = dataset_args
+        presto_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        presto_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        # IF we use dataset stats we want to turn off the pretrained normalizer
+        presto_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+        presto_args += " " + "--model.use_pretrained_normalizer=False"
+    return presto_args
+
+
+def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
+    """Get the Prithvi arguments."""
+    prithvi_args = dataset_args
+    if pretrained_normalizer:
+        # To use Prithvi pretrained normalizer we want to leave normalization to the Prithvi wrapper
+        prithvi_args = dataset_args
+        prithvi_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+
+        prithvi_args += " " + "--model.use_pretrained_normalizer=True"
+    else:
+        prithvi_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+        # IF we use dataset stats we want to turn off the pretrained normalizer
+        prithvi_args += " " + "--model.use_pretrained_normalizer=False"
+
+    return prithvi_args
 
 
 def _get_sub_command(args: argparse.Namespace) -> str:
@@ -211,32 +362,47 @@ def _get_model_specific_args(args: argparse.Namespace) -> str:
         return get_dino_v3_args()
     elif args.panopticon:
         return get_panopticon_args()
+    elif args.clay:
+        return get_clay_args()
     elif args.galileo:
         return get_galileo_args()
     elif args.terramind:
         return get_terramind_args()
+    elif args.satlas:
+        return get_satlas_args()
     elif args.croma:
         return get_croma_args()
+    elif args.copernicusfm:
+        return get_copernicusfm_args()
+    elif args.presto:
+        return get_presto_args()
+    elif args.anysat:
+        return get_anysat_args()
+    elif args.tessera:
+        return get_tessera_args()
+    elif args.prithvi_v2:
+        return get_prithviv2_args()
     return ""
 
 
 def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
     """Get normalization-specific command arguments."""
-    if args.galileo:
-        if norm_mode == "dataset":
-            return get_galileo_args(pretrained_normalizer=False)
-        elif norm_mode == "pre_trained":
-            return get_galileo_args(pretrained_normalizer=True)
-    elif args.terramind:
-        if norm_mode == "dataset":
-            return get_terramind_args(pretrained_normalizer=False)
-        elif norm_mode == "pre_trained":
-            return get_terramind_args(pretrained_normalizer=True)
-    else:
-        if norm_mode == "dataset":
-            return dataset_args
-        elif norm_mode == "pre_trained":
-            return helios_args
+    model_map = {
+        "galileo": get_galileo_args,
+        "tessera": get_tessera_args,
+        "prithvi_v2": get_prithviv2_args,
+        "satlas": get_satlas_args,
+        "presto": get_presto_args,
+        "clay": get_clay_args,
+        "terramind": get_terramind_args,
+    }
+    for model, func in model_map.items():
+        if getattr(args, model, False):
+            return func(pretrained_normalizer=(norm_mode == "pre_trained"))
+    if norm_mode == "dataset":
+        return dataset_args
+    if norm_mode == "pre_trained":
+        return helios_args
     return ""
 
 
@@ -306,6 +472,7 @@ def _build_hyperparameter_command(
     cmd_args += _get_model_specific_args(args)
 
     # Add normalization-specific args
+    # These args will override the model-specific args
     cmd_args += _get_normalization_args(args, norm_mode)
 
     return (
@@ -325,8 +492,18 @@ def _get_module_path(args: argparse.Namespace) -> str:
         return get_launch_script_path("terramind")
     elif args.croma:
         return get_launch_script_path("croma")
+    elif args.clay:
+        return get_launch_script_path("clay")
     elif args.galileo:
         return get_launch_script_path("galileo")
+    elif args.presto:
+        return get_launch_script_path("presto")
+    elif args.satlas:
+        return get_launch_script_path("satlas")
+    elif args.tessera:
+        return get_launch_script_path("tessera")
+    elif args.prithvi_v2:
+        return get_launch_script_path("prithvi_v2")
     else:
         raise ValueError(f"Invalid model name: {args.model_name}")
 
@@ -359,7 +536,9 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         hp_params = (
             loop_through_params()
             if not args.dino_v3
-            and not args.panopticon  # Only use the dataset normalization stats for these models
+            and not args.panopticon
+            and not args.copernicusfm  # Only use the dataset normalization stats for these models
+            and not args.tessera  # Only use the dataset normalization stats for these models
             else no_norm_sweep()
         )
 
@@ -437,9 +616,44 @@ def main() -> None:
         help="If set, use the galileo normalization settings",
     )
     parser.add_argument(
+        "--satlas",
+        action="store_true",
+        help="If set, use the satlas normalization settings",
+    )
+    parser.add_argument(
         "--croma",
         action="store_true",
         help="If set, use the croma normalization settings",
+    )
+    parser.add_argument(
+        "--clay",
+        action="store_true",
+        help="If set, use the clay normalization settings",
+    )
+    parser.add_argument(
+        "--copernicusfm",
+        action="store_true",
+        help="If set, use the copernicusfm normalization settings",
+    )
+    parser.add_argument(
+        "--presto",
+        action="store_true",
+        help="If set, use the presto normalization settings",
+    )
+    parser.add_argument(
+        "--anysat",
+        action="store_true",
+        help="If set, use the anysat normalization settings",
+    )
+    parser.add_argument(
+        "--tessera",
+        action="store_true",
+        help="If set, use the tessera normalization settings",
+    )
+    parser.add_argument(
+        "--prithvi_v2",
+        action="store_true",
+        help="If set, use the prithvi normalization settings",
     )
     args, extra_cli = parser.parse_known_args()
 

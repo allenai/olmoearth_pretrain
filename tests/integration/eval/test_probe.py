@@ -11,9 +11,12 @@ def test_probe_cls() -> None:
     """Test linear probe for classification."""
     batch_size, embedding_dim = 64, 16
     train_embeddings = torch.rand(64, embedding_dim)
+    val_embeddings = torch.rand(64, embedding_dim)
     test_embeddings = torch.rand(64, embedding_dim)
     train_labels = torch.ones(64).long()
     train_labels[:32] = 0
+    val_labels = torch.ones(64).long()
+    val_labels[:32] = 0
     test_labels = torch.ones(64).long()
     test_labels[:32] = 0
 
@@ -31,6 +34,8 @@ def test_probe_cls() -> None:
         config=config,
         train_embeddings=train_embeddings,
         train_labels=train_labels,
+        val_embeddings=val_embeddings,
+        val_labels=val_labels,
         test_embeddings=test_embeddings,
         test_labels=test_labels,
         device=train_embeddings.device,
@@ -55,9 +60,12 @@ def test_probe_seg() -> None:
         4,
     )
     train_embeddings = torch.rand(64, h // patch_size, w // patch_size, embedding_dim)
+    val_embeddings = torch.rand(64, h // patch_size, w // patch_size, embedding_dim)
     test_embeddings = torch.rand(64, h // patch_size, w // patch_size, embedding_dim)
     train_labels = torch.ones(64, h, w).long()
     train_labels[:32] = 0
+    val_labels = torch.ones(64, h, w).long()
+    val_labels[:32] = 0
     test_labels = torch.ones(64, h, w).long()
     test_labels[:32] = 0
 
@@ -76,6 +84,8 @@ def test_probe_seg() -> None:
         config=config,
         train_embeddings=train_embeddings,
         train_labels=train_labels,
+        val_embeddings=val_embeddings,
+        val_labels=val_labels,
         test_embeddings=test_embeddings,
         test_labels=test_labels,
         device=train_embeddings.device,

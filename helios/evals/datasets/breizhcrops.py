@@ -15,6 +15,7 @@ from helios.train.masking import HeliosSample, MaskedHeliosSample, Modality
 
 from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_HELIOS_S2_BANDS
 from .normalize import normalize_bands
+from .utils import load_min_max_stats
 
 LEVEL = "L1C"
 
@@ -102,7 +103,27 @@ class BreizhCropsDataset(Dataset):
             self.ds = BreizhCrops(region="belle-ile", **kwargs)
         self.monthly_average = monthly_average
 
-        self.means, self.stds = self._get_norm_stats(BAND_STATS)
+        self.min_max_stats = load_min_max_stats()["breizhcrops"]
+        # Merge BAND_STATS and min/max stats
+        minmax = self.min_max_stats["sentinel2_l2a"]
+        merged_band_stats = {
+            band_name: {
+                **(
+                    {k: BAND_STATS[band_name][k] for k in ("mean", "std")}
+                    if band_name in BAND_STATS
+                    else {}
+                ),
+                **(
+                    {k: minmax[band_name][k] for k in ("min", "max")}
+                    if band_name in minmax
+                    else {}
+                ),
+            }
+            for band_name in EVAL_S2_BAND_NAMES
+        }
+        self.means, self.stds, self.mins, self.maxs = self._get_norm_stats(
+            merged_band_stats
+        )
         if partition != "default":
             raise NotImplementedError(f"partition {partition} not implemented yet")
 
@@ -117,14 +138,18 @@ class BreizhCropsDataset(Dataset):
     @staticmethod
     def _get_norm_stats(
         imputed_band_info: dict[str, dict[str, float]],
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         means = []
         stds = []
+        mins = []
+        maxs = []
         for band_name in EVAL_S2_BAND_NAMES:
             assert band_name in imputed_band_info, f"{band_name} not found in band_info"
             means.append(imputed_band_info[band_name]["mean"])  # type: ignore
             stds.append(imputed_band_info[band_name]["std"])  # type: ignore
-        return np.array(means), np.array(stds)
+            mins.append(imputed_band_info[band_name]["min"])  # type: ignore
+            maxs.append(imputed_band_info[band_name]["max"])  # type: ignore
+        return np.array(means), np.array(stds), np.array(mins), np.array(maxs)
 
     def __len__(self) -> int:
         """Length of the dataset."""
@@ -144,7 +169,9 @@ class BreizhCropsDataset(Dataset):
         if not self.norm_stats_from_pretrained:
             # The first 13 bands are the S2 bands so to apply stats we first filter to those
             x = x[:, : len(BAND_STATS)]
-            x = normalize_bands(x, self.means, self.stds, self.norm_method)
+            x = normalize_bands(
+                x, self.means, self.stds, self.mins, self.maxs, self.norm_method
+            )
         image = repeat(x, "t c -> h w t c", w=1, h=1)[
             :,
             :,

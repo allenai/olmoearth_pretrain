@@ -3,6 +3,7 @@
 import logging
 from copy import deepcopy
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -47,7 +48,13 @@ class LatentMIM(nn.Module, DistributedMixins):
 
     def forward(
         self, x: MaskedHeliosSample, patch_size: int
-    ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
+    ) -> tuple[
+        TokensAndMasks,
+        TokensAndMasks,
+        torch.Tensor,
+        TokensAndMasks | None,
+        dict[str, Any],
+    ]:
         """Forward pass for the Latent MIM Style.
 
         Returns:
@@ -58,16 +65,26 @@ class LatentMIM(nn.Module, DistributedMixins):
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         output_dict = self.encoder(x, patch_size=patch_size)
+        token_norm_stats = output_dict.pop("token_norm_stats", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
         )
+        extra_metrics = {}
+        if token_norm_stats is not None:
+            extra_metrics["token_norm_stats"] = token_norm_stats
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
         decoded = self.decoder(
             latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
         )
-        return latent, decoded, latent_projected_and_pooled, reconstructed
+        return (
+            latent,
+            decoded,
+            latent_projected_and_pooled,
+            reconstructed,
+            extra_metrics,
+        )
 
     def apply_fsdp(
         self,

@@ -543,3 +543,17 @@ class HeliosTrainModule(TrainModule):
             total_batch_reg,
             ReduceType.mean,
         )
+
+    def log_extra_metrics(
+        self, extra_metrics: dict[str, Any], reduce_type: ReduceType | None = None
+    ) -> None:
+        """Log the extra metrics."""
+        for key, value in extra_metrics.items():
+            if isinstance(value, dict):
+                name_space = key
+                for sub_key, sub_value in value.items():
+                    self.trainer.record_metric(
+                        f"{name_space}/{sub_key}", sub_value, reduce_type=reduce_type
+                    )
+            else:
+                self.trainer.record_metric(f"{key}", value, reduce_type=reduce_type)
