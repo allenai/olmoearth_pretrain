@@ -1,28 +1,15 @@
 """Get metrics summary from W&B. See get_max_metrics."""
 
-import sys
+import argparse
+from collections import defaultdict
 
+import pandas as pd
 import wandb
 
+from helios.internal.all_evals import EVAL_TASKS
+
 WANDB_ENTITY = "eai-ai2"
-METRICS = [
-    "m-eurosat",
-    "m-forestnet",
-    "m-so2sat",
-    "m-brick-kiln",
-    "m-bigearthnet",
-    "m-sa-crop-type",
-    "m-cashew-plant",
-    "sickle-sentinel1",
-    "sickle_landsat",
-    "sickle_sentinel1_landsat",
-    "pastis_sentinel1",
-    "pastis_sentinel2",
-    "pastis_sentinel1_sentinel2",
-    "mados",
-    "sen1floods11",
-    "breizhcrops",
-]
+METRICS = EVAL_TASKS.keys()
 
 # Dataset partitions to consider (excluding default)
 PARTITIONS = [
@@ -33,6 +20,55 @@ PARTITIONS = [
     "0.20x_train",
     "0.50x_train",
 ]
+
+
+def get_run_group_name(run_name: str) -> str:
+    """Extracts the group name from a run name, e.g., 'my_experiment_step_100' -> 'my_experiment'."""
+    # just split on _step and take the first part
+    return run_name.split("_step")[0]
+
+
+def get_max_metrics_grouped(
+    project_name: str, run_prefix: str | None = None
+) -> dict[str, dict[str, float]]:
+    """Get the maximum value for each metric grouped by run prefix before '_step'.
+
+    Args:
+        project_name: the W&B project for the run.
+        run_prefix: optional prefix to filter runs. If None, processes all runs.
+
+    Returns:
+        a dictionary mapping from group name to a dict of metric name to max value.
+    """
+    api = wandb.Api()
+
+    # Group runs by their prefix before "_step"
+    grouped_runs = defaultdict(list)
+    for run in api.runs(f"{WANDB_ENTITY}/{project_name}"):
+        if run_prefix and not run.name.startswith(run_prefix):
+            continue
+        group_name = get_run_group_name(run.name)
+        grouped_runs[group_name].append(run)
+        print(f"Found run {run.name} ({run.id}) -> group: {group_name}")
+
+    print(f"\nFound {len(grouped_runs)} groups")
+
+    # print all the groups found and stop here
+    print(f"\nGroups found: {grouped_runs.keys()}")
+
+    # Get max metrics for each group
+    group_metrics = {}
+    for group_name, runs in grouped_runs.items():
+        print(f"\nProcessing group: {group_name} ({len(runs)} runs)")
+        metrics = {}
+        for run in runs:
+            for key, value in run.summary.items():
+                if not key.startswith("eval/"):
+                    continue
+                metrics[key] = max(metrics.get(key, value), value)
+        group_metrics[group_name] = metrics
+
+    return group_metrics
 
 
 def get_max_metrics_per_partition(
@@ -131,18 +167,55 @@ def get_max_metrics(project_name: str, run_prefix: str) -> dict[str, float]:
     return metrics
 
 
-if __name__ == "__main__":
-    # project_name is the W&B project under eai-ai2
-    project_name = sys.argv[1]
-    # run_prefix is the prefix of the runs with different probe learning rates.
-    # If you are not sweeping across probe learning rates, this can just be the name
-    # of the run (as long as no other run shares the same prefix).
-    run_prefix = sys.argv[2]
+def save_metrics_to_csv(metrics_dict: dict[str, dict[str, float]], filename: str):
+    """Saves the metrics dictionary to a CSV file."""
+    all_metrics_df = pd.DataFrame()
+    # first column should be group name and then the rest of the columns should be the metric names
+    all_metrics_df["group"] = metrics_dict.keys()
+    for metric_name in metrics_dict[list(metrics_dict.keys())[0]].keys():
+        all_metrics_df[metric_name] = [
+            metrics_dict[group_name][metric_name] for group_name in metrics_dict.keys()
+        ]
+    print(all_metrics_df.head())
+    all_metrics_df.to_csv(filename, index=False)
+    print(f"\nMetrics saved to {filename}")
 
-    # Check if user wants partition-based aggregation
-    if len(sys.argv) > 3 and sys.argv[3] == "--per-partition":
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Get maximum metrics from W&B runs, grouped by run prefix before '_step'."
+    )
+    parser.add_argument(
+        "-p", "--project_name", type=str, help="W&B project name under eai-ai2 entity"
+    )
+    parser.add_argument(
+        "--run_prefix",
+        type=str,
+        default=None,
+        help="Optional prefix to filter runs (e.g., 'my_experiment'). If not specified, processes all runs.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        default=None,
+        help="Output CSV file path (default: {project_name}_eval_metrics.csv or {run_prefix}_eval_metrics.csv)",
+    )
+    parser.add_argument(
+        "--per-partition",
+        action="store_true",
+        help="Aggregate metrics per dataset partition instead of grouping by '_step'",
+    )
+
+    args = parser.parse_args()
+
+    if args.per_partition:
+        if not args.run_prefix:
+            parser.error("--per-partition requires run_prefix to be specified")
         print("Getting max metrics per dataset partition (excluding default)...")
-        partition_metrics = get_max_metrics_per_partition(project_name, run_prefix)
+        partition_metrics = get_max_metrics_per_partition(
+            args.project_name, args.run_prefix
+        )
 
         print("\nResults per partition:")
         for partition in PARTITIONS:
@@ -162,18 +235,37 @@ if __name__ == "__main__":
             else:
                 print(f"\n{partition}: no runs found")
     else:
-        print("Getting max metrics across runs...")
-        metrics = get_max_metrics(project_name, run_prefix)
+        if args.run_prefix:
+            print(
+                f"Getting max metrics grouped by run prefix before '_step' (filtering by '{args.run_prefix}')..."
+            )
+        else:
+            print(
+                "Getting max metrics grouped by run prefix before '_step' (all runs in project)..."
+            )
+
+        group_metrics = get_max_metrics_grouped(args.project_name, args.run_prefix)
 
         print("\nFinal Results:")
-        for metric in METRICS:
-            try:
-                k = f"eval/{metric}"
-                print(f"{metric} {metrics[k]}")
-            except KeyError:
+        for group_name, metrics in group_metrics.items():
+            print(f"\n{group_name}:")
+            for metric in METRICS:
                 try:
-                    metric = metric.replace("-", "_")
                     k = f"eval/{metric}"
-                    print(f"{metric} {metrics[k]}")
+                    print(f"  {metric}: {metrics[k]}")
                 except KeyError:
-                    print(f"Metric {metric} not found")
+                    try:
+                        metric = metric.replace("-", "_")
+                        k = f"eval/{metric}"
+                        print(f"  {metric}: {metrics[k]}")
+                    except KeyError:
+                        print(f"  {metric}: not found")
+
+        # Save to CSV
+        if args.output:
+            output_csv = args.output
+        elif args.run_prefix:
+            output_csv = f"{args.run_prefix}_eval_metrics.csv"
+        else:
+            output_csv = f"{args.project_name}_eval_metrics.csv"
+        save_metrics_to_csv(group_metrics, output_csv)
