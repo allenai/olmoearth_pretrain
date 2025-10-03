@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 HELIOS_TO_SATLAS = {
     Modality.SENTINEL2_L2A.name: [
         Modality.SENTINEL2_L2A.band_order.index(b)
-        # TODO @favyenb is this band ordering correct?
         for b in ["B04", "B03", "B02", "B05", "B06", "B07", "B08", "B11", "B12"]
     ],
     Modality.SENTINEL1.name: [
@@ -49,7 +48,7 @@ class Satlas(nn.Module):
 
     modality_size_to_weights = {
         "base": {
-            Modality.SENTINEL2_L2A.name: "sentinel2_swinb_si_ms.pth",
+            Modality.SENTINEL2_L2A.name: "sentinel2_swinb_mi_ms.pth",
             Modality.LANDSAT.name: "landsat_swinb_si.pth",
             Modality.SENTINEL1.name: "sentinel1_swinb_si.pth",
         },
@@ -105,7 +104,9 @@ class Satlas(nn.Module):
     def normalize(image: torch.Tensor, modality: str) -> torch.Tensor:
         """https://github.com/allenai/satlas/blob/main/Normalization.md."""
         if modality == Modality.SENTINEL2_L2A.name:
-            return torch.clip(image / 8160, 0, 1)
+            assert image.shape[1] == 9
+            image[:, 0:3, :, :] = torch.clip(image[:, 0:3, :, :] / 3000, 0, 1)
+            image[:, 3:9, :, :] = torch.clip(image[:, 3:9, :, :] / 8160, 0, 1)
         elif modality == Modality.LANDSAT.name:
             return torch.clip((image - 4000) / 16320, 0, 1)
         elif modality == Modality.SENTINEL1.name:
@@ -189,11 +190,8 @@ class Satlas(nn.Module):
                 output = rearrange(output, "b c h w -> b h w c")
             outputs_list.append(output.unsqueeze(0))
 
-        # stack in the timestep dimension and take the mean or maybe the max?
-        if pooling == PoolingType.MEAN:
-            output_features = torch.cat(outputs_list, dim=0).mean(dim=0)
-        elif pooling == PoolingType.MAX:
-            output_features = torch.max(torch.cat(outputs_list, dim=0), dim=0)[0]
+        # always temporal max pool for satlas
+        output_features = torch.max(torch.cat(outputs_list, dim=0), dim=0)[0]
         return output_features
 
 
