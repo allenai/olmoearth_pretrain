@@ -193,6 +193,7 @@ def main() -> None:
         args.filter_tag,
         args.filter_name_prefix,
     )
+    runs = runs[4:]
     logger.info(f"Runs: {runs}")
     logger.info(f"Found {len(runs)} qualifying runs")
 
