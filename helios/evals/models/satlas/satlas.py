@@ -105,8 +105,10 @@ class Satlas(nn.Module):
         """https://github.com/allenai/satlas/blob/main/Normalization.md."""
         if modality == Modality.SENTINEL2_L2A.name:
             assert image.shape[1] == 9
+            print(image.min(), image.max())
             image[:, 0:3, :, :] = torch.clip(image[:, 0:3, :, :] / 3000, 0, 1)
             image[:, 3:9, :, :] = torch.clip(image[:, 3:9, :, :] / 8160, 0, 1)
+            return image
         elif modality == Modality.LANDSAT.name:
             return torch.clip((image - 4000) / 16320, 0, 1)
         elif modality == Modality.SENTINEL1.name:
