@@ -8,5 +8,5 @@ rslearn @ git+https://github.com/allenai/rslearn.git@master
 satlaspretrain-models
 scikit-learn
 terratorch
-timm==0.9.7
+timm
 xarray
