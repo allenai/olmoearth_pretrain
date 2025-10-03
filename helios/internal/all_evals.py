@@ -36,6 +36,12 @@ logger = getLogger(__name__)
 def load_user_module(path: str) -> Any:
     """Load the user module from the given path."""
     logger.info(f"Loading user module from {path}")
+
+    # Add the script's directory to sys.path so relative imports work
+    script_dir = os.path.dirname(os.path.abspath(path))
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+
     spec = importlib.util.spec_from_file_location("user_module", path)
     assert spec is not None
     user_mod = importlib.util.module_from_spec(spec)
