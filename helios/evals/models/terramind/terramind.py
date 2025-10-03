@@ -17,7 +17,7 @@ from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
 
-HELIOS_SENTINEL2_BANDS = [
+HELIOS_TO_TERRAMIND_SENTINEL2_BANDORDER = [
     Modality.SENTINEL2_L2A.band_order.index(b)
     for b in [
         "B01",
@@ -171,7 +171,7 @@ class Terramind(nn.Module):
 
             # Rearrange sen2 data
             if modality == "sentinel2_l2a":
-                data_i = data_i[:, HELIOS_SENTINEL2_BANDS, :, :]
+                data_i = data_i[:, HELIOS_TO_TERRAMIND_SENTINEL2_BANDORDER, :, :]
 
             if self.use_pretrained_normalizer:
                 # Normalize
