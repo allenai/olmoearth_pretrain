@@ -9,7 +9,7 @@ rioxarray
 rslearn @ git+https://github.com/allenai/rslearn.git@master
 satlaspretrain-models
 scikit-learn
-terratorch
+terratorch==1.1
 timm==1.0.20
 torchmetrics==1.7.1
 xarray
