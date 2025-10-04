@@ -394,13 +394,12 @@ def _get_model_specific_args(model: BaselineModelName | None) -> str:
         BaselineModelName.TESSERA: get_tessera_args,
         BaselineModelName.PRITHVI_V2: get_prithviv2_args,
         BaselineModelName.TERRAMIND: get_terramind_args,
-        BaselineModelName.CLAY: get_clay_args
+        BaselineModelName.CLAY: get_clay_args,
     }
     if model is None or model not in model_args_map:
         return ""
 
     return model_args_map[model]()  # type: ignore
-
 
 
 # TODO: Explain why some models are not in the map
@@ -413,7 +412,7 @@ def _get_normalization_args(model: BaselineModelName | None, norm_mode: str) -> 
         BaselineModelName.SATLAS: get_satlas_args,
         BaselineModelName.PRESTO: get_presto_args,
         BaselineModelName.TERRAMIND: get_terramind_args,
-        BaselineModelName.CLAY: get_clay_args
+        BaselineModelName.CLAY: get_clay_args,
     }
 
     if model in model_map:
@@ -461,7 +460,7 @@ def _build_default_command(
     )
     run_name = f"{base_run_name}_df"
     cmd_args = _get_model_specific_args(args.model)
-    
+
     # Add normalization-specific args
     cmd_args += _get_normalization_args(args.model, norm_mode)
 
@@ -541,7 +540,6 @@ def _get_module_path(model: BaselineModelName | None) -> str:
     if model is None:
         raise ValueError("Model must be specified when module_path is not provided")
     return get_launch_script_path(model)
-
 
 
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:

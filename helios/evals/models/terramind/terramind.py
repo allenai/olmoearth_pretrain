@@ -17,6 +17,7 @@ from helios.train.masking import MaskedHeliosSample
 
 logger = logging.getLogger(__name__)
 
+TERRAMIND_SIZES = ["base", "large"]
 HELIOS_TO_TERRAMIND_SENTINEL2_BANDORDER = [
     Modality.SENTINEL2_L2A.band_order.index(b)
     for b in [
@@ -144,6 +145,8 @@ class Terramind(nn.Module):
         """Initialize terramind model."""
         super().__init__()
         self.size = size
+        if size not in TERRAMIND_SIZES:
+            raise ValueError(f"Invalid model size: {size}")
         self._prepare_stats()
         self._init_model(self.size, self.supported_modalities)
         self.use_pretrained_normalizer = use_pretrained_normalizer
@@ -268,6 +271,11 @@ class TerramindConfig(Config):
 
     size: str = "base"
     use_pretrained_normalizer: bool = True
+
+    def validate(self) -> None:
+        """Validate the Terramind config."""
+        if self.size not in TERRAMIND_SIZES:
+            raise ValueError(f"Invalid model size: {self.size}")
 
     def build(self) -> Terramind:
         """Build the Terramind model."""
