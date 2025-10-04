@@ -1,10 +1,15 @@
 albumentations
 breizhcrops==0.0.4.1 # Force the latest available
+claymodel @ git+https://github.com/Clay-foundation/model.git
 geobench @ git+https://github.com/ServiceNow/geo-bench.git  # Unreleased relaxed dependencies
 geopandas
+pytorch-lightning==2.5.5
+PyYAML>=6.0
 rioxarray
 rslearn @ git+https://github.com/allenai/rslearn.git@master
 satlaspretrain-models
 scikit-learn
-timm==0.9.7
+terratorch==1.1
+timm==1.0.20
+torchmetrics==1.7.1
 xarray

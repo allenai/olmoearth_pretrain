@@ -1,8 +1,8 @@
 """Helios wrapper for Prithvi v2."""
 
-import logging
 import math
 from dataclasses import dataclass
+from enum import StrEnum
 
 import torch
 import torch.nn as nn
@@ -36,10 +36,26 @@ PRITHVI_STD = [
     1049.0,
 ]
 
-HF_HUB_ID = "ibm-nasa-geospatial/Prithvi-EO-2.0-300M"
+
+class PrithviV2Models(StrEnum):
+    """Names for different Prithvi models on torch hub."""
+
+    VIT_300 = "Prithvi_EO_V2_300M"
+    VIT_600 = "Prithvi_EO_V2_600M"
 
 
-logger = logging.getLogger(__name__)
+MODEL_TO_HF_INFO = {
+    PrithviV2Models.VIT_300: {
+        "hf_hub_id": f"ibm-nasa-geospatial/{PrithviV2Models.VIT_300.value}",
+        "weights": f"{PrithviV2Models.VIT_300.value}.pt",
+        "revision": "b2f2520ab889f42a25c5361ba18761fcb4ea44ad",
+    },
+    PrithviV2Models.VIT_600: {
+        "hf_hub_id": f"ibm-nasa-geospatial/{PrithviV2Models.VIT_600.value}",
+        "weights": f"{PrithviV2Models.VIT_600.value}.pt",
+        "revision": "87f15784813828dc37aa3197a143cd4689e4d080",
+    },
+}
 
 
 class PrithviV2(nn.Module):
@@ -50,22 +66,32 @@ class PrithviV2(nn.Module):
     def __init__(
         self,
         load_directory: str,
+        size: PrithviV2Models,
         use_pretrained_normalizer: bool = True,
     ):
         """Initialize the PrithviV2 wrapper.
 
         Args:
             load_directory: The directory to load from
+            size: one of VIT_300 or VIT_600
             use_pretrained_normalizer: Whether or not to apply prithvi pretraining normalization
         """
         super().__init__()
 
+        hub_id = MODEL_TO_HF_INFO[size]["hf_hub_id"]
+        revision = MODEL_TO_HF_INFO[size]["revision"]
+        weights_path = MODEL_TO_HF_INFO[size]["weights"]
+
         if not (UPath(load_directory) / "config.json").exists():
-            _ = hf_hub_download(
+            # even though we have a nosec here we actually follow the advice in
+            # https://bandit.readthedocs.io/en/latest/plugins/b615_huggingface_unsafe_download.html
+            # and pin the download to a specific commit, but our bandit can't tell because
+            # "revision" is now a variable instead of a string
+            _ = hf_hub_download(  # nosec
                 local_dir=UPath(load_directory),
-                repo_id=HF_HUB_ID,
+                repo_id=hub_id,
                 filename="config.json",
-                revision="b2f2520ab889f42a25c5361ba18761fcb4ea44ad",
+                revision=revision,
             )
         with (UPath(load_directory) / "config.json").open("r") as f:
             config = yaml.safe_load(f)["pretrained_cfg"]
@@ -74,16 +100,20 @@ class PrithviV2(nn.Module):
 
         self.model = PrithviMAE(**config)
 
-        if not (UPath(load_directory) / "Prithvi_EO_V2_300M.pt").exists():
-            _ = hf_hub_download(
+        if not (UPath(load_directory) / weights_path).exists():
+            # even though we have a nosec here we actually follow the advice in
+            # https://bandit.readthedocs.io/en/latest/plugins/b615_huggingface_unsafe_download.html
+            # and pin the download to a specific commit, but our bandit can't tell because
+            # "revision" is now a variable instead of a string
+            _ = hf_hub_download(  # nosec
                 local_dir=UPath(load_directory),
-                repo_id=HF_HUB_ID,
-                filename="Prithvi_EO_V2_300M.pt",
-                revision="b2f2520ab889f42a25c5361ba18761fcb4ea44ad",
+                repo_id=hub_id,
+                filename=weights_path,
+                revision=revision,
             )
 
         state_dict = torch.load(
-            UPath(load_directory) / "Prithvi_EO_V2_300M.pt", map_location="cpu"
+            UPath(load_directory) / weights_path, map_location="cpu"
         )
         # discard fixed pos_embedding weight, following
         # https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M/blob/e4aabdc440c8ee703a749def8af5bf4700dee35b/inference.py#L362
@@ -204,11 +234,13 @@ class PrithviV2Config(Config):
     """olmo_core style config for PrithviV2 Wrapper."""
 
     load_directory: str = "/weka/dfive-default/helios/models/prithvi"
+    size: PrithviV2Models = PrithviV2Models.VIT_300
     use_pretrained_normalizer: bool = True
 
     def build(self) -> PrithviV2:
         """Build the PrithviV2 model."""
         return PrithviV2(
             load_directory=self.load_directory,
+            size=self.size,
             use_pretrained_normalizer=self.use_pretrained_normalizer,
         )

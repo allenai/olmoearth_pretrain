@@ -4,6 +4,7 @@ from enum import StrEnum
 from typing import Any
 
 from helios.evals.models.anysat.anysat import AnySat, AnySatConfig
+from helios.evals.models.clay.clay import Clay, ClayConfig
 from helios.evals.models.copernicusfm.copernicusfm import (
     CopernicusFM,
     CopernicusFMConfig,
@@ -20,6 +21,7 @@ from helios.evals.models.panopticon.panopticon import Panopticon, PanopticonConf
 from helios.evals.models.presto.presto import PrestoConfig, PrestoWrapper
 from helios.evals.models.prithviv2.prithviv2 import PrithviV2, PrithviV2Config
 from helios.evals.models.satlas.satlas import Satlas, SatlasConfig
+from helios.evals.models.terramind.terramind import Terramind, TerramindConfig
 from helios.evals.models.tessera.tessera import Tessera, TesseraConfig
 
 
@@ -36,6 +38,8 @@ class BaselineModelName(StrEnum):
     ANYSAT = "anysat"
     TESSERA = "tessera"
     PRITHVI_V2 = "prithvi_v2"
+    TERRAMIND = "terramind"
+    CLAY = "clay"
 
 
 MODELS_WITH_MULTIPLE_SIZES: dict[BaselineModelName, Any] = {
@@ -56,11 +60,17 @@ def get_launch_script_path(model_name: str) -> str:
         return "helios/evals/models/galileo/galileo_launch.py"
     elif model_name == BaselineModelName.PANOPTICON:
         return "helios/evals/models/panopticon/panopticon_launch.py"
+
+    elif model_name == BaselineModelName.TERRAMIND:
+        return "helios/evals/models/terramind/terramind_launch.py"
     elif model_name == BaselineModelName.SATLAS:
         return "helios/evals/models/satlas/satlas_launch.py"
     elif model_name == BaselineModelName.CROMA:
         return "helios/evals/models/croma/croma_launch.py"
-    elif model_name == BaselineModelName.COPERNICUSFM:
+    elif model_name == BaselineModelName.CLAY:
+        return "helios/evals/models/clay/clay_launch.py"
+    elif model_name == BaselineModelName.COPERNICUSFM::
+
         return "helios/evals/models/copernicusfm/copernicusfm_launch.py"
     elif model_name == BaselineModelName.PRESTO:
         return "helios/evals/models/presto/presto_launch.py"
@@ -84,10 +94,14 @@ __all__ = [
     "GalileoConfig",
     "DINOv3",
     "DINOv3Config",
+    "Terramind",
+    "TerramindConfig",
     "Satlas",
     "SatlasConfig",
     "Croma",
     "CromaConfig",
+    "Clay",
+    "ClayConfig",
     "CopernicusFM",
     "CopernicusFMConfig",
     "PrestoWrapper",

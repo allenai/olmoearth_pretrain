@@ -218,22 +218,38 @@ if __name__ == "__main__":
         )
 
         print("\nResults per partition:")
+        rows = []  # for CSV: partition, metric, value
         for partition in PARTITIONS:
             if partition in partition_metrics:
                 print(f"\n{partition}:")
                 for metric in METRICS:
-                    try:
-                        k = f"eval/{metric}"
-                        print(f"  {metric}: {partition_metrics[partition][k]}")
-                    except KeyError:
-                        try:
-                            metric = metric.replace("-", "_")
-                            k = f"eval/{metric}"
-                            print(f"  {metric}: {partition_metrics[partition][k]}")
-                        except KeyError:
-                            print(f"  {metric}: not found")
+                    # Try original name
+                    key = f"eval/{metric}"
+                    val = partition_metrics[partition].get(key)
+                    # Fallback with underscore variant
+                    if val is None:
+                        metric_alt = metric.replace("-", "_")
+                        key_alt = f"eval/{metric_alt}"
+                        val = partition_metrics[partition].get(key_alt)
+                        name_for_print = metric_alt if val is not None else metric
+                    else:
+                        name_for_print = metric
+
+                    if val is None:
+                        print(f"  {metric}: not found")
+                        rows.append((partition, metric, "not found"))
+                    else:
+                        print(f"  {name_for_print}: {val}")
+                        rows.append((partition, name_for_print, val))
             else:
                 print(f"\n{partition}: no runs found")
+
+        with open(args.output_file, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["partition", "metric", "value"])
+            writer.writerows(rows)
+        print(f"\nPer-partition metrics written to {args.output_file}")
+
     else:
         if args.run_prefix:
             print(
