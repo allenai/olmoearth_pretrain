@@ -25,7 +25,11 @@ from helios.evals.models.prithviv2.prithviv2 import (
     PrithviV2Models,
 )
 from helios.evals.models.satlas.satlas import Satlas, SatlasConfig
-from helios.evals.models.terramind.terramind import Terramind, TerramindConfig
+from helios.evals.models.terramind.terramind import (
+    TERRAMIND_SIZES,
+    Terramind,
+    TerramindConfig,
+)
 from helios.evals.models.tessera.tessera import Tessera, TesseraConfig
 
 
@@ -51,6 +55,7 @@ MODELS_WITH_MULTIPLE_SIZES: dict[BaselineModelName, Any] = {
     BaselineModelName.DINO_V3: list(DinoV3Models),
     BaselineModelName.GALILEO: GALILEO_MODEL_SIZE_TO_WEKA_PATH.keys(),
     BaselineModelName.PRITHVI_V2: list(PrithviV2Models),
+    BaselineModelName.TERRAMIND: TERRAMIND_SIZES,
 }
 
 
