@@ -599,10 +599,15 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                 BaselineModelName.COPERNICUSFM,
                 BaselineModelName.TESSERA,
             }
-            model_sizes = MODELS_WITH_MULTIPLE_SIZES.get(
-                args.model,
-                [None],  # type: ignore # TODO: Fix this
+            model_sizes = (
+                MODELS_WITH_MULTIPLE_SIZES.get(
+                    args.model,
+                    [None],  # type: ignore # TODO: Fix this
+                )
+                if args.all_sizes
+                else [None]
             )
+
             for size in model_sizes:
                 base_run_name = _get_base_run_name(args, size)
                 hp_params = loop_through_params(
