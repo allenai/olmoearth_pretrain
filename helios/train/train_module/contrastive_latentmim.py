@@ -52,6 +52,7 @@ class ContrastiveLatentMIMTrainModuleConfig(HeliosTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
+    max_logit_scale: float = 4.6
 
     def build(
         self,
@@ -101,6 +102,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         regularizer_config: LossConfig | None = None,
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
+        max_logit_scale: float = 4.6,
     ):
         """Initialize the training module.
 
@@ -127,6 +129,7 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
             regularizer_config: An optional regularizer configuration for the model.
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
+            max_logit_scale: Maximum value for logit scale parameter in loss.
         """
         super().__init__(
             model=model,
@@ -161,10 +164,11 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
+        self.max_logit_scale = max_logit_scale
 
-    def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
+    def loss_fn(self, pred: Any, targets: Any, **kwargs: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
-        return self.base_loss.compute(pred, targets)
+        return self.base_loss.compute(pred, targets, **kwargs)
 
     def train_batch(
         self, batch: tuple[int, HeliosSample], dry_run: bool = False
@@ -292,7 +296,8 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
-            loss = self.loss_fn(decoded, target_output)
+            logit_scale = self.model.logit_scale.clamp(max=self.max_logit_scale).exp()
+            loss = self.loss_fn(decoded, target_output, logit_scale=logit_scale)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
             return loss, latent, decoded, target_output, latent_projected_and_pooled
