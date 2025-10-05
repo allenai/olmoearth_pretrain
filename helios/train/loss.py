@@ -294,12 +294,7 @@ class ClipPatchDiscriminationLoss(Loss):
 
         if self.mean_of_modalities:
             total_loss = torch.stack(
-                [
-                    loss.mean()
-                    if loss.numel() > 0
-                    else torch.tensor(0, device=loss.device)
-                    for loss in losses
-                ]
+                [loss.mean() for loss in losses if loss.numel() > 0]
             )
             total_loss = total_loss.mean() if total_loss.numel() > 0 else 0
         elif self.sum_of_modalities:
