@@ -275,9 +275,15 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, latent_projected_and_pooled, reconstructed = self.model(
-                batch, patch_size
-            )
+            (
+                latent,
+                decoded,
+                latent_projected_and_pooled,
+                reconstructed,
+                extra_metrics,
+            ) = self.model(batch, patch_size)
+            if extra_metrics is not None:
+                self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(

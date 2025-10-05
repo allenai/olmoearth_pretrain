@@ -918,7 +918,8 @@ class HeliosDataset(Dataset):
                     k: v[()]
                     for k, v in h5file.items()
                     if k in self.training_modalities
-                    or k in [Modality.LATLON.name, "timestamps"]
+                    # TODO: Fix the floating string issue
+                    or k in ["timestamps"]
                 }
 
                 # Log the dtype for each modality

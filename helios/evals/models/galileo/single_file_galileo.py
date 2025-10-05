@@ -1818,11 +1818,11 @@ class GalileoWrapper(nn.Module):
             s_t_x = self.normalizer(s_t_x)
         return (
             s_t_x,
-            torch.empty(
+            torch.zeros(
                 (b, h, w, len(SPACE_BANDS)), dtype=data_dtype, device=data_device
             ),
-            torch.empty((b, t, len(TIME_BANDS)), dtype=data_dtype, device=data_device),
-            torch.empty((b, len(STATIC_BANDS)), dtype=data_dtype, device=data_device),
+            torch.zeros((b, t, len(TIME_BANDS)), dtype=data_dtype, device=data_device),
+            torch.zeros((b, len(STATIC_BANDS)), dtype=data_dtype, device=data_device),
             s_t_m,
             torch.ones(
                 (b, h, w, len(SPACE_BAND_GROUPS_IDX)),
@@ -1837,7 +1837,6 @@ class GalileoWrapper(nn.Module):
             ),
             months.long(),
         )
-
 
     def forward(
         self,

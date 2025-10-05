@@ -77,19 +77,13 @@ def _get_normalization_bounds(
         NormMethod.NORM_YES_CLIP_2_STD_INT: 2.0,
         NormMethod.NORM_NO_CLIP: 1.0,
     }
-
     if method == NormMethod.NORM_YES_CLIP_MIN_MAX_INT:
         if mins is None or maxs is None:
-            logger.info("No mins/maxs provided, falling back to 2 std bounds")
-            std_mult = bounds_config[NormMethod.NORM_YES_CLIP_2_STD_INT]
-        else:
-            return mins, maxs
-    else:
-        std_mult = bounds_config[method]
+            raise ValueError("No mins/maxs provided")
+        return mins, maxs
 
-    min_value = means - std_mult * stds
-    max_value = means + std_mult * stds
-    return min_value, max_value
+    std_mult = bounds_config[method]
+    return means - std_mult * stds, means + std_mult * stds
 
 
 def _apply_clip_and_quantize(

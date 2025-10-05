@@ -288,31 +288,22 @@ class TestNormalizeBands:
 
         self.assert_outputs_equal(result, expected)
 
-    def test_norm_min_max_int_fallback_when_mins_none(self) -> None:
-        """Test NORM_YES_CLIP_MIN_MAX_INT falls back to 2_STD_INT when mins is None."""
+    def test_norm_min_max_int_raises_error_when_mins_none(self) -> None:
+        """Test NORM_YES_CLIP_MIN_MAX_INT raises an error when mins is None."""
         # THIS IS PRIMARILY USED by DINOV3 evals
         means = self.means.reshape(2, 1, 1)
         stds = self.stds.reshape(2, 1, 1)
         maxs = self.maxs.reshape(2, 1, 1)
 
-        result = normalize_bands(
-            self.image,
-            means,
-            stds,
-            mins=None,
-            maxs=maxs,
-            method=NormMethod.NORM_YES_CLIP_MIN_MAX_INT,
-        )
-
-        expected = np.array(
-            [
-                [[0.0, 0.49803922], [1.0, 0.0]],  # Channel 0
-                [[0.0, 0.7490196], [1.0, 0.24705882]],  # Channel 1
-            ],
-            dtype=np.float32,
-        )
-
-        self.assert_outputs_equal(result, expected)
+        with pytest.raises(ValueError):
+            normalize_bands(
+                self.image,
+                means,
+                stds,
+                mins=None,
+                maxs=maxs,
+                method=NormMethod.NORM_YES_CLIP_MIN_MAX_INT,
+            )
 
     def test_string_method_parameter(self) -> None:
         """Test that string method parameter is properly converted to enum."""

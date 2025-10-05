@@ -145,7 +145,7 @@ class ModalitySpec:
 
     @property
     def band_order(self) -> list[str]:
-        """Get band order."""
+        """Get all bands."""
         return sum((list(band_set.bands) for band_set in self.band_sets), [])
 
     @property
