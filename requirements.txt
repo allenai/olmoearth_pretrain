@@ -4,6 +4,7 @@ cartopy
 class-registry
 einops>=0.7.0
 gcsfs
+google-cloud-compute
 hdf5plugin
 matplotlib
 numpy
