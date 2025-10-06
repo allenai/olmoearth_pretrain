@@ -65,7 +65,7 @@ class _BackboneWithHead(nn.Module):
         """Forward pass through the model and head."""
         dev = next(self.wrapper.parameters()).device
         # classification: (B, D), segmentation: (B, H, W, D)
-        emb = self.wrapper(batch)  # type: ignore
+        emb = self.wrapper(batch, None)
         emb_dim = emb.shape[-1]  # type: ignore
         if not self._inited:
             self._init_head(emb_dim, dev)
