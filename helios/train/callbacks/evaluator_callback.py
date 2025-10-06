@@ -4,6 +4,7 @@ import gc
 import logging
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 from functools import partial
 
 import torch
@@ -36,6 +37,14 @@ from helios.train.callbacks.wandb import HeliosWandBCallback
 logger = logging.getLogger(__name__)
 
 
+class EvalMode(StrEnum):
+    """Eval mode."""
+
+    KNN = "knn"
+    LINEAR_PROBE = "linear_probe"
+    FINETUNE = "finetune"
+
+
 @dataclass
 class DownstreamTaskConfig:
     """Config for a downstream task."""
@@ -62,7 +71,7 @@ class DownstreamTaskConfig:
     # LP / KNN / FT
     patch_size: int = 4
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
-    eval_mode: str | None = None
+    eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
@@ -118,11 +127,13 @@ class DownstreamEvaluator:
         if self.eval_mode is None:
             self.eval_mode = get_eval_mode(self.config.task_type)
 
-        assert self.eval_mode in ["knn", "linear_probe", "finetune"], (
-            f"Unexpected eval mode {self.eval_mode}"
-        )
+        assert self.eval_mode in [
+            EvalMode.KNN,
+            EvalMode.LINEAR_PROBE,
+            EvalMode.FINETUNE,
+        ], f"Unexpected eval mode {self.eval_mode}"
 
-        if self.eval_mode == "linear_probe":
+        if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
                 raise ValueError("probe_lr cannot be none for segmentation tasks.")
             if self.config.task_type == TaskType.SEGMENTATION:
@@ -133,7 +144,7 @@ class DownstreamEvaluator:
                 if self.config.height_width % self.patch_size != 0:
                     raise ValueError("Image height / width indivisable by patch size.")
 
-        if self.eval_mode == "finetune":
+        if self.eval_mode == EvalMode.FINETUNE:
             if self.ft_lr is None:
                 raise ValueError("ft_lr cannot be none for finetune tasks.")
             if self.config.task_type == TaskType.SEGMENTATION:
@@ -146,7 +157,7 @@ class DownstreamEvaluator:
 
         self.eval_function = (
             run_knn
-            if self.eval_mode == "knn"
+            if self.eval_mode == EvalMode.KNN
             else partial(
                 # TODO: THis is updated dynamically in the get_embeddings function
                 train_and_eval_probe,
@@ -156,7 +167,7 @@ class DownstreamEvaluator:
                 probe_type=self.probe_type,
                 lr=self.probe_lr,
             )
-            if self.eval_mode == "linear_probe"
+            if self.eval_mode == EvalMode.LINEAR_PROBE
             else None  # "finetune" handled explictly below in .val()
         )
         self.run_on_test = run_on_test
@@ -237,14 +248,14 @@ class DownstreamEvaluator:
 
     def val(self) -> tuple[float, float]:
         """Validate the model on the downstream task."""
-        if self.eval_mode in ("knn", "linear_probe"):
+        if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
             return self._val_embed_probe()
-        elif self.eval_mode == "finetune":
+        elif self.eval_mode == EvalMode.FINETUNE:
             return self._val_finetune()
         else:
             raise ValueError(f"Unsupported eval_mode: {self.eval_mode}")
 
-    def _val_embed_probe(self) -> float:
+    def _val_embed_probe(self) -> tuple[float, float]:
         """Validate the model using embeddings and probe (knn or linear probe)."""
         logger.info(f"Validating {self.dataset} with {self.eval_mode}")
         train_loader = self._get_data_loader("train")
@@ -302,14 +313,15 @@ class DownstreamEvaluator:
 
         return val_result, test_result
 
-    def _val_finetune(self) -> float:
+    def _val_finetune(self) -> tuple[float, float]:
         """Validate the model using finetuning."""
         logger.info(f"Validating {self.dataset} with finetune")
 
         train_loader = self._get_data_loader_with_batch("train", self.ft_batch_size)  # type: ignore
         val_loader = self._get_data_loader_with_batch("valid", self.ft_batch_size)  # type: ignore
+        test_loader = self._get_data_loader_with_batch("test", self.ft_batch_size)  # type: ignore
 
-        # Choose model: prefer encoder if present
+        # Use encoder if present
         if hasattr(self.trainer.train_module.model, "encoder"):
             model = self.trainer.train_module.model.encoder
         else:
@@ -327,7 +339,7 @@ class DownstreamEvaluator:
                 f"No patch size found for {self.dataset}, using patch size {self.patch_size}"
             )
 
-        val_result = run_finetune_eval(
+        val_result, test_result = run_finetune_eval(
             task_config=self.config,
             model=model,
             device=self.device or self.trainer.device,
@@ -338,12 +350,15 @@ class DownstreamEvaluator:
             use_pooled_tokens=self.use_pooled_tokens,
             train_loader=train_loader,
             val_loader=val_loader,
+            test_loader=test_loader,
         )
-        logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
+        logger.info(
+            f"Downstream evaluator {self.evaluation_name} val score: {val_result}, test score: {test_result}"
+        )
 
         torch.cuda.empty_cache()
         gc.collect()
-        return val_result
+        return val_result, test_result
 
 
 @dataclass

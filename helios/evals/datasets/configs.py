@@ -4,6 +4,7 @@ from enum import Enum
 from typing import NamedTuple
 
 from helios.data.constants import Modality
+from helios.train.callbacks.evaluator_callback import EvalMode
 
 
 class TaskType(Enum):
@@ -13,12 +14,12 @@ class TaskType(Enum):
     SEGMENTATION = "segmentation"
 
 
-def get_eval_mode(task_type: TaskType) -> str:
+def get_eval_mode(task_type: TaskType) -> EvalMode:
     """Get the eval mode for a given task type."""
     if task_type == TaskType.CLASSIFICATION:
-        return "knn"
+        return EvalMode.KNN
     else:
-        return "linear_probe"
+        return EvalMode.LINEAR_PROBE
 
 
 class EvalDatasetConfig(NamedTuple):

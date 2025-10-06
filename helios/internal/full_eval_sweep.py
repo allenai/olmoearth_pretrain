@@ -8,6 +8,7 @@ import os
 import subprocess  # nosec
 import uuid
 from collections.abc import Generator
+from enum import StrEnum
 from logging import getLogger
 from typing import Any
 
@@ -16,14 +17,20 @@ from helios.evals.models import get_launch_script_path
 from helios.internal.all_evals import EVAL_TASKS, FT_EVAL_TASKS
 from helios.internal.experiment import SubCmd
 from helios.nn.flexihelios import PoolingType
+from helios.train.callbacks.evaluator_callback import EvalMode
 
 # Linear probe learning rates to sweep over
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 # Fine-tune learning rates to sweep over
-FT_LRs = [1e-5, 3e-5, 6e-5, 1e-4, 3e-4, 6e-4, 1e-3]
+FT_LRs = [1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2]
 
-Normalization_MODES = ["pre_trained", "dataset"]
-pooling_types = [PoolingType.MEAN, PoolingType.MAX]
+
+class NormalizationMode(StrEnum):
+    """Normalization mode."""
+
+    PRE_TRAINED = "pre_trained"
+    DATASET = "dataset"
+
 
 logger = getLogger(__name__)
 
@@ -60,7 +67,8 @@ lr_args = " ".join(
     [
         create_task_arg(task_name, "probe_lr")
         for task_name, task in EVAL_TASKS.items()
-        if get_eval_mode(dataset_to_config(task.dataset).task_type) == "linear_probe"
+        if get_eval_mode(dataset_to_config(task.dataset).task_type)
+        == EvalMode.LINEAR_PROBE
     ]
 )
 
@@ -92,8 +100,8 @@ helios_args = " ".join(
 def loop_through_params() -> Generator[dict[str, Any], None, None]:
     """Yield a dict of the hps we are sweeping over."""
     for lr in LP_LRs:
-        for norm_mode in Normalization_MODES:
-            for pooling_type in pooling_types:
+        for norm_mode in NormalizationMode:
+            for pooling_type in PoolingType:
                 yield {
                     "lr": lr,
                     "norm_mode": norm_mode,
@@ -103,7 +111,7 @@ def loop_through_params() -> Generator[dict[str, Any], None, None]:
 
 def no_norm_sweep() -> Generator[dict[str, Any], None, None]:
     """Yield a dict of the hps we are sweeping over."""
-    for pooling_type in pooling_types:
+    for pooling_type in PoolingType:
         for lr in LP_LRs:
             yield {
                 "lr": lr,
@@ -121,48 +129,33 @@ def ft_loop_through_params() -> Generator[dict[str, Any], None, None]:
 
 def get_dino_v3_args(finetune: bool = False) -> str:
     """Get the dino v3 arguments."""
-    # Normalization strategy is to scale with min max to 0 - 256 and then scale back to 0 - 1
-    # Normalization is then applied by the eval wrapper by default
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     dino_v3_args = dataset_args if not finetune else ft_dataset_args
-    if not finetune:
-        dino_v3_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_MIN_MAX_INT"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-    else:
-        dino_v3_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_MIN_MAX_INT"
-                for task_name in FT_EVAL_TASKS.keys()
-            ]
-        )
+    dino_v3_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_MIN_MAX_INT"
+            for task_name in tasks.keys()
+        ]
+    )
     return dino_v3_args
 
 
 def get_croma_args(finetune: bool = False) -> str:
     """Get the croma arguments."""
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     croma_args = dataset_args if not finetune else ft_dataset_args
-    if not finetune:
-        croma_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-    else:
-        croma_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
-                for task_name in FT_EVAL_TASKS.keys()
-            ]
-        )
+    croma_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
+            for task_name in tasks.keys()
+        ]
+    )
     return croma_args
 
 
-def get_tessera_args(pretrained_normalizer: bool = True) -> str:
+def get_tessera_args(pretrained_normalizer: bool = True, finetune: bool = False) -> str:
     """Get the tessera arguments."""
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     tessera_args = dataset_args
     if pretrained_normalizer:
         # To use galileo pretrained normalizer we want to leave normalization to the galileo wrapper
@@ -170,7 +163,7 @@ def get_tessera_args(pretrained_normalizer: bool = True) -> str:
         tessera_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
 
@@ -180,41 +173,37 @@ def get_tessera_args(pretrained_normalizer: bool = True) -> str:
         tessera_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
     return tessera_args
 
 
-def get_panopticon_args() -> str:
+def get_panopticon_args(finetune: bool = False) -> str:
     """Get the panopticon arguments."""
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     panopticon_args = dataset_args if not finetune else ft_dataset_args
-    if not finetune:
-        panopticon_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-    else:
-        panopticon_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in FT_EVAL_TASKS.keys()
-            ]
-        )
+    panopticon_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+            for task_name in tasks.keys()
+        ]
+    )
     return panopticon_args
 
 
-def get_terramind_args(pretrained_normalizer: bool = True) -> str:
+def get_terramind_args(
+    pretrained_normalizer: bool = True, finetune: bool = False
+) -> str:
     """Get the terramind arguments."""
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     terramind_args = dataset_args
     if pretrained_normalizer:
         # To use terramind pretrained normalizer we want to leave normalization to the terramind wrapper
         terramind_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
         terramind_args += " " + "--model.use_pretrained_normalizer=True"
@@ -223,22 +212,23 @@ def get_terramind_args(pretrained_normalizer: bool = True) -> str:
         terramind_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
         terramind_args += " " + "--model.use_pretrained_normalizer=False"
     return terramind_args
 
 
-def get_clay_args(pretrained_normalizer: bool = True) -> str:
+def get_clay_args(pretrained_normalizer: bool = True, finetune: bool = False) -> str:
     """Get the clay arguments."""
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     clay_args = dataset_args
     if pretrained_normalizer:
         # To use clay pretrained normalizer we want to leave normalization to the clay wrapper
         clay_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
         clay_args += " " + "--model.use_pretrained_normalizer=True"
@@ -247,95 +237,81 @@ def get_clay_args(pretrained_normalizer: bool = True) -> str:
         clay_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
         clay_args += " " + "--model.use_pretrained_normalizer=False"
     return clay_args
 
 
-def get_copernicusfm_args() -> str:
+def get_copernicusfm_args(finetune: bool = False) -> str:
     """Get the copernicusfm arguments."""
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     copernicusfm_args = dataset_args
     copernicusfm_args += " " + " ".join(
         [
             f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
-            for task_name in EVAL_TASKS.keys()
+            for task_name in tasks.keys()
         ]
     )
     return copernicusfm_args
 
 
-def get_anysat_args() -> str:
+def get_anysat_args(finetune: bool = False) -> str:
     """Get the anysat arguments."""
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     anysat_args = dataset_args
     anysat_args += " " + " ".join(
         [
             f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-            for task_name in EVAL_TASKS.keys()
+            for task_name in tasks.keys()
         ]
     )
     anysat_args += " " + " ".join(
         [
             f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=4"
-            for task_name in EVAL_TASKS.keys()
+            for task_name in tasks.keys()
         ]
     )
     return anysat_args
 
 
-def get_galileo_args(pretrained_normalizer: bool = True) -> str:
+def get_galileo_args(pretrained_normalizer: bool = True, finetune: bool = False) -> str:
     """Get the galileo arguments."""
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     galileo_args = dataset_args if not finetune else ft_dataset_args
     if pretrained_normalizer:
         # To use galileo pretrained normalizer we want to leave normalization to the galileo wrapper
-        galileo_args = dataset_args if not finetune else ft_dataset_args
-        if not finetune:
-            galileo_args += " " + " ".join(
-                [
-                    f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                    for task_name in EVAL_TASKS.keys()
-                ]
-            )
-        else:
-            galileo_args += " " + " ".join(
-                [
-                    f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                    for task_name in FT_EVAL_TASKS.keys()
-                ]
-            )
-
+        galileo_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                for task_name in tasks.keys()
+            ]
+        )
         galileo_args += " " + "--model.use_pretrained_normalizer=True"
     else:
         # IF we use dataset stats we want to turn off the pretrained normalizer
         galileo_args += " " + "--model.use_pretrained_normalizer=False"
 
-    if not finetune:
-        galileo_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=8"
-                for task_name in EVAL_TASKS.keys()
-            ]
-        )
-    else:
-        galileo_args += " " + " ".join(
-            [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=8"
-                for task_name in FT_EVAL_TASKS.keys()
-            ]
-        )
+    galileo_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=8"
+            for task_name in tasks.keys()
+        ]
+    )
     return galileo_args
 
 
-def get_satlas_args(pretrained_normalizer: bool = True) -> str:
+def get_satlas_args(pretrained_normalizer: bool = True, finetune: bool = False) -> str:
     """Get the satlas arguments."""
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     satlas_args = dataset_args
     if pretrained_normalizer:
         # To use satlas pretrained normalizer we want to leave normalization to the satlas wrapper
         satlas_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
 
@@ -344,7 +320,7 @@ def get_satlas_args(pretrained_normalizer: bool = True) -> str:
         satlas_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
         # IF we use dataset stats we want to turn off the pretrained normalizer
@@ -352,8 +328,9 @@ def get_satlas_args(pretrained_normalizer: bool = True) -> str:
     return satlas_args
 
 
-def get_presto_args(pretrained_normalizer: bool = True) -> str:
+def get_presto_args(pretrained_normalizer: bool = True, finetune: bool = False) -> str:
     """Get the presto arguments."""
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     presto_args = dataset_args
     if pretrained_normalizer:
         # To use presto pretrained normalizer we want to leave normalization to the presto wrapper
@@ -361,7 +338,7 @@ def get_presto_args(pretrained_normalizer: bool = True) -> str:
         presto_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
 
@@ -371,15 +348,18 @@ def get_presto_args(pretrained_normalizer: bool = True) -> str:
         presto_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
         presto_args += " " + "--model.use_pretrained_normalizer=False"
     return presto_args
 
 
-def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
+def get_prithviv2_args(
+    pretrained_normalizer: bool = True, finetune: bool = False
+) -> str:
     """Get the Prithvi arguments."""
+    tasks = FT_EVAL_TASKS if finetune else EVAL_TASKS
     prithvi_args = dataset_args
     if pretrained_normalizer:
         # To use Prithvi pretrained normalizer we want to leave normalization to the Prithvi wrapper
@@ -387,7 +367,7 @@ def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
         prithvi_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
 
@@ -396,7 +376,7 @@ def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
         prithvi_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
-                for task_name in EVAL_TASKS.keys()
+                for task_name in tasks.keys()
             ]
         )
         # IF we use dataset stats we want to turn off the pretrained normalizer
@@ -444,31 +424,33 @@ def _get_model_specific_args(args: argparse.Namespace, finetune: bool = False) -
     if args.dino_v3:
         return get_dino_v3_args(finetune=finetune)
     elif args.panopticon:
-        return get_panopticon_args()
+        return get_panopticon_args(finetune=finetune)
     elif args.clay:
-        return get_clay_args()
+        return get_clay_args(finetune=finetune)
     elif args.galileo:
-        return get_galileo_args()
+        return get_galileo_args(finetune=finetune)
     elif args.terramind:
-        return get_terramind_args()
+        return get_terramind_args(finetune=finetune)
     elif args.satlas:
-        return get_satlas_args()
+        return get_satlas_args(finetune=finetune)
     elif args.croma:
-        return get_croma_args()
+        return get_croma_args(finetune=finetune)
     elif args.copernicusfm:
-        return get_copernicusfm_args()
+        return get_copernicusfm_args(finetune=finetune)
     elif args.presto:
-        return get_presto_args()
+        return get_presto_args(finetune=finetune)
     elif args.anysat:
-        return get_anysat_args()
+        return get_anysat_args(finetune=finetune)
     elif args.tessera:
-        return get_tessera_args()
+        return get_tessera_args(finetune=finetune)
     elif args.prithvi_v2:
-        return get_prithviv2_args()
+        return get_prithviv2_args(finetune=finetune)
     return ""
 
 
-def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
+def _get_normalization_args(
+    args: argparse.Namespace, norm_mode: NormalizationMode
+) -> str:
     """Get normalization-specific command arguments."""
     model_map = {
         "galileo": get_galileo_args,
@@ -481,10 +463,12 @@ def _get_normalization_args(args: argparse.Namespace, norm_mode: str) -> str:
     }
     for model, func in model_map.items():
         if getattr(args, model, False):
-            return func(pretrained_normalizer=(norm_mode == "pre_trained"))
-    if norm_mode == "dataset":
+            return func(
+                pretrained_normalizer=(norm_mode == NormalizationMode.PRE_TRAINED)
+            )
+    if norm_mode == NormalizationMode.DATASET:
         return dataset_args
-    if norm_mode == "pre_trained":
+    if norm_mode == NormalizationMode.PRE_TRAINED:
         return helios_args
     return ""
 
@@ -500,8 +484,8 @@ def _build_default_command(
 ) -> str:
     """Build command for running with default hyperparameters."""
     lr = LP_LRs[0]
-    norm_mode = Normalization_MODES[0]
-    pooling_type = pooling_types[0]
+    norm_mode = NormalizationMode.DATASET
+    pooling_type = PoolingType.MEAN
     logger.info(
         f"Running defaults: {norm_mode} normalization, lr={lr}, pooling={pooling_type}"
     )
@@ -537,6 +521,7 @@ def _build_hyperparameter_command(
 ) -> str:
     """Build command for running with specific hyperparameters."""
     lr = params.get("lr", None)
+    # Why using fixed and default?
     norm_mode = params.get("norm_mode", "fixed")
     pooling_type = params.get("pooling_type", "default")
 

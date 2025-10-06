@@ -51,6 +51,7 @@ class _BackboneWithHead(nn.Module):
 
     def _init_head(self, emb_dim: int, device: torch.device) -> None:
         """Initialize the head based on the embedding dimension."""
+        self.batch_norm = nn.BatchNorm1d(emb_dim).to(device=device)
         if self.task_type == TaskType.CLASSIFICATION:
             self._head = nn.Linear(emb_dim, self.num_classes, bias=True)
         else:
@@ -63,12 +64,16 @@ class _BackboneWithHead(nn.Module):
     def forward(self, batch: MaskedHeliosSample) -> torch.Tensor:
         """Forward pass through the model and head."""
         dev = next(self.wrapper.parameters()).device
-        emb = self.wrapper(batch)  # CLS: (B, D)  |  SEG: (B, H, W, D)
-        emb_dim = emb.shape[-1]
+        # CLS: (B, D)  |  SEG: (B, H, W, D)
+        emb = self.wrapper(batch)  # type: ignore
+        emb_dim = emb.shape[-1]  # type: ignore
         if not self._inited:
             self._init_head(emb_dim, dev)
-        if emb.device != dev:
-            emb = emb.to(dev, non_blocking=True)
+        if emb.device != dev:  # type: ignore
+            emb = emb.to(dev, non_blocking=True)  # type: ignore
+        # Follow linear probe, apply BatchNorm before linear layer for classification tasks
+        if self.task_type == TaskType.CLASSIFICATION:
+            emb = self.batch_norm(emb)
         return self._head(emb)
 
 
@@ -161,7 +166,8 @@ def run_finetune_eval(
     use_pooled_tokens: bool,
     train_loader: DataLoader,
     val_loader: DataLoader,
-) -> float:
+    test_loader: DataLoader,
+) -> tuple[float, float]:
     """Finetune the model on a downstream task and evaluate."""
     ft = _BackboneWithHead(
         model=model,
@@ -234,6 +240,14 @@ def run_finetune_eval(
             opt.zero_grad()
 
     if task_config.task_type == TaskType.CLASSIFICATION:
-        return _eval_cls(ft, val_loader, device)
+        val_acc, test_acc = (
+            _eval_cls(ft, val_loader, device),
+            _eval_cls(ft, test_loader, device),
+        )
+        return val_acc, test_acc
     else:
-        return _eval_seg(ft, val_loader, device, task_config.num_classes, patch_size)
+        val_miou, test_miou = (
+            _eval_seg(ft, val_loader, device, task_config.num_classes, patch_size),
+            _eval_seg(ft, test_loader, device, task_config.num_classes, patch_size),
+        )
+        return val_miou, test_miou
