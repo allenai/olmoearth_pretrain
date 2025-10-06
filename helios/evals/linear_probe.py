@@ -122,6 +122,7 @@ def train_and_eval_probe(
     epochs: int = 50,
     eval_interval: int = 50,
     probe_type: ProbeType = ProbeType.LINEAR,
+    select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False,
 ) -> tuple[float, float]:
     """Run a linear probe on the Helios model."""
     logger.info(f"Probe type {probe_type}")
@@ -239,6 +240,10 @@ def train_and_eval_probe(
         final_test_miou = test_mious[-1]
     else:
         final_test_miou = 0.0
+    # add option to select the final test miou based on the epoch of the max val miou
+    final_test_miou = test_mious[val_mious.index(max_val_miou)]
+    if select_final_test_miou_based_on_epoch_of_max_val_miou:
+        final_test_miou = test_mious[val_mious.index(max_val_miou)]
     return final_val_miou, final_test_miou
 
 

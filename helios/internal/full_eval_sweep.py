@@ -93,6 +93,20 @@ def lr_only_params() -> Generator[dict[str, Any], None, None]:
         }
 
 
+def early_stopping_args() -> str:
+    """Get the early stopping arguments.
+
+    This is used to select the final test miou based on the epoch of the max val miou.
+    """
+    return " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_final_test_miou_based_on_epoch_of_max_val_miou=True \
+                --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+
+
 def get_dino_v3_args() -> str:
     """Get the dino v3 arguments."""
     # Normalization strategy is to scale with min max to 0 - 256 and then scale back to 0 - 1
@@ -628,6 +642,9 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                     )
                     commands_to_run.append(cmd)
 
+    if args.early_stop:
+        for cmd in commands_to_run:
+            cmd += early_stopping_args()
     return commands_to_run
 
 
@@ -696,6 +713,11 @@ def main() -> None:
         "--lr_only",
         action="store_true",
         help="If set, only run with default values (no sweep)",
+    )
+    parser.add_argument(
+        "--early_stop",
+        action="store_true",
+        help="If set, use early stopping on the linear probe evals",
     )
     args, extra_cli = parser.parse_known_args()
 

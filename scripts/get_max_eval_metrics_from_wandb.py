@@ -4,6 +4,7 @@ import argparse
 import csv
 from collections import defaultdict
 
+import numpy as np
 import pandas as pd
 import wandb
 
@@ -111,7 +112,11 @@ def group_runs_by_baseline_model_and_size(
 def get_max_metrics_grouped(
     grouped_runs: dict[str, list[wandb.Run]],
     get_test_metrics: bool = False,
-) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+) -> tuple[
+    dict[str, dict[str, float]],
+    dict[str, dict[str, float]],
+    dict[str, dict[str, wandb.Run]],
+]:
     # Get max metrics for each group
     group_metrics = {}
     group_max_runs_per_metric = {}
@@ -152,7 +157,7 @@ def get_max_metrics_grouped(
                 )
                 test_metrics[test_metric_key] = value
             grouped_test_metrics[group_name] = test_metrics
-    return group_metrics, grouped_test_metrics
+    return group_metrics, grouped_test_metrics, group_max_runs_per_metric
 
 
 def get_max_metrics_per_partition(
@@ -253,13 +258,22 @@ def get_max_metrics(project_name: str, run_prefix: str) -> dict[str, float]:
 
 def save_metrics_to_csv(metrics_dict: dict[str, dict[str, float]], filename: str):
     """Saves the metrics dictionary to a CSV file."""
-    all_metrics_df = pd.DataFrame()
-    # first column should be group name and then the rest of the columns should be the metric names
-    all_metrics_df["group"] = metrics_dict.keys()
-    for metric_name in metrics_dict[list(metrics_dict.keys())[0]].keys():
-        all_metrics_df[metric_name] = [
-            metrics_dict[group_name][metric_name] for group_name in metrics_dict.keys()
-        ]
+    all_groups = list(metrics_dict.keys())
+    # Collect all unique metric names across all groups
+    all_metric_names = set()
+    for group_metrics in metrics_dict.values():
+        all_metric_names.update(group_metrics.keys())
+    all_metric_names = sorted(all_metric_names)
+
+    # Build rows, using np.nan if a metric is missing for a group
+    rows = []
+    for group in all_groups:
+        row = {"group": group}
+        for metric in all_metric_names:
+            row[metric] = metrics_dict[group].get(metric, np.nan)
+        rows.append(row)
+
+    all_metrics_df = pd.DataFrame(rows)
     print(all_metrics_df.head())
     all_metrics_df.to_csv(filename, index=False)
     print(f"\nMetrics saved to {filename}")
@@ -358,8 +372,8 @@ if __name__ == "__main__":
         run_groups = get_run_groups(
             args.project_name, args.run_prefix, args.group_baseline_model_and_size
         )
-        group_metrics, group_test_metrics = get_max_metrics_grouped(
-            run_groups, args.get_test_metrics
+        group_metrics, group_test_metrics, group_max_runs_per_metric = (
+            get_max_metrics_grouped(run_groups, args.get_test_metrics)
         )
 
         print(group_test_metrics)
@@ -394,10 +408,15 @@ if __name__ == "__main__":
                             print(f"  {metric}: not found")
 
         # Save to CSV
-        # if args.output:
-        #     output_csv = args.output
-        # elif args.run_prefix:
-        #     output_csv = f"{args.run_prefix}_eval_metrics.csv"
-        # else:
-        #     output_csv = f"{args.project_name}_eval_metrics.csv"
-        # save_metrics_to_csv(group_metrics, output_csv)
+        if args.output:
+            output_csv = args.output
+            test_output_csv = args.output.replace(".csv", "_test.csv")
+        elif args.run_prefix:
+            output_csv = f"{args.run_prefix}_eval_metrics.csv"
+            test_output_csv = f"{args.run_prefix}_eval_metrics_test.csv"
+        else:
+            output_csv = f"{args.project_name}_eval_metrics.csv"
+            test_output_csv = f"{args.project_name}_eval_metrics_test.csv"
+        save_metrics_to_csv(group_metrics, output_csv)
+        save_metrics_to_csv(group_test_metrics, test_output_csv)
+        # TODO: save the anmes of the max runs per metric as a json

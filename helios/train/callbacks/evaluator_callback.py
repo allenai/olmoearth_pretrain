@@ -60,6 +60,7 @@ class DownstreamTaskConfig:
     use_pooled_tokens: bool = False
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
+    select_final_test_miou_based_on_epoch_of_max_val_miou: bool = True
 
 
 class DownstreamEvaluator:
@@ -106,6 +107,9 @@ class DownstreamEvaluator:
         self.partition = task.partition
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
+        self.select_final_test_miou_based_on_epoch_of_max_val_miou = (
+            task.select_final_test_miou_based_on_epoch_of_max_val_miou
+        )
         if self.eval_mode is None:
             self.eval_mode = get_eval_mode(self.config.task_type)
 
@@ -134,6 +138,7 @@ class DownstreamEvaluator:
                 eval_interval=self.linear_probe_eval_interval,
                 probe_type=self.probe_type,
                 lr=self.probe_lr,
+                select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
             )
         )
         self.run_on_test = run_on_test
