@@ -129,11 +129,7 @@ class DownstreamEvaluator:
         if isinstance(self.eval_mode, str):
             self.eval_mode = EvalMode(self.eval_mode)
 
-        assert self.eval_mode in [
-            EvalMode.KNN,
-            EvalMode.LINEAR_PROBE,
-            EvalMode.FINETUNE,
-        ], f"Unexpected eval mode {self.eval_mode}"
+        assert self.eval_mode in EvalMode, f"Unexpected eval mode {self.eval_mode}"
 
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
@@ -229,15 +225,6 @@ class DownstreamEvaluator:
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(data_loader=data_loader, model=model)
 
-    def val(self) -> tuple[float, float]:
-        """Validate the model on the downstream task."""
-        if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
-            return self._val_embed_probe()
-        elif self.eval_mode == EvalMode.FINETUNE:
-            return self._val_finetune()
-        else:
-            raise ValueError(f"Unsupported eval_mode: {self.eval_mode}")
-
     def _val_embed_probe(self) -> tuple[float, float]:
         """Validate the model using embeddings and probe (knn or linear probe)."""
         logger.info(f"Validating {self.dataset} with {self.eval_mode}")
@@ -302,7 +289,11 @@ class DownstreamEvaluator:
 
         train_loader = self._get_data_loader("train", self.ft_batch_size)
         val_loader = self._get_data_loader("valid", self.ft_batch_size)
-        test_loader = self._get_data_loader("test", self.ft_batch_size)
+
+        if self.run_on_test:
+            test_loader = self._get_data_loader("test", self.ft_batch_size)
+        else:
+            test_loader = None
 
         # Use encoder if present
         if hasattr(self.trainer.train_module.model, "encoder"):
@@ -342,6 +333,15 @@ class DownstreamEvaluator:
         torch.cuda.empty_cache()
         gc.collect()
         return val_result, test_result
+
+    def val(self) -> tuple[float, float]:
+        """Validate the model on the downstream task."""
+        if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
+            return self._val_embed_probe()
+        elif self.eval_mode == EvalMode.FINETUNE:
+            return self._val_finetune()
+        else:
+            raise ValueError(f"Unsupported eval_mode: {self.eval_mode}")
 
 
 @dataclass

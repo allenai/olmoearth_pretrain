@@ -64,7 +64,7 @@ class _BackboneWithHead(nn.Module):
     def forward(self, batch: MaskedHeliosSample) -> torch.Tensor:
         """Forward pass through the model and head."""
         dev = next(self.wrapper.parameters()).device
-        # CLS: (B, D)  |  SEG: (B, H, W, D)
+        # classification: (B, D), segmentation: (B, H, W, D)
         emb = self.wrapper(batch)  # type: ignore
         emb_dim = emb.shape[-1]  # type: ignore
         if not self._inited:
@@ -155,6 +155,11 @@ def count_params(module: nn.Module) -> tuple[int, int]:
     return total, trainable
 
 
+def _snapshot_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
+    """Clone a module's state dict onto CPU for later restoration."""
+    return {k: v.detach().cpu().clone() for k, v in module.state_dict().items()}
+
+
 def run_finetune_eval(
     task_config: EvalDatasetConfig,
     model: nn.Module,
@@ -166,7 +171,7 @@ def run_finetune_eval(
     use_pooled_tokens: bool,
     train_loader: DataLoader,
     val_loader: DataLoader,
-    test_loader: DataLoader,
+    test_loader: DataLoader | None,
 ) -> tuple[float, float]:
     """Finetune the model on a downstream task and evaluate."""
     ft = _BackboneWithHead(
@@ -196,6 +201,14 @@ def run_finetune_eval(
         )
     else:
         loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
+
+    patience = max(1, int(0.1 * epochs)) if epochs > 0 else 1
+    logger.info(f"Using early stopping patience of {patience} epochs")
+
+    best_state = _snapshot_state_dict(ft)
+    best_val_metric = float("-inf")
+    epochs_without_improvement = 0
+    should_stop = False
 
     ft.train()
     for epoch in range(epochs):
@@ -239,15 +252,65 @@ def run_finetune_eval(
             opt.step()
             opt.zero_grad()
 
+        if task_config.task_type == TaskType.CLASSIFICATION:
+            val_metric = _eval_cls(ft, val_loader, device)
+        else:
+            val_metric = _eval_seg(
+                ft,
+                val_loader,
+                device,
+                task_config.num_classes,
+                patch_size,
+            )
+        logger.info(
+            f"Finetune Epoch [{epoch + 1}/{epochs}] Validation Metric: {val_metric:.4f}"
+        )
+
+        if val_metric > best_val_metric:
+            best_val_metric = val_metric
+            best_state = _snapshot_state_dict(ft)
+            epochs_without_improvement = 0
+            logger.info(
+                f"New best validation metric {best_val_metric:.4f} at epoch {epoch + 1}"
+            )
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= patience:
+                logger.info(
+                    "Early stopping triggered after "
+                    f"{epochs_without_improvement} epochs without improvement"
+                )
+                should_stop = True
+
+        if should_stop:
+            break
+        ft.train()
+
+    if best_val_metric == float("-inf"):
+        if task_config.task_type == TaskType.CLASSIFICATION:
+            best_val_metric = _eval_cls(ft, val_loader, device)
+        else:
+            best_val_metric = _eval_seg(
+                ft,
+                val_loader,
+                device,
+                task_config.num_classes,
+                patch_size,
+            )
+
+    ft.load_state_dict(best_state)
+
     if task_config.task_type == TaskType.CLASSIFICATION:
-        val_acc, test_acc = (
-            _eval_cls(ft, val_loader, device),
-            _eval_cls(ft, test_loader, device),
+        val_acc = best_val_metric
+        test_acc = (
+            _eval_cls(ft, test_loader, device) if test_loader is not None else 0.0
         )
         return val_acc, test_acc
     else:
-        val_miou, test_miou = (
-            _eval_seg(ft, val_loader, device, task_config.num_classes, patch_size),
-            _eval_seg(ft, test_loader, device, task_config.num_classes, patch_size),
+        val_miou = best_val_metric
+        test_miou = (
+            _eval_seg(ft, test_loader, device, task_config.num_classes, patch_size)
+            if test_loader is not None
+            else 0.0
         )
         return val_miou, test_miou
