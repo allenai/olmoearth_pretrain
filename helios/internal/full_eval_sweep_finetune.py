@@ -48,6 +48,7 @@ class ModelPreset:
 
     per_task_overrides: dict[str, Any] = field(default_factory=dict)
     global_args: tuple[str, ...] = ()
+    # By default, we include the dataset stats.
     include_dataset_stats: bool = True
     launch_script_key: str | None = None
 
