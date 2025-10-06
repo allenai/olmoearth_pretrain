@@ -46,7 +46,6 @@ def _format_ft_lr_args(lr: float) -> list[str]:
 class ModelPreset:
     """Model-specific overrides used for evaluation normalisation."""
 
-    help_text: str
     per_task_overrides: dict[str, Any] = field(default_factory=dict)
     global_args: tuple[str, ...] = ()
     include_dataset_stats: bool = True
@@ -55,23 +54,19 @@ class ModelPreset:
 
 MODEL_PRESETS: dict[str, ModelPreset] = {
     "dino_v3": ModelPreset(
-        help_text="Apply DINOv3 evaluation normalisation preset",
         per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP_MIN_MAX_INT"},
         launch_script_key="dino_v3",
     ),
     "panopticon": ModelPreset(
-        help_text="Apply Panopticon evaluation normalisation preset",
         per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
         launch_script_key="panopticon",
     ),
     "terramind": ModelPreset(
-        help_text="Use Terramind pretrained normaliser settings",
         per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
         global_args=("--model.use_pretrained_normalizer=True",),
         launch_script_key="terramind",
     ),
     "galileo": ModelPreset(
-        help_text="Use Galileo pretrained normaliser settings",
         per_task_overrides={
             "norm_method": "NormMethod.NO_NORM",
             "embedding_batch_size": "8",
@@ -80,47 +75,39 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         launch_script_key="galileo",
     ),
     "satlas": ModelPreset(
-        help_text="Use Satlas pretrained normaliser settings",
         per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
         global_args=("--model.use_pretrained_normalizer=True",),
         launch_script_key="satlas",
     ),
     "croma": ModelPreset(
-        help_text="Apply Croma evaluation normalisation preset",
         per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP_2_STD"},
         launch_script_key="croma",
     ),
     "clay": ModelPreset(
-        help_text="Use Clay pretrained normaliser settings",
         per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
         global_args=("--model.use_pretrained_normalizer=True",),
         launch_script_key="clay",
     ),
     "copernicusfm": ModelPreset(
-        help_text="Apply CopernicusFM evaluation normalisation preset",
         per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP_2_STD"},
     ),
     "presto": ModelPreset(
-        help_text="Use Presto pretrained normaliser settings",
         per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
         global_args=("--model.use_pretrained_normalizer=True",),
         launch_script_key="presto",
     ),
     "anysat": ModelPreset(
-        help_text="Apply AnySat evaluation normalisation preset",
         per_task_overrides={
             "norm_method": "NormMethod.STANDARDIZE",
             "embedding_batch_size": "4",
         },
     ),
     "tessera": ModelPreset(
-        help_text="Use Tessera pretrained normaliser settings",
         per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
         global_args=("--model.use_pretrained_normalizer=True",),
         launch_script_key="tessera",
     ),
     "prithvi_v2": ModelPreset(
-        help_text="Use Prithvi-v2 pretrained normaliser settings",
         per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
         global_args=("--model.use_pretrained_normalizer=True",),
         launch_script_key="prithvi_v2",
@@ -315,7 +302,7 @@ def main() -> None:
     )
 
     for flag, preset in MODEL_PRESETS.items():
-        parser.add_argument(f"--{flag}", action="store_true", help=preset.help_text)
+        parser.add_argument(f"--{flag}", action="store_true")
 
     args, extra_cli = parser.parse_known_args()
 
