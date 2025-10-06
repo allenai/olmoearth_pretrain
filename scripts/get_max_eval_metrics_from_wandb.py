@@ -1,6 +1,7 @@
 """Get metrics summary from W&B. See get_max_metrics."""
 
 import argparse
+import csv
 from collections import defaultdict
 
 import pandas as pd
@@ -109,19 +110,49 @@ def group_runs_by_baseline_model_and_size(
 
 def get_max_metrics_grouped(
     grouped_runs: dict[str, list[wandb.Run]],
-) -> dict[str, dict[str, float]]:
+    get_test_metrics: bool = False,
+) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
     # Get max metrics for each group
     group_metrics = {}
+    group_max_runs_per_metric = {}
     for group_name, runs in grouped_runs.items():
         print(f"\nProcessing group: {group_name} ({len(runs)} runs)")
         metrics = {}
+        max_runs_per_metric = {}
         for run in runs:
             for key, value in run.summary.items():
-                if not key.startswith("eval/"):
+                # TODO: Make these metrics names constants
+                if not key.startswith("eval/") or key.startswith("eval/test/"):
                     continue
-                metrics[key] = max(metrics.get(key, value), value)
+                prev_max_val = metrics.get(key, float("-inf"))
+                metrics[key] = max(prev_max_val, value)
+                if value > prev_max_val:
+                    max_runs_per_metric[key] = run
+
         group_metrics[group_name] = metrics
-    return group_metrics
+        group_max_runs_per_metric[group_name] = max_runs_per_metric
+
+    grouped_test_metrics = {}
+    if get_test_metrics:
+        print("\nGetting test metrics...")
+        # get the test set values for all the max runs per metric
+
+        for group_name, max_runs_per_metric in group_max_runs_per_metric.items():
+            test_metrics = {}
+            for metric, run in max_runs_per_metric.items():
+                test_metric_key = metric.replace("eval/", "eval/test/")
+                value = run.summary.get(test_metric_key, None)
+                if value is None:
+                    print(
+                        f"No test metric found for run {run.name} for metric {metric}"
+                    )
+                    continue
+                print(
+                    f"Found test metric {test_metric_key} for run {run.name} with value {value}"
+                )
+                test_metrics[test_metric_key] = value
+            grouped_test_metrics[group_name] = test_metrics
+    return group_metrics, grouped_test_metrics
 
 
 def get_max_metrics_per_partition(
@@ -265,6 +296,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Aggregate metrics per dataset partition instead of grouping by '_step'",
     )
+    parser.add_argument(
+        "--get_test_metrics",
+        action="store_true",
+        help="Report test metrics based on the configuration of the validation results witht the highest score",
+    )
 
     args = parser.parse_args()
 
@@ -322,8 +358,11 @@ if __name__ == "__main__":
         run_groups = get_run_groups(
             args.project_name, args.run_prefix, args.group_baseline_model_and_size
         )
-        group_metrics = get_max_metrics_grouped(run_groups)
+        group_metrics, group_test_metrics = get_max_metrics_grouped(
+            run_groups, args.get_test_metrics
+        )
 
+        print(group_test_metrics)
         print("\nFinal Results:")
         for group_name, metrics in group_metrics.items():
             print(f"\n{group_name}:")
@@ -338,12 +377,27 @@ if __name__ == "__main__":
                         print(f"  {metric}: {metrics[k]}")
                     except KeyError:
                         print(f"  {metric}: not found")
+        if args.get_test_metrics:
+            print("\nFinal Test Results:")
+            for group_name, metrics in group_test_metrics.items():
+                print(f"\n{group_name}:")
+                for metric in METRICS:
+                    try:
+                        k = f"eval/test/{metric}"
+                        print(f"  {metric}: {metrics[k]}")
+                    except KeyError:
+                        try:
+                            metric = metric.replace("-", "_")
+                            k = f"eval/test/{metric}"
+                            print(f"  {metric}: {metrics[k]}")
+                        except KeyError:
+                            print(f"  {metric}: not found")
 
         # Save to CSV
-        if args.output:
-            output_csv = args.output
-        elif args.run_prefix:
-            output_csv = f"{args.run_prefix}_eval_metrics.csv"
-        else:
-            output_csv = f"{args.project_name}_eval_metrics.csv"
-        save_metrics_to_csv(group_metrics, output_csv)
+        # if args.output:
+        #     output_csv = args.output
+        # elif args.run_prefix:
+        #     output_csv = f"{args.run_prefix}_eval_metrics.csv"
+        # else:
+        #     output_csv = f"{args.project_name}_eval_metrics.csv"
+        # save_metrics_to_csv(group_metrics, output_csv)
