@@ -6,6 +6,7 @@ from collections import defaultdict
 import pandas as pd
 import wandb
 
+from helios.evals.models import BaselineModelName
 from helios.internal.all_evals import EVAL_TASKS
 
 WANDB_ENTITY = "eai-ai2"
@@ -28,8 +29,10 @@ def get_run_group_name(run_name: str) -> str:
     return run_name.split("_step")[0]
 
 
-def get_max_metrics_grouped(
-    project_name: str, run_prefix: str | None = None
+def get_run_groups(
+    project_name: str,
+    run_prefix: str | None = None,
+    group_baseline_model_and_size: bool = False,
 ) -> dict[str, dict[str, float]]:
     """Get the maximum value for each metric grouped by run prefix before '_step'.
 
@@ -41,21 +44,72 @@ def get_max_metrics_grouped(
         a dictionary mapping from group name to a dict of metric name to max value.
     """
     api = wandb.Api()
+    wandb_path = f"{WANDB_ENTITY}/{project_name}"
 
-    # Group runs by their prefix before "_step"
-    grouped_runs = defaultdict(list)
-    for run in api.runs(f"{WANDB_ENTITY}/{project_name}"):
-        if run_prefix and not run.name.startswith(run_prefix):
-            continue
-        group_name = get_run_group_name(run.name)
-        grouped_runs[group_name].append(run)
-        print(f"Found run {run.name} ({run.id}) -> group: {group_name}")
+    if not group_baseline_model_and_size:
+        grouped_runs = group_runs_by_run_prefix_and_step(api, wandb_path, run_prefix)
+    else:
+        grouped_runs = group_runs_by_baseline_model_and_size(api, wandb_path)
 
     print(f"\nFound {len(grouped_runs)} groups")
 
     # print all the groups found and stop here
     print(f"\nGroups found: {grouped_runs.keys()}")
+    return grouped_runs
 
+
+def group_runs_by_run_prefix_and_step(
+    api: wandb.Api, wandb_path: str, run_prefix: str | None = None
+) -> dict[str, list[wandb.Run]]:
+    """Group runs by their prefix before "_step"
+
+    Args:
+        project_name: the W&B project for the run.
+        run_prefix: optional prefix to filter runs. If None, processes all runs.
+
+    Returns:
+        a dictionary mapping from group name to a list of wandb.Run objects.
+    """
+    grouped_runs = defaultdict(list)
+    for run in api.runs(wandb_path):
+        if run_prefix and not run.name.startswith(run_prefix):
+            continue
+        group_name = get_run_group_name(run.name)
+        grouped_runs[group_name].append(run)
+        print(f"Found run {run.name} ({run.id}) -> group: {group_name}")
+    return grouped_runs
+
+
+def group_runs_by_baseline_model_and_size(
+    api: wandb.Api, wandb_path: str
+) -> dict[str, list[wandb.Run]]:
+    """Group runs by their baseline model name and model size key"""
+
+    def _find_model_name_and_size(run: wandb.Run) -> tuple[BaselineModelName, str]:
+        """Find the baseline model name and size key in the run config"""
+        for name in list(BaselineModelName):
+            if name.value in run.name:
+                return name, run.config["model"].get("size", None)
+        raise ValueError(f"No baseline model name found in run {run.name}")
+
+    def _get_group_name(model_name: BaselineModelName, size: str | None) -> str:
+        """Get the group name for the run"""
+        if size is None:
+            return model_name.value
+        return f"{model_name.value}_{size}"
+
+    grouped_runs = defaultdict(list)
+    for run in api.runs(wandb_path):
+        model_name, size = _find_model_name_and_size(run)
+        group_name = _get_group_name(model_name, size)
+        grouped_runs[group_name].append(run)
+        print(f"Found run {run.name} ({run.id}) -> group: {group_name}")
+    return grouped_runs
+
+
+def get_max_metrics_grouped(
+    grouped_runs: dict[str, list[wandb.Run]],
+) -> dict[str, dict[str, float]]:
     # Get max metrics for each group
     group_metrics = {}
     for group_name, runs in grouped_runs.items():
@@ -67,7 +121,6 @@ def get_max_metrics_grouped(
                     continue
                 metrics[key] = max(metrics.get(key, value), value)
         group_metrics[group_name] = metrics
-
     return group_metrics
 
 
@@ -194,6 +247,12 @@ if __name__ == "__main__":
         default=None,
         help="Optional prefix to filter runs (e.g., 'my_experiment'). If not specified, processes all runs.",
     )
+    # pull and group by baseline model name and model size key
+    parser.add_argument(
+        "--group_baseline_model_and_size",
+        action="store_true",
+        help="Group by baseline model name and model size key",
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -260,7 +319,10 @@ if __name__ == "__main__":
                 "Getting max metrics grouped by run prefix before '_step' (all runs in project)..."
             )
 
-        group_metrics = get_max_metrics_grouped(args.project_name, args.run_prefix)
+        run_groups = get_run_groups(
+            args.project_name, args.run_prefix, args.group_baseline_model_and_size
+        )
+        group_metrics = get_max_metrics_grouped(run_groups)
 
         print("\nFinal Results:")
         for group_name, metrics in group_metrics.items():
