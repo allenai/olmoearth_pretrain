@@ -485,7 +485,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     cancel_after_first_eval: bool = False
     tasks_to_run: list[str] | None = None
     # whether to run the evaluators on the val set only (=False) or on the test and val set (=True)
-    run_on_test: bool = False
+    run_on_test: bool = True
 
     def verify_input_modalities(
         self, task: DownstreamTaskConfig, config: EvalDatasetConfig
