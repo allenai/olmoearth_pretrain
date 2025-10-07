@@ -480,6 +480,15 @@ FT_EVAL_TASKS = {
         input_layers=["landsat"],
         epochs=50,
     ),
+    "pastis_sentinel2": DownstreamTaskConfig(
+        dataset="pastis",
+        ft_batch_size=16,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+    ),
     "breizhcrops": DownstreamTaskConfig(
         dataset="breizhcrops",
         ft_batch_size=64,
