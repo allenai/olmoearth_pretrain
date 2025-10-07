@@ -71,7 +71,7 @@ class DownstreamTaskConfig:
     # LP / KNN / FT
     patch_size: int = 4
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
-    eval_mode: str | None = None
+    eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
@@ -129,10 +129,15 @@ class DownstreamEvaluator:
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
         self.run_on_test = run_on_test
-        assert self.run_on_test and self.select_final_test_miou_based_on_epoch_of_max_val_miou, "select_final_test_miou_based_on_epoch_of_max_val_miou must be True if run_on_test is True"
+        assert (
+            self.run_on_test
+            and self.select_final_test_miou_based_on_epoch_of_max_val_miou
+        ), (
+            "select_final_test_miou_based_on_epoch_of_max_val_miou must be True if run_on_test is True"
+        )
         if self.eval_mode is None:
             self.eval_mode = get_eval_mode(self.config.task_type)  # type: ignore
-        if isinstance(self.eval_mode, str):
+        if isinstance(self.eval_mode, str) and self.eval_mode is not None:
             # This will check if the eval mode is valid
             self.eval_mode = EvalMode(self.eval_mode)
 
@@ -492,6 +497,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     tasks_to_run: list[str] | None = None
     # whether to run the evaluators on the val set only (=False) or on the test and val set (=True)
     run_on_test: bool = False
+    filter_for_eval_mode: EvalMode | None = None
 
     def verify_input_modalities(
         self, task: DownstreamTaskConfig, config: EvalDatasetConfig
@@ -549,6 +555,15 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     f"Skipping {evaluation_name} because it is not in the tasks_to_run list"
                 )
                 continue
+            if (
+                self.filter_for_eval_mode is not None
+                and task.eval_mode != self.filter_for_eval_mode
+            ):
+                logger.info(
+                    f"Skipping {evaluation_name} because it is not in the filter_for_eval_mode list"
+                )
+                continue
+
             config = dataset_to_config(task.dataset)
             if config.task_type == TaskType.SEGMENTATION:
                 if task.probe_lr is None and task.ft_lr is None:
@@ -560,7 +575,7 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             # Sort to ensure consistent order
             task.input_modalities.sort()
             self.verify_input_layers(task)
-
+            logger.info(f"Adding {evaluation_name} with eval mode {task.eval_mode}")
             evaluators.append(
                 DownstreamEvaluator(
                     evaluation_name=evaluation_name,

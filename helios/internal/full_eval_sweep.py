@@ -555,6 +555,13 @@ def _get_module_path(model: BaselineModelName | None) -> str:
     return get_launch_script_path(model)
 
 
+def _get_size_args(args: argparse.Namespace) -> str:
+    """Get the size arguments."""
+    if args.size is not None:
+        return f" --model.size={args.size}"
+    return ""
+
+
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     """Build the commands for the sweep."""
     project_name = args.project_name or "helios_in_loop_evals"
@@ -570,7 +577,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         if args.model == "all":
             raise ValueError("Cannot run defaults with all models")
         # Just run with the first/default values
-        base_run_name = _get_base_run_name(args)
+        base_run_name = _get_base_run_name(args, args.size)
         cmd = _build_default_command(
             args,
             base_run_name,
@@ -579,11 +586,12 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             checkpoint_args,
             project_name,
             extra,
+            args.size,
         )
         commands_to_run.append(cmd)
     elif args.lr_only:
         # only sweep the learning rates use mean pooling  and whatever normalization works best
-        base_run_name = _get_base_run_name(args)
+        base_run_name = _get_base_run_name(args, args.size)
         lr_params = lr_only_params()
 
         for params in lr_params:
@@ -596,11 +604,16 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                 checkpoint_args,
                 project_name,
                 extra,
+                args.size,
             )
             commands_to_run.append(cmd)
     else:
         if args.model == "all":
             models = list(BaselineModelName)
+            # Filter out skipped models if model-skip-names is provided
+            if args.model_skip_names:
+                skip_names = [name.strip() for name in args.model_skip_names.split(",")]
+                models = [model for model in models if model.value not in skip_names]
         else:
             models = [args.model]
         for model in models:
@@ -612,14 +625,17 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                 BaselineModelName.COPERNICUSFM,
                 BaselineModelName.TESSERA,
             }
-            model_sizes = (
-                MODELS_WITH_MULTIPLE_SIZES.get(
-                    args.model,
-                    [None],  # type: ignore # TODO: Fix this
+            if args.size is not None:
+                model_sizes = [args.size]
+            else:
+                model_sizes = (
+                    MODELS_WITH_MULTIPLE_SIZES.get(
+                        args.model,
+                        [None],  # type: ignore # TODO: Fix this
+                    )
+                    if args.all_sizes
+                    else [None]
                 )
-                if args.all_sizes
-                else [None]
-            )
 
             for size in model_sizes:
                 base_run_name = _get_base_run_name(args, size)
@@ -722,6 +738,19 @@ def main() -> None:
         action="store_true",
         help="If set, use early stopping on the linear probe evals",
     )
+    parser.add_argument(
+        "--model-skip-names",
+        type=str,
+        required=False,
+        help="Comma-separated list of model names to skip when --model=all is set",
+    )
+    parser.add_argument(
+        "--size",
+        type=str,
+        required=False,
+        help="Model size to use",
+    )
+
     args, extra_cli = parser.parse_known_args()
 
     commands_to_run = build_commands(args, extra_cli)

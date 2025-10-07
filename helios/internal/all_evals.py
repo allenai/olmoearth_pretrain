@@ -60,6 +60,7 @@ EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
+        eval_mode=EvalMode.KNN,
     ),
     "m_forestnet": DownstreamTaskConfig(
         dataset="m-forestnet",
@@ -68,6 +69,7 @@ EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
         eval_interval=Duration.epochs(5),
+        eval_mode=EvalMode.KNN,
     ),
     "m_bigearthnet": DownstreamTaskConfig(
         dataset="m-bigearthnet",
@@ -76,6 +78,7 @@ EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
+        eval_mode=EvalMode.KNN,
     ),
     "m_so2sat": DownstreamTaskConfig(
         dataset="m-so2sat",
@@ -84,6 +87,7 @@ EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
+        eval_mode=EvalMode.KNN,
     ),
     "m_brick_kiln": DownstreamTaskConfig(
         dataset="m-brick-kiln",
@@ -92,6 +96,7 @@ EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
+        eval_mode=EvalMode.KNN,
     ),
     "m_sa_crop_type": DownstreamTaskConfig(
         dataset="m-sa-crop-type",
@@ -102,6 +107,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=False,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
+        eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "m_cashew_plant": DownstreamTaskConfig(
         dataset="m-cashew-plant",
@@ -112,6 +118,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
+        eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "mados": DownstreamTaskConfig(
         dataset="mados",
@@ -122,6 +129,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=False,
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
+        eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "sen1floods11": DownstreamTaskConfig(
         dataset="sen1floods11",
@@ -132,6 +140,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=False,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
+        eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "pastis_sentinel2": DownstreamTaskConfig(
         dataset="pastis",
@@ -144,6 +153,7 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(50),
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "pastis_sentinel1": DownstreamTaskConfig(
         dataset="pastis",
@@ -156,6 +166,7 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(50),
         input_modalities=[Modality.SENTINEL1.name],
         epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "pastis_sentinel1_sentinel2": DownstreamTaskConfig(
         dataset="pastis",
@@ -168,6 +179,7 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(20),
         input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "breizhcrops": DownstreamTaskConfig(
         dataset="breizhcrops",
@@ -284,6 +296,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL1.name],
         input_layers=["sentinel1_ascending"],
         eval_interval=Duration.epochs(20),
+        eval_mode=EvalMode.KNN,
     ),
     "nandi_landsat": DownstreamTaskConfig(
         dataset="nandi",
@@ -294,6 +307,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.LANDSAT.name],
         input_layers=["landsat"],
         eval_interval=Duration.epochs(20),
+        eval_mode=EvalMode.KNN,
     ),
     "awf_sentinel2": DownstreamTaskConfig(
         dataset="awf",
@@ -304,6 +318,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         input_layers=["sentinel2"],
         eval_interval=Duration.epochs(20),
+        eval_mode=EvalMode.KNN,
     ),
     "awf_sentinel1": DownstreamTaskConfig(
         dataset="awf",
@@ -314,6 +329,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL1.name],
         input_layers=["sentinel1_ascending"],
         eval_interval=Duration.epochs(20),
+        eval_mode=EvalMode.KNN,
     ),
     "awf_landsat": DownstreamTaskConfig(
         dataset="awf",
@@ -324,6 +340,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.LANDSAT.name],
         input_layers=["landsat"],
         eval_interval=Duration.epochs(20),
+        eval_mode=EvalMode.KNN,
     ),
     "pastis128_sentinel2": DownstreamTaskConfig(
         dataset="pastis128",
@@ -336,6 +353,7 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(50),
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "pastis128_sentinel1": DownstreamTaskConfig(
         dataset="pastis128",
@@ -348,6 +366,7 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(50),
         input_modalities=[Modality.SENTINEL1.name],
         epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "pastis128_sentinel1_sentinel2": DownstreamTaskConfig(
         dataset="pastis128",
@@ -360,6 +379,7 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(20),
         input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
     ),
 }
 
