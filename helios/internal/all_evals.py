@@ -358,14 +358,14 @@ EVAL_TASKS = {
 }
 
 FT_EVAL_TASKS = {
-    # "m_eurosat": DownstreamTaskConfig(
-    #     dataset="m-eurosat",
-    #     ft_batch_size=64,
-    #     num_workers=0,
-    #     pooling_type=PoolingType.MEAN,
-    #     norm_stats_from_pretrained=True,
-    #     epochs=50,
-    # ),
+    "m_eurosat": DownstreamTaskConfig(
+        dataset="m-eurosat",
+        ft_batch_size=64,
+        num_workers=0,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        epochs=50,
+    ),
     "m_bigearthnet": DownstreamTaskConfig(
         dataset="m-bigearthnet",
         ft_batch_size=32,
