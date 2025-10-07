@@ -125,6 +125,11 @@ def build_launch_config(
     if train_script_path is not None:
         logger.info(f"Propagating train script path to experiment: {train_script_path}")
         env_vars.append(BeakerEnvVar(name="TRAIN_SCRIPT_PATH", value=train_script_path))
+    # Propagate the finetune tag to the experiment if set
+    finetune = os.environ.get("FINETUNE")
+    if finetune is not None:
+        logger.info(f"Propagating finetune tag to experiment: {finetune}")
+        env_vars.append(BeakerEnvVar(name="FINETUNE", value=finetune))
 
     return HeliosBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",

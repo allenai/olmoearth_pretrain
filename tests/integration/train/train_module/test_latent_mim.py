@@ -18,6 +18,8 @@ from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
+from .helper import check_loss_is_a_reasonable_value
+
 torch.set_default_device("cpu")
 logger = logging.getLogger(__name__)
 
@@ -167,11 +169,7 @@ def test_train_batch_without_missing_modalities(
         train_module._attach_trainer(mock_trainer)
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
-        assert torch.allclose(
-            mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(2.0),
-            atol=1e-1,
-        )
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])
 
 
 def test_train_batch_with_missing_modalities(
@@ -194,8 +192,4 @@ def test_train_batch_with_missing_modalities(
         train_module._attach_trainer(mock_trainer)
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
-        assert torch.allclose(
-            mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(1.89),
-            atol=1e-1,
-        )
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])

@@ -4,6 +4,7 @@ import gc
 import logging
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 from functools import partial
 
 import torch
@@ -27,6 +28,7 @@ from helios.evals.datasets.normalize import NormMethod
 from helios.evals.datasets.utils import eval_collate_fn
 from helios.evals.embeddings import get_embeddings
 from helios.evals.eval_wrapper import Satlas, get_eval_wrapper
+from helios.evals.finetune import run_finetune_eval
 from helios.evals.knn import run_knn
 from helios.evals.linear_probe import ProbeType, train_and_eval_probe
 from helios.nn.flexihelios import PoolingType
@@ -35,12 +37,19 @@ from helios.train.callbacks.wandb import HeliosWandBCallback
 logger = logging.getLogger(__name__)
 
 
+class EvalMode(StrEnum):
+    """Eval mode."""
+
+    KNN = "knn"
+    LINEAR_PROBE = "linear_probe"
+    FINETUNE = "finetune"
+
+
 @dataclass
 class DownstreamTaskConfig:
     """Config for a downstream task."""
 
     dataset: str
-    embedding_batch_size: int = 128
     num_workers: int = 8
     pooling_type: str = PoolingType.MEAN
     norm_stats_from_pretrained: bool = True
@@ -48,12 +57,19 @@ class DownstreamTaskConfig:
     input_modalities: list[str] = field(default_factory=list)
     # Only for rslearn datasets, e.g. nandi, awf
     input_layers: list[str] = field(default_factory=list)
-    # Sweep across lrs for segmentation tasks
+    # LP / KNN (embedding-based)
+    embedding_batch_size: int = 128
+    # LP
     probe_lr: float | None = None
-    patch_size: int = 4
     probe_batch_size: int = 32
-    epochs: int = 50  # Number of training epochs for linear probing task
     linear_probe_eval_interval: int = 50  # calculate val results every N epochs
+    # FT
+    ft_lr: float | None = None
+    ft_batch_size: int = 32
+    # LP / FT
+    epochs: int = 50
+    # LP / KNN / FT
+    patch_size: int = 4
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
     eval_mode: str | None = None
     probe_type: ProbeType = ProbeType.LINEAR
@@ -97,10 +113,12 @@ class DownstreamEvaluator:
         self.input_modalities = task.input_modalities
         self.input_layers = task.input_layers
         self.probe_lr = task.probe_lr
-        self.patch_size = task.patch_size
         self.probe_batch_size = task.probe_batch_size
+        self.ft_lr = task.ft_lr
+        self.ft_batch_size = task.ft_batch_size
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
+        self.patch_size = task.patch_size
         self.eval_interval = task.eval_interval
         self.eval_mode = task.eval_mode
         self.probe_type = task.probe_type
@@ -113,13 +131,14 @@ class DownstreamEvaluator:
         self.run_on_test = run_on_test
         assert self.run_on_test and self.select_final_test_miou_based_on_epoch_of_max_val_miou, "select_final_test_miou_based_on_epoch_of_max_val_miou must be True if run_on_test is True"
         if self.eval_mode is None:
-            self.eval_mode = get_eval_mode(self.config.task_type)
+            self.eval_mode = get_eval_mode(self.config.task_type)  # type: ignore
+        if isinstance(self.eval_mode, str):
+            # This will check if the eval mode is valid
+            self.eval_mode = EvalMode(self.eval_mode)
 
-        assert self.eval_mode in [
-            "knn",
-            "linear_probe",
-        ], f"Unexpected eval mode {self.eval_mode}"
-        if self.eval_mode == "linear_probe":
+        assert self.eval_mode in EvalMode, f"Unexpected eval mode {self.eval_mode}"
+
+        if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
                 raise ValueError("probe_lr cannot be none for segmentation tasks.")
             if self.config.task_type == TaskType.SEGMENTATION:
@@ -129,9 +148,21 @@ class DownstreamEvaluator:
                     )
                 if self.config.height_width % self.patch_size != 0:
                     raise ValueError("Image height / width indivisable by patch size.")
+
+        if self.eval_mode == EvalMode.FINETUNE:
+            if self.ft_lr is None:
+                raise ValueError("ft_lr cannot be none for finetune tasks.")
+            if self.config.task_type == TaskType.SEGMENTATION:
+                if self.config.height_width is None:
+                    raise ValueError(
+                        "config.height_width cannot be none for segmentation tasks."
+                    )
+                if self.config.height_width % self.patch_size != 0:
+                    raise ValueError("Image height / width indivisable by patch size.")
+
         self.eval_function = (
             run_knn
-            if self.eval_mode == "knn"
+            if self.eval_mode == EvalMode.KNN
             else partial(
                 # TODO: THis is updated dynamically in the get_embeddings function
                 train_and_eval_probe,
@@ -142,9 +173,11 @@ class DownstreamEvaluator:
                 lr=self.probe_lr,
                 select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
             )
+            if self.eval_mode == EvalMode.LINEAR_PROBE
+            else None  # "finetune" handled explictly below in .val()
         )
 
-    def _get_data_loader(self, split: str) -> DataLoader:
+    def _get_data_loader(self, split: str, batch_size: int) -> DataLoader:
         """Get the data loader for the given split."""
         logger.info(
             f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}"
@@ -160,7 +193,7 @@ class DownstreamEvaluator:
                 norm_method=self.norm_method,
             ),
             collate_fn=eval_collate_fn,
-            batch_size=self.embedding_batch_size,
+            batch_size=batch_size,
             num_workers=self.num_workers,
         )
 
@@ -199,11 +232,12 @@ class DownstreamEvaluator:
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(data_loader=data_loader, model=model)
 
-    def val(self) -> tuple[float, float]:
-        """Validate the model on the downstream task."""
-        train_loader = self._get_data_loader("train")
-        val_loader = self._get_data_loader("valid")
-        test_loader = self._get_data_loader("test")
+    def _val_embed_probe(self) -> tuple[float, float]:
+        """Validate the model using embeddings and probe (knn or linear probe)."""
+        logger.info(f"Validating {self.dataset} with {self.eval_mode}")
+        train_loader = self._get_data_loader("train", self.embedding_batch_size)
+        val_loader = self._get_data_loader("valid", self.embedding_batch_size)
+        test_loader = self._get_data_loader("test", self.embedding_batch_size)
 
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
@@ -248,14 +282,73 @@ class DownstreamEvaluator:
         }
         val_result, test_result = self.eval_function(**kwargs)  # type: ignore
         logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
-        # free memory
+
+        # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
-        # garbage collector is usually run after the end of the step during normal training
-        # but we run it here to ensure fresh start for each eval
         torch.cuda.empty_cache()
         gc.collect()
 
         return val_result, test_result
+
+    def _val_finetune(self) -> tuple[float, float]:
+        """Validate the model using finetuning."""
+        logger.info(f"Validating {self.dataset} with finetune")
+
+        train_loader = self._get_data_loader("train", self.ft_batch_size)
+        val_loader = self._get_data_loader("valid", self.ft_batch_size)
+
+        if self.run_on_test:
+            test_loader = self._get_data_loader("test", self.ft_batch_size)
+        else:
+            test_loader = None
+
+        # Use encoder if present
+        if hasattr(self.trainer.train_module.model, "encoder"):
+            model = self.trainer.train_module.model.encoder
+        else:
+            model = self.trainer.train_module.model
+
+        # Resolve patch size if model exposes it
+        if hasattr(model, "patch_size"):
+            logger.info(
+                f"Using patch size {model.patch_size} for {self.dataset} "
+                f"(requested {self.patch_size})"
+            )
+            self.patch_size = model.patch_size
+        else:
+            logger.info(
+                f"No patch size found for {self.dataset}, using patch size {self.patch_size}"
+            )
+
+        val_result, test_result = run_finetune_eval(
+            task_config=self.config,
+            model=model,
+            device=self.device or self.trainer.device,
+            lr=self.ft_lr,  # type: ignore
+            epochs=self.epochs,
+            patch_size=self.patch_size,
+            pooling_type=self.pooling_type,
+            use_pooled_tokens=self.use_pooled_tokens,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            test_loader=test_loader,
+        )
+        logger.info(
+            f"Downstream evaluator {self.evaluation_name} val score: {val_result}, test score: {test_result}"
+        )
+
+        torch.cuda.empty_cache()
+        gc.collect()
+        return val_result, test_result
+
+    def val(self) -> tuple[float, float]:
+        """Validate the model on the downstream task."""
+        if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
+            return self._val_embed_probe()
+        elif self.eval_mode == EvalMode.FINETUNE:
+            return self._val_finetune()
+        else:
+            raise ValueError(f"Unsupported eval_mode: {self.eval_mode}")
 
 
 @dataclass
@@ -458,8 +551,10 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                 continue
             config = dataset_to_config(task.dataset)
             if config.task_type == TaskType.SEGMENTATION:
-                if task.probe_lr is None:
-                    raise ValueError(f"probe_lr cannot be None for {task.dataset}")
+                if task.probe_lr is None and task.ft_lr is None:
+                    raise ValueError(
+                        f"probe_lr and ft_lr cannot both be None for {task.dataset}"
+                    )
 
             self.verify_input_modalities(task, config)
             # Sort to ensure consistent order

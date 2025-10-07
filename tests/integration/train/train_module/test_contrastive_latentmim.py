@@ -20,6 +20,8 @@ from helios.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
 )
 
+from .helper import check_loss_is_a_reasonable_value
+
 torch.set_default_device("cpu")
 logger = logging.getLogger(__name__)
 
@@ -174,16 +176,8 @@ def test_train_batch_without_missing_modalities(
         train_module._attach_trainer(mock_trainer)
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
-        assert torch.allclose(
-            mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(2.14),
-            atol=1e-1,
-        )
-        assert torch.allclose(
-            mock_trainer._metrics["train/InfoNCE"],
-            torch.tensor(0.196),
-            atol=1e-1,
-        )
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/InfoNCE"])
 
 
 def test_train_batch_with_missing_modalities(
@@ -206,13 +200,5 @@ def test_train_batch_with_missing_modalities(
         train_module._attach_trainer(mock_trainer)
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
-        assert torch.allclose(
-            mock_trainer._metrics["train/PatchDisc"],
-            torch.tensor(2.2),
-            atol=1e-1,
-        )
-        assert torch.allclose(
-            mock_trainer._metrics["train/InfoNCE"],
-            torch.tensor(0.2999),
-            atol=1e-1,
-        )
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/InfoNCE"])

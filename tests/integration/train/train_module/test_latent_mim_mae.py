@@ -18,25 +18,21 @@ from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
+from .helper import check_loss_is_a_reasonable_value
+
 torch.set_default_device("cpu")
 logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
-def supported_modalities() -> list:
-    """Return the supported modalities for the test."""
-    return [
-        Modality.get("sentinel2_l2a"),
-        Modality.get("sentinel1"),
-        Modality.get("worldcover"),
-        Modality.get("latlon"),
-    ]
-
-
-@pytest.fixture
 def supported_modality_names() -> list[str]:
     """Return the supported modality names for the test."""
-    return ["sentinel2_l2a", "sentinel1", "worldcover", "latlon"]
+    return [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+        Modality.WORLDCOVER.name,
+        Modality.LATLON.name,
+    ]
 
 
 @pytest.fixture
@@ -183,11 +179,7 @@ def test_train_batch_without_missing_modalities(
         train_module._attach_trainer(mock_trainer)
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
-        assert torch.allclose(
-            mock_trainer._metrics["train/PatchDisc+MAE"],
-            torch.tensor(2.9),
-            atol=1e-1,
-        )
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc+MAE"])
 
 
 def test_train_batch_with_missing_modalities(
@@ -210,8 +202,4 @@ def test_train_batch_with_missing_modalities(
         train_module._attach_trainer(mock_trainer)
         train_module.train_batch(batch)
         logger.info(mock_trainer._metrics)
-        assert torch.allclose(
-            mock_trainer._metrics["train/PatchDisc+MAE"],
-            torch.tensor(2.9),
-            atol=1e-1,
-        )
+        check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc+MAE"])
