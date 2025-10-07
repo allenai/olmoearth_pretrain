@@ -241,9 +241,7 @@ def train_and_eval_probe(
         final_test_miou = test_mious[-1]
     else:
         final_test_miou = 0.0
-    # add option to select the final test miou based on the epoch of the max val miou
     if select_final_test_miou_based_on_epoch_of_max_val_miou:
-        logger.debug("Selecting final test miou based on the epoch of the max val miou")
         final_test_miou = test_mious[val_mious.index(max_val_miou)]
     return final_val_miou, final_test_miou
 
