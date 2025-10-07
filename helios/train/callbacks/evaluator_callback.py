@@ -110,6 +110,8 @@ class DownstreamEvaluator:
         self.select_final_test_miou_based_on_epoch_of_max_val_miou = (
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
+        self.run_on_test = run_on_test
+        assert self.run_on_test and self.select_final_test_miou_based_on_epoch_of_max_val_miou, "select_final_test_miou_based_on_epoch_of_max_val_miou must be True if run_on_test is True"
         if self.eval_mode is None:
             self.eval_mode = get_eval_mode(self.config.task_type)
 
@@ -141,7 +143,6 @@ class DownstreamEvaluator:
                 select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
             )
         )
-        self.run_on_test = run_on_test
 
     def _get_data_loader(self, split: str) -> DataLoader:
         """Get the data loader for the given split."""

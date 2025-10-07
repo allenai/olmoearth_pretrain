@@ -224,12 +224,13 @@ def train_and_eval_probe(
                 task_type=config.task_type,
                 probe_type=probe_type,
             )
+            logger.info(f"Epoch {end_epoch}, Test MIoU: {test_miou}")
             test_mious.append(test_miou)
     for i in range(len(val_mious)):
-        logger.debug(f"Epoch {(i + 1) * eval_interval}, MIoU: {val_mious[i]}")
+        logger.info(f"Epoch {(i + 1) * eval_interval}, MIoU: {val_mious[i]}")
     max_val_miou = max(val_mious)
     max_epoch = (val_mious.index(max_val_miou) + 1) * eval_interval
-    logger.debug(f"Max MIoU: {max_val_miou} at epoch {max_epoch}")
+    logger.info(f"Max MIoU: {max_val_miou} at epoch {max_epoch}")
     final_val_miou = val_mious[-1]
     if final_val_miou < max_val_miou:
         logger.warning(
@@ -241,8 +242,8 @@ def train_and_eval_probe(
     else:
         final_test_miou = 0.0
     # add option to select the final test miou based on the epoch of the max val miou
-    final_test_miou = test_mious[val_mious.index(max_val_miou)]
     if select_final_test_miou_based_on_epoch_of_max_val_miou:
+        logger.info(f"Selecting final test miou based on the epoch of the max val miou")
         final_test_miou = test_mious[val_mious.index(max_val_miou)]
     return final_val_miou, final_test_miou
 

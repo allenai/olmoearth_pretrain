@@ -100,8 +100,7 @@ def early_stopping_args() -> str:
     """
     return " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_final_test_miou_based_on_epoch_of_max_val_miou=True \
-                --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
+            f" --trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_final_test_miou_based_on_epoch_of_max_val_miou=True  --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -643,8 +642,12 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                     commands_to_run.append(cmd)
 
     if args.early_stop:
+        commands_to_run_new = []
         for cmd in commands_to_run:
+            logger.info(f"Adding early stopping args to {cmd}")
             cmd += early_stopping_args()
+            commands_to_run_new.append(cmd)
+        commands_to_run = commands_to_run_new
     return commands_to_run
 
 
