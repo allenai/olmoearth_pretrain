@@ -109,7 +109,7 @@ class PrithviV2(nn.Module):
             # and pin the download to a specific commit, but our bandit can't tell because
             # "revision" is now a variable instead of a string
             _ = hf_hub_download(  # nosec
-                local_dir=UPath(load_directory),
+                local_dir=UPath(model_size_directory),
                 repo_id=hub_id,
                 filename=weights_path,
                 revision=revision,
