@@ -1207,6 +1207,14 @@ class Encoder(GalileoBase):
             # of True indicates the value *should* take part in
             # attention
             x = blk(x=x, y=None, attn_mask=~new_m.bool())
+            temp_mask = ~new_m.bool()
+
+            if temp_mask.all():
+                # if all the tokens are used in attention we can pass a None mask
+                # to the attention block
+                temp_mask = None
+
+            x = blk(x=x, y=None, attn_mask=temp_mask)
 
         if exit_ids_seq is not None:
             assert exited_tokens is not None
