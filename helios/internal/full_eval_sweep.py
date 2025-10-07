@@ -451,7 +451,7 @@ def _get_load_checkpoints_args(model: BaselineModelName | None) -> str:
     if model is None:
         # Allow load model for helios checkpoints
         return " --trainer.no_checkpoints=False"
-    return ""
+    return " --trainer.no_checkpoints=True"
 
 
 def _build_default_command(
