@@ -49,14 +49,11 @@ class _BackboneWithHead(nn.Module):
         # placeholder head; real in_dim discovered on first forward
         self._head = nn.Linear(1, 1, bias=True)
         self._inited = False
-        # placeholder batch norm; real in_dim discovered on first forward
-        self.batch_norm = nn.Identity()
 
     def _init_head(self, emb_dim: int, device: torch.device) -> None:
         """Initialize the head based on the embedding dimension."""
         if self.task_type == TaskType.CLASSIFICATION:
             self._head = nn.Linear(emb_dim, self.num_classes, bias=True)
-            self.batch_norm = nn.BatchNorm1d(emb_dim).to(device=device)
         else:
             logits_per_patch = int(self.num_classes * self.patch_size * self.patch_size)
             self._head = nn.Linear(emb_dim, logits_per_patch, bias=True)
@@ -75,9 +72,6 @@ class _BackboneWithHead(nn.Module):
             self._init_head(emb_dim, dev)
         if emb.device != dev:
             emb = emb.to(dev, non_blocking=True)
-        # Apply BatchNorm before linear layer for classification tasks
-        if self.task_type == TaskType.CLASSIFICATION:
-            emb = self.batch_norm(emb)
         return self._head(emb)
 
 
