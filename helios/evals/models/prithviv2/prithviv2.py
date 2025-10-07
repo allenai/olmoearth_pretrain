@@ -18,7 +18,7 @@ from helios.evals.models.prithviv2.prithvi_mae import PrithviMAE
 from helios.nn.flexihelios import PoolingType
 from helios.train.masking import MaskedHeliosSample
 
-# for Prithvi, true values are ["B02", "B03", "B04", "B05", "B06", "B07"]
+# for Prithvi, true values are HLS ["B02", "B03", "B04", "B05", "B06", "B07"]
 PRITHVI_MEAN = [
     1087.0,
     1342.0,
@@ -36,23 +36,29 @@ PRITHVI_STD = [
     1049.0,
 ]
 
+# These are Sentinel-2 L2A band names that correspond most closely with the HLS bands
+# expected by Prithvi. The model is only trained on HLS though, which is at a different
+# resolution (30 m/pixel) and there may be other processing too.
+# HLS bands: Blue, Green, Red, Narrow NIR, SWIR, SWIR 2
+SENTINEL2_L2A_BAND_NAMES = ["B02", "B03", "B04", "B08", "B11", "B12"]
+
 
 class PrithviV2Models(StrEnum):
     """Names for different Prithvi models on torch hub."""
 
-    VIT_300 = "Prithvi_EO_V2_300M"
-    VIT_600 = "Prithvi_EO_V2_600M"
+    VIT_300 = "Prithvi-EO-2.0-300M"
+    VIT_600 = "Prithvi-EO-2.0-600M"
 
 
 MODEL_TO_HF_INFO = {
     PrithviV2Models.VIT_300: {
         "hf_hub_id": f"ibm-nasa-geospatial/{PrithviV2Models.VIT_300.value}",
-        "weights": f"{PrithviV2Models.VIT_300.value}.pt",
+        "weights": "Prithvi_EO_V2_300M.pt",
         "revision": "b2f2520ab889f42a25c5361ba18761fcb4ea44ad",
     },
     PrithviV2Models.VIT_600: {
         "hf_hub_id": f"ibm-nasa-geospatial/{PrithviV2Models.VIT_600.value}",
-        "weights": f"{PrithviV2Models.VIT_600.value}.pt",
+        "weights": "Prithvi_EO_V2_600M.pt",
         "revision": "87f15784813828dc37aa3197a143cd4689e4d080",
     },
 }
@@ -78,42 +84,45 @@ class PrithviV2(nn.Module):
         """
         super().__init__()
 
+        model_size_directory = UPath(load_directory) / size.value
+        model_size_directory.mkdir(exist_ok=True)
+
         hub_id = MODEL_TO_HF_INFO[size]["hf_hub_id"]
         revision = MODEL_TO_HF_INFO[size]["revision"]
         weights_path = MODEL_TO_HF_INFO[size]["weights"]
 
-        if not (UPath(load_directory) / "config.json").exists():
+        if not (UPath(model_size_directory) / "config.json").exists():
             # even though we have a nosec here we actually follow the advice in
             # https://bandit.readthedocs.io/en/latest/plugins/b615_huggingface_unsafe_download.html
             # and pin the download to a specific commit, but our bandit can't tell because
             # "revision" is now a variable instead of a string
             _ = hf_hub_download(  # nosec
-                local_dir=UPath(load_directory),
+                local_dir=UPath(model_size_directory),
                 repo_id=hub_id,
                 filename="config.json",
                 revision=revision,
             )
-        with (UPath(load_directory) / "config.json").open("r") as f:
+        with (UPath(model_size_directory) / "config.json").open("r") as f:
             config = yaml.safe_load(f)["pretrained_cfg"]
 
         config["num_frames"] = 1
 
         self.model = PrithviMAE(**config)
 
-        if not (UPath(load_directory) / weights_path).exists():
+        if not (UPath(model_size_directory) / weights_path).exists():
             # even though we have a nosec here we actually follow the advice in
             # https://bandit.readthedocs.io/en/latest/plugins/b615_huggingface_unsafe_download.html
             # and pin the download to a specific commit, but our bandit can't tell because
             # "revision" is now a variable instead of a string
             _ = hf_hub_download(  # nosec
-                local_dir=UPath(load_directory),
+                local_dir=UPath(model_size_directory),
                 repo_id=hub_id,
                 filename=weights_path,
                 revision=revision,
             )
 
         state_dict = torch.load(
-            UPath(load_directory) / weights_path, map_location="cpu"
+            UPath(model_size_directory) / weights_path, map_location="cpu"
         )
         # discard fixed pos_embedding weight, following
         # https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M/blob/e4aabdc440c8ee703a749def8af5bf4700dee35b/inference.py#L362
@@ -122,11 +131,10 @@ class PrithviV2(nn.Module):
                 del state_dict[k]
         self.model.load_state_dict(state_dict, strict=False)
         self.image_resolution = config["img_size"]
-        self.bands = config["bands"]
         # patch size is a list [t, h, w], where h == w
         self.patch_size = config["patch_size"][-1]
         self.helios_s2_to_prithvi = [
-            Modality.SENTINEL2_L2A.band_order.index(b) for b in self.bands
+            Modality.SENTINEL2_L2A.band_order.index(b) for b in SENTINEL2_L2A_BAND_NAMES
         ]
         self.use_pretrained_normalizer = use_pretrained_normalizer
 
