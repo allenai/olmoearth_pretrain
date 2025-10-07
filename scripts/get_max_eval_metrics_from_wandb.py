@@ -7,18 +7,20 @@ import wandb
 
 WANDB_ENTITY = "eai-ai2"
 METRICS = [
-    "m-eurosat",
-    "m-forestnet",
-    "m-so2sat",
-    "m-brick-kiln",
-    "m-bigearthnet",
-    "m-sa-crop-type",
-    "m-cashew-plant",
-    "pastis_sentinel1",
-    "pastis_sentinel2",
-    "pastis_sentinel1_sentinel2",
+    "m_eurosat",
+    "m_bigearthnet",
+    "m_sa_crop_type",
+    "m_so2sat",
     "mados",
-    "sen1floods11",
+    "cropharvest_Togo_12_sentinel2",
+    "cropharvest_Togo_12_sentinel1",
+    "cropharvest_Peoples_Republic_of_China_6",
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1",
+    "nandi_sentinel2",
+    "nandi_landsat",
+    "awf_sentinel2",
+    "awf_landsat",
+    "pastis_sentinel2",
     "breizhcrops",
 ]
 
@@ -162,7 +164,7 @@ def main():
                 print(f"\n{partition}:")
                 for metric in METRICS:
                     # Try original name
-                    key = f"eval/{metric}"
+                    key = f"eval/test/{metric}"
                     val = partition_metrics[partition].get(key)
                     # Fallback with underscore variant
                     if val is None:
