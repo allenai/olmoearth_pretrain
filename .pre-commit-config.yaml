@@ -68,7 +68,7 @@ repos:
             --ignore-init-module,
             -p,
             -vv,
-            helios,
+            olmoearth_pretrain,
             --fail-under=80,
           ]
   - repo: https://github.com/astral-sh/ruff-pre-commit

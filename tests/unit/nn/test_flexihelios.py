@@ -6,8 +6,8 @@ import pytest
 import torch
 from einops import repeat
 
-from helios.data.constants import Modality, ModalitySpec
-from helios.nn.flexihelios import (
+from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.nn.flexihelios import (
     Encoder,
     EncoderConfig,
     FlexiHeliosBase,
@@ -18,7 +18,7 @@ from helios.nn.flexihelios import (
     ProjectAndAggregate,
     TokensAndMasks,
 )
-from helios.train.masking import MaskValue
+from olmoearth_pretrain.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
 

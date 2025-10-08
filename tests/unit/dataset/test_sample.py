@@ -1,4 +1,4 @@
-"""Unit tests for HeliosSample."""
+"""Unit tests for OlmoEarthSample."""
 
 import calendar
 from collections.abc import Callable
@@ -8,18 +8,23 @@ from pathlib import Path
 import pytest
 import torch
 
-from helios.data.constants import BandSet, Modality, ModalitySpec
-from helios.data.dataset import HeliosSample
-from helios.dataset.parse import GridTile, ModalityImage, ModalityTile, TimeSpan
-from helios.dataset.sample import image_tiles_to_samples
+from olmoearth_pretrain.data.constants import BandSet, Modality, ModalitySpec
+from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.dataset.parse import (
+    GridTile,
+    ModalityImage,
+    ModalityTile,
+    TimeSpan,
+)
+from olmoearth_pretrain.dataset.sample import image_tiles_to_samples
 
 CRS = "EPSG:32610"
 
 
 def test_all_attrs_have_bands() -> None:
     """Test all attributes are described in attribute_to_bands."""
-    for attribute_name in HeliosSample._fields:
-        _ = HeliosSample.num_bands(attribute_name)
+    for attribute_name in OlmoEarthSample._fields:
+        _ = OlmoEarthSample.num_bands(attribute_name)
 
 
 @pytest.fixture
@@ -146,9 +151,9 @@ def test_default_subsetting() -> None:
         16,
         100,
     )
-    sample = HeliosSample(
-        sentinel2_l2a=torch.ones((h, w, t, HeliosSample.num_bands("sentinel2_l2a"))),
-        timestamps=torch.ones((t, HeliosSample.num_bands("timestamps"))),
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
+        timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
     )
     subsetted_sample = sample.subset_default(
         patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
@@ -171,9 +176,9 @@ def test_cutmix_subsetting() -> None:
         16,
         100,
     )
-    sample = HeliosSample(
-        sentinel2_l2a=torch.ones((h, w, t, HeliosSample.num_bands("sentinel2_l2a"))),
-        timestamps=torch.ones((t, HeliosSample.num_bands("timestamps"))),
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
+        timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
     )
     default_subsetted_sample = sample.subset_default(
         patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
@@ -201,10 +206,10 @@ def test_subsetting_worldcover_too() -> None:
         16,
         100,
     )
-    sample = HeliosSample(
-        sentinel2_l2a=torch.ones((h, w, t, HeliosSample.num_bands("sentinel2_l2a"))),
-        worldcover=torch.ones((h, w, HeliosSample.num_bands("worldcover"))),
-        timestamps=torch.ones((t, HeliosSample.num_bands("timestamps"))),
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
+        worldcover=torch.ones((h, w, OlmoEarthSample.num_bands("worldcover"))),
+        timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
     )
     subsetted_sample = sample.subset_default(
         patch_size=4,

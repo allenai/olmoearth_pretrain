@@ -1,0 +1,142 @@
+"""Concat dataset for OlmoEarth Pretrain."""
+
+import bisect
+import hashlib
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+from olmo_core.config import Config
+from torch.utils.data import ConcatDataset, Dataset
+
+from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
+
+from .dataset import GetItemArgs
+
+logger = logging.getLogger(__name__)
+
+
+class OlmoEarthConcatDataset(ConcatDataset):
+    """Dataset based on ConcatDataset for concatenating multiple OlmoEarthDatasets.
+
+    The resulting OlmoEarthConcatDataset acts as a concatenated version of the individual
+    OlmoEarthDatasets.
+
+    We need to use custom OlmoEarthConcatDataset because we have a custom way to access
+    __getitem__ (instead of just integer index), and we need to support various
+    functions and attributes expected by the OlmoEarthDataLoader and various callbacks.
+    """
+
+    def __getitem__(self, args: GetItemArgs) -> Any:
+        """Get the sample at the given index."""
+        # Adapted from ConcatDataset.
+        # The only change we make is to extract the index from args, and then get a
+        # tuple with updated index at the end to pass to the sub dataset.
+        idx = args.idx
+        if idx < 0:
+            if -idx > len(self):
+                raise ValueError(
+                    "absolute value of index should not exceed dataset length"
+                )
+            idx = len(self) + idx
+        dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
+        if dataset_idx == 0:
+            sample_idx = idx
+        else:
+            sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+        sample_args = args._replace(idx=sample_idx)
+        return self.datasets[dataset_idx][sample_args]
+
+    @property
+    def fingerprint_version(self) -> str:
+        """The version of the fingerprint."""
+        # We make sure fingerprint version is the same for all sub datasets.
+        version = self.datasets[0].fingerprint_version
+        for dataset in self.datasets:
+            if dataset.fingerprint_version != version:
+                raise ValueError(
+                    "expected all sub datasets to have the same fingerprint_version"
+                )
+        return version
+
+    @property
+    def fingerprint(self) -> str:
+        """Can be used to identify/compare a dataset."""
+        # Compute fingerprint that combines the fingerprints of sub datasets.
+        sha256_hash = hashlib.sha256()
+        for dataset in self.datasets:
+            if not hasattr(dataset, "fingerprint"):
+                raise ValueError(
+                    "expected all sub datasets to have fingerprint property"
+                )
+            sha256_hash.update(dataset.fingerprint.encode())
+        return sha256_hash.hexdigest()
+
+    def _set_latlon_distribution(self) -> None:
+        """Set the latlon distribution of the dataset based on the latlon distribution of the sub datasets."""
+        dataset_latlons = []
+        for dataset in self.datasets:
+            dataset_latlons.append(dataset.latlon_distribution)
+        self.latlon_distribution = np.concatenate(dataset_latlons, axis=0)
+
+    def prepare(self) -> None:
+        """Prepare the dataset."""
+        # The datasets should already be prepared before initializing
+        # OlmoEarthConcatDataset since otherwise they would not have a length, but we
+        # prepare here just in case.
+        for dataset in self.datasets:
+            dataset.prepare()
+
+        # We need to compute latlon_distribution attribute since it is expected by some
+        # callback.
+        self._set_latlon_distribution()
+
+        # Set training modalities attribute (accessed by data loader).
+        self.training_modalities = self.datasets[0].training_modalities
+        for dataset in self.datasets:
+            if self.training_modalities != dataset.training_modalities:
+                raise ValueError(
+                    "expected all sub datasets to have same training modalities"
+                )
+
+
+@dataclass
+class OlmoEarthConcatDatasetConfig(Config):
+    """Configuration for the OlmoEarthConcatDataset."""
+
+    dataset_configs: list[Config]
+
+    # Optional overrides for each sub dataset
+    dataset_percentage: float | None = None
+    seed: int | None = None
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        if len(self.dataset_configs) == 0:
+            raise ValueError("at least one dataset config must be provided")
+
+    def build(self) -> OlmoEarthConcatDataset:
+        """Build the dataset."""
+        self.validate()
+        logging.info(f"concatenating {len(self.dataset_configs)} sub datasets")
+        datasets: list[Dataset] = []
+        for dataset_config in self.dataset_configs:
+            if self.dataset_percentage is not None:
+                dataset_config.dataset_percentage = self.dataset_percentage
+            if self.seed is not None:
+                dataset_config.seed = self.seed
+            dataset = dataset_config.build()
+            # Dataset must be prepared before passing to OlmoEarthConcatDataset so it has
+            # a defined length.
+            dataset.prepare()
+            datasets.append(dataset)
+        return OlmoEarthConcatDataset(datasets)
+
+
+HeliosConcatDataset = _deprecated_class_alias(
+    OlmoEarthConcatDataset, "helios.data.concat.HeliosConcatDataset"
+)
+HeliosConcatDatasetConfig = _deprecated_class_alias(
+    OlmoEarthConcatDatasetConfig, "helios.data.concat.HeliosConcatDatasetConfig"
+)

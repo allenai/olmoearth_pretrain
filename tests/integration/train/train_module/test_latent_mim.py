@@ -9,14 +9,14 @@ import torch
 from olmo_core.optim.adamw import AdamWConfig
 from olmo_core.train.config import TrainerConfig
 
-from helios.data.constants import Modality
-from helios.data.dataset import HeliosSample, collate_helios
-from helios.data.transform import TransformConfig
-from helios.nn.flexihelios import EncoderConfig, PredictorConfig
-from helios.nn.latent_mim import LatentMIM, LatentMIMConfig
-from helios.train.loss import LossConfig
-from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.dataset import OlmoEarthSample, collate_olmoearth_pretrain
+from olmoearth_pretrain.data.transform import TransformConfig
+from olmoearth_pretrain.nn.flexihelios import EncoderConfig, PredictorConfig
+from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
+from olmoearth_pretrain.train.loss import LossConfig
+from olmoearth_pretrain.train.masking import MaskingConfig
+from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 from .helper import check_loss_is_a_reasonable_value
 
@@ -151,15 +151,15 @@ class MockTrainer:
 
 
 def test_train_batch_without_missing_modalities(
-    samples_without_missing_modalities: list[tuple[int, HeliosSample]],
+    samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
     latent_mim_model: LatentMIM,
     train_module_config: LatentMIMTrainModuleConfig,
     set_random_seeds: None,
 ) -> None:
     """Test train batch without missing modalities."""
-    batch = collate_helios(samples_without_missing_modalities)
+    batch = collate_olmoearth_pretrain(samples_without_missing_modalities)
     train_module = train_module_config.build(latent_mim_model, device="cpu")
-    with patch("helios.train.train_module.train_module.build_world_mesh"):
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
         # Mock the trainer property
         mock_trainer = MockTrainer()
         # Create a MagicMock for on_attach
@@ -173,16 +173,16 @@ def test_train_batch_without_missing_modalities(
 
 
 def test_train_batch_with_missing_modalities(
-    samples_with_missing_modalities: list[tuple[int, HeliosSample]],
+    samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
     latent_mim_model: LatentMIM,
     train_module_config: LatentMIMTrainModuleConfig,
     set_random_seeds: None,
 ) -> None:
     """Test train batch with missing modalities."""
     # Create a collated batch
-    batch = collate_helios(samples_with_missing_modalities)
+    batch = collate_olmoearth_pretrain(samples_with_missing_modalities)
     train_module = train_module_config.build(latent_mim_model, device="cpu")
-    with patch("helios.train.train_module.train_module.build_world_mesh"):
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
         # Mock the trainer property
         mock_trainer = MockTrainer()
         # Create a MagicMock for on_attach

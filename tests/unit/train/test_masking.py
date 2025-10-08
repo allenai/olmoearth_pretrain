@@ -4,10 +4,10 @@ import logging
 
 import torch
 
-from helios.data.constants import MISSING_VALUE, Modality
-from helios.data.dataset import HeliosSample
-from helios.train.masking import (
-    MaskedHeliosSample,
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.train.masking import (
+    MaskedOlmoEarthSample,
     MaskValue,
     ModalityCrossRandomMaskingStrategy,
     ModalityCrossSpaceMaskingStrategy,
@@ -35,7 +35,7 @@ def test_random_masking_and_unmask() -> None:
     sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
     worldcover_num_bands = Modality.WORLDCOVER.num_bands
     latlon_num_bands = Modality.LATLON.num_bands
-    batch = HeliosSample(
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         latlon=torch.ones((b, latlon_num_bands)),
         timestamps=timestamps,
@@ -107,7 +107,7 @@ def test_space_structure_masking_and_unmask() -> None:
     sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
     latlon_num_bands = Modality.LATLON.num_bands
     worldcover_num_bands = Modality.WORLDCOVER.num_bands
-    batch = HeliosSample(
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         latlon=torch.ones((b, latlon_num_bands)),
         timestamps=timestamps,
@@ -170,7 +170,7 @@ def test_time_structure_masking_and_unmask() -> None:
     sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
     latlon_num_bands = Modality.LATLON.num_bands
     worldcover_num_bands = Modality.WORLDCOVER.num_bands
-    batch = HeliosSample(
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         latlon=torch.ones((b, latlon_num_bands)),
         timestamps=timestamps,
@@ -251,7 +251,7 @@ def test_time_with_missing_timesteps_structure_masking_and_unmask() -> None:
         missing_timesteps = torch.randint(2, 5, (num_missing_timesteps,))
         sentinel1[sample_idx, :, :, missing_timesteps, :] = MISSING_VALUE
 
-    batch = HeliosSample(
+    batch = OlmoEarthSample(
         sentinel2_l2a=sentinel2_l2a,
         sentinel1=sentinel1,
         latlon=torch.ones((b, latlon_num_bands)),
@@ -310,7 +310,7 @@ def test_modality_space_time_masking_and_unmask() -> None:
     sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
     latlon_num_bands = Modality.LATLON.num_bands
     worldcover_num_bands = Modality.WORLDCOVER.num_bands
-    batch = HeliosSample(
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         latlon=torch.ones((b, latlon_num_bands)),
         timestamps=timestamps,
@@ -355,7 +355,7 @@ def test_modality_space_time_masking_and_unmask() -> None:
 
 
 def test_create_random_mask_with_missing_mask() -> None:
-    """Test that missing_mask in HeliosSample is respected during masking."""
+    """Test that missing_mask in OlmoEarthSample is respected during masking."""
     b, h, w, t = 5, 8, 8, 4
 
     # Create a sample with sentinel1 data where some samples are missing
@@ -364,13 +364,13 @@ def test_create_random_mask_with_missing_mask() -> None:
     # Create a missing mask for sentinel1 where half the batch is missing
     sentinel1[b // 2 :] = MISSING_VALUE
 
-    # Create the HeliosSample
+    # Create the OlmoEarthSample
     days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
     months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
     years = torch.randint(2018, 2020, (b, 1, t), dtype=torch.long)
     timestamps = torch.cat([days, months, years], dim=1)
 
-    batch = HeliosSample(
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, 12)),  # 12 bands for sentinel2
         sentinel1=sentinel1,
         timestamps=timestamps,
@@ -520,8 +520,8 @@ def test_space_masking_with_missing_modality_mask() -> None:
     sentinel1 = torch.ones((b, h, w, t, sentinel1_num_bands))
     sentinel1[b // 2 :] = MISSING_VALUE
 
-    # Create the HeliosSample with missing_modalities_masks
-    batch = HeliosSample(
+    # Create the OlmoEarthSample with missing_modalities_masks
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         sentinel1=sentinel1,
         latlon=torch.ones((b, latlon_num_bands)),
@@ -610,8 +610,8 @@ def test_time_masking_with_missing_modality_mask() -> None:
     sentinel1 = torch.ones((b, h, w, t, sentinel1_num_bands))
     sentinel1[b // 2 :] = MISSING_VALUE
 
-    # Create the HeliosSample with missing_modalities_masks
-    batch = HeliosSample(
+    # Create the OlmoEarthSample with missing_modalities_masks
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         sentinel1=sentinel1,
         latlon=torch.ones((b, latlon_num_bands)),
@@ -694,8 +694,8 @@ def test_random_masking_with_missing_modality_mask() -> None:
     sentinel1 = torch.ones((b, h, w, t, sentinel1_num_bands))
     sentinel1[b // 2 :] = MISSING_VALUE
 
-    # Create the HeliosSample with missing_modalities_masks
-    batch = HeliosSample(
+    # Create the OlmoEarthSample with missing_modalities_masks
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         sentinel1=sentinel1,
         latlon=torch.ones((b, latlon_num_bands)),
@@ -770,7 +770,7 @@ def test_modality_mask_and_unmask() -> None:
     sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
     latlon_num_bands = Modality.LATLON.num_bands
     worldcover_num_bands = Modality.WORLDCOVER.num_bands
-    batch = HeliosSample(
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         latlon=torch.ones((b, latlon_num_bands)),
         timestamps=timestamps,
@@ -845,7 +845,7 @@ def test_random_range_masking() -> None:
     sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
     worldcover_num_bands = Modality.WORLDCOVER.num_bands
     latlon_num_bands = Modality.LATLON.num_bands
-    batch = HeliosSample(
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         latlon=torch.ones((b, latlon_num_bands)),
         timestamps=timestamps,
@@ -903,7 +903,7 @@ def test_space_cross_modality_masking(set_random_seeds: None) -> None:
     sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
     worldcover_num_bands = Modality.WORLDCOVER.num_bands
     latlon_num_bands = Modality.LATLON.num_bands
-    batch = HeliosSample(
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         sentinel1=torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands)),
         latlon=torch.ones((b, latlon_num_bands)),
@@ -973,7 +973,7 @@ def test_space_cross_modality_masking_with_missing_data(set_random_seeds: None) 
     sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
     worldcover_num_bands = Modality.WORLDCOVER.num_bands
     latlon_num_bands = Modality.LATLON.num_bands
-    batch = HeliosSample(
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         sentinel1=torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands)),
         latlon=torch.ones((b, latlon_num_bands)),
@@ -1028,7 +1028,7 @@ def test_modality_cross_random_masking() -> None:
     sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
     worldcover_num_bands = Modality.WORLDCOVER.num_bands
     latlon_num_bands = Modality.LATLON.num_bands
-    batch = HeliosSample(
+    batch = OlmoEarthSample(
         sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
         sentinel1=torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands)),
         latlon=torch.ones((b, latlon_num_bands)),
@@ -1171,7 +1171,7 @@ class TestModalityCrossMaskingStrategy:
         s2_mask = torch.full((b, h, w, t, 2), MaskValue.ONLINE_ENCODER.value)
         wc_mask = torch.full((b, h, w, 1, 1), MaskValue.ONLINE_ENCODER.value)
         wc_mask[0] = MaskValue.MISSING.value  # worldcover missing for sample 0
-        batch = MaskedHeliosSample(
+        batch = MaskedOlmoEarthSample(
             sentinel2_l2a=torch.ones((b, h, w, t, s2_bands)),
             sentinel2_l2a_mask=s2_mask,
             worldcover=torch.ones((b, h, w, 1, wc_bands)),
@@ -1211,7 +1211,7 @@ class TestModalityCrossMaskingStrategy:
         # sample 0: all decoder, sample 1: all encoder
         s2_mask = torch.full((b, h, w, t, 2), MaskValue.DECODER.value)
         s2_mask[1] = MaskValue.ONLINE_ENCODER.value
-        batch = MaskedHeliosSample(
+        batch = MaskedOlmoEarthSample(
             sentinel2_l2a=torch.ones((b, h, w, t, s2_bands)),
             sentinel2_l2a_mask=s2_mask,
             worldcover=torch.ones((b, h, w, 1, Modality.WORLDCOVER.num_bands)),
@@ -1249,7 +1249,7 @@ class TestModalityCrossMaskingStrategy:
         s2_mask = torch.full((b, h, w, t, 2), MaskValue.ONLINE_ENCODER.value)
         wc_mask = torch.full((b, h, w, 1, 1), MaskValue.ONLINE_ENCODER.value)
         wc_mask[0] = MaskValue.MISSING.value  # missing for sample 0
-        batch = MaskedHeliosSample(
+        batch = MaskedOlmoEarthSample(
             sentinel2_l2a=torch.ones((b, h, w, t, s2_bands)),
             sentinel2_l2a_mask=s2_mask,
             worldcover=torch.ones((b, h, w, 1, wc_bands)),

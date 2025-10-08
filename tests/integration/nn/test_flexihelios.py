@@ -9,15 +9,15 @@ import pytest
 import torch
 from einops import rearrange
 
-from helios.data.constants import Modality, ModalitySpec
-from helios.nn.flexihelios import (
+from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.nn.flexihelios import (
     Encoder,
     FlexiHeliosPatchEmbeddings,
     Predictor,
     TokensAndMasks,
 )
-from helios.nn.utils import unpack_encoder_output
-from helios.train.masking import MaskedHeliosSample, MaskValue
+from olmoearth_pretrain.nn.utils import unpack_encoder_output
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ class TestFlexiHeliosPatchEmbeddings:
             "latlon_mask": latlon_mask,
             "timestamps": timestamps,
         }
-        sample = MaskedHeliosSample(**masked_sample_dict)
+        sample = MaskedOlmoEarthSample(**masked_sample_dict)
         output = patch_embeddings.forward(sample, patch_size)
         embedding_size = patch_embeddings.embedding_size
         assert output["sentinel2_l2a"].shape == (
@@ -153,7 +153,7 @@ class TestFlexiHeliosPatchEmbeddings:
             "latlon_mask": latlon_mask,
             "timestamps": timestamps,
         }
-        sample = MaskedHeliosSample(**masked_sample_dict)
+        sample = MaskedOlmoEarthSample(**masked_sample_dict)
         output = patch_embeddings.forward(sample, patch_size)
         embedding_size = patch_embeddings.embedding_size
         assert output["sentinel2_l2a"].shape == (
@@ -361,7 +361,7 @@ class TestEncoder:
             "latlon_mask": latlon_mask,
             "timestamps": timestamps,
         }
-        x = MaskedHeliosSample(**masked_sample_dict)
+        x = MaskedOlmoEarthSample(**masked_sample_dict)
 
         patch_size = 4
         input_res = 1
@@ -462,7 +462,7 @@ class TestEncoder:
             "latlon_mask": latlon_mask,
             "timestamps": timestamps,
         }
-        x = MaskedHeliosSample(**masked_sample_dict)
+        x = MaskedOlmoEarthSample(**masked_sample_dict)
 
         patch_size = 2
         input_res = 1
@@ -563,7 +563,7 @@ class TestEncoder:
             "latlon_mask": latlon_mask,
             "timestamps": timestamps,
         }
-        x = MaskedHeliosSample(**masked_sample_dict)
+        x = MaskedOlmoEarthSample(**masked_sample_dict)
 
         patch_size = 4
         input_res = 1
@@ -661,7 +661,7 @@ class TestEncoder:
             "latlon_mask": latlon_mask,
             "timestamps": timestamps,
         }
-        x = MaskedHeliosSample(**masked_sample_dict)
+        x = MaskedOlmoEarthSample(**masked_sample_dict)
 
         patch_size = 4
         input_res = 1
@@ -940,7 +940,7 @@ def test_end_to_end_with_exit_config(
     ][0]
     latlon_num_band_sets = modality_band_set_len_and_total_bands["latlon"][0]
     B, H, W, T, _ = masked_sample_dict["sentinel2_l2a"].shape
-    x = MaskedHeliosSample(**masked_sample_dict)
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
 
     patch_size = 4
     input_res = 1

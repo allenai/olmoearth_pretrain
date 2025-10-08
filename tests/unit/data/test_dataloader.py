@@ -4,29 +4,32 @@ from pathlib import Path
 
 import numpy as np
 
-from helios.data.constants import Modality
-from helios.data.dataloader import HeliosDataLoader, _IterableDatasetWrapper
-from helios.data.dataset import HeliosDataset, collate_helios
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.dataloader import (
+    OlmoEarthDataLoader,
+    _IterableDatasetWrapper,
+)
+from olmoearth_pretrain.data.dataset import OlmoEarthDataset, collate_olmoearth_pretrain
 
 
 def test_get_batch_item_params_iterator(tmp_path: Path, setup_h5py_dir: Path) -> None:
     """Test the _get_batch_item_params_iterator function."""
     # Setup test data
-    """Test the HeliosDataloader class."""
+    """Test the OlmoEarthDataLoader class."""
     training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
         Modality.OPENSTREETMAP_RASTER.name,
     ]
-    dataset = HeliosDataset(
+    dataset = OlmoEarthDataset(
         h5py_dir=setup_h5py_dir,
         training_modalities=training_modalities,
         dtype=np.float32,
     )
 
     dataset.prepare()
-    dataloader = HeliosDataLoader(
+    dataloader = OlmoEarthDataLoader(
         dataset=dataset,
         work_dir=tmp_path,
         global_batch_size=1,
@@ -36,7 +39,7 @@ def test_get_batch_item_params_iterator(tmp_path: Path, setup_h5py_dir: Path) ->
         seed=0,
         shuffle=True,
         num_workers=0,
-        collator=collate_helios,
+        collator=collate_olmoearth_pretrain,
         target_device_type="cpu",
         token_budget=1000000,
         min_patch_size=1,
@@ -105,10 +108,10 @@ def _create_test_dataloader(
     shuffle: bool = True,
     num_dataset_repeats_per_epoch: int = 1,
     global_batch_size: int = 2,
-) -> HeliosDataLoader:
+) -> OlmoEarthDataLoader:
     """Helper function to create a test dataloader with common parameters."""
 
-    class MockDataset(HeliosDataset):
+    class MockDataset(OlmoEarthDataset):
         def __init__(self, length: int) -> None:
             self.length = length
 
@@ -116,7 +119,7 @@ def _create_test_dataloader(
             return self.length
 
     dataset = MockDataset(length=20)
-    return HeliosDataLoader(
+    return OlmoEarthDataLoader(
         dataset=dataset,
         work_dir=tmp_path,
         global_batch_size=global_batch_size,
@@ -126,7 +129,7 @@ def _create_test_dataloader(
         seed=seed,
         shuffle=shuffle,
         num_workers=0,
-        collator=collate_helios,
+        collator=collate_olmoearth_pretrain,
         target_device_type="cpu",
         token_budget=1000000,
         min_patch_size=1,

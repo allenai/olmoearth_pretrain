@@ -1,6 +1,6 @@
 """Test data constants."""
 
-from helios.data.constants import Modality
+from olmoearth_pretrain.data.constants import Modality
 
 
 def test_modality_spec_band_order() -> None:

@@ -1,4 +1,4 @@
-"""Test the HeliosDataset class."""
+"""Test the OlmoEarthDataset class."""
 
 import logging
 from pathlib import Path
@@ -6,8 +6,12 @@ from pathlib import Path
 import numpy as np
 from numpy.random import default_rng
 
-from helios.data.constants import MISSING_VALUE, Modality
-from helios.data.dataset import GetItemArgs, HeliosDataset, HeliosSample
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.data.dataset import (
+    GetItemArgs,
+    OlmoEarthDataset,
+    OlmoEarthSample,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,14 +19,14 @@ logger = logging.getLogger(__name__)
 def test_helios_dataset(
     setup_h5py_dir: Path,
 ) -> None:
-    """Test the HeliosDataset class."""
+    """Test the OlmoEarthDataset class."""
     training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
         Modality.OPENSTREETMAP_RASTER.name,
     ]
-    dataset = HeliosDataset(
+    dataset = OlmoEarthDataset(
         h5py_dir=setup_h5py_dir,
         dtype=np.float32,
         training_modalities=training_modalities,
@@ -38,7 +42,7 @@ def test_helios_dataset(
     )
     patch_size, item = dataset[args]
     assert patch_size == 1
-    assert isinstance(item, HeliosSample)
+    assert isinstance(item, OlmoEarthSample)
     assert item.sentinel2_l2a.shape == (256, 256, 12, 12)  # type: ignore
     assert item.sentinel1.shape == (256, 256, 12, 2)  # type: ignore
     assert item.worldcover.shape == (256, 256, 1, 1)  # type: ignore
@@ -46,8 +50,8 @@ def test_helios_dataset(
     assert item.timestamps.shape == (12, 3)  # type: ignore
 
 
-class TestHeliosDataset:
-    """Test the HeliosDataset class."""
+class TestOlmoEarthDataset:
+    """Test the OlmoEarthDataset class."""
 
     def test_load_sample_correct_band_order(
         self,
@@ -61,7 +65,7 @@ class TestHeliosDataset:
             Modality.WORLDCOVER.name,
             Modality.OPENSTREETMAP_RASTER.name,
         ]
-        dataset = HeliosDataset(
+        dataset = OlmoEarthDataset(
             h5py_dir=setup_h5py_dir,
             dtype=np.float32,
             training_modalities=training_modalities,
@@ -122,7 +126,7 @@ class TestHeliosDataset:
             # Modality.SRTM.name,
             # Modality.LANDSAT.name,
         ]
-        dataset = HeliosDataset(
+        dataset = OlmoEarthDataset(
             h5py_dir=setup_h5py_dir,
             dtype=np.float32,
             training_modalities=training_modalities,

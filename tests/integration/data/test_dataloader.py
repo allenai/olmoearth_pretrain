@@ -1,32 +1,39 @@
-"""Test the HeliosDataloader class."""
+"""Test the OlmoEarthDataLoader class."""
 
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from helios.data.concat import HeliosConcatDatasetConfig
-from helios.data.constants import Modality
-from helios.data.dataloader import HeliosDataLoader, HeliosDataLoaderConfig
-from helios.data.dataset import HeliosDataset, HeliosDatasetConfig, collate_helios
+from olmoearth_pretrain.data.concat import OlmoEarthConcatDatasetConfig
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.dataloader import (
+    OlmoEarthDataLoader,
+    OlmoEarthDataLoaderConfig,
+)
+from olmoearth_pretrain.data.dataset import (
+    OlmoEarthDataset,
+    OlmoEarthDatasetConfig,
+    collate_olmoearth_pretrain,
+)
 
 
 def test_helios_dataloader(tmp_path: Path, setup_h5py_dir: Path) -> None:
-    """Test the HeliosDataloader class."""
+    """Test the OlmoEarthDataLoader class."""
     training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
         Modality.OPENSTREETMAP_RASTER.name,
     ]
-    dataset_config = HeliosDatasetConfig(
+    dataset_config = OlmoEarthDatasetConfig(
         h5py_dir=str(setup_h5py_dir),
         training_modalities=training_modalities,
     )
     dataset = dataset_config.build()
     dataset.prepare()
-    assert isinstance(dataset, HeliosDataset)
-    dataloader_config = HeliosDataLoaderConfig(
+    assert isinstance(dataset, OlmoEarthDataset)
+    dataloader_config = OlmoEarthDataLoaderConfig(
         work_dir=str(tmp_path),
         global_batch_size=1,
         seed=0,
@@ -38,7 +45,7 @@ def test_helios_dataloader(tmp_path: Path, setup_h5py_dir: Path) -> None:
         max_patch_size=1,
         sampled_hw_p_list=[6],
     )
-    dataloader = dataloader_config.build(dataset, collate_helios)
+    dataloader = dataloader_config.build(dataset, collate_olmoearth_pretrain)
     dataloader.reshuffle()
     batches_processed = 0
     for batch in dataloader:
@@ -55,14 +62,14 @@ def test_helios_dataloader(tmp_path: Path, setup_h5py_dir: Path) -> None:
 def test_helios_dataloader_dataset_percentage(
     tmp_path: Path, setup_h5py_dir_20_samples: Path
 ) -> None:
-    """Test the HeliosDataloader class."""
+    """Test the OlmoEarthDataLoader class."""
     training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
         Modality.OPENSTREETMAP_RASTER.name,
     ]
-    dataset_config = HeliosDatasetConfig(
+    dataset_config = OlmoEarthDatasetConfig(
         h5py_dir=str(setup_h5py_dir_20_samples),
         training_modalities=training_modalities,
         dataset_percentage=0.5,
@@ -72,8 +79,8 @@ def test_helios_dataloader_dataset_percentage(
     dataset.prepare()
     len_dataset = len(dataset)
     assert len_dataset == 10
-    assert isinstance(dataset, HeliosDataset)
-    dataloader_config = HeliosDataLoaderConfig(
+    assert isinstance(dataset, OlmoEarthDataset)
+    dataloader_config = OlmoEarthDataLoaderConfig(
         work_dir=str(tmp_path),
         global_batch_size=1,
         seed=0,
@@ -85,7 +92,7 @@ def test_helios_dataloader_dataset_percentage(
         max_patch_size=1,
         sampled_hw_p_list=[6],
     )
-    dataloader = dataloader_config.build(dataset, collate_helios)
+    dataloader = dataloader_config.build(dataset, collate_olmoearth_pretrain)
     len_dataloader = len(dataloader)
     assert len_dataloader == 10
 
@@ -101,14 +108,14 @@ def test_helios_dataloader_dataset_percentage(
 def test_helios_dataloader_dataset_percentage_bigger_world_size(
     tmp_path: Path, setup_h5py_dir_100_samples: Path, dp_world_size: int
 ) -> None:
-    """Test the HeliosDataloader class with different world sizes."""
+    """Test the OlmoEarthDataLoader class with different world sizes."""
     training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
         Modality.OPENSTREETMAP_RASTER.name,
     ]
-    dataset_config = HeliosDatasetConfig(
+    dataset_config = OlmoEarthDatasetConfig(
         h5py_dir=str(setup_h5py_dir_100_samples),
         training_modalities=training_modalities,
         dataset_percentage=0.5,
@@ -118,14 +125,14 @@ def test_helios_dataloader_dataset_percentage_bigger_world_size(
     dataset.prepare()
     len_dataset = len(dataset)
     assert len_dataset == 50
-    assert isinstance(dataset, HeliosDataset)
-    dataloader = HeliosDataLoader(
+    assert isinstance(dataset, OlmoEarthDataset)
+    dataloader = OlmoEarthDataLoader(
         dataset=dataset,
         work_dir=str(tmp_path),
         global_batch_size=16,
         dp_world_size=dp_world_size,
         dp_rank=0,
-        collator=collate_helios,
+        collator=collate_olmoearth_pretrain,
         seed=0,
         shuffle=True,
         num_workers=0,
@@ -160,8 +167,8 @@ def test_dataset_percentage_consistent_across_epochs(
     # Helper to create dataset and dataloader with shared config
     def make_dataset_and_dataloader(
         work_dir: Path,
-    ) -> tuple[HeliosDataset, HeliosDataLoader]:
-        dataset_config = HeliosDatasetConfig(
+    ) -> tuple[OlmoEarthDataset, OlmoEarthDataLoader]:
+        dataset_config = OlmoEarthDatasetConfig(
             h5py_dir=str(setup_h5py_dir_100_samples),
             training_modalities=training_modalities,
             dataset_percentage=0.5,
@@ -169,7 +176,7 @@ def test_dataset_percentage_consistent_across_epochs(
         )
         dataset = dataset_config.build()
         dataset.prepare()
-        dataloader_config = HeliosDataLoaderConfig(
+        dataloader_config = OlmoEarthDataLoaderConfig(
             work_dir=str(work_dir),
             global_batch_size=4,
             seed=42,
@@ -181,7 +188,7 @@ def test_dataset_percentage_consistent_across_epochs(
             max_patch_size=1,
             sampled_hw_p_list=[6],
         )
-        dataloader = dataloader_config.build(dataset, collate_helios)
+        dataloader = dataloader_config.build(dataset, collate_olmoearth_pretrain)
         return dataset, dataloader
 
     dataset1, dataloader1 = make_dataset_and_dataloader(tmp_path / "epoch1")
@@ -202,7 +209,7 @@ def test_dataset_percentage_consistent_across_epochs(
 def test_concat_dataset_percentage_filtering(
     tmp_path: Path, setup_h5py_dir_20_samples: Path, setup_h5py_dir_100_samples: Path
 ) -> None:
-    """Test that dataset percentage filtering works with HeliosConcatDataset."""
+    """Test that dataset percentage filtering works with OlmoEarthConcatDataset."""
     training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
@@ -212,23 +219,23 @@ def test_concat_dataset_percentage_filtering(
 
     # Create dataset configs
     dataset_configs = [
-        HeliosDatasetConfig(
+        OlmoEarthDatasetConfig(
             h5py_dir=str(setup_h5py_dir_20_samples),
             training_modalities=training_modalities,
         ),
-        HeliosDatasetConfig(
+        OlmoEarthDatasetConfig(
             h5py_dir=str(setup_h5py_dir_100_samples),
             training_modalities=training_modalities,
         ),
     ]
 
     # Build concat dataset
-    concat_config = HeliosConcatDatasetConfig(
+    concat_config = OlmoEarthConcatDatasetConfig(
         dataset_configs=dataset_configs, dataset_percentage=0.5, seed=42
     )
     concat_dataset = concat_config.build()
     concat_dataset.prepare()
-    dataloader_config = HeliosDataLoaderConfig(
+    dataloader_config = OlmoEarthDataLoaderConfig(
         work_dir=str(tmp_path),
         global_batch_size=8,
         seed=42,
@@ -240,7 +247,7 @@ def test_concat_dataset_percentage_filtering(
         max_patch_size=1,
         sampled_hw_p_list=[6],
     )
-    dataloader = dataloader_config.build(concat_dataset, collate_helios)
+    dataloader = dataloader_config.build(concat_dataset, collate_olmoearth_pretrain)
 
     dataloader.reshuffle(epoch=1)
 

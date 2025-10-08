@@ -6,9 +6,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from helios.evals.models import BaselineModelName
-from helios.internal.all_evals import EVAL_TASKS
-from helios.internal.full_eval_sweep import (
+from olmoearth_pretrain.evals.models import BaselineModelName
+from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
+from olmoearth_pretrain.internal.full_eval_sweep import (
     LP_LRs,
     Normalization_MODES,
     build_commands,
@@ -299,10 +299,12 @@ class TestBuildCommandsSweep:
         """Test build_commands with full sweep for default model."""
         base_args.defaults_only = False
 
-        with patch("helios.evals.datasets.configs.get_eval_mode") as mock_get_eval_mode:
+        with patch(
+            "olmoearth_pretrain.evals.datasets.configs.get_eval_mode"
+        ) as mock_get_eval_mode:
             mock_get_eval_mode.return_value = "linear_probe"
             with patch(
-                "helios.evals.datasets.configs.dataset_to_config"
+                "olmoearth_pretrain.evals.datasets.configs.dataset_to_config"
             ) as mock_dataset_to_config:
                 mock_config = Mock()
                 mock_config.task_type = "classification"
@@ -471,10 +473,12 @@ class TestIntegration:
         base_args.model = BaselineModelName.GALILEO
         base_args.project_name = "complex_test"
 
-        with patch("helios.evals.datasets.configs.get_eval_mode") as mock_get_eval_mode:
+        with patch(
+            "olmoearth_pretrain.evals.datasets.configs.get_eval_mode"
+        ) as mock_get_eval_mode:
             mock_get_eval_mode.return_value = "linear_probe"
             with patch(
-                "helios.evals.datasets.configs.dataset_to_config"
+                "olmoearth_pretrain.evals.datasets.configs.dataset_to_config"
             ) as mock_dataset_to_config:
                 mock_config = Mock()
                 mock_config.task_type = "classification"

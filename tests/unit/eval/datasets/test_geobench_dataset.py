@@ -6,8 +6,8 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from helios.evals.datasets import GeobenchDataset
-from helios.evals.datasets.utils import eval_collate_fn
+from olmoearth_pretrain.evals.datasets import GeobenchDataset
+from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn
 
 
 @pytest.fixture
