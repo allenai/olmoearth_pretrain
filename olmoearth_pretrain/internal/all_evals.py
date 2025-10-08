@@ -48,7 +48,7 @@ def load_user_module(path: str) -> Any:
     # Ensure helios shim is available for dynamic module loading
     # The helios shim's meta path finder needs to be active when the module executes
     try:
-        import helios  # This ensures the helios shim is loaded and meta path finder is active
+        import helios  # noqa: F401 # This ensures the helios shim is loaded and meta path finder is active
     except ImportError:
         pass  # If helios is not available, continue without it
 
