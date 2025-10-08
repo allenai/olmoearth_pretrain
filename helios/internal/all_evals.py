@@ -368,7 +368,7 @@ FT_EVAL_TASKS = {
     ),
     "m_bigearthnet": DownstreamTaskConfig(
         dataset="m-bigearthnet",
-        ft_batch_size=32,
+        ft_batch_size=8,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -376,7 +376,7 @@ FT_EVAL_TASKS = {
     ),
     "m_so2sat": DownstreamTaskConfig(
         dataset="m-so2sat",
-        ft_batch_size=32,
+        ft_batch_size=16,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -384,7 +384,7 @@ FT_EVAL_TASKS = {
     ),
     "m_sa_crop_type": DownstreamTaskConfig(
         dataset="m-sa-crop-type",
-        ft_batch_size=32,
+        ft_batch_size=16,
         num_workers=2,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
