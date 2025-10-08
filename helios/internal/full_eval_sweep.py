@@ -454,6 +454,24 @@ def _get_load_checkpoints_args(model: BaselineModelName | None) -> str:
     return " --trainer.no_checkpoints=True"
 
 
+def _get_norm_mode_str(norm_mode: str) -> str:
+    """Get the normalization mode string."""
+    if norm_mode == "default":
+        norm_mode_str = "df"
+    else:
+        norm_mode_str = norm_mode
+    return norm_mode_str
+
+
+def _get_pooling_type_str(pooling_type: str) -> str:
+    """Get the pooling type string."""
+    if pooling_type == "default":
+        pooling_type_str = "df"
+    else:
+        pooling_type_str = pooling_type
+    return pooling_type_str
+
+
 def _build_default_command(
     args: argparse.Namespace,
     base_run_name: str,
@@ -513,14 +531,8 @@ def _build_hyperparameter_command(
         f"Running with module path {args.module_path} on cluster {args.cluster}"
     )
     # map default to df
-    if norm_mode == "default":
-        norm_mode_str = "df"
-    else:
-        norm_mode_str = norm_mode
-    if pooling_type == "default":
-        pooling_type_str = "df"
-    else:
-        pooling_type_str = pooling_type
+    norm_mode_str = _get_norm_mode_str(norm_mode)
+    pooling_type_str = _get_pooling_type_str(pooling_type)
     run_name = f"{base_run_name}_{norm_mode_str}_lr{lr}_pt{pooling_type_str}"
     cmd_args = lr_args.format(arg=lr)
 
