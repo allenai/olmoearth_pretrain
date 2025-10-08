@@ -45,6 +45,13 @@ def load_user_module(path: str) -> Any:
     if script_dir not in sys.path:
         sys.path.insert(0, script_dir)
 
+    # Ensure helios shim is available for dynamic module loading
+    # The helios shim's meta path finder needs to be active when the module executes
+    try:
+        import helios  # This ensures the helios shim is loaded and meta path finder is active
+    except ImportError:
+        pass  # If helios is not available, continue without it
+
     spec = importlib.util.spec_from_file_location("user_module", path)
     assert spec is not None
     user_mod = importlib.util.module_from_spec(spec)

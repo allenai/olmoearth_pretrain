@@ -27,6 +27,7 @@ pooling_types = [PoolingType.MEAN, PoolingType.MAX]
 
 logger = getLogger(__name__)
 
+EVAL_LAUNCH_PATH = "olmoearth_pretrain/internal/all_evals.py"
 
 def create_linear_probe_arg(task_name: str, field_name: str) -> str:
     """Create a linear probe argument for a given task name."""
@@ -504,7 +505,7 @@ def _build_default_command(
     cmd_args += _get_model_size_args(args.model, size)
     cmd_args += _get_load_checkpoints_args(args.model)
     return (
-        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} helios/internal/all_evals.py "
+        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} --launch.priority=high "
         f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
     )
@@ -554,7 +555,7 @@ def _build_hyperparameter_command(
     cmd_args += _get_model_size_args(args.model, size)
 
     return (
-        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} helios/internal/all_evals.py "
+        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} --launch.priority=high {cmd_args} "
         f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
     )
