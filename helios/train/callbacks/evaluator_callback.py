@@ -129,12 +129,11 @@ class DownstreamEvaluator:
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
         self.run_on_test = run_on_test
-        assert (
-            self.run_on_test
-            and self.select_final_test_miou_based_on_epoch_of_max_val_miou
-        ), (
-            "select_final_test_miou_based_on_epoch_of_max_val_miou must be True if run_on_test is True"
-        )
+        if self.select_final_test_miou_based_on_epoch_of_max_val_miou:
+            assert self.run_on_test, (
+                "if select_final_test_miou_based_on_epoch_of_max_val_miou is True, "
+                "run_on_test must be True"
+            )
         if self.eval_mode is None:
             self.eval_mode = get_eval_mode(self.config.task_type)  # type: ignore
         if isinstance(self.eval_mode, str) and self.eval_mode is not None:
