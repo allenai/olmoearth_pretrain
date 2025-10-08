@@ -247,8 +247,7 @@ class PrithviV2Config(Config):
 
     def build(self) -> PrithviV2:
         """Build the PrithviV2 model."""
-        # if size is a string, convert it to a PrithviV2Models enum
-        if isinstance(self.size, str):
+        if isinstance(self.size, str):  # To make mypy happy
             self.size = PrithviV2Models(self.size)
         return PrithviV2(
             load_directory=self.load_directory,
