@@ -242,6 +242,10 @@ def train_and_eval_probe(
     else:
         final_test_miou = 0.0
     if select_final_test_miou_based_on_epoch_of_max_val_miou:
+        assert len(test_mious) == len(val_mious), (
+            "if select_final_test_miou_based_on_epoch_of_max_val_miou is True, "
+            "test_mious and val_mious must have the same length"
+        )
         final_test_miou = test_mious[val_mious.index(max_val_miou)]
     return final_val_miou, final_test_miou
 
