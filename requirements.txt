@@ -8,6 +8,7 @@ hdf5plugin
 matplotlib
 numpy
 pandas>=2.2 # Force this higher than 1.x
+psutil
 rasterio
 shapely>=2 # temporary hack to force shapely 2.x
 torch>=2.7, <2.8
