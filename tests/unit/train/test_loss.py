@@ -7,6 +7,7 @@ import torch
 from helios.nn.flexihelios import TokensAndMasks
 from helios.train.loss import (
     AdjustedPatchDiscriminationLoss,
+    ClipPatchDiscriminationLoss,
     CrossEntropyLoss,
     InfoNCELoss,
     L1Loss,
@@ -17,6 +18,31 @@ from helios.train.loss import (
 from helios.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
+
+
+def test_clip_patch_discrimination_loss() -> None:
+    """Just test that it runs as expected."""
+    b, t_h, t_w, t, bs, d = 3, 4, 4, 2, 3, 2
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.ones((b, t_h, t_w, t, bs, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t, bs)) * MaskValue.DECODER.value,
+        latlon=torch.ones((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.ones((b, t_h, t_w, t, bs, d)),
+        sentinel2_l2a_mask=torch.zeros((b, t_h, t_w, t, bs)),
+        latlon=torch.ones((b, 1, d)),
+        latlon_mask=torch.zeros((b, 1)),
+    )
+    loss = ClipPatchDiscriminationLoss(
+        batch_loss=True, bandset_loss=True, modality_loss=True
+    )
+    loss_value = loss.compute(preds, targets, torch.tensor([1 / 0.07]))
+    # not very good! since they are all the same
+    # predictions and values
+    assert loss_value > 0.5
 
 
 def test_patch_disc_loss() -> None:

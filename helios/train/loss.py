@@ -44,6 +44,272 @@ class Loss(ABC):
 LOSS_REGISTRY = ClassRegistry[Loss]()
 
 
+@LOSS_REGISTRY.register("clip_patch_discrimination")
+class ClipPatchDiscriminationLoss(Loss):
+    """Loss function for configurable CLIP-like patch discrimination task.
+
+    Closer to the original loss from CLIP paper.
+    """
+
+    name = "ClipPatchDisc"
+
+    def __init__(
+        self,
+        label_smoothing: float = 0,
+        prediction_norm: float | None = None,
+        target_norm: float | None = None,
+        modality_loss: bool = True,
+        symmetric: bool = True,
+        batch_loss: bool = False,
+        bandset_loss: bool = False,
+        spatial_loss: bool = False,
+        time_loss: bool = False,
+        mean_of_modalities: bool = True,
+        sum_of_modalities: bool = False,
+        decode_only: bool = True,
+        weight: float = 1.0,
+    ):
+        """Initialize patch discrimination loss.
+
+        Args:
+            alpha: scalar multiple for norm
+            label_smoothing: label smoothing [0,1], 0=none, 1=too much
+            prediction_norm: norm for predictions,
+            target_norm: norm for targets,
+            modality_loss: calculate loss across each modality
+            symmetric: calculate symmetric version of contrastive loss
+            batch_loss: caluclate loss across batches
+            bandset_loss: caluclate loss across bandset
+            weight: the weight to apply to this loss
+            mean_of_modalities: mean of means instead of mean of all losses
+            sum_of_modalities: sum of means instead of mean of all losses
+            decode_only: only compare to targets masked as decode (prevents cheating maybe?)
+            spatial_loss: bool = False
+            time_loss: bool = False
+        """
+        self.label_smoothing = label_smoothing
+        self.weight = weight
+        self.prediction_norm = prediction_norm
+        self.target_norm = target_norm
+        self.modality_loss = modality_loss
+        self.symmetric = symmetric
+        self.batch_loss = batch_loss
+        self.bandset_loss = bandset_loss
+        self.mean_of_modalities = mean_of_modalities
+        self.sum_of_modalities = sum_of_modalities
+        self.decode_only = decode_only
+        self.spatial_loss = spatial_loss
+        self.time_loss = time_loss
+
+    def _calculate_modality_loss(
+        self, preds: Tensor, targs: Tensor, masks: Tensor
+    ) -> Tensor:
+        preds_flat = rearrange(preds, "b ... d -> b (...) d")
+        targs_flat = rearrange(targs, "b ... d -> b (...) d")
+        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) * self.logit_scale
+        if self.decode_only:
+            score_mask = (
+                (masks != MaskValue.DECODER.value)
+                .flatten(start_dim=1)
+                .unsqueeze(1)
+                .expand_as(score)
+            )
+            score[score_mask] = torch.finfo(score.dtype).min
+        label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
+        loss = F.cross_entropy(
+            score.flatten(0, 1),
+            label.repeat(score.shape[0]),
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )[masks.flatten() == MaskValue.DECODER.value]
+        return loss
+
+    def _calculate_batch_loss(
+        self, preds: Tensor, targs: Tensor, masks: Tensor
+    ) -> Tensor:
+        preds_flat = rearrange(preds, "b ... d -> (...) b d")
+        targs_flat = rearrange(targs, "b ... d -> (...) b d")
+        masks_flat = rearrange(masks, "b ... -> (...) b")
+        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) * self.logit_scale
+        if self.decode_only:
+            score_mask = (
+                (masks_flat != MaskValue.DECODER.value).unsqueeze(1).expand_as(score)
+            )
+            score[score_mask] = torch.finfo(score.dtype).min
+        label = torch.arange(score.shape[2], dtype=torch.long, device=score.device)
+        loss = F.cross_entropy(
+            score.flatten(0, 1),
+            label.repeat(score.shape[0]),
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )[masks_flat.flatten() == MaskValue.DECODER.value]
+        return loss
+
+    def _calculate_bandset_loss(
+        self, preds: Tensor, targs: Tensor, masks: Tensor
+    ) -> Tensor:
+        # (B, P_H, P_W, T, Band_Sets, D)
+        preds_flat = rearrange(preds, "b ... bs d -> (b bs) (...) d")
+        targs_flat = rearrange(targs, "b ... bs d -> (b bs) (...) d")
+        masks_flat = rearrange(masks, "b ... bs -> (b bs) (...)")
+        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) * self.logit_scale
+        if self.decode_only:
+            score_mask = (
+                (masks_flat != MaskValue.DECODER.value)
+                .flatten(start_dim=1)
+                .unsqueeze(1)
+                .expand_as(score)
+            )
+            score[score_mask] = torch.finfo(score.dtype).min
+
+        label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
+        loss = F.cross_entropy(
+            score.flatten(0, 1),
+            label.repeat(score.shape[0]),
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )[masks_flat.flatten() == MaskValue.DECODER.value]
+        return loss
+
+    def _calculate_spatial_loss(
+        self, preds: Tensor, targs: Tensor, masks: Tensor
+    ) -> Tensor:
+        # (B, P_H, P_W, T, Band_Sets, D)
+        preds_flat = rearrange(preds, "b ph pw t bs d -> (b t) (ph pw bs) d")
+        targs_flat = rearrange(targs, "b ph pw t bs d -> (b t) (ph pw bs) d")
+        masks_flat = rearrange(masks, "b ph pw t bs   -> (b t) (ph pw bs)")
+        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) * self.logit_scale
+        if self.decode_only:
+            score_mask = (
+                (masks_flat != MaskValue.DECODER.value)
+                .flatten(start_dim=1)
+                .unsqueeze(1)
+                .expand_as(score)
+            )
+            score[score_mask] = torch.finfo(score.dtype).min
+        label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
+        loss = F.cross_entropy(
+            score.flatten(0, 1),
+            label.repeat(score.shape[0]),
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )[masks_flat.flatten() == MaskValue.DECODER.value]
+        return loss
+
+    def _calculate_time_loss(
+        self, preds: Tensor, targs: Tensor, masks: Tensor
+    ) -> Tensor:
+        # (B, P_H, P_W, T, Band_Sets, D)
+        preds_flat = rearrange(preds, "b ph pw t bs d -> (b ph pw) (t bs) d")
+        targs_flat = rearrange(targs, "b ph pw t bs d -> (b ph pw) (t bs) d")
+        masks_flat = rearrange(masks, "b ph pw t bs   -> (b ph pw) (t bs)")
+        score = torch.einsum("bxd,byd->bxy", preds_flat, targs_flat) * self.logit_scale
+        if self.decode_only:
+            score_mask = (
+                (masks_flat != MaskValue.DECODER.value)
+                .flatten(start_dim=1)
+                .unsqueeze(1)
+                .expand_as(score)
+            )
+            score[score_mask] = torch.finfo(score.dtype).min
+        label = torch.arange(score.shape[1], dtype=torch.long, device=score.device)
+        loss = F.cross_entropy(
+            score.flatten(0, 1),
+            label.repeat(score.shape[0]),
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )[masks_flat.flatten() == MaskValue.DECODER.value]
+        return loss
+
+    def compute(
+        self,
+        predictions: TokensAndMasks,
+        targets: TokensAndMasks,
+        logit_scale: Tensor = None,
+        **kwargs: Any,
+    ) -> Tensor:
+        """Compute patch discrimination loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            logit_scale: scalar for logit.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        # sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
+        self.logit_scale = logit_scale
+        losses = []
+        for modality_name in predictions.modalities:
+            preds = getattr(predictions, modality_name)
+            targs = getattr(targets, modality_name)
+            masks = getattr(
+                predictions, predictions.get_masked_modality_name(modality_name)
+            )
+            if self.target_norm is not None:
+                targs = self.target_norm * F.normalize(targs, p=2, dim=-1)
+            if self.prediction_norm is not None:
+                preds = self.prediction_norm * F.normalize(preds, p=2, dim=-1)
+
+            if self.modality_loss:
+                losses.append(self._calculate_modality_loss(preds, targs, masks))
+                if self.symmetric:
+                    losses.append(self._calculate_modality_loss(targs, preds, masks))
+
+            if self.batch_loss:
+                losses.append(self._calculate_batch_loss(preds, targs, masks))
+                if self.symmetric:
+                    losses.append(self._calculate_batch_loss(targs, preds, masks))
+
+            if self.bandset_loss:
+                losses.append(self._calculate_bandset_loss(preds, targs, masks))
+                if self.symmetric:
+                    losses.append(self._calculate_bandset_loss(targs, preds, masks))
+
+            if self.time_loss:
+                if Modality.get(modality_name).is_multitemporal:
+                    losses.append(self._calculate_time_loss(preds, targs, masks))
+                    if self.symmetric:
+                        losses.append(self._calculate_time_loss(targs, preds, masks))
+                else:
+                    losses.append(self._calculate_modality_loss(preds, targs, masks))
+                    if self.symmetric:
+                        losses.append(
+                            self._calculate_modality_loss(targs, preds, masks)
+                        )
+
+            if self.spatial_loss:
+                if Modality.get(modality_name).is_multitemporal:
+                    losses.append(self._calculate_spatial_loss(preds, targs, masks))
+                    if self.symmetric:
+                        losses.append(self._calculate_spatial_loss(targs, preds, masks))
+                else:
+                    losses.append(self._calculate_modality_loss(preds, targs, masks))
+                    if self.symmetric:
+                        losses.append(
+                            self._calculate_modality_loss(targs, preds, masks)
+                        )
+
+        if self.mean_of_modalities:
+            total_loss = torch.stack(
+                [loss.mean() for loss in losses if loss.numel() > 0]
+            )
+            total_loss = total_loss.mean() if total_loss.numel() > 0 else 0
+        elif self.sum_of_modalities:
+            total_loss = torch.stack(
+                [loss.mean() for loss in losses if loss.numel() > 0]
+            ).sum()
+        else:
+            total_loss = torch.cat(
+                [loss.flatten() for loss in losses if loss.numel() > 0]
+            )
+            total_loss = total_loss.mean() if total_loss.numel() > 0 else 0
+
+        return self.weight * total_loss
+
+
 @LOSS_REGISTRY.register("all_discrimination")
 class AllDiscriminationLoss(Loss):
     """Loss function for all discrimination task.
@@ -752,7 +1018,7 @@ class InfoNCELoss(Loss):
         targets = F.normalize(targets, p=2, dim=-1)
         logits = predictions @ targets.transpose(-2, -1)
 
-        logger.warning(logits.shape)
+        # logger.warning(logits.shape)
 
         # Positive keys are the entries on the diagonal
         labels = torch.arange(len(predictions), device=predictions.device)

@@ -45,6 +45,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
+        self.logit_scale = nn.Parameter(torch.tensor([1.0 / 0.07]).log())
 
     def forward(
         self, x: MaskedHeliosSample, patch_size: int
