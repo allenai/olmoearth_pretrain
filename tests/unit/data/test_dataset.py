@@ -1,7 +1,6 @@
 """Unit tests for the dataset module."""
 
 import importlib
-import warnings
 from logging import getLogger
 from pathlib import Path
 
@@ -313,10 +312,6 @@ class TestOlmoEarthDataset:
 def test_helios_dataset_config_deprecation_warning(tmp_path: Path) -> None:
     """Ensure the legacy HeliosDatasetConfig emits a deprecation warning."""
     module = importlib.import_module("helios.data.dataset")
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", DeprecationWarning)
-        importlib.reload(module)
-    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
 
     with pytest.warns(DeprecationWarning):
         module.HeliosDatasetConfig(

@@ -18,7 +18,7 @@ _DEPRECATION_MESSAGE = (
     "Please update your imports; this compatibility shim will be removed in a future release."
 )
 
-warnings.warn(_DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=2)
+warnings.warn(_DEPRECATION_MESSAGE, FutureWarning, stacklevel=2)
 
 _target_pkg = importlib.import_module(_TARGET_PACKAGE)
 
@@ -86,6 +86,7 @@ if not any(isinstance(finder, _HeliosAliasFinder) for finder in sys.meta_path):
 
 
 def __getattr__(name: str) -> object:
+    warnings.warn(_DEPRECATION_MESSAGE, FutureWarning, stacklevel=2)
     value = getattr(_target_pkg, name)
     if isinstance(value, types.ModuleType):
         sys.modules.setdefault(f"{__name__}.{name}", value)
