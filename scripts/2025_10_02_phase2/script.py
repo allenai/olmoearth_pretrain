@@ -25,7 +25,7 @@ from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.common import build_common_components
+from helios.internal.common import build_common_components as build_common_components_default
 from helios.internal.experiment import (
     CommonComponents,
     HeliosVisualizeConfig,
@@ -57,7 +57,7 @@ MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
 
-def my_build_common_components(
+def build_common_components(
     script: str,
     cmd: SubCmd,
     run_name: str,
@@ -65,7 +65,7 @@ def my_build_common_components(
     overrides: list[str],
 ) -> CommonComponents:
     """Build the common components for an experiment."""
-    config = build_common_components(script, cmd, run_name, cluster, overrides)
+    config = build_common_components_default(script, cmd, run_name, cluster, overrides)
     config.training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
@@ -330,7 +330,7 @@ def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
 
 if __name__ == "__main__":
     main(
-        common_components_builder=my_build_common_components,
+        common_components_builder=build_common_components,
         model_config_builder=build_model_config,
         train_module_config_builder=build_train_module_config,
         dataset_config_builder=build_dataset_config,

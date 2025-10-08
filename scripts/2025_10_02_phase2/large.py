@@ -8,7 +8,7 @@ from script import (
     build_train_module_config,
     build_trainer_config,
     build_visualize_config,
-    my_build_common_components,
+    build_common_components,
 )
 
 from helios.internal.experiment import CommonComponents, main
@@ -25,7 +25,7 @@ MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
 
-def my_build_model_config(common: CommonComponents) -> LatentMIMConfig:
+def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
     model_size = MODEL_SIZE_ARGS["large_shallow_decoder"]
 
@@ -57,8 +57,8 @@ def my_build_model_config(common: CommonComponents) -> LatentMIMConfig:
 
 if __name__ == "__main__":
     main(
-        common_components_builder=my_build_common_components,
-        model_config_builder=my_build_model_config,
+        common_components_builder=build_common_components,
+        model_config_builder=build_model_config,
         train_module_config_builder=build_train_module_config,
         dataset_config_builder=build_dataset_config,
         dataloader_config_builder=build_dataloader_config,
