@@ -76,7 +76,7 @@ class DownstreamTaskConfig:
     use_pooled_tokens: bool = False
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
-    select_final_test_miou_based_on_epoch_of_max_val_miou: bool = True
+    select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
 
 
 class DownstreamEvaluator:
