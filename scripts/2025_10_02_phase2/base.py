@@ -3,12 +3,12 @@
 import logging
 
 from script import (
+    build_common_components,
     build_dataloader_config,
     build_dataset_config,
     build_train_module_config,
     build_trainer_config,
     build_visualize_config,
-    build_common_components,
 )
 
 from helios.internal.experiment import CommonComponents, main

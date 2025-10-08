@@ -25,7 +25,9 @@ from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.common import build_common_components as build_common_components_default
+from helios.internal.common import (
+    build_common_components as build_common_components_default,
+)
 from helios.internal.experiment import (
     CommonComponents,
     HeliosVisualizeConfig,

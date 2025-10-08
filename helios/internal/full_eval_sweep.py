@@ -613,7 +613,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             # Filter out skipped models if model-skip-names is provided
             if args.model_skip_names:
                 skip_names = [name.strip() for name in args.model_skip_names.split(",")]
-                models = [model for model in models if model.value not in skip_names]
+                models = [model for model in models if model not in skip_names]
         else:
             models = [args.model]
         for model in models:

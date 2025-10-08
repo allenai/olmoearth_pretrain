@@ -41,6 +41,7 @@ def get_run_groups(
     Args:
         project_name: the W&B project for the run.
         run_prefix: optional prefix to filter runs. If None, processes all runs.
+        group_baseline_model_and_size: if True, group by baseline model name and model size key instead of run prefix before '_step'.
 
     Returns:
         a dictionary mapping from group name to a dict of metric name to max value.
@@ -63,10 +64,11 @@ def get_run_groups(
 def group_runs_by_run_prefix_and_step(
     api: wandb.Api, wandb_path: str, run_prefix: str | None = None
 ) -> dict[str, list[wandb.Run]]:
-    """Group runs by their prefix before "_step"
+    """Group runs by their prefix before "_step".
 
     Args:
-        project_name: the W&B project for the run.
+        api: the W&B API object.
+        wandb_path: the W&B path for the run.
         run_prefix: optional prefix to filter runs. If None, processes all runs.
 
     Returns:
@@ -85,17 +87,17 @@ def group_runs_by_run_prefix_and_step(
 def group_runs_by_baseline_model_and_size(
     api: wandb.Api, wandb_path: str
 ) -> dict[str, list[wandb.Run]]:
-    """Group runs by their baseline model name and model size key"""
+    """Group runs by their baseline model name and model size key."""
 
     def _find_model_name_and_size(run: wandb.Run) -> tuple[BaselineModelName, str]:
-        """Find the baseline model name and size key in the run config"""
+        """Find the baseline model name and size key in the run config."""
         for name in list(BaselineModelName):
             if name.value in run.name:
                 return name, run.config["model"].get("size", None)
         raise ValueError(f"No baseline model name found in run {run.name}")
 
     def _get_group_name(model_name: BaselineModelName, size: str | None) -> str:
-        """Get the group name for the run"""
+        """Get the group name for the run."""
         if size is None:
             return model_name.value
         return f"{model_name.value}_{size}"
@@ -117,6 +119,7 @@ def get_max_metrics_grouped(
     dict[str, dict[str, float]],
     dict[str, dict[str, wandb.Run]],
 ]:
+    """Get max metrics for each group."""
     # Get max metrics for each group
     group_metrics = {}
     group_max_runs_per_metric = {}
