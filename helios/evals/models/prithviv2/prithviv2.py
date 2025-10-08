@@ -18,7 +18,7 @@ from helios.evals.models.prithviv2.prithvi_mae import PrithviMAE
 from helios.nn.flexihelios import PoolingType
 from helios.train.masking import MaskedHeliosSample
 
-# for Prithvi, true values are ["B02", "B03", "B04", "B05", "B06", "B07"]
+# for Prithvi, true values are HLS ["B02", "B03", "B04", "B05", "B06", "B07"]
 PRITHVI_MEAN = [
     1087.0,
     1342.0,
@@ -35,6 +35,12 @@ PRITHVI_STD = [
     1242.0,
     1049.0,
 ]
+
+# These are Sentinel-2 L2A band names that correspond most closely with the HLS bands
+# expected by Prithvi. The model is only trained on HLS though, which is at a different
+# resolution (30 m/pixel) and there may be other processing too.
+# HLS bands: Blue, Green, Red, Narrow NIR, SWIR, SWIR 2
+SENTINEL2_L2A_BAND_NAMES = ["B02", "B03", "B04", "B08", "B11", "B12"]
 
 
 class PrithviV2Models(StrEnum):
@@ -125,11 +131,10 @@ class PrithviV2(nn.Module):
                 del state_dict[k]
         self.model.load_state_dict(state_dict, strict=False)
         self.image_resolution = config["img_size"]
-        self.bands = config["bands"]
         # patch size is a list [t, h, w], where h == w
         self.patch_size = config["patch_size"][-1]
         self.helios_s2_to_prithvi = [
-            Modality.SENTINEL2_L2A.band_order.index(b) for b in self.bands
+            Modality.SENTINEL2_L2A.band_order.index(b) for b in SENTINEL2_L2A_BAND_NAMES
         ]
         self.use_pretrained_normalizer = use_pretrained_normalizer
 
