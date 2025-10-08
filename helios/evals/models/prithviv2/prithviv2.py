@@ -78,7 +78,7 @@ class PrithviV2(nn.Module):
         """
         super().__init__()
 
-        model_size_directory = UPath(load_directory) / size.value
+        model_size_directory = UPath(load_directory) / size
         model_size_directory.mkdir(exist_ok=True)
 
         hub_id = MODEL_TO_HF_INFO[size]["hf_hub_id"]
