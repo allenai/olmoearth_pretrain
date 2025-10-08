@@ -10,7 +10,7 @@ python scripts/get_and_run_phase1_evals.py \
 """
 
 import argparse
-import subprocess
+import subprocess  # nosec
 from logging import getLogger
 
 import wandb
