@@ -29,6 +29,7 @@ logger = getLogger(__name__)
 
 EVAL_LAUNCH_PATH = "olmoearth_pretrain/internal/all_evals.py"
 
+
 def create_linear_probe_arg(task_name: str, field_name: str) -> str:
     """Create a linear probe argument for a given task name."""
     initial_str = (
