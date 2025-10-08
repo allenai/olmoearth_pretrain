@@ -127,7 +127,7 @@ EVAL_TASKS = {
         num_workers=8,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
-        probe_lr=0.1,
+        probe_lr=0.01,
         eval_interval=Duration.epochs(10),
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
