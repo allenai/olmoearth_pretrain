@@ -93,7 +93,7 @@ def lr_only_params() -> Generator[dict[str, Any], None, None]:
         }
 
 
-def early_stopping_args() -> str:
+def select_best_val_args() -> str:
     """Get the early stopping arguments.
 
     This is used to select the final test miou based on the epoch of the max val miou.
@@ -669,11 +669,11 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                     )
                     commands_to_run.append(cmd)
 
-    if args.early_stop:
+    if args.select_best_val:
         commands_to_run_new = []
         for cmd in commands_to_run:
-            logger.info(f"Adding early stopping args to {cmd}")
-            cmd += early_stopping_args()
+            logger.info(f"Adding select best val args to {cmd}")
+            cmd += select_best_val_args()
             commands_to_run_new.append(cmd)
         commands_to_run = commands_to_run_new
     return commands_to_run
@@ -746,7 +746,7 @@ def main() -> None:
         help="If set, only run with default values (no sweep)",
     )
     parser.add_argument(
-        "--early_stop",
+        "--select_best_val",
         action="store_true",
         help="If set, use early stopping on the linear probe evals",
     )
