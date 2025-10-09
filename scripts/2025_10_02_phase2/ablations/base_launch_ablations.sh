@@ -21,3 +21,6 @@ python scripts/2025_10_02_phase2/base.py launch phase2.0_base_no_maps_srtm ai2/c
 python scripts/2025_10_02_phase2/base.py launch phase2.0_base_no_maps_srtm_landsat ai2/ceres-cirrascale  --launch.clusters='[ai2/jupiter-cirrascale-2,ai2/ceres-cirrascale]' --launch.priority=normal --common.training_modalities='[sentinel2_l2a,sentinel1]' --train_module.masking_config.strategy_config.only_decode_modalities='[]' --trainer.callbacks.wandb.project=2025_10_08_phase2_ablations
 # s2 only (no s1)
 python scripts/2025_10_02_phase2/base.py launch phase2.0_base_no_maps_srtm_landsat_s1 ai2/ceres-cirrascale  --launch.clusters='[ai2/jupiter-cirrascale-2,ai2/ceres-cirrascale]' --launch.priority=high --common.training_modalities='[sentinel2_l2a]' --train_module.masking_config.strategy_config.only_decode_modalities='[]' --trainer.callbacks.wandb.project=2025_10_08_phase2_ablations
+### extra ablations ###
+# ema active again
+python scripts/2025_10_02_phase2/base.py launch phase2.0_base_ema ai2/ceres-cirrascale --launch.clusters='[ai2/jupiter-cirrascale-2,ai2/ceres-cirrascale]' --launch.priority=normal --train_module.ema_decay='[0.996,1.0]' --trainer.callbacks.wandb.project=2025_10_08_phase2_ablations
