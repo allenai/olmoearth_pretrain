@@ -36,7 +36,7 @@ def base_args() -> argparse.Namespace:
         model=None,
         all_sizes=False,
         lr_only=False,
-        early_stop=False,
+        select_best_val=False,
         model_skip_names=None,
         size=None,
     )
@@ -56,7 +56,7 @@ def minimal_args() -> argparse.Namespace:
         model=None,
         all_sizes=False,
         lr_only=False,
-        early_stop=False,
+        select_best_val=False,
         model_skip_names=None,
         size=None,
     )

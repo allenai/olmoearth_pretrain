@@ -3,37 +3,34 @@
 from enum import StrEnum
 from typing import Any
 
-from olmoearth_pretrain.evals.models.anysat.anysat import AnySat, AnySatConfig
-from olmoearth_pretrain.evals.models.clay.clay import Clay, ClayConfig
-from olmoearth_pretrain.evals.models.copernicusfm.copernicusfm import (
+from helios.evals.models.anysat.anysat import AnySat, AnySatConfig
+from helios.evals.models.clay.clay import Clay, ClayConfig
+from helios.evals.models.copernicusfm.copernicusfm import (
     CopernicusFM,
     CopernicusFMConfig,
 )
-from olmoearth_pretrain.evals.models.croma.croma import CROMA_SIZES, Croma, CromaConfig
-from olmoearth_pretrain.evals.models.dinov2.dinov2 import DINOv2, DINOv2Config
-from olmoearth_pretrain.evals.models.dinov3.constants import DinoV3Models
-from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
-from olmoearth_pretrain.evals.models.galileo import GalileoConfig, GalileoWrapper
-from olmoearth_pretrain.evals.models.galileo.single_file_galileo import (
+from helios.evals.models.croma.croma import CROMA_SIZES, Croma, CromaConfig
+from helios.evals.models.dinov2.dinov2 import DINOv2, DINOv2Config
+from helios.evals.models.dinov3.constants import DinoV3Models
+from helios.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
+from helios.evals.models.galileo import GalileoConfig, GalileoWrapper
+from helios.evals.models.galileo.single_file_galileo import (
     MODEL_SIZE_TO_WEKA_PATH as GALILEO_MODEL_SIZE_TO_WEKA_PATH,
 )
-from olmoearth_pretrain.evals.models.panopticon.panopticon import (
-    Panopticon,
-    PanopticonConfig,
-)
-from olmoearth_pretrain.evals.models.presto.presto import PrestoConfig, PrestoWrapper
-from olmoearth_pretrain.evals.models.prithviv2.prithviv2 import (
+from helios.evals.models.panopticon.panopticon import Panopticon, PanopticonConfig
+from helios.evals.models.presto.presto import PrestoConfig, PrestoWrapper
+from helios.evals.models.prithviv2.prithviv2 import (
     PrithviV2,
     PrithviV2Config,
     PrithviV2Models,
 )
-from olmoearth_pretrain.evals.models.satlas.satlas import Satlas, SatlasConfig
-from olmoearth_pretrain.evals.models.terramind.terramind import (
+from helios.evals.models.satlas.satlas import Satlas, SatlasConfig
+from helios.evals.models.terramind.terramind import (
     TERRAMIND_SIZES,
     Terramind,
     TerramindConfig,
 )
-from olmoearth_pretrain.evals.models.tessera.tessera import Tessera, TesseraConfig
+from helios.evals.models.tessera.tessera import Tessera, TesseraConfig
 
 
 class BaselineModelName(StrEnum):
@@ -66,31 +63,31 @@ def get_launch_script_path(model_name: str) -> str:
     """Get the launch script path for a model."""
     if model_name == "dino_v2":
         # TODO: Remove as not mantained since dinov3 came out
-        return "olmoearth_pretrain/evals/models/dinov2/dinov2_launch.py"
+        return "helios/evals/models/dinov2/dinov2_launch.py"
     elif model_name == BaselineModelName.DINO_V3:
-        return "olmoearth_pretrain/evals/models/dinov3/dino_v3_launch.py"
+        return "helios/evals/models/dinov3/dino_v3_launch.py"
     elif model_name == BaselineModelName.GALILEO:
-        return "olmoearth_pretrain/evals/models/galileo/galileo_launch.py"
+        return "helios/evals/models/galileo/galileo_launch.py"
     elif model_name == BaselineModelName.PANOPTICON:
-        return "olmoearth_pretrain/evals/models/panopticon/panopticon_launch.py"
+        return "helios/evals/models/panopticon/panopticon_launch.py"
     elif model_name == BaselineModelName.TERRAMIND:
-        return "olmoearth_pretrain/evals/models/terramind/terramind_launch.py"
+        return "helios/evals/models/terramind/terramind_launch.py"
     elif model_name == BaselineModelName.SATLAS:
-        return "olmoearth_pretrain/evals/models/satlas/satlas_launch.py"
+        return "helios/evals/models/satlas/satlas_launch.py"
     elif model_name == BaselineModelName.CROMA:
-        return "olmoearth_pretrain/evals/models/croma/croma_launch.py"
+        return "helios/evals/models/croma/croma_launch.py"
     elif model_name == BaselineModelName.CLAY:
-        return "olmoearth_pretrain/evals/models/clay/clay_launch.py"
+        return "helios/evals/models/clay/clay_launch.py"
     elif model_name == BaselineModelName.COPERNICUSFM:
-        return "olmoearth_pretrain/evals/models/copernicusfm/copernicusfm_launch.py"
+        return "helios/evals/models/copernicusfm/copernicusfm_launch.py"
     elif model_name == BaselineModelName.PRESTO:
-        return "olmoearth_pretrain/evals/models/presto/presto_launch.py"
+        return "helios/evals/models/presto/presto_launch.py"
     elif model_name == BaselineModelName.ANYSAT:
-        return "olmoearth_pretrain/evals/models/anysat/anysat_launch.py"
+        return "helios/evals/models/anysat/anysat_launch.py"
     elif model_name == BaselineModelName.TESSERA:
-        return "olmoearth_pretrain/evals/models/tessera/tessera_launch.py"
+        return "helios/evals/models/tessera/tessera_launch.py"
     elif model_name == BaselineModelName.PRITHVI_V2:
-        return "olmoearth_pretrain/evals/models/prithviv2/prithviv2_launch.py"
+        return "helios/evals/models/prithviv2/prithviv2_launch.py"
     else:
         raise ValueError(f"Invalid model name: {model_name}")
 

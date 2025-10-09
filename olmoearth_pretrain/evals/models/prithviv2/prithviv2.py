@@ -241,7 +241,7 @@ class PrithviV2(nn.Module):
 class PrithviV2Config(Config):
     """olmo_core style config for PrithviV2 Wrapper."""
 
-    load_directory: str = "/weka/dfive-default/olmoearth_pretrain/models/prithvi"
+    load_directory: str = "/weka/dfive-default/helios/models/prithvi"
     size: str | PrithviV2Models = PrithviV2Models.VIT_300
     use_pretrained_normalizer: bool = True
 
