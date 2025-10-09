@@ -159,7 +159,7 @@ def parse_modality_csv(
     return list(modality_tiles.values())
 
 
-def parse_helios_dataset(
+def parse_dataset(
     helios_path: UPath, supported_modalities: list[ModalitySpec] = Modality.values()
 ) -> dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]]:
     """Parse the various per-modality tiles present in a OlmoEarth Pretrain dataset.

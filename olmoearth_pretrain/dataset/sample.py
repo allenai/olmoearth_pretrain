@@ -82,7 +82,7 @@ def image_tiles_to_samples(
     """Compute samples from the parsed per-modality image tiles.
 
     Args:
-        image_tiles: the parsed dataset from parse_helios_dataset.
+        image_tiles: the parsed dataset from parse_dataset.
         supported_modalities: the modalities to include in the samples. Default is all
             modalities.
 

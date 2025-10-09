@@ -25,7 +25,7 @@ from olmoearth_pretrain.data.constants import (
     TimeSpan,
 )
 from olmoearth_pretrain.data.utils import convert_to_db
-from olmoearth_pretrain.dataset.parse import parse_helios_dataset
+from olmoearth_pretrain.dataset.parse import parse_dataset
 from olmoearth_pretrain.dataset.sample import (
     ModalityTile,
     SampleInformation,
@@ -171,7 +171,7 @@ class ConvertToH5py:
 
     def _get_samples(self) -> list[SampleInformation]:
         """Get the samples from the raw dataset (image tile directory)."""
-        tiles = parse_helios_dataset(self.tile_path, self.supported_modalities)
+        tiles = parse_dataset(self.tile_path, self.supported_modalities)
         samples = image_tiles_to_samples(tiles, self.supported_modalities)
         logger.info(f"Total samples: {len(samples)}")
         logger.info("Distribution of samples before filtering:\n")
