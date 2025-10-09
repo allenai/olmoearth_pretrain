@@ -748,7 +748,7 @@ def main() -> None:
     parser.add_argument(
         "--select_best_val",
         action="store_true",
-        help="If set, use early stopping on the linear probe evals",
+        help="If set, use select best val on the linear probe evals",
     )
     parser.add_argument(
         "--model-skip-names",

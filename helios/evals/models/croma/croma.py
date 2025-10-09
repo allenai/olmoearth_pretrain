@@ -37,7 +37,7 @@ HELIOS_SENTINEL2_BANDS = [
     ]
 ]
 
-CHROMA_SIZES = ["base", "large"]
+CROMA_SIZES = ["base", "large"]
 
 
 class Croma(nn.Module):
@@ -63,8 +63,8 @@ class Croma(nn.Module):
         """
         super().__init__()
         load_dir = UPath(load_directory)
-        if size not in CHROMA_SIZES:
-            raise ValueError(f"Invalid size: {size}. Must be one of {CHROMA_SIZES}")
+        if size not in CROMA_SIZES:
+            raise ValueError(f"Invalid size: {size}. Must be one of {CROMA_SIZES}")
         load_path = load_dir / f"CROMA_{size}.pt"
 
         self.model = PretrainedCROMA(

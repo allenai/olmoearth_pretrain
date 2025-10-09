@@ -9,7 +9,7 @@ from helios.evals.models.copernicusfm.copernicusfm import (
     CopernicusFM,
     CopernicusFMConfig,
 )
-from helios.evals.models.croma.croma import CHROMA_SIZES, Croma, CromaConfig
+from helios.evals.models.croma.croma import CROMA_SIZES, Croma, CromaConfig
 from helios.evals.models.dinov2.dinov2 import DINOv2, DINOv2Config
 from helios.evals.models.dinov3.constants import DinoV3Models
 from helios.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
@@ -51,7 +51,7 @@ class BaselineModelName(StrEnum):
 
 
 MODELS_WITH_MULTIPLE_SIZES: dict[BaselineModelName, Any] = {
-    BaselineModelName.CROMA: CHROMA_SIZES,
+    BaselineModelName.CROMA: CROMA_SIZES,
     BaselineModelName.DINO_V3: list(DinoV3Models),
     BaselineModelName.GALILEO: GALILEO_MODEL_SIZE_TO_WEKA_PATH.keys(),
     BaselineModelName.PRITHVI_V2: list(PrithviV2Models),
