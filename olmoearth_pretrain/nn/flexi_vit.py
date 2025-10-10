@@ -359,7 +359,7 @@ class ProjectAndAggregate(nn.Module):
         )
 
 
-class FlexiHeliosPatchEmbeddings(nn.Module):
+class MultiModalPatchEmbeddings(nn.Module):
     """Module that patchifies and encodes the input data."""
 
     def __init__(
@@ -721,8 +721,8 @@ class ReconstructorConfig(Config):
         return Reconstructor(**kwargs)
 
 
-class FlexiHeliosCompositeEncodings(nn.Module):
-    """Composite encodings for the FlexiHelios model."""
+class CompositeEncodings(nn.Module):
+    """Composite encodings for FlexiVit models."""
 
     def __init__(
         self,
@@ -950,8 +950,8 @@ class FlexiHeliosCompositeEncodings(nn.Module):
         return output_dict
 
 
-class FlexiHeliosBase(nn.Module):
-    """FlexiHeliosBase is a base class for FlexiHelios models."""
+class FlexiVitBase(nn.Module):
+    """FlexiVitBase is a base class for FlexiVit models."""
 
     cross_attn: bool = False
 
@@ -969,7 +969,7 @@ class FlexiHeliosBase(nn.Module):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
     ) -> None:
-        """Initialize the FlexiHeliosBase class."""
+        """Initialize the FlexiVitBase class."""
         super().__init__()
 
         self.embedding_size = embedding_size
@@ -999,7 +999,7 @@ class FlexiHeliosBase(nn.Module):
             ]
         )
 
-        self.composite_encodings = FlexiHeliosCompositeEncodings(
+        self.composite_encodings = CompositeEncodings(
             embedding_size,
             self.supported_modalities,
             max_sequence_length,
@@ -1168,7 +1168,7 @@ class FlexiHeliosBase(nn.Module):
             block.apply_compile()
 
 
-class Encoder(FlexiHeliosBase):
+class Encoder(FlexiVitBase):
     """Encoder module that processes masked input samples into token representations."""
 
     cross_attn: bool = False
@@ -1242,7 +1242,7 @@ class Encoder(FlexiHeliosBase):
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
-        self.patch_embeddings = FlexiHeliosPatchEmbeddings(
+        self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
@@ -1697,7 +1697,7 @@ class Encoder(FlexiHeliosBase):
         # torch.compile(self.patch_embeddings, dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
 
 
-class PredictorBase(FlexiHeliosBase):
+class PredictorBase(FlexiVitBase):
     """Predictor module that generates predictions from encoded tokens."""
 
     cross_attn = True
