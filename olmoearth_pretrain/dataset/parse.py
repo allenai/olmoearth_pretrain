@@ -82,12 +82,12 @@ class ModalityTile:
 
 
 def parse_modality_csv(
-    helios_path: UPath, modality: ModalitySpec, time_span: TimeSpan, csv_path: UPath
+    path: UPath, modality: ModalitySpec, time_span: TimeSpan, csv_path: UPath
 ) -> list[ModalityTile]:
     """Parse CSV for one modality and time span.
 
     Args:
-        helios_path: the OlmoEarth Pretrain dataset path.
+        path: the OlmoEarth Pretrain dataset path.
         modality: the modality to parse.
         time_span: the time span to parse.
         csv_path: the CSV path.
@@ -147,7 +147,7 @@ def parse_modality_csv(
         )
         for band_set in modality.band_sets:
             fname = get_modality_fname(
-                helios_path,
+                path,
                 modality,
                 time_span,
                 window_metadata,
@@ -160,7 +160,7 @@ def parse_modality_csv(
 
 
 def parse_dataset(
-    helios_path: UPath, supported_modalities: list[ModalitySpec] = Modality.values()
+    path: UPath, supported_modalities: list[ModalitySpec] = Modality.values()
 ) -> dict[ModalitySpec, dict[TimeSpan, list[ModalityTile]]]:
     """Parse the various per-modality tiles present in a OlmoEarth Pretrain dataset.
 
@@ -192,12 +192,11 @@ def parse_dataset(
             # Reconstruct the CSV filename from the grid resolution, modality, and time span.
             tile_resolution = modality.get_tile_resolution()
             csv_fname = (
-                helios_path
-                / f"{tile_resolution}_{modality.name}{time_span.get_suffix()}.csv"  # type: ignore
+                path / f"{tile_resolution}_{modality.name}{time_span.get_suffix()}.csv"  # type: ignore
             )
             logger.debug(f"Parsing {modality.name} {time_span} {csv_fname}")
             tiles[modality][time_span] = parse_modality_csv(  # type: ignore
-                helios_path,
+                path,
                 modality,
                 time_span,  # type: ignore
                 csv_fname,
