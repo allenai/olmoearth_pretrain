@@ -1,11 +1,11 @@
-"""Simple set up of latent predictor."""
+"""Simple set up of MAE networks."""
 
 from dataclasses import dataclass
 
 import torch.nn as nn
 from olmo_core.config import Config
 
-from olmoearth_pretrain.nn.flexihelios import (
+from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
     PredictorConfig,
     ReconstructorConfig,

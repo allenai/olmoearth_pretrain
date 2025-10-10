@@ -6,9 +6,9 @@ Maintained for backwards compatibility with old checkpoints.
 import sys
 import warnings
 
-import olmoearth_pretrain.nn.flexivit as flexivit
+import olmoearth_pretrain.nn.flexi_vit as flexivit
 
-from .flexivit import *  # noqa: F403
+from .flexi_vit import *  # noqa: F403
 
 warnings.warn(
     "olmoearth_pretrain.nn.flexihelios is deprecated. "
