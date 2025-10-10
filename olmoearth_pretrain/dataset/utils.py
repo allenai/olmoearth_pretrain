@@ -54,26 +54,24 @@ class WindowMetadata:
         return round(self.resolution / BASE_RESOLUTION)
 
 
-def get_modality_dir(
-    helios_path: UPath, modality: ModalitySpec, time_span: TimeSpan
-) -> UPath:
+def get_modality_dir(path: UPath, modality: ModalitySpec, time_span: TimeSpan) -> UPath:
     """Get the directory where data should be stored for the specified modality.
 
     Args:
-        helios_path: the OlmoEarth Pretrain dataset root.
+        path: the OlmoEarth Pretrain dataset root.
         modality: the modality.
         time_span: the time span, which determines suffix of directory name.
 
     Returns:
-        directory within helios_path to store the modality.
+        directory within path to store the modality.
     """
     suffix = time_span.get_suffix()
     dir_name = f"{modality.get_tile_resolution()}_{modality.name}{suffix}"
-    return helios_path / dir_name
+    return path / dir_name
 
 
 def list_examples_for_modality(
-    helios_path: UPath, modality: ModalitySpec, time_span: TimeSpan
+    path: UPath, modality: ModalitySpec, time_span: TimeSpan
 ) -> list[str]:
     """List the example IDs available for the specified modality.
 
@@ -81,14 +79,14 @@ def list_examples_for_modality(
     metadata CSVs are not used.
 
     Args:
-        helios_path: the OlmoEarth Pretrain dataset root.
+        path: the OlmoEarth Pretrain dataset root.
         modality: the modality to check.
         time_span: the time span to check.
 
     Returns:
         a list of example IDs
     """
-    modality_dir = get_modality_dir(helios_path, modality, time_span)
+    modality_dir = get_modality_dir(path, modality, time_span)
     if not modality_dir.exists():
         return []
 
@@ -100,7 +98,7 @@ def list_examples_for_modality(
 
 
 def get_modality_fname(
-    helios_path: UPath,
+    path: UPath,
     modality: ModalitySpec,
     time_span: TimeSpan,
     window_metadata: WindowMetadata,
@@ -110,7 +108,7 @@ def get_modality_fname(
     """Get the filename where to store data for the specified window and modality.
 
     Args:
-        helios_path: the OlmoEarth Pretrain dataset root.
+        path: the OlmoEarth Pretrain dataset root.
         modality: the modality.
         time_span: the time span of this data.
         window_metadata: details extracted from the window name.
@@ -121,7 +119,7 @@ def get_modality_fname(
     Returns:
         the filename to store the data in.
     """
-    modality_dir = get_modality_dir(helios_path, modality, time_span)
+    modality_dir = get_modality_dir(path, modality, time_span)
     crs = window_metadata.crs
     col = window_metadata.col
     row = window_metadata.row
