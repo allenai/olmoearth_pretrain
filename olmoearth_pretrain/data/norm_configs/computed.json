@@ -648,7 +648,7 @@
       "var": 6612037978190837.0
     }
   },
-  "tile_path": "/weka/dfive-default/olmoearth_pretrain/dataset/presto/h5py_data",
+  "tile_path": "/weka/dfive-default/helios/dataset/presto/h5py_data",
   "total_n": 103896,
   "worldcover": {
     "B1": {
