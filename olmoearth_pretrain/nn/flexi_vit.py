@@ -360,7 +360,7 @@ class ProjectAndAggregate(nn.Module):
 
 
 class MultiModalPatchEmbeddings(nn.Module):
-    """Module that patchifies and encodes the input data."""
+    """Module that patchifies and encodes the input data for multiple modalities."""
 
     def __init__(
         self,

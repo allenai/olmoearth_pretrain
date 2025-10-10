@@ -15,10 +15,10 @@ from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.dataset.utils import get_modality_specs_from_names
 from olmoearth_pretrain.nn.attention import Block
-from olmoearth_pretrain.nn.flexihelios import (
+from olmoearth_pretrain.nn.flexi_vit import (
     BASE_GSD,
-    FlexiHeliosCompositeEncodings,
-    FlexiHeliosPatchEmbeddings,
+    CompositeEncodings,
+    MultiModalPatchEmbeddings,
     ProjectAndAggregate,
     TokensAndMasks,
     get_modalities_to_process,
@@ -86,7 +86,7 @@ class STBase(nn.Module):
             ]
         )
 
-        self.composite_encodings = FlexiHeliosCompositeEncodings(
+        self.composite_encodings = CompositeEncodings(
             embedding_size,
             self.supported_modalities,
             max_sequence_length,
@@ -784,7 +784,7 @@ class STEncoder(STBase):
         self.fuse_layers = fuse_layers
         self.layer_attention_modes = layer_attention_modes
         self.fuse_using_cross_attn = fuse_using_cross_attn
-        self.patch_embeddings = FlexiHeliosPatchEmbeddings(
+        self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,

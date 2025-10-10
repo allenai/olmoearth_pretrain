@@ -13,7 +13,7 @@ from torch import Tensor
 
 from olmoearth_pretrain.data.constants import BASE_GSD, Modality
 from olmoearth_pretrain.nn.attention import Mlp
-from olmoearth_pretrain.nn.flexihelios import (
+from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     EncoderConfig,
     PredictorBase,
