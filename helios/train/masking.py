@@ -1217,18 +1217,18 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             raise ValueError("patch_size must be provided for cross masking")
 
         masked_sample = self.strategy.apply_mask(batch, patch_size, **kwargs)
-        # present_modalities_bandsets = self.get_sample_present_modalities_bandsets(
-        #     masked_sample
-        # )
-        # encoded_decoded_bandsets = self.select_encoded_decoded_bandsets(
-        #     present_modalities_bandsets
-        # )
-        # masked_sample = self.apply_bandset_mask_rules(
-        #     masked_sample,
-        #     encoded_decoded_bandsets,
-        #     present_modalities_bandsets,
-        #     patch_size,
-        # )
+        present_modalities_bandsets = self.get_sample_present_modalities_bandsets(
+            masked_sample
+        )
+        encoded_decoded_bandsets = self.select_encoded_decoded_bandsets(
+            present_modalities_bandsets
+        )
+        masked_sample = self.apply_bandset_mask_rules(
+            masked_sample,
+            encoded_decoded_bandsets,
+            present_modalities_bandsets,
+            patch_size,
+        )
 
         return masked_sample
 

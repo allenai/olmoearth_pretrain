@@ -119,25 +119,25 @@ def build_train_module_config(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
         rank_microbatch_size=32,
         masking_config=MaskingConfig(
-            # strategy_config={
-            #     "type": "random",
-            #     "encode_ratio": 0.5,
-            #     "decode_ratio": 0.5,
-            # }
             strategy_config={
-                "type": "modality_cross_random",
+                "type": "random",
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
-                "allow_encoding_decoding_same_bandset": True,
-                "only_decode_modalities": [
-                    "worldcover",
-                    "srtm",
-                    "openstreetmap_raster",
-                    "wri_canopy_height_map",
-                    "cdl",
-                    "worldcereal",
-                ],
             }
+            # strategy_config={
+            #     "type": "modality_cross_random",
+            #     "encode_ratio": 0.5,
+            #     "decode_ratio": 0.5,
+            #     "allow_encoding_decoding_same_bandset": True,
+            #     "only_decode_modalities": [
+            #         "worldcover",
+            #         "srtm",
+            #         "openstreetmap_raster",
+            #         "wri_canopy_height_map",
+            #         "cdl",
+            #         "worldcereal",
+            #     ],
+            # }
         ),
         loss_config=LossConfig(
             loss_config={
