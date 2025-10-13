@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import wandb
 
-from helios.evals.models import BaselineModelName
-from helios.internal.all_evals import EVAL_TASKS
+from olmoearth_pretrain.evals.models import BaselineModelName
+from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
 
 WANDB_ENTITY = "eai-ai2"
 METRICS = EVAL_TASKS.keys()
@@ -75,7 +75,7 @@ def group_runs_by_run_prefix_and_step(
         a dictionary mapping from group name to a list of wandb.Run objects.
     """
     grouped_runs = defaultdict(list)
-    for run in api.runs(wandb_path):
+    for run in api.runs(wandb_path, lazy=False):
         if run_prefix and not run.name.startswith(run_prefix):
             continue
         group_name = get_run_group_name(run.name)
@@ -93,7 +93,9 @@ def group_runs_by_baseline_model_and_size(
         """Find the baseline model name and size key in the run config."""
         for name in list(BaselineModelName):
             if name.value in run.name:
-                return name, run.config["model"].get("size", None)
+                model_config = run.config["model"]
+                print(f"Model config: {model_config} type: {type(model_config)}")
+                return name, model_config.get("size", None)
         raise ValueError(f"No baseline model name found in run {run.name}")
 
     def _get_group_name(model_name: BaselineModelName, size: str | None) -> str:
@@ -103,7 +105,8 @@ def group_runs_by_baseline_model_and_size(
         return f"{model_name.value}_{size}"
 
     grouped_runs = defaultdict(list)
-    for run in api.runs(wandb_path):
+    for run in api.runs(wandb_path, lazy=False):
+        print(f"Processing run {run.name} ({run.id})")
         model_name, size = _find_model_name_and_size(run)
         group_name = _get_group_name(model_name, size)
         grouped_runs[group_name].append(run)
@@ -190,7 +193,7 @@ def get_max_metrics_per_partition(
 
         # List all the runs in the project and find the subset matching the prefix and partition
         run_ids: list[str] = []
-        for run in api.runs(f"{WANDB_ENTITY}/{project_name}"):
+        for run in api.runs(f"{WANDB_ENTITY}/{project_name}", lazy=False):
             if not run.name.startswith(run_prefix):
                 continue
             # Check if run name contains the partition
@@ -241,7 +244,7 @@ def get_max_metrics(project_name: str, run_prefix: str) -> dict[str, float]:
 
     # List all the runs in the project and find the subset matching the prefix.
     run_ids: list[str] = []
-    for run in api.runs(f"{WANDB_ENTITY}/{project_name}"):
+    for run in api.runs(f"{WANDB_ENTITY}/{project_name}", lazy=False):
         if not run.name.startswith(run_prefix):
             continue
         print(f"Found run {run.name} ({run.id})")
@@ -363,15 +366,7 @@ if __name__ == "__main__":
         print(f"\nPer-partition metrics written to {args.output_file}")
 
     else:
-        if args.run_prefix:
-            print(
-                f"Getting max metrics grouped by run prefix before '_step' (filtering by '{args.run_prefix}')..."
-            )
-        else:
-            print(
-                "Getting max metrics grouped by run prefix before '_step' (all runs in project)..."
-            )
-
+        print(f"Running with the following arguments: {args}")
         run_groups = get_run_groups(
             args.project_name, args.run_prefix, args.group_baseline_model_and_size
         )
