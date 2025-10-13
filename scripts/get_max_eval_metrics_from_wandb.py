@@ -10,6 +10,7 @@ import wandb
 
 from olmoearth_pretrain.evals.models import BaselineModelName
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
+from olmoearth_pretrain.train.callbacks.evaluator_callback import ProbeType
 
 WANDB_ENTITY = "eai-ai2"
 METRICS = EVAL_TASKS.keys()
@@ -114,6 +115,11 @@ def group_runs_by_baseline_model_and_size(
     return grouped_runs
 
 
+def _get_corresponding_test_key(key: str) -> str:
+    """Get the corresponding test key for a given metric key."""
+    return key.replace("eval/", "eval/test/")
+
+
 def get_max_metrics_grouped(
     grouped_runs: dict[str, list[wandb.Run]],
     get_test_metrics: bool = False,
@@ -128,13 +134,45 @@ def get_max_metrics_grouped(
     group_max_runs_per_metric = {}
     for group_name, runs in grouped_runs.items():
         print(f"\nProcessing group: {group_name} ({len(runs)} runs)")
+        #  Get the run that has test metrics with the highest validation score for each metric
         metrics = {}
         max_runs_per_metric = {}
         for run in runs:
             for key, value in run.summary.items():
                 # TODO: Make these metrics names constants
-                if not key.startswith("eval/") or key.startswith("eval/test/"):
+                if not key.startswith("eval/"):
                     continue
+                if key.startswith("eval/test/"):
+                    print(
+                        f"Skipping test metric {key} for run {run.name} because it is a test metric"
+                    )
+                    # DO NOT select on test metrics
+                    continue
+                # Ensure the run has test metrics
+                if run.summary.get(_get_corresponding_test_key(key), None) is None:
+                    # DOn't select top val metrics if there is no corresponding test metric
+                    print(
+                        f"Skipping metric {key} for run {run.name} because it has no corresponding test metric"
+                    )
+                    continue
+
+                # If for the given metric, it is a linear probe task skip if it was not done with early stop linear porbing
+                task_name = key.split("/")[1]
+                task_config = run.config["trainer"]["callbacks"][
+                    "downstream_evaluator"
+                ]["tasks"][task_name]
+
+                if (
+                    not task_config.get(
+                        "select_final_test_miou_based_on_epoch_of_max_val_miou", False
+                    )
+                    and task_config["probe_type"] == ProbeType.LINEAR
+                ):
+                    print(
+                        f"Skipping metric {key} for run {run.name} because it is not done with early stop linear probing"
+                    )
+                    continue
+
                 prev_max_val = metrics.get(key, float("-inf"))
                 metrics[key] = max(prev_max_val, value)
                 if value > prev_max_val:
