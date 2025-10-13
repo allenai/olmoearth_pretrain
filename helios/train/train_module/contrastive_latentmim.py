@@ -206,69 +206,62 @@ class ContrastiveLatentMIMTrainModule(HeliosTrainModule):
                 logger.info(
                     f"SKIPPING microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
-            else:
-                with self._train_microbatch_context(microbatch_idx, num_microbatches):
-                    logger.info(
-                        f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
-                    )
-                    masked_batch_a = self.masking_strategy.apply_mask(
-                        self.transform.apply(microbatch).to_device(self.device),
-                        patch_size=patch_size,
-                    )
-                    masked_batch_b = self.masking_strategy.apply_mask(
-                        self.transform.apply(microbatch).to_device(self.device),
-                        patch_size=patch_size,
-                    )
-                    # Run Encoder and decoder on the augmented input
-                    loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
-                        self.model_forward(
-                            masked_batch_a, patch_size, self.token_exit_cfg
-                        )
-                    )
-                    loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
-                        self.model_forward(
-                            masked_batch_b, patch_size, self.token_exit_cfg
-                        )
-                    )
-                    loss = (loss_a + loss_b) / 2
+                continue
+            with self._train_microbatch_context(microbatch_idx, num_microbatches):
+                logger.info(
+                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
+                )
+                masked_batch_a = self.masking_strategy.apply_mask(
+                    self.transform.apply(microbatch).to_device(self.device),
+                    patch_size=patch_size,
+                )
+                masked_batch_b = self.masking_strategy.apply_mask(
+                    self.transform.apply(microbatch).to_device(self.device),
+                    patch_size=patch_size,
+                )
+                # Run Encoder and decoder on the augmented input
+                loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
+                    self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
+                )
+                loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
+                    self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
+                )
+                loss = (loss_a + loss_b) / 2
 
-                    # Scale loss by number of microbatches
-                    reg_term_a = self.compute_regularization(pooled_a)
-                    reg_term_b = self.compute_regularization(pooled_b)
-                    if reg_term_a is not None:
-                        assert reg_term_b is not None
-                        loss = loss + (reg_term_a + reg_term_b) / 2
-                        total_batch_reg += (
-                            get_local_tensor(
-                                (reg_term_a.detach() + reg_term_b.detach()) / 2
-                            )
-                            / num_microbatches
+                # Scale loss by number of microbatches
+                reg_term_a = self.compute_regularization(pooled_a)
+                reg_term_b = self.compute_regularization(pooled_b)
+                if reg_term_a is not None:
+                    assert reg_term_b is not None
+                    loss = loss + (reg_term_a + reg_term_b) / 2
+                    total_batch_reg += (
+                        get_local_tensor(
+                            (reg_term_a.detach() + reg_term_b.detach()) / 2
                         )
+                        / num_microbatches
+                    )
 
-                    if self.contrastive_loss is not None:
-                        contrastive_loss = self.contrastive_loss.compute(
-                            pooled_a, pooled_b
-                        )
-                        loss += contrastive_loss
-                        total_batch_con += (
-                            get_local_tensor(contrastive_loss.detach())
-                            / num_microbatches
-                        )
+                if self.contrastive_loss is not None:
+                    contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
+                    loss += contrastive_loss
+                    total_batch_con += (
+                        get_local_tensor(contrastive_loss.detach()) / num_microbatches
+                    )
 
-                    loss = loss / num_microbatches
-                    loss_val = get_local_tensor(loss.detach())
-                    total_batch_loss += loss_val
+                loss = loss / num_microbatches
+                loss_val = get_local_tensor(loss.detach())
+                total_batch_loss += loss_val
 
-                    # Skip bad batches
-                    if torch.isnan(loss).any() or torch.isinf(loss).any():
-                        logger.warning(
-                            f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
-                        )
-                        del latent_a, latent_b
-                        break
-
+                # Skip bad batches
+                if torch.isnan(loss).any() or torch.isinf(loss).any():
+                    logger.warning(
+                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
+                    )
                     del latent_a, latent_b
-                    loss.backward()
+                    break
+
+                del latent_a, latent_b
+                loss.backward()
 
         if dry_run:
             return
