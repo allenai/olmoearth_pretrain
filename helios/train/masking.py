@@ -345,7 +345,9 @@ class MaskingStrategy:
         # if decode_tokens == 0:
         #    raise ValueError(f"No encode tokens for input shape {mask.shape}")
 
-        target_tokens = int(num_not_missing_tokens - (encode_tokens + decode_tokens))
+        target_tokens = max(
+            0, int(num_not_missing_tokens - (encode_tokens + decode_tokens))
+        )
         flat_mask_tokens = torch.cat(
             [
                 torch.full(
