@@ -8,10 +8,10 @@ from einops import repeat
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexihelios import (
+    CompositeEncodings,
     Encoder,
     EncoderConfig,
-    FlexiHeliosBase,
-    FlexiHeliosCompositeEncodings,
+    FlexiVitBase,
     PoolingType,
     Predictor,
     PredictorConfig,
@@ -23,15 +23,15 @@ from olmoearth_pretrain.train.masking import MaskValue
 logger = logging.getLogger(__name__)
 
 
-class TestFlexiHeliosCompositeEncodings:
-    """Unit tests for the FlexiHeliosCompositeEncodings class."""
+class TestCompositeEncodings:
+    """Unit tests for the CompositeEncodings class."""
 
     @pytest.fixture
     def flexi_helios_composite_encodings(
         self,
-    ) -> FlexiHeliosCompositeEncodings:
+    ) -> CompositeEncodings:
         """Create composite encoder fixture for testing."""
-        flexi_helios_composite_encodings = FlexiHeliosCompositeEncodings(
+        flexi_helios_composite_encodings = CompositeEncodings(
             embedding_size=16,
             supported_modalities=[
                 Modality.SENTINEL2_L2A,
@@ -45,7 +45,7 @@ class TestFlexiHeliosCompositeEncodings:
 
     def test_apply_encodings_per_modality_latlon(
         self,
-        flexi_helios_composite_encodings: FlexiHeliosCompositeEncodings,
+        flexi_helios_composite_encodings: CompositeEncodings,
     ) -> None:
         """Test applying encodings to different modalities."""
         B, D = 4, 16
@@ -60,7 +60,7 @@ class TestFlexiHeliosCompositeEncodings:
         assert latlon_tokens.shape == ll_enc.shape
 
     def test_apply_encodings_per_modality_sentinel2_l2a(
-        self, flexi_helios_composite_encodings: FlexiHeliosCompositeEncodings
+        self, flexi_helios_composite_encodings: CompositeEncodings
     ) -> None:
         """Test applying encodings to different modalities."""
         B, H, W, T, C, D = 4, 4, 4, 3, 3, 16
@@ -78,7 +78,7 @@ class TestFlexiHeliosCompositeEncodings:
 
     def test_apply_encodings_per_modality_worldcover(
         self,
-        flexi_helios_composite_encodings: FlexiHeliosCompositeEncodings,
+        flexi_helios_composite_encodings: CompositeEncodings,
     ) -> None:
         """Test applying encodings to different modalities."""
         B, H, W, C, D = 4, 4, 4, 1, 16
@@ -93,7 +93,7 @@ class TestFlexiHeliosCompositeEncodings:
         assert worldcover_tokens.shape == wc_enc.shape
 
     def test_apply_encodings_per_modality_grad(
-        self, flexi_helios_composite_encodings: FlexiHeliosCompositeEncodings
+        self, flexi_helios_composite_encodings: CompositeEncodings
     ) -> None:
         """Test applying encodings to different modalities."""
         B, H, W, T, C, D = 4, 4, 4, 3, 3, 16
@@ -124,15 +124,15 @@ class TestFlexiHeliosCompositeEncodings:
 
 
 # TODO: Add tests for when the inputs are completely masked or different dims or something
-class TestFlexiHeliosBase:
-    """Unit tests for the FlexiHeliosBase class."""
+class TestFlexiVitBase:
+    """Unit tests for the FlexiVitBase class."""
 
     @pytest.fixture
     def flexi_helios_base(
         self, supported_modalities: list[ModalitySpec]
-    ) -> FlexiHeliosBase:
+    ) -> FlexiVitBase:
         """Create encoder fixture for testing."""
-        flexi_helios_base = FlexiHeliosBase(
+        flexi_helios_base = FlexiVitBase(
             embedding_size=8,
             num_heads=2,
             mlp_ratio=4.0,
@@ -143,9 +143,7 @@ class TestFlexiHeliosBase:
         )
         return flexi_helios_base
 
-    def test_collapse_and_combine_hwtc(
-        self, flexi_helios_base: FlexiHeliosBase
-    ) -> None:
+    def test_collapse_and_combine_hwtc(self, flexi_helios_base: FlexiVitBase) -> None:
         """Test collapsing tokens from different modalities into single tensor."""
         B, D = 2, 4
         sentinel2_l2a_tokens = torch.randn(B, 2, 1, 1, 2, D)
@@ -178,7 +176,7 @@ class TestFlexiHeliosBase:
         x = torch.cat([modality1_data, modality2_data], dim=1)
 
         # Now call the function
-        modality_tokens_dict = FlexiHeliosBase.split_and_expand_per_modality(
+        modality_tokens_dict = FlexiVitBase.split_and_expand_per_modality(
             x, modalities_to_dims_dict
         )
 

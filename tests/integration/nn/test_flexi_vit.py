@@ -12,7 +12,7 @@ from einops import rearrange
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexihelios import (
     Encoder,
-    FlexiHeliosPatchEmbeddings,
+    MultiModalPatchEmbeddings,
     Predictor,
     TokensAndMasks,
 )
@@ -46,20 +46,20 @@ def supported_modality_names(supported_modalities: list[ModalitySpec]) -> list[s
     return [modality.name for modality in supported_modalities]
 
 
-class TestFlexiHeliosPatchEmbeddings:
-    """Integration tests for the FlexiHeliosPatchEmbeddings class."""
+class TestMultiModalPatchEmbeddings:
+    """Integration tests for the MultiModalPatchEmbeddings class."""
 
     @pytest.fixture
     def patch_embeddings(
         self,
-    ) -> FlexiHeliosPatchEmbeddings:
+    ) -> MultiModalPatchEmbeddings:
         """Create patch embeddings fixture for testing.
 
         Returns:
-            FlexiHeliosPatchEmbeddings: Test patch embeddings instance with small test config
+            MultiModalPatchEmbeddings: Test patch embeddings instance with small test config
         """
         supported_modality_names = ["sentinel2_l2a", "latlon"]
-        return FlexiHeliosPatchEmbeddings(
+        return MultiModalPatchEmbeddings(
             supported_modality_names=supported_modality_names,
             embedding_size=16,
             max_patch_size=8,
@@ -67,7 +67,7 @@ class TestFlexiHeliosPatchEmbeddings:
 
     def test_forward(
         self,
-        patch_embeddings: FlexiHeliosPatchEmbeddings,
+        patch_embeddings: MultiModalPatchEmbeddings,
         modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
     ) -> None:
         """Test the forward pass of the patch embeddings."""
@@ -123,7 +123,7 @@ class TestFlexiHeliosPatchEmbeddings:
 
     def test_forward_with_missing_modalities(
         self,
-        patch_embeddings: FlexiHeliosPatchEmbeddings,
+        patch_embeddings: MultiModalPatchEmbeddings,
         modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
     ) -> None:
         """Test the forward pass of the patch embeddings."""
