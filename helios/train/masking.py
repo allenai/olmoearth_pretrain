@@ -338,13 +338,6 @@ class MaskingStrategy:
         encode_tokens = int(num_not_missing_tokens * encode_ratio)
         decode_tokens = int(num_not_missing_tokens * decode_ratio)
 
-        # I assume if you are using this function its to make sure
-        # we have at least one encode and one decode token.
-        if encode_tokens == 0:
-            raise ValueError(f"No encode tokens for input shape {mask.shape}")
-        if decode_tokens == 0:
-            raise ValueError(f"No encode tokens for input shape {mask.shape}")
-
         target_tokens = int(num_not_missing_tokens - (encode_tokens + decode_tokens))
         flat_mask_tokens = torch.cat(
             [
