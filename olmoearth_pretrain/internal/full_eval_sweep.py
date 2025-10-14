@@ -21,7 +21,7 @@ from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
 from olmoearth_pretrain.internal.experiment import SubCmd
 from olmoearth_pretrain.nn.flexihelios import PoolingType
 
-LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
+LP_LRs = [1e-4]  # [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 Normalization_MODES = ["dataset", "pre_trained"]
 pooling_types = [PoolingType.MEAN, PoolingType.MAX]
 
@@ -567,13 +567,6 @@ def _get_module_path(model: BaselineModelName | None) -> str:
     if model is None:
         raise ValueError("Model must be specified when module_path is not provided")
     return get_launch_script_path(model)
-
-
-def _get_size_args(args: argparse.Namespace) -> str:
-    """Get the size arguments."""
-    if args.size is not None:
-        return f" --model.size={args.size}"
-    return ""
 
 
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:

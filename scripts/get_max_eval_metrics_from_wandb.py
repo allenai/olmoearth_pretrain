@@ -10,7 +10,7 @@ import wandb
 
 from olmoearth_pretrain.evals.models import BaselineModelName
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
-from olmoearth_pretrain.train.callbacks.evaluator_callback import ProbeType
+from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
 WANDB_ENTITY = "eai-ai2"
 METRICS = EVAL_TASKS.keys()
@@ -162,16 +162,28 @@ def get_max_metrics_grouped(
                     "downstream_evaluator"
                 ]["tasks"][task_name]
 
-                if (
-                    not task_config.get(
+                eval_mode = task_config.get("eval_mode", None)
+                is_linear_probe_task = (
+                    EvalMode(eval_mode.lower()) == EvalMode.LINEAR_PROBE
+                    if eval_mode is not None
+                    else False
+                )
+                is_select_final_test_miou_based_on_epoch_of_max_val_miou = (
+                    task_config.get(
                         "select_final_test_miou_based_on_epoch_of_max_val_miou", False
                     )
-                    and task_config["probe_type"] == ProbeType.LINEAR
+                )
+                if (
+                    is_linear_probe_task
+                    and not is_select_final_test_miou_based_on_epoch_of_max_val_miou
                 ):
                     print(
-                        f"Skipping metric {key} for run {run.name} because it is not done with early stop linear probing"
+                        f"Skipping metric {key} for run {run.name} because it is a linear probe task but not done with early stop linear probing"
                     )
                     continue
+                print(
+                    f"Selecting metric {key} for run {run.name} because it matches criteria"
+                )
 
                 prev_max_val = metrics.get(key, float("-inf"))
                 metrics[key] = max(prev_max_val, value)
