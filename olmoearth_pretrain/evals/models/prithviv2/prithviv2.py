@@ -69,6 +69,7 @@ class PrithviV2(nn.Module):
     """Class containing the PrithviV2 model that can ingest MaskedOlmoEarthSample objects."""
 
     supported_modalities = [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]
+    supports_multiple_modalities_at_once = False
 
     def __init__(
         self,

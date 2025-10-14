@@ -66,6 +66,7 @@ class DINOv3(nn.Module):
         Modality.SENTINEL2_L2A.name,
         Modality.LANDSAT.name,
     ]
+    supports_multiple_modalities_at_once = False
 
     def __init__(
         self,

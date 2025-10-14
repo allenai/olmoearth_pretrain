@@ -62,6 +62,7 @@ class Clay(nn.Module):
         Modality.SENTINEL1.name: "sentinel-1-rtc",
         Modality.LANDSAT.name: "landsat-c2l1",
     }
+    supports_multiple_modalities_at_once = True
 
     def _load_model(self, size: str, path: str, metadata: str) -> nn.Module:
         if size == "large":
