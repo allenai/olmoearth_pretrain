@@ -335,7 +335,7 @@ class MaskingStrategy:
         if decode_ratio is None:
             decode_ratio = self.decode_ratio
 
-        encode_tokens = min(1, int(num_not_missing_tokens * encode_ratio))
+        encode_tokens = max(1, int(num_not_missing_tokens * encode_ratio))
         decode_tokens = int(num_not_missing_tokens * decode_ratio)
 
         # I assume if you are using this function its to make sure

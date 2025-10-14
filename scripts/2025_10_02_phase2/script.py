@@ -119,10 +119,23 @@ def build_train_module_config(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
         rank_microbatch_size=32,
         masking_config=MaskingConfig(
+            # strategy_config={
+            #     "type": "safe_random",
+            #     "encode_ratio": 0.5,
+            #     "decode_ratio": 0.5,
+            # }
             strategy_config={
-                "type": "safe_random",
+                "type": "random_fixed_modality",
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
+                "decoded_modalities": [
+                    "worldcover",
+                    "srtm",
+                    "openstreetmap_raster",
+                    "wri_canopy_height_map",
+                    "cdl",
+                    "worldcereal",
+                ],
             }
             # strategy_config={
             #     "type": "modality_cross_random",
