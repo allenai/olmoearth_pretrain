@@ -206,9 +206,9 @@ class PrithviV2(nn.Module):
                 f"Prithvi only supports one modality. Received {len(masked_olmoearth_sample.modalities)}: {masked_olmoearth_sample.modalities}"
             )
         modality = masked_olmoearth_sample.modalities[0]
-        if modality not in [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]:
+        if modality not in self.supported_modalities:
             raise RuntimeError(
-                f"Prithvi only supports Sentinel2_L2A or LANDSAT. Received {modality}"
+                f"Prithvi only supports {self.supported_modalities}. Received {modality}"
             )
 
         data = getattr(masked_olmoearth_sample, modality)
