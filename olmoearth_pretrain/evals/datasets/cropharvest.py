@@ -362,7 +362,7 @@ class CropHarvestDataset(Dataset):
             )
         ).long()
         days = torch.ones_like(months)
-        # years are not used. Currently (20250710) flexihelios only uses the months when
+        # TODO: years are not used. Currently (20250710) flexivit only uses the months when
         # computing the composite encodings
         years = torch.ones_like(months) * 2017
         timestamp = torch.stack([days, months, years], dim=-1)  # t, c=3
