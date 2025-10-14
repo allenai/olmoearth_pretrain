@@ -22,7 +22,7 @@ from olmoearth_pretrain.data.constants import BASE_GSD, Modality
 from olmoearth_pretrain.inference_benchmarking import constants
 from olmoearth_pretrain.inference_benchmarking.data_models import RunParams
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
-from olmoearth_pretrain.nn.flexihelios import (
+from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     EncoderConfig,
     PredictorConfig,

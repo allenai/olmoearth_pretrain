@@ -10,7 +10,7 @@ import torch
 from einops import rearrange
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.nn.flexihelios import (
+from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     MultiModalPatchEmbeddings,
     Predictor,

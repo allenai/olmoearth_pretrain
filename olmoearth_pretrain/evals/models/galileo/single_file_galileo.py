@@ -27,7 +27,7 @@ from torch.jit import Final
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.nn.flexihelios import PoolingType
+from olmoearth_pretrain.nn.flexi_vit import PoolingType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)

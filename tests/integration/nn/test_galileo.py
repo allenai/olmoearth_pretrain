@@ -5,7 +5,7 @@ import logging
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.nn.flexihelios import Encoder, Predictor
+from olmoearth_pretrain.nn.flexi_vit import Encoder, Predictor
 from olmoearth_pretrain.nn.galileo import Galileo
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 

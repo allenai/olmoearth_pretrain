@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.nn.flexihelios import (
+from olmoearth_pretrain.nn.flexi_vit import (
     get_modalities_to_process,
     return_modalities_from_dict,
 )

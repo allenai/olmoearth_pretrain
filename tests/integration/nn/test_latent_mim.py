@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.nn.flexihelios import Encoder, Predictor
+from olmoearth_pretrain.nn.flexi_vit import Encoder, Predictor
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import PatchDiscriminationLoss

@@ -27,7 +27,7 @@ from olmoearth_pretrain.internal.experiment import (
     OlmoEarthVisualizeConfig,
     main,
 )
-from olmoearth_pretrain.nn.flexihelios import PoolingType
+from olmoearth_pretrain.nn.flexi_vit import PoolingType
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,

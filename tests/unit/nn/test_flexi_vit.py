@@ -7,7 +7,7 @@ import torch
 from einops import repeat
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.nn.flexihelios import (
+from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     Encoder,
     EncoderConfig,

@@ -15,7 +15,7 @@ from olmoearth_pretrain.internal.experiment import (
     OlmoEarthVisualizeConfig,
     build_config,
 )
-from olmoearth_pretrain.nn.flexihelios import EncoderConfig, PredictorConfig
+from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig

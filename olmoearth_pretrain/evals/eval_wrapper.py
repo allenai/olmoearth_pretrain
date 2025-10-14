@@ -24,8 +24,8 @@ from olmoearth_pretrain.evals.models import (
     Terramind,
     Tessera,
 )
-from olmoearth_pretrain.nn.flexihelios import (
-    FlexiHeliosBase,
+from olmoearth_pretrain.nn.flexi_vit import (
+    FlexiVitBase,
     PoolingType,
     TokensAndMasks,
 )
@@ -405,7 +405,7 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     Returns:
         The appropriate eval wrapper for the given model.
     """
-    if isinstance(model, FlexiHeliosBase) or isinstance(model, STBase):
+    if isinstance(model, FlexiVitBase) or isinstance(model, STBase):
         logger.info("Using OlmoEarthEvalWrapper")
         return OlmoEarthEvalWrapper(model=model, **kwargs)
     elif isinstance(model, Panopticon):

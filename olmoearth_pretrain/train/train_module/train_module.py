@@ -34,7 +34,7 @@ from torch.optim import Optimizer
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.data.transform import TransformConfig
-from olmoearth_pretrain.nn.flexihelios import TokensAndMasks
+from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.train.loss import LossConfig
 
 logger = getLogger(__name__)

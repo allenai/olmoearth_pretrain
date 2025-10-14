@@ -12,7 +12,7 @@ from olmo_core.train.config import TrainerConfig
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample, collate_olmoearth_pretrain
 from olmoearth_pretrain.data.transform import TransformConfig
-from olmoearth_pretrain.nn.flexihelios import EncoderConfig, PredictorConfig
+from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig

@@ -15,7 +15,7 @@ from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.models.prithviv2.prithvi_mae import PrithviMAE
-from olmoearth_pretrain.nn.flexihelios import PoolingType
+from olmoearth_pretrain.nn.flexi_vit import PoolingType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 # for Prithvi, true values are HLS ["B02", "B03", "B04", "B05", "B06", "B07"]

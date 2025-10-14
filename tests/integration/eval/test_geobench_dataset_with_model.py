@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets import GeobenchDataset
 from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn
-from olmoearth_pretrain.nn.flexihelios import Encoder
+from olmoearth_pretrain.nn.flexi_vit import Encoder
 
 
 @pytest.fixture

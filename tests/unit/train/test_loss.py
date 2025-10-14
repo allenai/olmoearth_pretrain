@@ -4,7 +4,7 @@ import logging
 
 import torch
 
-from olmoearth_pretrain.nn.flexihelios import TokensAndMasks
+from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.train.loss import (
     AdjustedPatchDiscriminationLoss,
     CrossEntropyLoss,

@@ -19,7 +19,7 @@ from olmoearth_pretrain.evals.models import (
 )
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
 from olmoearth_pretrain.internal.experiment import SubCmd
-from olmoearth_pretrain.nn.flexihelios import PoolingType
+from olmoearth_pretrain.nn.flexi_vit import PoolingType
 
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 Normalization_MODES = ["dataset", "pre_trained"]

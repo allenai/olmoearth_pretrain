@@ -14,7 +14,7 @@ from olmo_core.config import Config
 from torch import Tensor
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.nn.flexihelios import PoolingType, TokensAndMasks
+from olmoearth_pretrain.nn.flexi_vit import PoolingType, TokensAndMasks
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
