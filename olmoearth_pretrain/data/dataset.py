@@ -357,7 +357,7 @@ class OlmoEarthSample(NamedTuple):
         current_length: int,
         missing_timesteps_masks: dict[str, Any] = {},
     ) -> "OlmoEarthSample":
-        """Subset a HelioSample using default rectangular cropping.
+        """Subset a OlmoEarthSample using default rectangular cropping.
 
         Args:
             patch_size: The patch size being applied to this sample.
@@ -430,7 +430,7 @@ class OlmoEarthSample(NamedTuple):
         current_length: int,
         missing_timesteps_masks: dict[str, Any] = {},
     ) -> "OlmoEarthSample":
-        """Subset a HelioSample using CutMix patch sampling.
+        """Subset a OlmoEarthSample using CutMix patch sampling.
 
         Args:
             patch_size: The patch size being applied to this sample.

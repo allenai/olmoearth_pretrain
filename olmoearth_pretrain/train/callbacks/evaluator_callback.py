@@ -27,7 +27,7 @@ from olmoearth_pretrain.evals.datasets.configs import (
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn
 from olmoearth_pretrain.evals.embeddings import get_embeddings
-from olmoearth_pretrain.evals.eval_wrapper import Satlas, get_eval_wrapper
+from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
 from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
@@ -373,9 +373,8 @@ class DownstreamEvaluatorCallback(Callback):
         if len(task_instance_used_modalities) == 0:
             task_instance_used_modalities = task_supported_modalities
 
-        if isinstance(self.trainer.train_module.model, Satlas):
+        if not self.trainer.train_module.model.supports_multiple_modalities_at_once:
             if len(task_instance_used_modalities) > 1:
-                # satlas can only ingest one modality at a time
                 return False
 
         does_model_support_all_task_instance_used_modalities = set(

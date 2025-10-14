@@ -39,6 +39,7 @@ class PrestoWrapper(nn.Module):
 
     supported_modalities = [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name]
     requires_timeseries: bool = True
+    supports_multiple_modalities_at_once = True
 
     def __init__(
         self,

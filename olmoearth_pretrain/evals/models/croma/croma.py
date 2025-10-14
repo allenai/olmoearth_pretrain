@@ -49,6 +49,7 @@ class Croma(nn.Module):
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
     ]
+    supports_multiple_modalities_at_once = True
 
     def __init__(
         self,

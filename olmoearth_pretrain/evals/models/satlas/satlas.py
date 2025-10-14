@@ -46,6 +46,7 @@ class Satlas(nn.Module):
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
     ]
+    supports_multiple_modalities_at_once = False
 
     modality_size_to_weights = {
         "base": {

@@ -41,6 +41,7 @@ PRITHVI_STD = [
 # resolution (30 m/pixel) and there may be other processing too.
 # HLS bands: Blue, Green, Red, Narrow NIR, SWIR, SWIR 2
 SENTINEL2_L2A_BAND_NAMES = ["B02", "B03", "B04", "B08", "B11", "B12"]
+LANDSAT_BAND_NAMES = ["B2", "B3", "B4", "B5", "B6", "B7"]
 
 
 class PrithviV2Models(StrEnum):
@@ -67,7 +68,8 @@ MODEL_TO_HF_INFO = {
 class PrithviV2(nn.Module):
     """Class containing the PrithviV2 model that can ingest MaskedOlmoEarthSample objects."""
 
-    supported_modalities = [Modality.SENTINEL2_L2A.name]
+    supported_modalities = [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]
+    supports_multiple_modalities_at_once = False
 
     def __init__(
         self,
@@ -136,6 +138,9 @@ class PrithviV2(nn.Module):
         self.helios_s2_to_prithvi = [
             Modality.SENTINEL2_L2A.band_order.index(b) for b in SENTINEL2_L2A_BAND_NAMES
         ]
+        self.helios_landsat_to_prithvi = [
+            Modality.LANDSAT.band_order.index(b) for b in LANDSAT_BAND_NAMES
+        ]
         self.use_pretrained_normalizer = use_pretrained_normalizer
 
     @staticmethod
@@ -162,9 +167,16 @@ class PrithviV2(nn.Module):
         original_height = data.shape[2]
         data_list = []
 
+        if modality == Modality.SENTINEL2_L2A.name:
+            band_mapping = self.helios_s2_to_prithvi
+        elif modality == Modality.LANDSAT.name:
+            band_mapping = self.helios_landsat_to_prithvi
+        else:
+            raise ValueError(f"Unexpected modality {modality}")
+
         # interpolate only accepts up to 4d tensors
         for i in range(t_dim):
-            data_i = data[:, :, :, i, self.helios_s2_to_prithvi]
+            data_i = data[:, :, :, i, band_mapping]
             if self.use_pretrained_normalizer:
                 data_i = self.normalize(data_i)
             data_i = rearrange(data_i, "b h w c -> b c h w")
@@ -194,9 +206,9 @@ class PrithviV2(nn.Module):
                 f"Prithvi only supports one modality. Received {len(masked_olmoearth_sample.modalities)}: {masked_olmoearth_sample.modalities}"
             )
         modality = masked_olmoearth_sample.modalities[0]
-        if modality != Modality.SENTINEL2_L2A.name:
+        if modality not in self.supported_modalities:
             raise RuntimeError(
-                f"Prithvi only supports Sentinel2_L2A. Received {modality}"
+                f"Prithvi only supports {self.supported_modalities}. Received {modality}"
             )
 
         data = getattr(masked_olmoearth_sample, modality)
