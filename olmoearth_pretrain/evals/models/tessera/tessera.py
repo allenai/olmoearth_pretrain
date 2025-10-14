@@ -82,6 +82,7 @@ class Tessera(nn.Module):
         Modality.SENTINEL1.name,
     ]
     requires_timeseries: bool = True
+    supports_multiple_modalities_at_once = True
 
     def __init__(
         self,

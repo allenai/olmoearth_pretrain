@@ -71,6 +71,7 @@ class CopernicusFM(torch.nn.Module):
     patch_size = 16
     input_mode = "spectral"
     supported_modalities = [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name]
+    supports_multiple_modalities_at_once = True
 
     def __init__(self, load_directory: str = DEFAULT_LOAD_DIRECTORY) -> None:
         """Initialize the Copernicus FM wrapper.

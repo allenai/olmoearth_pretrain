@@ -102,6 +102,7 @@ class Terramind(nn.Module):
         Modality.SENTINEL2.name: "S2L1C",
     }
     h_modalities = {v: k for k, v in tm_modalities.items()}
+    supports_multiple_modalities_at_once = True
 
     def _prepare_stats(self) -> None:
         self.stats: dict = {}

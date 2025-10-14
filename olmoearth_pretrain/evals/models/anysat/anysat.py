@@ -59,6 +59,8 @@ class AnySat(nn.Module):
         Modality.SENTINEL1.name,
     ]
 
+    supports_multiple_modalities_at_once = True
+
     def __init__(self) -> None:
         """AnySat wrapper."""
         super().__init__()
