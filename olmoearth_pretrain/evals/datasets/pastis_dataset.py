@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
-DATA_DIR = UPath("/weka/dfive-default/olmoearth_pretrain/evaluation/PASTIS-R")
+DATA_DIR = UPath("/weka/dfive-default/helios/evaluation/PASTIS-R")
 PASTIS_DIR = UPath("/weka/dfive-default/presto_eval_sets/pastis_r")
 PASTIS_DIR_ORIG = UPath("/weka/dfive-default/presto_eval_sets/pastis_r_origsize")
 PASTIS_DIR_PARTITION = UPath("/weka/dfive-default/presto_eval_sets/pastis")

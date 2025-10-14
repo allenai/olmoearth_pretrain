@@ -54,7 +54,7 @@ class Croma(nn.Module):
     def __init__(
         self,
         size: str = "base",
-        load_directory: str = "/weka/dfive-default/olmoearth_pretrain/models/croma",
+        load_directory: str = "/weka/dfive-default/helios/models/croma",
     ):
         """Initialize the Croma wrapper.
 
@@ -199,7 +199,7 @@ class CromaConfig(Config):
     """olmo_core style config for CromaWrapper."""
 
     size: str = "base"
-    load_directory: str = "/weka/dfive-default/olmoearth_pretrain/models/croma"
+    load_directory: str = "/weka/dfive-default/helios/models/croma"
 
     def build(self) -> Croma:
         """Build the Croma model."""

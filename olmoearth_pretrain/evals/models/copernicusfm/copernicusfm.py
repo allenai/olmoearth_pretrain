@@ -61,7 +61,7 @@ MODALITY_TO_WAVELENGTH_BANDWIDTHS: dict[str, dict[str, list]] = {
     },
 }
 
-DEFAULT_LOAD_DIRECTORY = "/weka/dfive-default/olmoearth_pretrain/models/copernicusfm"
+DEFAULT_LOAD_DIRECTORY = "/weka/dfive-default/helios/models/copernicusfm"
 
 
 class CopernicusFM(torch.nn.Module):

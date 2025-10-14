@@ -39,9 +39,9 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 logger = logging.getLogger(__name__)
 
 CSV_PATH = UPath(
-    "/weka/dfive-default/olmoearth_pretrain/evaluation/SICKLE/sickle_dataset_tabular.csv"
+    "/weka/dfive-default/helios/evaluation/SICKLE/sickle_dataset_tabular.csv"
 )
-DATA_DIR = UPath("/weka/dfive-default/olmoearth_pretrain/evaluation/SICKLE")
+DATA_DIR = UPath("/weka/dfive-default/helios/evaluation/SICKLE")
 SICKLE_DIR = UPath("/weka/dfive-default/presto_eval_sets/sickle")
 
 MONTH_TO_INT = {
