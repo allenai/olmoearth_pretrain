@@ -1,4 +1,4 @@
-"""Unit tests for the flexihelios module."""
+"""Unit tests for the flexi_vit module."""
 
 import logging
 
@@ -27,11 +27,11 @@ class TestCompositeEncodings:
     """Unit tests for the CompositeEncodings class."""
 
     @pytest.fixture
-    def flexi_helios_composite_encodings(
+    def composite_encodings(
         self,
     ) -> CompositeEncodings:
         """Create composite encoder fixture for testing."""
-        flexi_helios_composite_encodings = CompositeEncodings(
+        composite_encodings = CompositeEncodings(
             embedding_size=16,
             supported_modalities=[
                 Modality.SENTINEL2_L2A,
@@ -41,18 +41,18 @@ class TestCompositeEncodings:
             max_sequence_length=12,
             random_channel_embeddings=True,
         )
-        return flexi_helios_composite_encodings
+        return composite_encodings
 
     def test_apply_encodings_per_modality_latlon(
         self,
-        flexi_helios_composite_encodings: CompositeEncodings,
+        composite_encodings: CompositeEncodings,
     ) -> None:
         """Test applying encodings to different modalities."""
         B, D = 4, 16
         patch_size = 4
         input_res = 10
         latlon_tokens = torch.randn(B, 1, D)
-        ll_enc = flexi_helios_composite_encodings._apply_encodings_per_modality(
+        ll_enc = composite_encodings._apply_encodings_per_modality(
             "latlon", latlon_tokens, None, patch_size, input_res
         )
         assert not (ll_enc == 0).all()
@@ -60,7 +60,7 @@ class TestCompositeEncodings:
         assert latlon_tokens.shape == ll_enc.shape
 
     def test_apply_encodings_per_modality_sentinel2_l2a(
-        self, flexi_helios_composite_encodings: CompositeEncodings
+        self, composite_encodings: CompositeEncodings
     ) -> None:
         """Test applying encodings to different modalities."""
         B, H, W, T, C, D = 4, 4, 4, 3, 3, 16
@@ -71,21 +71,21 @@ class TestCompositeEncodings:
         )
         timestamps = repeat(timestamps, "... -> b ...", b=B)
         sentinel2_l2a_tokens = torch.zeros(B, H, W, T, C, D)
-        enc = flexi_helios_composite_encodings._apply_encodings_per_modality(
+        enc = composite_encodings._apply_encodings_per_modality(
             "sentinel2_l2a", sentinel2_l2a_tokens, timestamps, patch_size, input_res
         )
         assert not (enc == 0).all()
 
     def test_apply_encodings_per_modality_worldcover(
         self,
-        flexi_helios_composite_encodings: CompositeEncodings,
+        composite_encodings: CompositeEncodings,
     ) -> None:
         """Test applying encodings to different modalities."""
         B, H, W, C, D = 4, 4, 4, 1, 16
         patch_size = 4
         input_res = 10
         worldcover_tokens = torch.randn(B, H, W, C, D)
-        wc_enc = flexi_helios_composite_encodings._apply_encodings_per_modality(
+        wc_enc = composite_encodings._apply_encodings_per_modality(
             "worldcover", worldcover_tokens, None, patch_size, input_res
         )
         assert not (wc_enc == 0).all()
@@ -93,7 +93,7 @@ class TestCompositeEncodings:
         assert worldcover_tokens.shape == wc_enc.shape
 
     def test_apply_encodings_per_modality_grad(
-        self, flexi_helios_composite_encodings: CompositeEncodings
+        self, composite_encodings: CompositeEncodings
     ) -> None:
         """Test applying encodings to different modalities."""
         B, H, W, T, C, D = 4, 4, 4, 3, 3, 16
@@ -105,20 +105,16 @@ class TestCompositeEncodings:
         timestamps = repeat(timestamps, "... -> b ...", b=B)
         sentinel2_l2a_tokens = torch.zeros(B, H, W, T, C, D)
         assert (
-            flexi_helios_composite_encodings.per_modality_channel_embeddings[
-                "sentinel2_l2a"
-            ].grad
+            composite_encodings.per_modality_channel_embeddings["sentinel2_l2a"].grad
             is None
         )
-        enc = flexi_helios_composite_encodings._apply_encodings_per_modality(
+        enc = composite_encodings._apply_encodings_per_modality(
             "sentinel2_l2a", sentinel2_l2a_tokens, timestamps, patch_size, input_res
         )
         loss = enc.sum()
         loss.backward()
         assert (
-            flexi_helios_composite_encodings.per_modality_channel_embeddings[
-                "sentinel2_l2a"
-            ].grad
+            composite_encodings.per_modality_channel_embeddings["sentinel2_l2a"].grad
             is not None
         )
 
