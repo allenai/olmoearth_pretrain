@@ -1,9 +1,9 @@
 """Launch fine-tune evaluation sweeps for OlmoEarth Pretrain checkpoints.
 
 Example run:
-python helios/internal/full_eval_sweep_finetune.py --project_name 2025_10_06_phase1_finetune --module_path olmoearth_pretrain/evals/models/dinov3/dino_v3_launch.py --cluster ai2/jupiter --model_name dino_v3 --defaults_only
+python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --project_name 2025_10_06_phase1_finetune --module_path olmoearth_pretrain/evals/models/dinov3/dino_v3_launch.py --cluster ai2/jupiter --model_name dino_v3 --defaults_only
 
-python helios/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/helios/checkpoints/yawenzzzz/base_v6_default/step400000 --project_name 2025_10_06_phase1_finetune --module_path scripts/2025_09_10_phase1/script.py --cluster ai2/jupiter --defaults_only
+python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/helios/checkpoints/yawenzzzz/base_v6_default/step400000 --project_name 2025_10_06_phase1_finetune --module_path scripts/2025_09_10_phase1/script.py --cluster ai2/jupiter --defaults_only
 """
 
 import argparse
@@ -17,6 +17,7 @@ from typing import Any
 
 from olmoearth_pretrain.evals.models import get_launch_script_path
 from olmoearth_pretrain.internal.all_evals import FT_EVAL_TASKS
+from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
 from olmoearth_pretrain.internal.experiment import SubCmd
 
 logger = getLogger(__name__)
@@ -212,7 +213,7 @@ def _format_launch_command(
     parts = [
         f"TRAIN_SCRIPT_PATH={module_path}",
         launch_command,
-        "helios/internal/all_evals.py",
+        EVAL_LAUNCH_PATH,
         sub_command,
         run_name,
         cluster,
@@ -231,7 +232,7 @@ def _format_launch_command(
 
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     """Build the commands for the sweep."""
-    project_name = args.project_name or "helios_in_loop_evals"
+    project_name = args.project_name or EVAL_WANDB_PROJECT
     sub_command = _get_sub_command(args)
     base_run_name = _get_base_run_name(args)
     launch_command = "python3" if sub_command != SubCmd.train else "torchrun"

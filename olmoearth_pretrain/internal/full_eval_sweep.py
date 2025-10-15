@@ -18,6 +18,7 @@ from olmoearth_pretrain.evals.models import (
     get_launch_script_path,
 )
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
+from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
 from olmoearth_pretrain.internal.experiment import SubCmd
 from olmoearth_pretrain.nn.flexi_vit import PoolingType
 
@@ -26,8 +27,6 @@ Normalization_MODES = ["dataset", "pre_trained"]
 pooling_types = [PoolingType.MEAN, PoolingType.MAX]
 
 logger = getLogger(__name__)
-
-EVAL_LAUNCH_PATH = "olmoearth_pretrain/internal/all_evals.py"
 
 
 def create_linear_probe_arg(task_name: str, field_name: str) -> str:
@@ -62,7 +61,7 @@ dataset_args = " ".join(
     ]
 )
 
-helios_args = " ".join(
+olmoearth_args = " ".join(
     [""]
     + [
         f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_stats_from_pretrained=True"
@@ -436,7 +435,7 @@ def _get_normalization_args(model: BaselineModelName | None, norm_mode: str) -> 
     if norm_mode == "dataset":
         return dataset_args
     if norm_mode == "pre_trained":
-        return helios_args
+        return olmoearth_args
     return ""
 
 
@@ -451,7 +450,7 @@ def _get_model_size_args(model: BaselineModelName | None, size: str | None) -> s
 def _get_load_checkpoints_args(model: BaselineModelName | None) -> str:
     """Get the no checkpoints arguments."""
     if model is None:
-        # Allow load model for helios checkpoints
+        # Allow load model for olmoearth checkpoints
         return " --trainer.no_checkpoints=False"
     return " --trainer.no_checkpoints=True"
 
@@ -578,7 +577,7 @@ def _get_size_args(args: argparse.Namespace) -> str:
 
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     """Build the commands for the sweep."""
-    project_name = args.project_name or "helios_in_loop_evals"
+    project_name = args.project_name or EVAL_WANDB_PROJECT
     extra = " " + " ".join(extra_cli) if extra_cli else ""
 
     sub_command = _get_sub_command(args)
