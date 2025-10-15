@@ -639,7 +639,9 @@ class MAELoss(Loss):
         self.weight = weight
 
     # data: [B, H, W, T, C]
-    def _flatten_helios_data(self, data: TokensAndMasks) -> tuple[Tensor, Tensor]:
+    def _flatten_spatiotemporal_data(
+        self, data: TokensAndMasks
+    ) -> tuple[Tensor, Tensor]:
         masks = []
         datas = []
         for modality in data.modalities:
@@ -674,7 +676,7 @@ class MAELoss(Loss):
         Returns:
             The computed loss value.
         """
-        data, masks = self._flatten_helios_data(predictions)
+        data, masks = self._flatten_spatiotemporal_data(predictions)
         valid_dict = {}
         for modality in predictions.modalities:
             if getattr(predictions, modality) is not None:
@@ -682,7 +684,7 @@ class MAELoss(Loss):
                 valid_dict[modality] = getattr(targets, modality)
                 valid_dict[masked_name] = getattr(targets, masked_name)
         valid_targets = TokensAndMasks(**valid_dict)
-        labels, label_masks = self._flatten_helios_data(valid_targets)
+        labels, label_masks = self._flatten_spatiotemporal_data(valid_targets)
         if self.only_decode:
             decode = label_masks == MaskValue.DECODER.value
         else:
