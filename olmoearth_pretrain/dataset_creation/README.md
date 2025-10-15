@@ -42,7 +42,7 @@ parallelize the materialize commands.
 For Sentinel-1:
 
     # Set DATASET_PATH to the location of your rslearn dataset from the previous step.
-    export DATASET_PATH=/weka/dfive-default/olmoearth_pretrain/dataset_creation/X/
+    export DATASET_PATH=/weka/dfive-default/helios/dataset_creation/X/
     cp data/rslearn_dataset_configs/config_sentinel1.json $DATASET_PATH/config.json
     rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job --retry-max-attempts 8 --retry-backoff-seconds 60 --jobs-per-process 16
     rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job --retry-max-attempts 8 --retry-backoff-seconds 60
@@ -133,7 +133,7 @@ Convert Data
 
 Now we convert the data to OlmoEarth Pretrain format.
 
-    export HELIOS_PATH=/weka/dfive-default/olmoearth_pretrain/dataset/X/
+    export HELIOS_PATH=/weka/dfive-default/helios/dataset/X/
     python -m helios.dataset_creation.rslearn_to_helios.naip --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.naip_10 --ds_path $DATASET_PATH --helios_path $HELIOS_PATH
     python -m helios.dataset_creation.rslearn_to_helios.openstreetmap --ds_path $DATASET_PATH --helios_path $HELIOS_PATH

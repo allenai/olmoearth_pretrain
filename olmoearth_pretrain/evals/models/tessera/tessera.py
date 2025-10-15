@@ -235,7 +235,9 @@ class TesseraConfig(Config):
     def build(self) -> "Tessera":
         """Build the Tessera model from this config."""
         if self.checkpoint_path is None:
-            default_weka_path = "/weka/dfive-default/olmoearth_pretrain/models/tessera/tessera_checkpoint.pt"
+            default_weka_path = (
+                "/weka/dfive-default/helios/models/tessera/tessera_checkpoint.pt"
+            )
             # if the file exists use it otherwise give instructions to download it and ovveride to point to the local path
             if os.path.exists(default_weka_path):
                 logger.info(

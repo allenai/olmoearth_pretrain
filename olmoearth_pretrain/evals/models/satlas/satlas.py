@@ -203,7 +203,7 @@ class SatlasConfig(Config):
     """olmo_core style config for Satlas Wrapper."""
 
     size: str = "base"
-    load_directory: str = "/weka/dfive-default/olmoearth_pretrain/models/satlas"
+    load_directory: str = "/weka/dfive-default/helios/models/satlas"
     use_pretrained_normalizer: bool = True
 
     def build(self) -> Satlas:

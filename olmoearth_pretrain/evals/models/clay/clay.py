@@ -92,7 +92,7 @@ class Clay(nn.Module):
     def __init__(
         self,
         size: str = "large",
-        load_path: str = "/weka/dfive-default/olmoearth_pretrain/models/clay/clay-v1.5.ckpt",
+        load_path: str = "/weka/dfive-default/helios/models/clay/clay-v1.5.ckpt",
         metadata_path: str = "olmoearth_pretrain/evals/models/clay/metadata.yaml",
         use_pretrained_normalizer: bool = True,
     ):
@@ -260,7 +260,7 @@ class ClayConfig(Config):
     """olmo_core style config for ClayWrapper."""
 
     size: str = "large"
-    load_path: str = "/weka/dfive-default/olmoearth_pretrain/models/clay/clay-v1.5.ckpt"
+    load_path: str = "/weka/dfive-default/helios/models/clay/clay-v1.5.ckpt"
     metadata_path: str = "olmoearth_pretrain/evals/models/clay/metadata.yaml"
     use_pretrained_normalizer: bool = True
 

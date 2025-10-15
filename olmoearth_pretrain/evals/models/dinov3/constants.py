@@ -18,11 +18,11 @@ class DinoV3Models(StrEnum):
 # if non Ai2, user set the DINOV3_REPO_DIR and DINOV3_CHECKPOINT_DIR environment variables
 REPO_DIR = os.environ.get(
     "DINOV3_REPO_DIR",
-    "/weka/dfive-default/olmoearth_pretrain/models/dinov3/repo/dinov3",
+    "/weka/dfive-default/helios/models/dinov3/repo/dinov3",
 )
 CHECKPOINT_DIR = os.environ.get(
     "DINOV3_CHECKPOINT_DIR",
-    "/weka/dfive-default/olmoearth_pretrain/models/dinov3/checkpoints",
+    "/weka/dfive-default/helios/models/dinov3/checkpoints",
 )
 MODEL_TO_TORCHHUB_ID_AND_WEIGHTS_URL = {
     DinoV3Models.LARGE_SATELLITE: (

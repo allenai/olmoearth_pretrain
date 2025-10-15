@@ -3,7 +3,7 @@
 Example run:
 python helios/internal/full_eval_sweep_finetune.py --project_name 2025_10_06_phase1_finetune --module_path olmoearth_pretrain/evals/models/dinov3/dino_v3_launch.py --cluster ai2/jupiter --model_name dino_v3 --defaults_only
 
-python helios/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/olmoearth_pretrain/checkpoints/yawenzzzz/base_v6_default/step400000 --project_name 2025_10_06_phase1_finetune --module_path scripts/2025_09_10_phase1/script.py --cluster ai2/jupiter --defaults_only
+python helios/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/helios/checkpoints/yawenzzzz/base_v6_default/step400000 --project_name 2025_10_06_phase1_finetune --module_path scripts/2025_09_10_phase1/script.py --cluster ai2/jupiter --defaults_only
 """
 
 import argparse

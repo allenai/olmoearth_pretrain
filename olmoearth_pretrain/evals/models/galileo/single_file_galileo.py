@@ -1731,7 +1731,7 @@ class GalileoWrapper(nn.Module):
         ]
         self.add_layernorm_on_exit = add_layernorm_on_exit
         if use_pretrained_normalizer:
-            self.normalizer = Normalizer(std=True, normalizing_dicts=load_normalization_values(Path("/weka/dfive-default/henryh/helios/helios/olmoearth_pretrain/evals/models/galileo/normalization_config.json")))
+            self.normalizer = Normalizer(std=True, normalizing_dicts=load_normalization_values(Path(__file__).resolve().parent / "normalization_config.json"))
         else:
             self.normalizer = None
 

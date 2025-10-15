@@ -43,7 +43,7 @@ class PrestoWrapper(nn.Module):
 
     def __init__(
         self,
-        load_directory: str = "/weka/dfive-default/olmoearth_pretrain/models/presto",
+        load_directory: str = "/weka/dfive-default/helios/models/presto",
         use_pretrained_normalizer: bool = True,
     ):
         """Initialize the Presto wrapper.
@@ -205,7 +205,7 @@ class PrestoWrapper(nn.Module):
 class PrestoConfig(Config):
     """olmo_core style config for PrestoWrapper."""
 
-    load_directory: str = "/weka/dfive-default/olmoearth_pretrain/models/presto"
+    load_directory: str = "/weka/dfive-default/helios/models/presto"
     use_pretrained_normalizer: bool = True
 
     def build(self) -> PrestoWrapper:
