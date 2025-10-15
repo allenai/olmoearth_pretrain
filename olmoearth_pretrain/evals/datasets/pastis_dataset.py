@@ -535,7 +535,7 @@ class PASTISRDataset(Dataset):
         if not sample_dict:
             raise ValueError(f"No valid modalities found in: {self.input_modalities}")
 
-        masked_sample = MaskedOlmoEarthSample.from_heliossample(
+        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
             OlmoEarthSample(**sample_dict)
         )
 

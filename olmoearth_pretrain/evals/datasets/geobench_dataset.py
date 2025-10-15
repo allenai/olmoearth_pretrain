@@ -301,7 +301,7 @@ class GeobenchDataset(Dataset):
             sample_dict["sentinel2_l2a"] = torch.tensor(s2).float()
 
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
-        masked_sample = MaskedOlmoEarthSample.from_heliossample(
+        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
             OlmoEarthSample(**sample_dict, timestamps=timestamp.long())
         )
         return masked_sample, target

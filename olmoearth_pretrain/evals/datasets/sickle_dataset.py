@@ -719,7 +719,7 @@ class SICKLEDataset(Dataset):
         if not sample_dict:
             raise ValueError(f"No modalities requested in {self.input_modalities}")
 
-        masked_sample = MaskedOlmoEarthSample.from_heliossample(
+        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
             OlmoEarthSample(**sample_dict)
         )
 

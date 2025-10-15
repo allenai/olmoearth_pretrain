@@ -185,7 +185,7 @@ class BreizhCropsDataset(Dataset):
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
 
-        masked_sample = MaskedOlmoEarthSample.from_heliossample(
+        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
             OlmoEarthSample(
                 sentinel2_l2a=torch.tensor(image).float(), timestamps=timestamp.long()
             )

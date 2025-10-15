@@ -383,4 +383,6 @@ class CropHarvestDataset(Dataset):
             input_dict[Modality.SRTM.name] = torch.tensor(srtm).float()
         if Modality.LATLON.name in self.input_modalities:
             input_dict[Modality.LATLON.name] = torch.tensor(latlon).float()
-        return MaskedOlmoEarthSample.from_heliossample(OlmoEarthSample(**input_dict)), y
+        return MaskedOlmoEarthSample.from_olmoearthsample(
+            OlmoEarthSample(**input_dict)
+        ), y

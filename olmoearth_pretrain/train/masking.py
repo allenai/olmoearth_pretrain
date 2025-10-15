@@ -101,7 +101,7 @@ class MaskedOlmoEarthSample(NamedTuple):
         return return_dict
 
     def unmask(self) -> "MaskedOlmoEarthSample":
-        """Return an unmasked MaskedHelioSample.
+        """Return an unmasked MaskedOlmoEarthSample.
 
         All mask values are MaskValue.ONLINE_ENCODER except for MaskValue.MISSING,
         which remain MISSING.
@@ -141,11 +141,11 @@ class MaskedOlmoEarthSample(NamedTuple):
 
     # TODO: add unit test because this does modlaity based checking
     @classmethod
-    def from_heliossample(
+    def from_olmoearthsample(
         cls,
         sample: OlmoEarthSample,
     ) -> "MaskedOlmoEarthSample":
-        """Transforms a HelioSample into a MaskedOlmoEarthSample.
+        """Transforms a OlmoEarthSample into a MaskedOlmoEarthSample.
 
         This function assumes modalities are uniformly missing.
         """

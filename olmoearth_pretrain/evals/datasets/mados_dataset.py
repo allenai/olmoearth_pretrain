@@ -314,7 +314,7 @@ class MADOSDataset(Dataset):
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
 
         timestamp = repeat(torch.tensor(self.default_day_month_year), "d -> t d", t=1)
-        masked_sample = MaskedOlmoEarthSample.from_heliossample(
+        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(
             OlmoEarthSample(
                 sentinel2_l2a=torch.tensor(image).float(), timestamps=timestamp.long()
             )

@@ -322,5 +322,5 @@ class RslearnToOlmoEarthDataset(Dataset):
         sample_dict["timestamps"] = self.timestamps
 
         helios_sample = OlmoEarthSample(**sample_dict)
-        masked_sample = MaskedOlmoEarthSample.from_heliossample(helios_sample)
+        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(helios_sample)
         return masked_sample, target["class"].long()
