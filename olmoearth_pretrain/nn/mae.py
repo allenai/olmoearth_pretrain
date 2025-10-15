@@ -18,6 +18,8 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 class MAE(nn.Module, DistributedMixins):
     """Masked Auto-Encoder Module."""
 
+    supports_multiple_modalities_at_once = True
+
     def __init__(
         self,
         encoder: nn.Module,

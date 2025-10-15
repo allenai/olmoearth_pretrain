@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 class LatentMIM(nn.Module, DistributedMixins):
     """Latent MIM Style."""
 
+    supports_multiple_modalities_at_once = True
+
     def __init__(
         self,
         encoder: nn.Module,

@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 class Galileo(nn.Module, DistributedMixins):
     """Galileo Style."""
 
+    supports_multiple_modalities_at_once = True
+
     def __init__(
         self,
         encoder: torch.nn.Module,
