@@ -8,7 +8,10 @@ import numpy as np
 import pandas as pd
 import wandb
 
-from olmoearth_pretrain.evals.models import BaselineModelName
+from olmoearth_pretrain.evals.models import (
+    MODELS_WITH_MULTIPLE_SIZES,
+    BaselineModelName,
+)
 from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
 from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
@@ -109,6 +112,11 @@ def group_runs_by_baseline_model_and_size(
     for run in api.runs(wandb_path, lazy=False):
         print(f"Processing run {run.name} ({run.id})")
         model_name, size = _find_model_name_and_size(run)
+        if model_name in MODELS_WITH_MULTIPLE_SIZES and size is None:
+            print(
+                f"Skipping run {run.name} ({run.id}) because it has no size specified and is a model with multiple sizes"
+            )
+            continue
         group_name = _get_group_name(model_name, size)
         grouped_runs[group_name].append(run)
         print(f"Found run {run.name} ({run.id}) -> group: {group_name}")
