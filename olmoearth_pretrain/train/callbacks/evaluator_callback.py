@@ -217,7 +217,7 @@ class DownstreamEvaluator:
             logger.info(
                 f"Using patch size {model.patch_size} for {self.dataset} with set patch size {self.patch_size}"
             )
-            # For non-helios models we override the task patch size with the model patch size
+            # For non-olmoearth models we override the task patch size with the model patch size
             self.patch_size = model.patch_size
         else:
             logger.info(
