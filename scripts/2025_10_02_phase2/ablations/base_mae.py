@@ -21,34 +21,34 @@ from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
-from helios.data.concat import HeliosConcatDatasetConfig
-from helios.data.constants import Modality
-from helios.data.dataloader import HeliosDataLoaderConfig
-from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.common import build_common_components
-from helios.internal.experiment import (
+from olmoearth_pretrain.data.concat import OlmoEarthConcatDatasetConfig
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
+from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
+from olmoearth_pretrain.internal.common import build_common_components
+from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
-    HeliosVisualizeConfig,
+    OlmoEarthVisualizeConfig,
     SubCmd,
     main,
 )
-from helios.internal.utils import MODEL_SIZE_ARGS
-from helios.nn.flexihelios import (
+from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
+from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
     PoolingType,
     PredictorConfig,
     ReconstructorConfig,
 )
-from helios.nn.mae import MAEConfig
-from helios.train.callbacks import (
+from olmoearth_pretrain.nn.mae import MAEConfig
+from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
-    HeliosSpeedMonitorCallback,
-    HeliosWandBCallback,
+    OlmoEarthSpeedMonitorCallback,
+    OlmoEarthWandBCallback,
 )
-from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
-from helios.train.loss import LossConfig
-from helios.train.masking import MaskingConfig
-from helios.train.train_module.mae import (
+from olmoearth_pretrain.train.callbacks.evaluator_callback import DownstreamTaskConfig
+from olmoearth_pretrain.train.loss import LossConfig
+from olmoearth_pretrain.train.masking import MaskingConfig
+from olmoearth_pretrain.train.train_module.mae import (
     MAETrainModuleConfig,
 )
 
@@ -155,11 +155,11 @@ def build_train_module_config(
     )
 
 
-def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
+def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
     """Build the dataloader config for an experiment."""
     # things should be set during building
 
-    return HeliosDataLoaderConfig(
+    return OlmoEarthDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
         token_budget=2250,
@@ -172,15 +172,15 @@ def build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:
     )
 
 
-def build_dataset_config(common: CommonComponents) -> HeliosDatasetConfig:
+def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     """Build the dataset config for an experiment."""
     dataset_configs = [
-        HeliosDatasetConfig(
+        OlmoEarthDatasetConfig(
             h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
             training_modalities=common.training_modalities,
         ),
     ]
-    return HeliosConcatDatasetConfig(dataset_configs=dataset_configs)
+    return OlmoEarthConcatDatasetConfig(dataset_configs=dataset_configs)
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
@@ -194,7 +194,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
-    wandb_callback = HeliosWandBCallback(
+    wandb_callback = OlmoEarthWandBCallback(
         name=common.run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
@@ -294,7 +294,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             checkpointer=checkpointer_config,
         )
         .with_callback("wandb", wandb_callback)
-        .with_callback("speed_monitor", HeliosSpeedMonitorCallback())
+        .with_callback("speed_monitor", OlmoEarthSpeedMonitorCallback())
         .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback(
@@ -316,9 +316,9 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     return trainer_config
 
 
-def build_visualize_config(common: CommonComponents) -> HeliosVisualizeConfig:
+def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig:
     """Build the visualize config for an experiment."""
-    return HeliosVisualizeConfig(
+    return OlmoEarthVisualizeConfig(
         num_samples=None,
         output_dir=str(UPath(common.save_folder) / "visualizations"),
         std_multiplier=2.0,

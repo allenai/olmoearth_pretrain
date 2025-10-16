@@ -11,13 +11,13 @@ from script import (
     build_visualize_config,
 )
 
-from helios.internal.experiment import CommonComponents, main
-from helios.internal.utils import MODEL_SIZE_ARGS
-from helios.nn.flexihelios import (
+from olmoearth_pretrain.internal.experiment import CommonComponents, main
+from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
+from olmoearth_pretrain.nn.flexihelios import (
     EncoderConfig,
     PredictorConfig,
 )
-from helios.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 
 logger = logging.getLogger(__name__)
 
