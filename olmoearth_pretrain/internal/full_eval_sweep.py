@@ -137,7 +137,6 @@ def get_tessera_args(pretrained_normalizer: bool = True) -> str:
     """Get the tessera arguments."""
     tessera_args = dataset_args
     if pretrained_normalizer:
-        # To use galileo pretrained normalizer we want to leave normalization to the galileo wrapper
         tessera_args = dataset_args
         tessera_args += " " + " ".join(
             [
