@@ -285,6 +285,9 @@ class DownstreamEvaluatorCallback(Callback):
         """Get the supported modalities for the model."""
         if hasattr(self.trainer.train_module.model, "supported_modalities"):
             return self.trainer.train_module.model.supported_modalities
+        elif hasattr(self.trainer.train_module.model, "encoder"):
+            if hasattr(self.trainer.train_module.model.encoder, "supported_modalities"):
+                return self.trainer.train_module.model.encoder.supported_modalities
         return Modality.names()
 
     def _check_input_requirements(self, evaluator: DownstreamEvaluator) -> bool:
