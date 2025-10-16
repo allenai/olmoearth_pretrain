@@ -266,6 +266,12 @@ def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     else:
         # IF we use dataset stats we want to turn off the pretrained normalizer
         galileo_args += " " + "--model.use_pretrained_normalizer=False"
+        galileo_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_NO_CLIP_2_STD"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
     galileo_args += " " + " ".join(
         [
             f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=8"
