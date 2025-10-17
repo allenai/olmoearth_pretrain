@@ -422,18 +422,21 @@ def _get_model_specific_args(model: BaselineModelName | None) -> str:
 
     return model_args_map[model]()  # type: ignore
 
+
 def get_olmoearth_args(pretrained_normalizer: bool = True) -> str:
     """Get the olmoearth arguments."""
     if pretrained_normalizer:
         return helios_args
     else:
-        dataset_args += " " + " ".join(
+        olmoearth_args = dataset_args
+        olmoearth_args += " " + " ".join(
             [
                 f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_NO_CLIP_2_STD"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
-        return dataset_args
+        return olmoearth_args
+
 
 # TODO: Explain why some models are not in the map
 def _get_normalization_args(model: BaselineModelName | None, norm_mode: str) -> str:
