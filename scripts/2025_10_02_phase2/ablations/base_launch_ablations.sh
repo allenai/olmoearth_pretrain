@@ -1,7 +1,7 @@
 # no contrastive loss ablation
 python scripts/2025_10_02_phase2/base.py launch phase2.0_base_no_contrastive ai2/ceres-cirrascale  --train_module.contrastive_config.loss_config.weight=0.0 --launch.clusters='[ai2/jupiter-cirrascale-2,ai2/ceres-cirrascale]' --launch.priority=high --trainer.callbacks.wandb.project=2025_10_08_phase2_ablations
 # random masking
-python scripts/2025_10_02_phase2/base.py launch phase2.0_base_random_masking ai2/ceres-cirrascale  --train_module.masking_config.strategy_config="{'type': 'random_fixed_modality', 'encode_ratio': 0.5,  'decode_ratio': 0.5,  'decoded_modalities': ['worldcover', 'srtm', 'openstreetmap_raster', 'wri_canopy_height_map', 'cdl', 'worldcereal']}" --launch.clusters='[ai2/jupiter-cirrascale-2,ai2/ceres-cirrascale]' --launch.priority=high --trainer.callbacks.wandb.project=2025_10_08_phase2_ablations
+python scripts/2025_10_02_phase2/ablations/base_random_masking.py launch phase2.0_base_random_masking ai2/ceres-cirrascale --launch.clusters='[ai2/jupiter-cirrascale-2,ai2/ceres-cirrascale]' --launch.priority=high --trainer.callbacks.wandb.project=2025_10_08_phase2_ablations
 # MAE
 python scripts/2025_10_02_phase2/ablations/base_mae.py launch phase2.0_base_mae ai2/ceres-cirrascale  --launch.clusters='[ai2/jupiter-cirrascale-2,ai2/ceres-cirrascale]' --launch.priority=normal --trainer.callbacks.wandb.project=2025_10_08_phase2_ablations
 # random init the target projections
