@@ -27,6 +27,7 @@ RUN pip install \
 RUN pip install --no-cache-dir einops rasterio
 
 WORKDIR /app
+COPY olmoearth_pretrain /app/olmoearth_pretrain
 COPY helios /app/helios
 
 # Download model weights
@@ -37,4 +38,4 @@ COPY helios /app/helios
 COPY scripts/inference /app
 
 EXPOSE 8080
-CMD ["python", "/app/server.py"]
+CMD ["python", "/app/server2.py"]

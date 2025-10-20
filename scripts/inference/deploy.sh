@@ -1,9 +1,9 @@
-# Script to deploy Helios server to Vertex AI
-# Has to be run from helios root directory: sh scripts/inference/deploy.sh
+# Script to deploy olmoearth server to Vertex AI
+# Has to be run from olmoearth_pretrain root directory: sh scripts/inference/deploy.sh
 set -e
 PROJECT="ai2-ivan"
 REGION="us-central1"
-TAG="$REGION-docker.pkg.dev/$PROJECT/helios/helios"
+TAG="$REGION-docker.pkg.dev/$PROJECT/olmoearth/olmoearth"
 IN_BUCKET="ai2-ivan-helios-input-data"
 STEPS="5"
 
@@ -19,8 +19,8 @@ else
 fi
 
 echo "2/$STEPS: Creating artifact registry project if it doesn't exist."
-if [ -z "$(gcloud artifacts repositories list --format='get(name)' --filter "helios")" ]; then
-        gcloud artifacts repositories create "helios" \
+if [ -z "$(gcloud artifacts repositories list --format='get(name)' --filter "olmoearth")" ]; then
+        gcloud artifacts repositories create "olmoearth" \
         --location "$REGION" \
         --repository-format docker
 fi
@@ -32,7 +32,7 @@ echo "4/$STEPS: Pushing docker container to cloud."
 docker push "$TAG"
 
 echo "5/$STEPS Deploying inference docker image to Google Cloud Run"
-gcloud run deploy "helios" --image "$TAG":latest \
+gcloud run deploy "olmoearth" --image "$TAG":latest \
         --cpu=4 \
         --memory=8Gi \
         --platform=managed \
