@@ -128,6 +128,11 @@ class LatentMIMConfig(Config):
     encoder_config: Config
     decoder_config: Config
     reconstructor_config: Config | None = None
+    # this is only introduced in this temporary commit
+    # so that the ablations can be run. If we just remove
+    # this key from the ablation configs then the models
+    # load as normal.
+    reinitialize_targets: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
