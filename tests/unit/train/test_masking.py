@@ -1,6 +1,7 @@
 """Test masking."""
 
 import logging
+import random
 
 import torch
 
@@ -1156,6 +1157,140 @@ def test_modality_cross_random_masking() -> None:
     # ensure none of the worldcover mask is encoded
     assert (masked_sample.worldcover_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0  # type: ignore
     assert (masked_sample.sentinel2_l2a_mask == expected_sentinel2_l2a_mask).all()
+
+
+def test_modality_cross_random_masking_has_online_encoder_and_decoder_tokens_many_missing() -> (
+    None
+):
+    """Test modality cross random masking."""
+    masking_strategy = ModalityCrossRandomMaskingStrategy(
+        encode_ratio=0.5,
+        decode_ratio=0.5,
+        allow_encoding_decoding_same_bandset=True,
+    )
+
+    for _ in range(10):
+        h_w = random.choice([1, 2, 3, 4, 5, 6])
+        t = random.choice([1, 2, 3])
+        b = 100
+        patch_size = h_w
+
+        days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
+        months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
+        years = torch.randint(2018, 2020, (b, 1, t), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
+        batch = OlmoEarthSample(
+            sentinel2_l2a=torch.ones(
+                (b, h_w, h_w, t, Modality.SENTINEL2_L2A.num_bands)
+            ),
+            timestamps=timestamps,
+        )
+
+        masked_sample = masking_strategy.apply_mask(batch, patch_size=patch_size)
+        logger.info(f"masked_sample: {masked_sample.sentinel2_l2a_mask}")
+        num_encoded = torch.sum(
+            masked_sample.sentinel2_l2a_mask == MaskValue.ONLINE_ENCODER.value,
+            dim=(1, 2, 3, 4),
+        )
+        num_decoded = torch.sum(
+            masked_sample.sentinel2_l2a_mask == MaskValue.DECODER.value,
+            dim=(1, 2, 3, 4),
+        )
+        assert (num_encoded > 0).all()
+        assert (num_decoded > 0).all()
+
+
+def test_mask_when_most_samples_are_missing() -> None:
+    """Test the following failure case no longer occurs.
+
+    https://beaker.allen.ai/orgs/ai2/workspaces/earth-systems/work/01K796J483408TEV6S5THV7J6M
+    """
+    masking_strategy = ModalityCrossRandomMaskingStrategy(
+        encode_ratio=0.5,
+        decode_ratio=0.5,
+        allow_encoding_decoding_same_bandset=True,
+    )
+
+    # this is a real example which triggered the following failure in the
+    # beaker job linked above
+    mask = torch.tensor(
+        [
+            [
+                [
+                    [
+                        [2, 2, 2],
+                        [2, 2, 2],
+                        [3, 3, 3],
+                        [3, 3, 3],
+                        [3, 3, 3],
+                        [3, 3, 3],
+                        [3, 3, 3],
+                        [3, 3, 3],
+                        [3, 3, 3],
+                        [3, 3, 3],
+                        [3, 3, 3],
+                        [3, 3, 3],
+                    ]
+                ]
+            ]
+        ]
+    )
+    filled_mask = masking_strategy._random_fill_unmasked(
+        mask, modality=Modality.SENTINEL2_L2A, patch_size_at_16=1
+    )
+    num_encoded = torch.sum(
+        filled_mask == MaskValue.ONLINE_ENCODER.value,
+        dim=(1, 2, 3, 4),
+    )
+    num_decoded = torch.sum(
+        filled_mask == MaskValue.DECODER.value,
+        dim=(1, 2, 3, 4),
+    )
+    assert (num_encoded > 0).all()
+    assert (num_decoded > 0).all()
+    # also, check the original missing values are still missing
+    assert (
+        filled_mask[mask == MaskValue.MISSING.value] == MaskValue.MISSING.value
+    ).all()
+
+
+def test_modality_cross_random_masking_has_online_encoder_and_decoder_tokens() -> None:
+    """Test modality cross random masking."""
+    masking_strategy = ModalityCrossRandomMaskingStrategy(
+        encode_ratio=0.5,
+        decode_ratio=0.5,
+        allow_encoding_decoding_same_bandset=True,
+    )
+
+    for _ in range(10):
+        h_w = random.choice([1, 2, 3, 4, 5, 6])
+        t = random.choice([1, 2, 3])
+        b = 100
+        patch_size = h_w
+
+        days = torch.randint(1, 31, (b, 1, t), dtype=torch.long)
+        months = torch.randint(1, 13, (b, 1, t), dtype=torch.long)
+        years = torch.randint(2018, 2020, (b, 1, t), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=1)  # Shape: (B, 3, T)
+        batch = OlmoEarthSample(
+            sentinel2_l2a=torch.ones(
+                (b, h_w, h_w, t, Modality.SENTINEL2_L2A.num_bands)
+            ),
+            timestamps=timestamps,
+        )
+
+        masked_sample = masking_strategy.apply_mask(batch, patch_size=patch_size)
+        logger.info(f"masked_sample: {masked_sample.sentinel2_l2a_mask}")
+        num_encoded = torch.sum(
+            masked_sample.sentinel2_l2a_mask == MaskValue.ONLINE_ENCODER.value,
+            dim=(1, 2, 3, 4),
+        )
+        num_decoded = torch.sum(
+            masked_sample.sentinel2_l2a_mask == MaskValue.DECODER.value,
+            dim=(1, 2, 3, 4),
+        )
+        assert (num_encoded > 0).all()
+        assert (num_decoded > 0).all()
 
 
 class TestModalityCrossMaskingStrategy:

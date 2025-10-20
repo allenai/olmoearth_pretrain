@@ -52,6 +52,7 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
+    reinit_targets: bool = False
 
     def build(
         self,
@@ -101,6 +102,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         regularizer_config: LossConfig | None = None,
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
+        reinit_targets: bool = False,
     ):
         """Initialize the training module.
 
@@ -127,6 +129,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             regularizer_config: An optional regularizer configuration for the model.
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
+            reinit_targets: Whether or not to reinitialize the target encoder.
         """
         super().__init__(
             model=model,
@@ -161,6 +164,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
+        if reinit_targets:
+            if ema_decay != (0.0, 0.0):
+                logger.warning(
+                    "Applying EMA updates to a randomly initialized target encoder."
+                )
+            self.model.target_encoder.apply(self.model.target_encoder._init_weights)
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""

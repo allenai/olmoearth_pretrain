@@ -49,6 +49,7 @@ class NormMethod(str, Enum):
     """Normalization methods."""
 
     NORM_NO_CLIP = "norm_no_clip"
+    NORM_NO_CLIP_2_STD = "norm_no_clip_2_std"
     NORM_YES_CLIP = "norm_yes_clip"
     NORM_YES_CLIP_3_STD = "norm_yes_clip_3_std"
     NORM_YES_CLIP_2_STD = "norm_yes_clip_2_std"
@@ -76,6 +77,7 @@ def _get_normalization_bounds(
         NormMethod.NORM_YES_CLIP_2_STD: 2.0,
         NormMethod.NORM_YES_CLIP_2_STD_INT: 2.0,
         NormMethod.NORM_NO_CLIP: 1.0,
+        NormMethod.NORM_NO_CLIP_2_STD: 2.0,
     }
     if method == NormMethod.NORM_YES_CLIP_MIN_MAX_INT:
         if mins is None or maxs is None:

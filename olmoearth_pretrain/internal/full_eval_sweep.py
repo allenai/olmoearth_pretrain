@@ -264,6 +264,12 @@ def get_galileo_args(pretrained_normalizer: bool = True) -> str:
     else:
         # IF we use dataset stats we want to turn off the pretrained normalizer
         galileo_args += " " + "--model.use_pretrained_normalizer=False"
+        galileo_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_NO_CLIP_2_STD"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
     galileo_args += " " + " ".join(
         [
             f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=8"
@@ -415,9 +421,27 @@ def _get_model_specific_args(model: BaselineModelName | None) -> str:
     return model_args_map[model]()  # type: ignore
 
 
+def get_olmoearth_args(pretrained_normalizer: bool = True) -> str:
+    """Get the olmoearth arguments."""
+    if pretrained_normalizer:
+        return helios_args
+    else:
+        olmoearth_args = dataset_args
+        olmoearth_args += " " + " ".join(
+            [
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_NO_CLIP_2_STD"
+                for task_name in EVAL_TASKS.keys()
+            ]
+        )
+        return olmoearth_args
+
+
 # TODO: Explain why some models are not in the map
 def _get_normalization_args(model: BaselineModelName | None, norm_mode: str) -> str:
     """Get normalization-specific command arguments."""
+    if model is None:
+        # If model is None, we want to use the olmoearth arguments
+        return get_olmoearth_args(pretrained_normalizer=(norm_mode == "pre_trained"))
     model_map = {
         BaselineModelName.GALILEO: get_galileo_args,
         BaselineModelName.TESSERA: get_tessera_args,

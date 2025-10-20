@@ -122,11 +122,10 @@ def build_train_module_config(
         rank_microbatch_size=32,
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "modality_cross_random",
+                "type": "random_fixed_modality",
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
-                "allow_encoding_decoding_same_bandset": True,
-                "only_decode_modalities": [
+                "decoded_modalities": [
                     "worldcover",
                     "srtm",
                     "openstreetmap_raster",

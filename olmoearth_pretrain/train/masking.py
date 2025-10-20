@@ -305,6 +305,68 @@ class MaskingStrategy:
 
         return mask
 
+    def _random_fill_unmasked(
+        self,
+        mask: torch.Tensor,
+        modality: ModalitySpec,
+        patch_size_at_16: int,
+        encode_ratio: float | None = None,
+        decode_ratio: float | None = None,
+    ) -> ArrayTensor:
+        """This function assumes B=1."""
+        assert mask.shape[0] == 1, (
+            f"_random_fill_unmasked does not support B != 1, got input shape {mask.shape}"
+        )
+        device = mask.device
+        if modality.is_spatial:
+            patch_size = patch_size_at_16 * modality.image_tile_size_factor
+            # the first two dimensions are spatial; lets turn them
+            # from h, w to p_h, p_w
+            mask = mask[:, 0::patch_size, 0::patch_size]
+
+        original_shape = mask.shape
+        # this only works because we assume B = 1
+        flat_mask = mask.flatten()  # N tokens
+        not_missing_tokens = flat_mask != MaskValue.MISSING.value
+        num_not_missing_tokens = sum(not_missing_tokens)
+
+        if encode_ratio is None:
+            encode_ratio = self.encode_ratio
+        if decode_ratio is None:
+            decode_ratio = self.decode_ratio
+
+        if num_not_missing_tokens == 1:
+            encode_tokens = 1
+            decode_tokens = 0
+        else:
+            encode_tokens = int(num_not_missing_tokens * encode_ratio)
+            decode_tokens = int(num_not_missing_tokens * decode_ratio)
+
+        target_tokens = int(num_not_missing_tokens - (encode_tokens + decode_tokens))
+        flat_mask_tokens = torch.cat(
+            [
+                torch.full(
+                    (encode_tokens,), MaskValue.ONLINE_ENCODER.value, device=device
+                ),
+                torch.full((decode_tokens,), MaskValue.DECODER.value, device=device),
+                torch.full(
+                    (target_tokens,), MaskValue.TARGET_ENCODER_ONLY.value, device=device
+                ),
+            ]
+        )
+
+        flat_mask_tokens = flat_mask_tokens[
+            torch.randperm(num_not_missing_tokens, device=device)
+        ]
+        flat_mask[not_missing_tokens] = flat_mask_tokens
+        mask = flat_mask.view(*original_shape)
+        if modality.is_spatial:
+            mask = repeat(
+                mask, "b h w ... -> b (h hp) (w wp) ...", hp=patch_size, wp=patch_size
+            )
+
+        return mask
+
 
 MASKING_STRATEGY_REGISTRY = ClassRegistry[MaskingStrategy]()
 
@@ -1011,6 +1073,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             tuple[set[tuple[str, int]], set[tuple[str, int]]]
         ],
         present_modalities_bandsets: list[list[tuple[str, int]]],
+        patch_size: int,
     ) -> MaskedOlmoEarthSample:
         """Compute masks for each band set based on the encode and decode selections.
 
@@ -1020,11 +1083,14 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             masked_batch: The masked batch to apply the mask to.
             encoded_decoded_bandsets: The encoded and decoded bandsets for each sample.
             present_modalities_bandsets: The present modalities and bandsets for each sample.
+            patch_size: The patch size being applied
 
         Returns:
             The masked batch with the masks applied.
         """
         masked_batch_dict = masked_batch.as_dict(return_none=False)
+        num_encoded: None | torch.Tensor = None
+        num_decoded: None | torch.Tensor = None
         for modality in masked_batch.modalities:
             if modality == "timestamps":
                 continue
@@ -1106,9 +1172,50 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                             MaskValue.TARGET_ENCODER_ONLY.value,
                             modality_mask[sample_idx, ..., bandset_idx],
                         )
-
+            # check we have more than 0 encoded and decoded tokens.
+            # this should happen very rarely (only in the S2-only ablation when
+            # the h, w is small)
+            flat_mask = torch.flatten(out_modality_mask, start_dim=1)
+            encoded_for_modality = (flat_mask == MaskValue.ONLINE_ENCODER.value).sum(
+                dim=-1
+            )
+            decoded_for_modality = (flat_mask == MaskValue.DECODER.value).sum(dim=-1)
+            if num_encoded is None:
+                num_encoded = encoded_for_modality
+            else:
+                num_encoded += encoded_for_modality
+            if num_decoded is None:
+                num_decoded = decoded_for_modality
+            else:
+                num_decoded += decoded_for_modality
             masked_batch_dict[masked_modality_name] = out_modality_mask
-
+        # Again - no_encoded_indices and no_decoded_indices should have length > 0 very rarely
+        # (so far this has only happened when we ablate S2 only, and have a small h, w), so these
+        # loops should not be entered very often.
+        no_encoded_indices = torch.argwhere(num_encoded == 0)
+        no_decoded_indices = torch.argwhere(num_decoded == 0)
+        for i in no_encoded_indices:
+            for key, val in masked_batch_dict.items():
+                if key.endswith("mask"):
+                    modality_mask = val[i]
+                    modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
+                        key
+                    )
+                    modality_spec = Modality.get(modality_name)
+                    masked_batch_dict[key][i] = self._random_fill_unmasked(
+                        modality_mask, modality_spec, patch_size
+                    )
+        for i in no_decoded_indices:
+            for key, val in masked_batch_dict.items():
+                if key.endswith("mask"):
+                    modality_mask = val[i]
+                    modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
+                        key
+                    )
+                    modality_spec = Modality.get(modality_name)
+                    masked_batch_dict[key][i] = self._random_fill_unmasked(
+                        modality_mask, modality_spec, patch_size
+                    )
         masked_batch = MaskedOlmoEarthSample(**masked_batch_dict)
 
         return masked_batch
@@ -1117,6 +1224,11 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
     ) -> MaskedOlmoEarthSample:
         """Apply space masking to the input data."""
+        if patch_size is None:
+            # this is because we use a random-masking proxy in case of
+            # no encoded or decoded tokens.
+            raise ValueError("patch_size must be provided for cross masking")
+
         masked_sample = self.strategy.apply_mask(batch, patch_size, **kwargs)
         present_modalities_bandsets = self.get_sample_present_modalities_bandsets(
             masked_sample
@@ -1125,8 +1237,12 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             present_modalities_bandsets
         )
         masked_sample = self.apply_bandset_mask_rules(
-            masked_sample, encoded_decoded_bandsets, present_modalities_bandsets
+            masked_sample,
+            encoded_decoded_bandsets,
+            present_modalities_bandsets,
+            patch_size,
         )
+
         return masked_sample
 
 

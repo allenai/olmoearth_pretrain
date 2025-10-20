@@ -387,6 +387,15 @@ class DownstreamEvaluatorCallback(Callback):
         """Get the supported modalities for the model."""
         if hasattr(self.trainer.train_module.model, "supported_modalities"):
             return self.trainer.train_module.model.supported_modalities
+        elif hasattr(self.trainer.train_module.model, "encoder"):
+            if hasattr(
+                self.trainer.train_module.model.encoder, "supported_modality_names"
+            ):
+                return self.trainer.train_module.model.encoder.supported_modality_names
+        else:
+            logger.info(
+                "Can't find a supported_modalities attribute; defaulting to all modalities."
+            )
         return Modality.names()
 
     def _check_input_requirements(self, evaluator: DownstreamEvaluator) -> bool:
@@ -457,6 +466,11 @@ class DownstreamEvaluatorCallback(Callback):
                 evaluator.eval_interval
             )
             if self.step <= 1 or self.step % eval_interval_steps != 0:
+                continue
+            if not self._check_supported_modalities(evaluator):
+                logger.info(
+                    f"Skipping {evaluator.evaluation_name} because it requires a modality that is not supported by the model"
+                )
                 continue
             self._perform_eval(evaluator)
 

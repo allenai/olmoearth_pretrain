@@ -2,8 +2,14 @@
 
 from dataclasses import dataclass
 
+import torch
 import torch.nn as nn
 from olmo_core.config import Config
+from torch.distributed import DeviceMesh
+from torch.distributed.fsdp import (
+    MixedPrecisionPolicy,
+    fully_shard,
+)
 
 from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
@@ -52,6 +58,27 @@ class MAE(nn.Module, DistributedMixins):
         )
 
         return latent, decoded, reconstructed
+
+    def apply_fsdp(
+        self,
+        dp_mesh: DeviceMesh | None = None,
+        param_dtype: torch.dtype | None = None,
+        reduce_dtype: torch.dtype = torch.float32,
+        prefetch_factor: int = 0,
+    ) -> None:
+        """Apply FSDP to the model."""
+        mp_policy = MixedPrecisionPolicy(
+            param_dtype=param_dtype, reduce_dtype=reduce_dtype
+        )
+        fsdp_config = dict(mesh=dp_mesh, mp_policy=mp_policy)
+
+        self.encoder.apply_fsdp(**fsdp_config)
+        if self.decoder:
+            self.decoder.apply_fsdp(**fsdp_config)
+        if self.reconstructor:
+            self.reconstructor.apply_fsdp(**fsdp_config)
+        # TODO: More finegrained wrapping of the encoder transformer layers next time
+        fully_shard(self, **fsdp_config)
 
     def apply_compile(self) -> None:
         """Apply torch.compile to the model."""
