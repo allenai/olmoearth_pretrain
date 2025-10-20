@@ -531,7 +531,7 @@ def _build_default_command(
     cmd_args += _get_load_checkpoints_args(args.model)
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
-        f"{sub_command} {run_name} {args.cluster} --launch.priority=high "
+        f"{sub_command} {run_name} {args.cluster} --launch.priority=high --launch.num_gpus=1 "
         f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
     )
 
@@ -581,7 +581,7 @@ def _build_hyperparameter_command(
 
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
-        f"{sub_command} {run_name} {args.cluster} --launch.priority=high {cmd_args} "
+        f"{sub_command} {run_name} {args.cluster} --launch.priority=high --launch.num_gpus=1 {cmd_args} "
         f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
     )
 
