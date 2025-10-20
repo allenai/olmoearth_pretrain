@@ -1,10 +1,10 @@
-"""Test the HeliosDataset class compute_norm_stats method."""
+"""Test the OlmoEarthDataset class compute_norm_stats method."""
 
 import logging
 
 import numpy as np
 
-from helios.data.utils import update_streaming_stats
+from olmoearth_pretrain.data.utils import update_streaming_stats
 
 logger = logging.getLogger(__name__)
 

@@ -3,15 +3,15 @@
 import numpy as np
 from torch.utils.data import Dataset
 
-from helios.data.concat import HeliosConcatDataset
-from helios.data.constants import Modality
-from helios.data.dataset import GetItemArgs
+from olmoearth_pretrain.data.concat import OlmoEarthConcatDataset
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.dataset import GetItemArgs
 
 MOCK_FINGERPRINT_VERSION = "mockversion"
 
 
 class MockDataset(Dataset):
-    """Mock HeliosDataset for testing."""
+    """Mock OlmoEarthDataset for testing."""
 
     def __init__(self, items: list[int]):
         """Create a new MockDataset."""
@@ -40,7 +40,7 @@ def test_basic_concat() -> None:
     """Basic test where we concatenate two datasets."""
     dataset1 = MockDataset([0, 1])
     dataset2 = MockDataset([2])
-    concat_dataset = HeliosConcatDataset([dataset1, dataset2])
+    concat_dataset = OlmoEarthConcatDataset([dataset1, dataset2])
     concat_dataset.prepare()
     concat_items = [
         concat_dataset[GetItemArgs(idx=idx, patch_size=4, sampled_hw_p=4)]
@@ -53,6 +53,6 @@ def test_basic_concat() -> None:
 def test_fingerprint() -> None:
     """Make sure the fingerprint and version don't give errors."""
     dataset = MockDataset([0])
-    concat_dataset = HeliosConcatDataset([dataset])
+    concat_dataset = OlmoEarthConcatDataset([dataset])
     assert concat_dataset.fingerprint_version == MOCK_FINGERPRINT_VERSION
     assert len(concat_dataset.fingerprint) > 0

@@ -5,21 +5,21 @@ from olmo_core.config import DType
 from olmo_core.optim.adamw import AdamWConfig
 from olmo_core.train import TrainerConfig
 
-from helios.data.dataloader import HeliosDataLoaderConfig
-from helios.data.dataset import HeliosDatasetConfig
-from helios.data.transform import TransformConfig
-from helios.internal.experiment import (
+from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
+from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
+from olmoearth_pretrain.data.transform import TransformConfig
+from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
-    HeliosBeakerLaunchConfig,
-    HeliosExperimentConfig,
-    HeliosVisualizeConfig,
+    OlmoEarthBeakerLaunchConfig,
+    OlmoEarthExperimentConfig,
+    OlmoEarthVisualizeConfig,
     build_config,
 )
-from helios.nn.flexihelios import EncoderConfig, PredictorConfig
-from helios.nn.latent_mim import LatentMIMConfig
-from helios.train.loss import LossConfig
-from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
+from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.train.loss import LossConfig
+from olmoearth_pretrain.train.masking import MaskingConfig
+from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 
@@ -30,7 +30,7 @@ def minimal_common_components() -> CommonComponents:
         run_name="test_run",
         save_folder="test_save_folder",
         training_modalities=["sentinel2", "sentinel1", "worldcover", "naip"],
-        launch=HeliosBeakerLaunchConfig(
+        launch=OlmoEarthBeakerLaunchConfig(
             name="test_run",
             cmd=["dummy_cmd"],
             clusters=["dummy_cluster"],
@@ -74,10 +74,10 @@ def minimal_model_config_builder(common: CommonComponents) -> LatentMIMConfig:
     return model_config
 
 
-def minimal_dataset_config_builder(common: CommonComponents) -> HeliosDatasetConfig:
-    """Return a minimal HeliosDatasetConfig."""
+def minimal_dataset_config_builder(common: CommonComponents) -> OlmoEarthDatasetConfig:
+    """Return a minimal OlmoEarthDatasetConfig."""
     h5py_dir = "test_tile_path"
-    return HeliosDatasetConfig(
+    return OlmoEarthDatasetConfig(
         h5py_dir=h5py_dir,
         training_modalities=common.training_modalities,
         dtype=DType.float32,
@@ -86,10 +86,10 @@ def minimal_dataset_config_builder(common: CommonComponents) -> HeliosDatasetCon
 
 def minimal_dataloader_config_builder(
     common: CommonComponents,
-) -> HeliosDataLoaderConfig:
-    """Return a minimal HeliosDataLoaderConfig."""
+) -> OlmoEarthDataLoaderConfig:
+    """Return a minimal OlmoEarthDataLoaderConfig."""
     GLOBAL_BATCH_SIZE = 16
-    dataloader_config = HeliosDataLoaderConfig(
+    dataloader_config = OlmoEarthDataLoaderConfig(
         global_batch_size=GLOBAL_BATCH_SIZE,
         seed=3622,
         work_dir=common.save_folder,
@@ -152,13 +152,15 @@ def minimal_train_module_config_builder(
     return train_module_config
 
 
-def minimal_visualize_config_builder(common: CommonComponents) -> HeliosVisualizeConfig:
-    """Return a minimal HeliosVisualizeConfig."""
-    return HeliosVisualizeConfig(output_dir="dummy_visuals")
+def minimal_visualize_config_builder(
+    common: CommonComponents,
+) -> OlmoEarthVisualizeConfig:
+    """Return a minimal OlmoEarthVisualizeConfig."""
+    return OlmoEarthVisualizeConfig(output_dir="dummy_visuals")
 
 
 def test_build_config_no_overrides() -> None:
-    """Test that build_config produces a valid HeliosExperimentConfig."""
+    """Test that build_config produces a valid OlmoEarthExperimentConfig."""
     common = minimal_common_components()
     config = build_config(
         common=common,
@@ -171,7 +173,7 @@ def test_build_config_no_overrides() -> None:
         overrides=[],
     )
 
-    assert isinstance(config, HeliosExperimentConfig)
+    assert isinstance(config, OlmoEarthExperimentConfig)
     assert config.run_name == "test_run"
     assert config.data_loader.global_batch_size == 16
     assert config.visualize is not None
@@ -225,7 +227,7 @@ def test_build_config_with_trainer_overrides(
         overrides=overrides,
     )
 
-    assert isinstance(config, HeliosExperimentConfig)
+    assert isinstance(config, OlmoEarthExperimentConfig)
     # Confirm that the overrides took effect
     assert config.trainer.cancel_check_interval == expected_cancel_check
     assert config.trainer.metrics_collect_interval == expected_metrics_collect
@@ -246,7 +248,7 @@ def test_overrides_with_common_prefix() -> None:
         overrides=["common.training_modalities=[sentinel2, sentinel1]"],
     )
 
-    assert isinstance(config, HeliosExperimentConfig)
+    assert isinstance(config, OlmoEarthExperimentConfig)
     assert config.dataset.training_modalities == ["sentinel2", "sentinel1"]
 
 

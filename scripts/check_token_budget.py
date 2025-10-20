@@ -65,12 +65,14 @@ def main():
     # A mix of spacetime and space-only varying modalities.
     modalities_to_test = [
         Modality.SENTINEL2_L2A.name,
-        Modality.WORLDCOVER.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
-        Modality.OPENSTREETMAP_RASTER.name,
+        Modality.WORLDCOVER.name,
         Modality.SRTM.name,
-        Modality.LATLON.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+        Modality.WRI_CANOPY_HEIGHT_MAP.name,
+        # Modality.CDL.name,
+        Modality.WORLDCEREAL.name,
     ]
 
     H, W, T = 256, 256, 12

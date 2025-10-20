@@ -6,8 +6,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from helios.internal.all_evals import EVAL_TASKS
-from helios.internal.full_eval_sweep import (
+from olmoearth_pretrain.evals.models import BaselineModelName
+from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
+from olmoearth_pretrain.internal.full_eval_sweep import (
     LP_LRs,
     Normalization_MODES,
     build_commands,
@@ -16,7 +17,6 @@ from helios.internal.full_eval_sweep import (
     get_galileo_args,
     get_panopticon_args,
     loop_through_params,
-    no_norm_sweep,
     pooling_types,
 )
 
@@ -32,10 +32,13 @@ def base_args() -> argparse.Namespace:
         project_name="test_project",
         defaults_only=False,
         dry_run=True,
-        dino_v3=False,
         model_name=None,
-        panopticon=False,
-        galileo=False,
+        model=None,
+        all_sizes=False,
+        lr_only=False,
+        select_best_val=False,
+        model_skip_names=None,
+        size=None,
     )
 
 
@@ -49,10 +52,13 @@ def minimal_args() -> argparse.Namespace:
         project_name=None,
         defaults_only=True,
         dry_run=True,
-        dino_v3=False,
         model_name=None,
-        panopticon=False,
-        galileo=False,
+        model=None,
+        all_sizes=False,
+        lr_only=False,
+        select_best_val=False,
+        model_skip_names=None,
+        size=None,
     )
 
 
@@ -113,25 +119,30 @@ class TestLoopThroughParams:
         assert lrs_found == set(LP_LRs)
 
 
-class TestNoNormSweep:
-    """Test no_norm_sweep function."""
+class TestLoopThroughParamsNoNorm:
+    """Test loop_through_params function with no_norm=True."""
 
     def test_generates_correct_combinations(self) -> None:
-        """Test that no_norm_sweep generates the right combinations."""
-        params_list: list[dict[str, float | str]] = list(no_norm_sweep())
+        """Test that loop_through_params(no_norm=True) generates the right combinations."""
+        params_list: list[dict[str, float | str]] = list(
+            loop_through_params(no_norm=True)
+        )
 
-        # Should generate len(pooling_types) * len(LP_LRs) combinations
+        # Should generate len(pooling_types) * len(LP_LRs) combinations (only dataset norm mode)
         expected_count: int = len(pooling_types) * len(LP_LRs)
         assert len(params_list) == expected_count
 
     def test_parameter_structure(self) -> None:
-        """Test parameter structure for no_norm_sweep."""
-        params_list: list[dict[str, float | str]] = list(no_norm_sweep())
+        """Test parameter structure for loop_through_params(no_norm=True)."""
+        params_list: list[dict[str, float | str]] = list(
+            loop_through_params(no_norm=True)
+        )
 
         for params in params_list:
             assert "lr" in params
             assert "pooling_type" in params
-            assert "norm_mode" not in params  # Should not include norm_mode
+            assert "norm_mode" in params
+            assert params["norm_mode"] == "dataset"  # Should only be dataset mode
             assert params["lr"] in LP_LRs
             assert params["pooling_type"] in pooling_types
 
@@ -194,7 +205,7 @@ class TestBuildCommandsBasic:
         assert "dry_run" in command
         assert "test-cluster" in command
         assert "/path/to/checkpoint" in command
-        assert "_defaults" in command
+        assert "_df" in command
 
     def test_build_commands_no_checkpoint_path(
         self, base_args: argparse.Namespace
@@ -224,7 +235,7 @@ class TestBuildCommandsBasic:
 
         assert len(commands) == 1
         command: str = commands[0]
-        assert "my_custom_model_defaults" in command
+        assert "my_custom_model_df" in command
 
     def test_model_name_and_checkpoint_path(
         self, base_args: argparse.Namespace
@@ -246,7 +257,7 @@ class TestBuildCommandsModelTypes:
 
     def test_build_commands_dino_v3(self, base_args: argparse.Namespace) -> None:
         """Test build_commands with DinoV3 model."""
-        base_args.dino_v3 = True
+        base_args.model = BaselineModelName.DINO_V3
         base_args.defaults_only = True
 
         commands: list[str] = build_commands(base_args, [])
@@ -257,7 +268,7 @@ class TestBuildCommandsModelTypes:
 
     def test_build_commands_panopticon(self, base_args: argparse.Namespace) -> None:
         """Test build_commands with Panopticon model."""
-        base_args.panopticon = True
+        base_args.model = BaselineModelName.PANOPTICON
         base_args.defaults_only = True
 
         commands: list[str] = build_commands(base_args, [])
@@ -268,7 +279,7 @@ class TestBuildCommandsModelTypes:
 
     def test_build_commands_galileo(self, base_args: argparse.Namespace) -> None:
         """Test build_commands with Galileo model."""
-        base_args.galileo = True
+        base_args.model = BaselineModelName.GALILEO
         base_args.defaults_only = True
 
         commands: list[str] = build_commands(base_args, [])
@@ -288,10 +299,12 @@ class TestBuildCommandsSweep:
         """Test build_commands with full sweep for default model."""
         base_args.defaults_only = False
 
-        with patch("helios.evals.datasets.configs.get_eval_mode") as mock_get_eval_mode:
+        with patch(
+            "olmoearth_pretrain.evals.datasets.configs.get_eval_mode"
+        ) as mock_get_eval_mode:
             mock_get_eval_mode.return_value = "linear_probe"
             with patch(
-                "helios.evals.datasets.configs.dataset_to_config"
+                "olmoearth_pretrain.evals.datasets.configs.dataset_to_config"
             ) as mock_dataset_to_config:
                 mock_config = Mock()
                 mock_config.task_type = "classification"
@@ -311,13 +324,13 @@ class TestBuildCommandsSweep:
         assert "pre_trained" in command_text
 
     def test_build_commands_sweep_dino_v3(self, base_args: argparse.Namespace) -> None:
-        """Test build_commands sweep with DinoV3 (uses no_norm_sweep)."""
-        base_args.dino_v3 = True
+        """Test build_commands sweep with DinoV3 (dataset norm only)."""
+        base_args.model = BaselineModelName.DINO_V3
         base_args.defaults_only = False
 
         commands: list[str] = build_commands(base_args, [])
 
-        # Should use no_norm_sweep, so fewer combinations
+        # Should use loop_through_params(no_norm=True), so fewer combinations (only dataset norm mode)
         expected_count: int = len(pooling_types) * len(LP_LRs)
         assert len(commands) == expected_count
 
@@ -395,19 +408,23 @@ class TestParametrizedTests:
     @pytest.mark.parametrize(
         "model_type,expected_args",
         [
-            ("dino_v3", "norm_method=NormMethod.NORM_YES_CLIP_MIN_MAX_INT"),
-            ("panopticon", "norm_method=NormMethod.STANDARDIZE"),
-            ("galileo", "use_pretrained_normalizer=True"),
+            (
+                BaselineModelName.DINO_V3,
+                "norm_method=NormMethod.NORM_YES_CLIP_MIN_MAX_INT",
+            ),
+            (BaselineModelName.PANOPTICON, "norm_method=NormMethod.STANDARDIZE"),
+            (BaselineModelName.GALILEO, "use_pretrained_normalizer=True"),
         ],
     )
     def test_model_specific_args_parametrized(
-        self, model_type: str, expected_args: str, base_args: argparse.Namespace
+        self,
+        model_type: BaselineModelName,
+        expected_args: str,
+        base_args: argparse.Namespace,
     ) -> None:
         """Test different model types parametrically."""
         base_args.defaults_only = True
-
-        # Set the appropriate model flag
-        setattr(base_args, model_type, True)
+        base_args.model = model_type
 
         commands: list[str] = build_commands(base_args, [])
 
@@ -453,13 +470,15 @@ class TestIntegration:
     ) -> None:
         """Test complex workflow with multiple options enabled."""
         base_args.defaults_only = False
-        base_args.galileo = True
+        base_args.model = BaselineModelName.GALILEO
         base_args.project_name = "complex_test"
 
-        with patch("helios.evals.datasets.configs.get_eval_mode") as mock_get_eval_mode:
+        with patch(
+            "olmoearth_pretrain.evals.datasets.configs.get_eval_mode"
+        ) as mock_get_eval_mode:
             mock_get_eval_mode.return_value = "linear_probe"
             with patch(
-                "helios.evals.datasets.configs.dataset_to_config"
+                "olmoearth_pretrain.evals.datasets.configs.dataset_to_config"
             ) as mock_dataset_to_config:
                 mock_config = Mock()
                 mock_config.task_type = "classification"

@@ -1,6 +1,6 @@
 """Test configs are properly constructed."""
 
-from helios.evals.datasets.configs import DATASET_TO_CONFIG, TaskType
+from olmoearth_pretrain.evals.datasets.configs import DATASET_TO_CONFIG, TaskType
 
 
 def test_segmentation_tasks_have_hw() -> None:

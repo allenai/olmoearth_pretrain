@@ -1,13 +1,13 @@
-"""Unit tests for the Helios Dataset Visualization."""
+"""Unit tests for the OlmoEarth Pretrain Dataset Visualization."""
 
 import os
 from pathlib import Path
 
 import numpy as np
 
-from helios.data.constants import Modality
-from helios.data.dataset import HeliosDataset
-from helios.data.visualize import visualize_sample
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.dataset import OlmoEarthDataset
+from olmoearth_pretrain.data.visualize import visualize_sample
 
 
 def test_visualize_sample(
@@ -21,8 +21,9 @@ def test_visualize_sample(
         Modality.SENTINEL1.name,
         Modality.WORLDCOVER.name,
         Modality.OPENSTREETMAP_RASTER.name,
+        Modality.LATLON.name,
     ]
-    dataset = HeliosDataset(
+    dataset = OlmoEarthDataset(
         h5py_dir=setup_h5py_dir,
         dtype=np.float32,
         training_modalities=training_modalities,

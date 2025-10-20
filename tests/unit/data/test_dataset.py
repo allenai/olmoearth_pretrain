@@ -1,5 +1,6 @@
 """Unit tests for the dataset module."""
 
+import importlib
 from logging import getLogger
 from pathlib import Path
 
@@ -8,17 +9,21 @@ import pytest
 import torch
 from upath import UPath
 
-from helios.data.constants import MISSING_VALUE, Modality
-from helios.data.dataset import HeliosDataset, HeliosSample, collate_helios
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.data.dataset import (
+    OlmoEarthDataset,
+    OlmoEarthSample,
+    collate_olmoearth_pretrain,
+)
 
 logger = getLogger(__name__)
 
 
-def test_collate_helios(
-    samples_with_missing_modalities: list[tuple[int, HeliosSample]],
+def test_collate_olmoearth_pretrain(
+    samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
 ) -> None:
-    """Test the collate_helios function."""
-    collated_sample = collate_helios(
+    """Test the collate_olmoearth_pretrain function."""
+    collated_sample = collate_olmoearth_pretrain(
         samples_with_missing_modalities,
     )
 
@@ -41,19 +46,19 @@ def test_collate_helios(
     assert torch.all(collated_sample[1].worldcover[2] == MISSING_VALUE)
 
 
-class TestHeliosSample:
-    """Test the HeliosSample class."""
+class TestOlmoEarthSample:
+    """Test the OlmoEarthSample class."""
 
     def test_subset_with_missing_modalities(
         self,
-        samples_with_missing_modalities: list[tuple[int, HeliosSample]],
+        samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
     ) -> None:
         """Test subsetting a collated sample with missing modalities."""
         sampled_hw_p = 4
         patch_size = 2
         max_tokens_per_instance = 100
         current_length = 12
-        sample: HeliosSample = samples_with_missing_modalities[1][1]
+        sample: OlmoEarthSample = samples_with_missing_modalities[1][1]
         subset_sample = sample.subset_default(
             patch_size=patch_size,
             max_tokens_per_instance=max_tokens_per_instance,
@@ -82,7 +87,9 @@ class TestHeliosSample:
             }
             max_t = 2
             current_length = 6
-            HeliosSample._get_valid_start_ts(missing_timesteps, max_t, current_length)
+            OlmoEarthSample._get_valid_start_ts(
+                missing_timesteps, max_t, current_length
+            )
 
     def test_get_valid_start_ts_with_cropped_timesteps(self) -> None:
         """Test the get_valid_start_ts function with properly cropped timesteps."""
@@ -94,7 +101,7 @@ class TestHeliosSample:
         current_length = 8
 
         # This should not raise an error since timesteps are properly cropped
-        start_ts = HeliosSample._get_valid_start_ts(
+        start_ts = OlmoEarthSample._get_valid_start_ts(
             missing_timesteps, max_t, current_length
         )
 
@@ -103,8 +110,8 @@ class TestHeliosSample:
             assert 0 <= t <= current_length - max_t
 
 
-class TestHeliosDataset:
-    """Test the HeliosDataset class."""
+class TestOlmoEarthDataset:
+    """Test the OlmoEarthDataset class."""
 
     @pytest.fixture
     def tmp_h5py_dir(self, tmp_path: Path) -> UPath:
@@ -123,7 +130,7 @@ class TestHeliosDataset:
         max_sequence_length = 5
 
         # Create dataset instance
-        dataset = HeliosDataset(
+        dataset = OlmoEarthDataset(
             h5py_dir=tmp_h5py_dir,
             training_modalities=["sentinel2_l2a"],
             dtype=np.float32,
@@ -149,11 +156,11 @@ class TestHeliosDataset:
     def test_fill_missing_modality(
         self,
         tmp_h5py_dir: UPath,
-        samples_with_missing_modalities: list[tuple[int, HeliosSample]],
+        samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
     ) -> None:
         """Test _fill_missing_modality function."""
         sample = samples_with_missing_modalities[0][1]
-        dataset = HeliosDataset(
+        dataset = OlmoEarthDataset(
             h5py_dir=tmp_h5py_dir,
             training_modalities=["sentinel2_l2a", "sentinel1"],
             dtype=np.float32,
@@ -186,7 +193,7 @@ class TestHeliosDataset:
         }
         missing_timesteps_masks = {"sentinel2_l2a": np.array([True, False, True])}
 
-        dataset = HeliosDataset(
+        dataset = OlmoEarthDataset(
             h5py_dir=tmp_h5py_dir,
             training_modalities=["sentinel2_l2a", "sentinel1"],
             dtype=np.float32,
@@ -226,7 +233,7 @@ class TestHeliosDataset:
             Modality.LANDSAT.name: np.array([False] * 3 + [True] * 6),
         }
         cropped_timestamps, cropped_missing_timesteps_masks = (
-            HeliosDataset._crop_timestamps_and_masks(
+            OlmoEarthDataset._crop_timestamps_and_masks(
                 timestamps, missing_timesteps_masks
             )
         )
@@ -239,7 +246,7 @@ class TestHeliosDataset:
     ) -> None:
         """Test the prepare and filter sample indices by dataset percentage."""
         same_seed = 42
-        dataset1 = HeliosDataset(
+        dataset1 = OlmoEarthDataset(
             h5py_dir=setup_h5py_dir_20_samples,
             training_modalities=["sentinel2_l2a", "sentinel1"],
             dtype=np.float32,
@@ -252,7 +259,7 @@ class TestHeliosDataset:
         assert dataset1.sample_indices is not None
         assert len(dataset1.sample_indices) == 10
 
-        dataset2 = HeliosDataset(
+        dataset2 = OlmoEarthDataset(
             h5py_dir=setup_h5py_dir_20_samples,
             training_modalities=["sentinel2_l2a", "sentinel1"],
             dtype=np.float32,
@@ -272,7 +279,7 @@ class TestHeliosDataset:
     ) -> None:
         """Test the prepare and filter sample indices by dataset percentage with different seed."""
         seed1 = 43
-        dataset1 = HeliosDataset(
+        dataset1 = OlmoEarthDataset(
             h5py_dir=setup_h5py_dir_20_samples,
             training_modalities=["sentinel2_l2a", "sentinel1"],
             dtype=np.float32,
@@ -286,7 +293,7 @@ class TestHeliosDataset:
         assert len(dataset1.sample_indices) == 14
 
         seed2 = 44
-        dataset2 = HeliosDataset(
+        dataset2 = OlmoEarthDataset(
             h5py_dir=setup_h5py_dir_20_samples,
             training_modalities=["sentinel2_l2a", "sentinel1"],
             dtype=np.float32,
@@ -300,3 +307,23 @@ class TestHeliosDataset:
         assert len(dataset2.sample_indices) == 14
 
         assert not np.array_equal(dataset1.sample_indices, dataset2.sample_indices)
+
+
+def test_helios_dataset_config_deprecation_warning(tmp_path: Path) -> None:
+    """Ensure the legacy HeliosDatasetConfig emits a deprecation warning."""
+    module = importlib.import_module("helios.data.dataset")
+
+    with pytest.warns(DeprecationWarning):
+        module.HeliosDatasetConfig(
+            h5py_dir=str(tmp_path),
+            training_modalities=[Modality.SENTINEL2_L2A.name],
+        )
+
+
+def test_collate_helios_deprecation_warning(
+    samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
+) -> None:
+    """Ensure the legacy collate_helios emits a deprecation warning."""
+    module = importlib.import_module("helios.data.dataset")
+    with pytest.warns(DeprecationWarning):
+        module.collate_helios(samples_with_missing_modalities)

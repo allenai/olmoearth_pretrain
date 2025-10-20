@@ -5,12 +5,12 @@ import logging
 import pytest
 import torch
 
-from helios.data.constants import Modality, ModalitySpec
-from helios.nn.flexihelios import Encoder, Predictor, Reconstructor
-from helios.nn.mae import MAE
-from helios.nn.utils import unpack_encoder_output
-from helios.train.loss import MAELoss, PatchDiscriminationLossNew
-from helios.train.masking import MaskedHeliosSample, MaskValue
+from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.nn.flexi_vit import Encoder, Predictor, Reconstructor
+from olmoearth_pretrain.nn.mae import MAE
+from olmoearth_pretrain.nn.utils import unpack_encoder_output
+from olmoearth_pretrain.train.loss import MAELoss, PatchDiscriminationLossNew
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def test_mae_with_loss(
         "worldcover_mask": worldcover_mask,
         "timestamps": timestamps,
     }
-    x = MaskedHeliosSample(**masked_sample_dict)
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
 
     patch_size = 2
     # input_res = 1

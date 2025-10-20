@@ -5,9 +5,12 @@ import logging
 import pytest
 import torch
 
-from helios.data.constants import Modality
-from helios.nn.flexihelios import get_modalities_to_process, return_modalities_from_dict
-from helios.nn.st_model import STBase
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.nn.flexi_vit import (
+    get_modalities_to_process,
+    return_modalities_from_dict,
+)
+from olmoearth_pretrain.nn.st_model import STBase
 
 logger = logging.getLogger(__name__)
 

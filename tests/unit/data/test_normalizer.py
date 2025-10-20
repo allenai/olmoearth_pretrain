@@ -2,8 +2,8 @@
 
 import numpy as np
 
-from helios.data.constants import Modality
-from helios.data.normalize import Normalizer, Strategy
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 
 
 def test_normalize_predefined() -> None:

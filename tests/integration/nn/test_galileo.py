@@ -4,10 +4,10 @@ import logging
 
 import torch
 
-from helios.data.constants import Modality
-from helios.nn.flexihelios import Encoder, Predictor
-from helios.nn.galileo import Galileo
-from helios.train.masking import MaskedHeliosSample
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.nn.flexi_vit import Encoder, Predictor
+from olmoearth_pretrain.nn.galileo import Galileo
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ def test_galileo_forward_pass(
         "latlon"
     ]
     B, H, W, T, C = masked_sample_dict["sentinel2_l2a"].shape
-    x = MaskedHeliosSample(**masked_sample_dict)
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
 
     patch_size = 4
     # Shared constants for encoder and predictor

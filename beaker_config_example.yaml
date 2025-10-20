@@ -1,12 +1,12 @@
 version: v2
 budget: ai2/d5
-description: Helios no warmup
+description: OlmoEarth Pretrain no warmup
 tasks:
   # We only have one step in our experiment, so there's only one entry in this list
   - name: training
     image:
       # You will want to replace `username` below with your Beaker username
-      beaker: henryh/henryh-helios-2025024
+      beaker: henryh/henryh-olmoearth-pretrain-2025024
     command: [ torchrun , latent_mim.py, train]
     result:
       # Beaker will capture anything that's written to this location and store it in the results

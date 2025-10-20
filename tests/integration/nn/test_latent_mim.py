@@ -5,12 +5,12 @@ import logging
 import pytest
 import torch
 
-from helios.data.constants import Modality, ModalitySpec
-from helios.nn.flexihelios import Encoder, Predictor
-from helios.nn.latent_mim import LatentMIM
-from helios.nn.utils import unpack_encoder_output
-from helios.train.loss import PatchDiscriminationLoss
-from helios.train.masking import MaskedHeliosSample
+from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.nn.flexi_vit import Encoder, Predictor
+from olmoearth_pretrain.nn.latent_mim import LatentMIM
+from olmoearth_pretrain.nn.utils import unpack_encoder_output
+from olmoearth_pretrain.train.loss import PatchDiscriminationLoss
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def test_latentmim_with_loss(
         "latlon"
     ]
     B, H, W, T, C = masked_sample_dict["sentinel2_l2a"].shape
-    x = MaskedHeliosSample(**masked_sample_dict)
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
 
     patch_size = 4
     # Shared constants for encoder and predictor
@@ -86,7 +86,7 @@ def test_latentmim_with_loss(
     )
     latentmim = LatentMIM(encoder, predictor)
 
-    _, output, _, _ = latentmim.forward(x, patch_size)
+    _, output, _, _, _ = latentmim.forward(x, patch_size)
     output = predictor.forward(output, x.timestamps, patch_size, input_res=1)
     patched_H = H // patch_size
     patched_W = W // patch_size
