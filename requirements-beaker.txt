@@ -1,5 +1,6 @@
 beaker-py==1.34.1
 docker>=5.0,<8.0
+google-cloud-compute
 packaging
 pydantic>=1.8.2,<3.0
 PyYAML
