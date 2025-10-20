@@ -474,5 +474,5 @@ if __name__ == "__main__":
             output_csv = f"{args.project_name}_eval_metrics.csv"
             test_output_csv = f"{args.project_name}_eval_metrics_test.csv"
         save_metrics_to_csv(group_metrics, output_csv)
-        save_metrics_to_csv(group_test_metrics, test_output_csv)
-        # TODO: save the anmes of the max runs per metric as a json
+        if args.get_test_metrics:
+            save_metrics_to_csv(group_test_metrics, test_output_csv)
