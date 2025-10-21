@@ -9,19 +9,11 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.multiprocessing
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 
 logger = logging.getLogger(__name__)
-
-torch.multiprocessing.set_sharing_strategy("file_system")
-
-DATA_DIR = UPath("/weka/dfive-default/helios/evaluation/PASTIS-R")
-PASTIS_DIR = UPath("/weka/dfive-default/presto_eval_sets/pastis_r")
-PASTIS_DIR_ORIG = UPath("/weka/dfive-default/presto_eval_sets/pastis_r_origsize")
-PASTIS_DIR_PARTITION = UPath("/weka/dfive-default/presto_eval_sets/pastis")
 
 class PASTISRProcessor:
     """Process PASTIS-R dataset into PyTorch objects.
