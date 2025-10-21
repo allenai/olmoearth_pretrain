@@ -18,18 +18,12 @@ jobs:
         with:
           lfs: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
         with:
-          # Install a specific version of uv.
-          version: "0.9.4"
-
-      - name: Set up Python
-        run: uv python install
-        with:
-          python-version-file: "pyproject.toml"
+          python-version: 3.11
 
       - name: Linting
         run: |
-          uv sync --locked --dev
+          pip install -r requirements-dev.txt
           pre-commit run --all-files
