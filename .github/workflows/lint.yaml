@@ -18,11 +18,11 @@ jobs:
         with:
           lfs: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          # Install a specific version of uv.
-          version: "0.9.4"
+      # - name: Install uv
+      #   uses: astral-sh/setup-uv@v6
+      #   with:
+      #     # Install a specific version of uv.
+      #     version: "0.9.4"
 
       - name: Set up Python
         run: uv python install
