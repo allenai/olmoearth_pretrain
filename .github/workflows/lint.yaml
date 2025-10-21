@@ -31,7 +31,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --locked --group dev
+          uv sync --no-default-groups --locked --group dev
 
       - name: Linting
         run: |
