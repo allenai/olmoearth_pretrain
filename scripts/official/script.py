@@ -41,61 +41,26 @@ from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
 )
 
+from olmoearth_pretrain.internal.common import build_common_components as build_common_components_default
 logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
-#TODO: Require that to be passed in if the case is that it is not beaker
-# Default to one directory higher than in a experiment save folder
-import os
-SAVE_FOLDER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "checkpoints")
-if not os.path.exists(SAVE_FOLDER):
-    os.makedirs(SAVE_FOLDER)
-
-def build_common_components_default(
-    run_name: str,
-) -> CommonComponents:
-    """Build the common components for an experiment."""
-    TRAINING_MODALITIES = [
-        Modality.SENTINEL2_L2A.name,
-        Modality.SENTINEL1.name,
-        Modality.LANDSAT.name,
-        # Modality.WORLDCOVER.name,
-        # Modality.LATLON.name,
-        # Modality.SRTM.name,
-        # Modality.OPENSTREETMAP_RASTER.name,
-        # Modality.NAIP_10.name,
-        # Modality.ERA5_10.name,
-    ]
-    # This feaure doesn't work automatically for outside running
-    # # Extract nccl_debug from overrides if present
-    # nccl_debug = False
-    # for override in overrides:
-    #     if override.startswith("--common.nccl_debug="):
-    #         logger.info(f"Setting nccl_debug to {override}")
-    #         nccl_debug = override.split("=")[1].lower() in ("true", "1", "yes")
-    #         break
-    return CommonComponents(
-        run_name=run_name,
-        save_folder=f"{SAVE_FOLDER}/{run_name}",
-        training_modalities=TRAINING_MODALITIES,
-    )
 
 def build_common_components(script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]) -> CommonComponents:
     """Build the common components for an experiment."""
-    config = build_common_components_default(run_name)
-    # TODO: Put this back for non debugging
+    config = build_common_components_default(script, cmd, run_name, cluster, overrides)
     config.training_modalities = [
         Modality.SENTINEL2_L2A.name,
-        # Modality.SENTINEL1.name,
-        # Modality.LANDSAT.name,
+        Modality.SENTINEL1.name,
+        Modality.LANDSAT.name,
         Modality.WORLDCOVER.name,
-        # Modality.SRTM.name,
-        # Modality.OPENSTREETMAP_RASTER.name,
-        # Modality.WRI_CANOPY_HEIGHT_MAP.name,
-        # Modality.CDL.name,
-        # Modality.WORLDCEREAL.name,
+        Modality.SRTM.name,
+        Modality.OPENSTREETMAP_RASTER.name,
+        Modality.WRI_CANOPY_HEIGHT_MAP.name,
+        Modality.CDL.name,
+        Modality.WORLDCEREAL.name,
     ]
     return config
 
