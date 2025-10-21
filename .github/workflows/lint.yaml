@@ -25,6 +25,8 @@ jobs:
           version: "0.9.4"
 
       - name: Set up Python
+        with:
+          python-version-file: "pyproject.toml"
         run: uv python install
 
       - name: Install dependencies
