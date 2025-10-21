@@ -31,8 +31,6 @@ torch.multiprocessing.set_sharing_strategy("file_system")
 
 logger = logging.getLogger(__name__)
 
-GEOBENCH_DIR = UPath("/weka/dfive-default/presto-geobench/dataset/geobench")
-
 
 def _landsathelios2geobench_name(band_name: str) -> str:
     """Transform OlmoEarth Pretrain Landsat band name to Geobench Landsat band name."""

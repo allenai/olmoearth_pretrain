@@ -26,8 +26,6 @@ BAND_STATS = {
 }
 
 
-FLOODS_DIR = UPath("/weka/dfive-default/presto_eval_sets/floods")
-
 
 class Sen1Floods11Processor:
     """Class for preprocessing floods dataset."""

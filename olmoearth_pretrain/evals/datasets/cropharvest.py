@@ -152,9 +152,6 @@ X_MAX = np.array(
 )
 
 
-CROPHARVEST_DIR = UPath("/weka/dfive-default/presto_eval_sets/cropharvest")
-
-
 def _s2helios2ch_name(band_name: str) -> str:
     """Transform OlmoEarth Pretrain S2 band name to CropHarvest (and Breizhcrops) S2 band name."""
     band_number = band_name.split(" ")[0]
@@ -186,13 +183,13 @@ SRTM_TO_OUTPUT_BAND_MAPPING = [BANDS.index("elevation")]
 
 
 @memoized
-def _get_eval_datasets(root: Path = CROPHARVEST_DIR) -> list:
+def _get_eval_datasets(root: Path) -> list:
     return CropHarvest.create_benchmark_datasets(
         root=root, balance_negative_crops=False, normalize=False
     )
 
 
-def _download_cropharvest_data(root: Path = CROPHARVEST_DIR) -> None:
+def _download_cropharvest_data(root: Path) -> None:
     if not root.exists():
         root.mkdir()
         CropHarvest(root, download=True)

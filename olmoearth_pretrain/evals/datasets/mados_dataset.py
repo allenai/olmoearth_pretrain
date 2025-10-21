@@ -23,7 +23,6 @@ from .utils import load_min_max_stats
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 
-MADOS_DIR = UPath("/weka/dfive-default/presto_eval_sets/mados")
 
 
 BAND_STATS = {
