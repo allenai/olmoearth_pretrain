@@ -4,13 +4,11 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import cast, Optional, Any
 
 import numpy as np
-from beaker import ExperimentSpec
 from olmo_core.config import Config, StrEnum
 from olmo_core.distributed.utils import get_local_rank
-from olmo_core.launch.beaker import BeakerLaunchConfig
 from olmo_core.train import (
     TrainerConfig,
     prepare_training_environment,
@@ -36,36 +34,13 @@ from olmoearth_pretrain.train.train_module.train_module import (
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class OlmoEarthBeakerLaunchConfig(BeakerLaunchConfig):
-    """Extend BeakerLaunchConfig with hostnames option.
-
-    This enables targeting specific Beaker hosts.
-    """
-
-    hostnames: list[str] | None = None
-
-    def build_experiment_spec(
-        self, torchrun: bool = True, entrypoint: str | None = None
-    ) -> ExperimentSpec:
-        """Build the experiment spec."""
-        # We simply call the superclass build_experiment_spec, but just replace cluster
-        # setting in the Constraints with hostname setting if user provided hostname
-        # list.
-        spec = super().build_experiment_spec(torchrun, entrypoint)
-        if self.hostnames:
-            constraints = spec.tasks[0].constraints
-            constraints.cluster = None
-            constraints.hostname = self.hostnames
-        return spec
-
-
-HeliosBeakerLaunchConfig = _deprecated_class_alias(
-    OlmoEarthBeakerLaunchConfig,
-    "helios.internal.experiment.HeliosBeakerLaunchConfig",
-)
-
+# Goal is to make the main script runnable without beaker installed
+try:
+    from olmoearth_pretrain.launch.beaker import OlmoEarthBeakerLaunchConfig
+    LAUNCH_CONFIG_TYPE = Optional[OlmoEarthBeakerLaunchConfig]
+except ImportError:
+    logger.warning("Beaker launch config not available, please install beaker to use it")
+    LAUNCH_CONFIG_TYPE = Optional[Any]
 
 @dataclass
 class CommonComponents(Config):
@@ -73,8 +48,8 @@ class CommonComponents(Config):
 
     run_name: str
     save_folder: str
-    launch: OlmoEarthBeakerLaunchConfig
     training_modalities: list[str]
+    launch: LAUNCH_CONFIG_TYPE = None
     nccl_debug: bool = False
     # callbacks: dict[str, Callback]
 
@@ -111,12 +86,12 @@ class OlmoEarthExperimentConfig(Config):
     """Configuration for a OlmoEarth Pretrain experiment."""
 
     run_name: str
-    launch: OlmoEarthBeakerLaunchConfig
     model: Config
     dataset: Config  # will likely be fixed for us
     data_loader: OlmoEarthDataLoaderConfig  # will likely be fixed for us
     train_module: OlmoEarthTrainModuleConfig
     trainer: TrainerConfig
+    launch: LAUNCH_CONFIG_TYPE = None
     visualize: OlmoEarthVisualizeConfig | None = None
     init_seed: int = 12536
 
@@ -131,8 +106,8 @@ HeliosExperimentConfig = _deprecated_class_alias(
 class BenchmarkExperimentConfig(Config):
     """Configuration for a throughput benchmarking run."""
 
-    launch: OlmoEarthBeakerLaunchConfig
     benchmark: ThroughputBenchmarkRunnerConfig
+    launch: LAUNCH_CONFIG_TYPE = None
 
 
 def split_common_overrides(overrides: list[str]) -> tuple[list[str], list[str]]:
