@@ -1,0 +1,9 @@
+python scripts/2025_10_02_phase2/large.py launch phase2.0_large_lr0.0001_wd0.20 ai2/titan  --train_module.optim_config.lr=0.0001 --train_module.optim_config.weight_decay=0.20 --launch.priority=urgent
+python scripts/2025_10_02_phase2/large.py launch phase2.0_large_lr0.0001_wd0.02 ai2/titan  --train_module.optim_config.lr=0.0001 --train_module.optim_config.weight_decay=0.02 --launch.priority=urgent
+python scripts/2025_10_02_phase2/large.py launch phase2.0_large_lr0.0001_wd0.002 ai2/titan  --train_module.optim_config.lr=0.0001 --train_module.optim_config.weight_decay=0.002 --launch.priority=urgent
+python scripts/2025_10_02_phase2/large.py launch phase2.0_large_lr0.0002_wd0.20 ai2/titan  --train_module.optim_config.lr=0.0002 --train_module.optim_config.weight_decay=0.20 --launch.priority=urgent
+python scripts/2025_10_02_phase2/large.py launch phase2.0_large_lr0.0002_wd0.02 ai2/titan  --train_module.optim_config.lr=0.0002 --train_module.optim_config.weight_decay=0.02 --launch.priority=urgent
+python scripts/2025_10_02_phase2/large.py launch phase2.0_large_lr0.0002_wd0.002 ai2/titan  --train_module.optim_config.lr=0.0002 --train_module.optim_config.weight_decay=0.002 --launch.priority=urgent
+python scripts/2025_10_02_phase2/large.py launch phase2.0_large_lr0.0003_wd0.20 ai2/titan  --train_module.optim_config.lr=0.0003 --train_module.optim_config.weight_decay=0.20 --launch.priority=urgent
+python scripts/2025_10_02_phase2/large.py launch phase2.0_large_lr0.0003_wd0.02 ai2/titan  --train_module.optim_config.lr=0.0003 --train_module.optim_config.weight_decay=0.02 --launch.priority=urgent
+python scripts/2025_10_02_phase2/large.py launch phase2.0_large_lr0.0003_wd0.002 ai2/titan  --train_module.optim_config.lr=0.0003 --train_module.optim_config.weight_decay=0.002 --launch.priority=urgent
