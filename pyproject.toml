@@ -12,8 +12,25 @@ authors = [
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.11"
-
-dynamic = ["dependencies", "optional-dependencies"]
+dependencies = [
+    "ai2-olmo-core",
+    "albumentations>=1.4.10",
+    "cartopy>=0.25.0",
+    "class-registry>=2.1.2",
+    "einops>=0.7.0",
+    "gcsfs>=2025.9.0",
+    "hdf5plugin>=6.0.0",
+    "matplotlib>=3.10.7",
+    "numpy>=1.26.4",
+    "pandas>=2.2",
+    "psutil>=7.1.1",
+    "rasterio>=1.4.3",
+    "shapely>=2",
+    "torch>=2.7,<2.8",
+    "torchvision>=0.22.1",
+    "universal-pathlib>=0.2.5",
+    "wandb>=0.19.0",
+]
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -21,16 +38,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["olmoearth_pretrain*", "helios*"]
-
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
-
-[tool.setuptools.dynamic.optional-dependencies]
-dataset_creation = { file = ["requirements_dataset_creation.txt"] }
-dev = { file = ["requirements-dev.txt"] }
-eval = { file = ["requirements-eval.txt"] }
-beaker = { file = ["requirements-beaker.txt"] }
-all = { file = ["requirements.txt", "requirements-dev.txt", "requirements-eval.txt", "requirements-beaker.txt"] }
 
 [tool.setuptools.package-data]
 "olmoearth_pretrain.data.norm_configs" = ["*.json"]
@@ -51,6 +58,39 @@ testpaths = [
 ]
 addopts = [
     "--import-mode=importlib",
+]
+
+[tool.uv.sources]
+claymodel = { git = "https://github.com/Clay-foundation/model.git" }
+geobench = { git = "https://github.com/ServiceNow/geo-bench.git" }
+rslearn = { git = "https://github.com/allenai/rslearn.git", rev = "master" }
+ai2-olmo-core = { git = "https://github.com/allenai/OLMo-core.git", rev = "abc12e50ba756c21e575452cfc6f150dafa9509e" }
+
+[dependency-groups]
+dev = [
+    "gitpython>=3.0,<4.0",
+    "interrogate>=1.7.0",
+    "pre-commit>=4.3.0",
+    "pytest>=8.4.2",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.14.1",
+]
+eval = [
+    "albumentations>=1.4.10",
+    "breizhcrops==0.0.4.1",
+    "claymodel",
+    "geobench",
+    "geopandas>=1.1.1",
+    "pytorch-lightning==2.5.5",
+    "pyyaml>=6.0",
+    "rioxarray>=0.19.0",
+    "rslearn",
+    "satlaspretrain-models>=0.3.1",
+    "scikit-learn>=1.7.2",
+    "terratorch==1.1",
+    "timm==1.0.20",
+    "torchmetrics==1.7.1",
+    "xarray>=2025.10.1",
 ]
 
 [tool.ruff.lint.per-file-ignores]
