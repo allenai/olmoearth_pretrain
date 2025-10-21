@@ -702,7 +702,8 @@ class OlmoEarthDataset(Dataset):
         Updates the sample indices numpy array to only include the indices we want to train on.
         """
         # Read the metadata CSV
-        metadata_df = pd.read_csv(self.sample_metadata_path)
+        # TODO: Pandas can't read gcs upaths
+        metadata_df = pd.read_csv(str(self.sample_metadata_path))
         logger.info(f"Metadata CSV has {len(metadata_df)} samples")
         logger.info(f"columns: {metadata_df.columns}")
 
