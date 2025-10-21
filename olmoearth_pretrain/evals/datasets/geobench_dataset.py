@@ -3,9 +3,10 @@
 import logging
 import os
 from pathlib import Path
+from upath import UPath
 from types import MethodType
 
-import geobench
+from geobench.task import TaskSpecifications
 import matplotlib.pyplot as plt
 import numpy as np
 import torch.multiprocessing
@@ -13,6 +14,7 @@ from einops import repeat
 from geobench.dataset import Stats
 from torch.utils.data import Dataset
 from upath import UPath
+import pickle
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
@@ -54,6 +56,14 @@ def _landsathelios2geobench_name(band_name: str) -> str:
     }
     return transform[band_name]
 
+
+def load_geobench_task_specs(dataset_dir: Path) -> TaskSpecifications:
+    """Load task specifications from a dataset directory."""
+
+    pkl_path = UPath(dataset_dir) / "task_specs.pkl"
+    with pkl_path.open("rb") as fd:
+        task_specs = pickle.load(fd)
+    return task_specs
 
 GEOBENCH_L8_BAND_NAMES = [_landsathelios2geobench_name(b) for b in EVAL_L8_BAND_NAMES]
 
@@ -103,20 +113,15 @@ class GeobenchDataset(Dataset):
             from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
-
-        for task in geobench.task_iterator(
-            # e.g. "classification_v1.0"
-            benchmark_name=f"{config.task_type.value}_v1.0",
-            benchmark_dir=geobench_dir / f"{config.task_type.value}_v1.0",
-        ):
-            if task.dataset_name == dataset:
-                break
-        self.is_landsat = task.bands_info[0].__class__.__name__ == "Landsat8"
+        # GEOBENCH cannot handle remote upath objects
+        dataset_dir = geobench_dir / f"{config.task_type.value}_v1.0" / dataset
+        task = load_geobench_task_specs(dataset_dir)
         # hack: https://github.com/ServiceNow/geo-bench/issues/22
         task.get_dataset_dir = MethodType(
             lambda self: geobench_dir / f"{config.task_type.value}_v1.0" / dataset,
             task,
         )
+        self.is_landsat = task.bands_info[0].__class__.__name__ == "Landsat8"
 
         self.dataset = task.get_dataset(split=self.split, partition_name=self.partition)
 
