@@ -1,26 +1,14 @@
 """SICKLE dataset class."""
 
-import glob
-import logging
-import os
-import random
-import warnings
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
-from pathlib import Path
-from typing import Any
 
-import albumentations as A
-import cv2
+import logging
+import random
+from pathlib import Path
+
 import einops
 import numpy as np
-import pandas as pd
-import rasterio
 import torch
-import torch.multiprocessing
 from torch.utils.data import Dataset
-from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
@@ -38,7 +26,8 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
-
+# TODO: Move this into a worker init function and see if this has to do with the eval memory leak on long runs
+torch.multiprocessing.set_sharing_strategy("file_system")
 MONTH_TO_INT = {
     "jan": 1,
     "feb": 2,
