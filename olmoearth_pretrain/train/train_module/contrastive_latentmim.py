@@ -281,6 +281,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     )
                     del latent_a, latent_b
                     break
+                del latent_a, latent_b
+                loss.backward()
                 missing = []
                 for name, p in self.model.named_parameters():
                     if p.requires_grad and p.grad is None:
@@ -289,8 +291,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     print(f"[rank {torch.distributed.get_rank()}] Missing grads for {len(missing)} params:")
                     for n, d, s in missing:
                         print("  ", n, d, s)
-                del latent_a, latent_b
-                loss.backward()
 
         if dry_run:
             # add a barrier to ensure all processes are done
