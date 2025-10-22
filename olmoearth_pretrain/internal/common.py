@@ -119,7 +119,7 @@ def build_launch_config(
             name="TORCH_NCCL_TRACE_BUFFER_SIZE",
             value="1000000000" if nccl_debug else "0",
         ),
-        BeakerEnvVar(name="NCCL_BLOCKING_WAIT", value="1" if nccl_debug else "0"),
+        BeakerEnvVar(name="TORCH_NCCL_BLOCKING_WAIT", value="1" if nccl_debug else "0"),
         BeakerEnvVar(
             name="GOOGLE_APPLICATION_CREDENTIALS", value="/etc/gcp_credentials.json"
         ),
