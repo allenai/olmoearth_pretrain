@@ -239,7 +239,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                         encoded_tokens = (bandset_mask == 0).sum()
                         decoded_tokens = (bandset_mask == 2).sum()
                         neither_tokens = (bandset_mask == 3).sum()
+
                         logger.warning(f"Modality {modality} has {encoded_tokens} encoded tokens, {decoded_tokens} decoded tokens, and {neither_tokens} neither encoded nor decoded tokens")
+                logger.warning("DOing inference with gradients enabled")
                 loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
                 )
@@ -279,13 +281,16 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     )
                     del latent_a, latent_b
                     break
-
+                missing = []
+                for name, p in self.model.named_parameters():
+                    if p.requires_grad and p.grad is None:
+                        missing.append((name, p.device, p.shape))
+                if missing:
+                    print(f"[rank {torch.distributed.get_rank()}] Missing grads for {len(missing)} params:")
+                    for n, d, s in missing:
+                        print("  ", n, d, s)
                 del latent_a, latent_b
-                # TEMP HACK TO SEE which backward pass is causing the issue
-                if dry_run:
-                    loss.backward()
-                else:
-                    loss.backward()
+                loss.backward()
 
         if dry_run:
             # add a barrier to ensure all processes are done
