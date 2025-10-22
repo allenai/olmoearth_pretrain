@@ -17,17 +17,25 @@ This guide walks you through setting up and running pretraining jobs for OlmoEar
 ## Table of Contents
 
 1. [Environment Setup](#environment-setup) - External users start here
-2. [Dataset Setup](#dataset-setup) - Required for external users
-3. [Launching Scripts](#launching-scripts) - All users
-4. [Overrides and Experiments](#overrides-and-experiments) - All users
-5. [Gotchas and Troubleshooting](#gotchas-and-troubleshooting) - All users
-6. [Additional Resources](#additional-resources)
+2. [Launching Scripts](#launching-scripts) - All users
+3. [Dataset Setup](#dataset-setup) - Required for external users
+4. [Main Training Scripts](#main-training-scripts) - All users
+5. [Overrides and Experiments](#overrides-and-experiments) - All users
+6. [Gotchas and Troubleshooting](#gotchas-and-troubleshooting) - All users
+7. [Additional Resources](#additional-resources)
+8. [Quick Reference](#quick-reference)
 
 ---
 
 ## Environment Setup
 
-> **AI2 Researchers:** You can skip this section. See [Setup-Internal.md](Setup-Internal.md) for Beaker-specific setup.
+> **Note for AI2 Researchers:** You can skip this section. See [Setup-Internal.md](Setup-Internal.md) for Beaker-specific setup.
+
+This section covers:
+- Setting up your Python environment for local training
+- Installing required dependencies
+- Configuring your system for both containerized and non-containerized workflows
+- Running minimal single-GPU commands for debugging or limited hardware
 
 ### Prerequisites
 
@@ -55,24 +63,99 @@ This guide walks you through setting up and running pretraining jobs for OlmoEar
    pre-commit install
    ```
 
-### Required Environment Variables
 
-#### 1. W&B API Key (for logging)
+## Launching Scripts
+
+### Basic Command Structure
+
+All training scripts configure builder functions used in the main entrypoint: [`main` in `olmoearth_pretrain/internal/experiment.py`](../olmoearth_pretrain/internal/experiment.py#L364).
+
+**General Usage:**
+```bash
+python scripts/official/<SCRIPT>.py <SUBCOMMAND> <RUN_NAME> <CLUSTER> [OVERRIDES...]
+```
+
+For distributed training, use `torchrun`:
+```bash
+torchrun [TORCHRUN_OPTIONS] scripts/official/<SCRIPT>.py <SUBCOMMAND> <RUN_NAME> <CLUSTER> [OVERRIDES...]
+```
+
+**Required Arguments:**
+- `<SUBCOMMAND>`: The operation to perform (see [Available Subcommands](#available-subcommands) below)
+- `<RUN_NAME>`: A unique, descriptive name for your training run (e.g., `my_base_experiment`)
+  - Used to identify checkpoints, logs, and W&B runs
+  - Should be memorable and descriptive
+- `<CLUSTER>`: Cluster identifier that determines where outputs are saved
+  - **External users:** Always use `local`
+  - **AI2 researchers:** Use `local` for interactive sessions, or cluster names like `ai2/saturn` for batch jobs
+  - Determines the root directory for checkpoints and logs
+
+**Optional Arguments:**
+- `[OVERRIDES...]`: Configuration overrides in dot notation format
+  - Format: `--path.to.parameter=value`
+  - Example: `--data_loader.global_batch_size=256`
+  - See [Overrides](#overrides-and-experiments) section for details
+
+#### Available Subcommands
+
+The most commonly used subcommands are:
+- **`train`**: Run distributed training (use with `torchrun` for multi-GPU)
+- **`launch`**: Submit a Beaker job (AI2 researchers only)
+- **`dry_run`**: Validate configuration without running training
+
+For a complete list of subcommands and their usage, see the [`SubCmd` enum](../olmoearth_pretrain/internal/experiment.py#L280-L294) in the source code, or run any script without arguments to see the help message:
+```bash
+python scripts/official/base.py
+```
+
+#### Command Structure Examples
+
+**Example 1: Single-GPU Training for Debugging**
+```bash
+python scripts/official/nano.py train_single my_debug_run local \
+  --dataset.h5py_dir=/path/to/data \
+  --data_loader.global_batch_size=64
+```
+
+**Example 2: Multi-GPU Training with torchrun**
+```bash
+torchrun --nproc_per_node=4 scripts/official/base.py train my_pretrain_run local \
+  --dataset.h5py_dir=/path/to/data \
+  --data_loader.global_batch_size=512
+```
+
+**Example 3: Validate Configuration Without Training**
+```bash
+python scripts/official/base.py dry_run my_config_test local \
+  --trainer.max_duration.value=100
+```
+
+**Example 4: Submitting a Beaker Job (AI2 Only)**
+```bash
+python scripts/official/large.py launch my_large_model ai2/saturn \
+  --trainer.max_duration.value=300
+```
+
+
+
+### Environment Variables
+
+#### 1. W&B API Key (For Logging)
 
 ```bash
 export WANDB_API_KEY="your_wandb_api_key_here"
 ```
 
-**OR** disable W&B in your config:
+Alternatively, you can disable W&B logging in your configuration:
 ```bash
 --trainer.callbacks.wandb.enabled=False
 ```
 
 See the [Reference Guide](Reference.md#troubleshooting-guide) for more details.
 
-#### 2. Evaluation Dataset Paths (Optional)
+#### 2. Evaluation Dataset Paths
 
-If you want to run evaluations, override the default evaluation dataset paths:
+If you want to run evaluations with custom dataset locations, you can override the default evaluation dataset paths using environment variables:
 
 ```bash
 export GEOBENCH_DIR="/your/path/to/geobench"
@@ -92,28 +175,18 @@ You only need to set those you want to override; others will use their defaults 
 
 ## Dataset Setup
 
-> **AI2 Researchers:** Training datasets are already available on Weka at `/weka/dfive-default/helios/dataset/`. See the [README](../README.md#olmoearth-pretrain-dataset) for specific paths. You can skip the rest of this section.
+> **Note for AI2 Researchers:** Training datasets are already available on Weka at `/weka/dfive-default/helios/dataset/`. See the [README](../README.md#olmoearth-pretrain-dataset) for specific paths. You can skip the rest of this section.
 
 ### Training Dataset Requirements
 
 Your training data must be in **H5 format**. The dataset can be stored:
 - **Locally:** `/path/to/h5data/num_samples`
 - **Google Cloud Storage:** `gs://bucket_path/to/h5data/num_samples`
-- **Other cloud storage:** Supported via appropriate filesystem libraries
 
-### Creating an H5 Dataset
-
-To create an H5 dataset from tiles:
-
-```bash
-python3 -m olmoearth_pretrain.internal.run_h5_conversion
-```
-
-See `olmoearth_pretrain/data/dataset.py` for the expected H5 schema and format details.
 
 ### Dataset Path Configuration
 
-The dataset path **must be overridden** when launching scripts:
+External users must specify the dataset path when launching training scripts:
 
 ```bash
 --dataset.h5py_dir=/your/path/to/h5data/num_samples
@@ -126,77 +199,76 @@ Evaluation datasets have default paths set in [`olmoearth_pretrain/evals/dataset
 **For external users:** These defaults point to AI2 internal infrastructure. To use evaluations:
 
 1. Download/prepare the evaluation datasets locally
-2. Set environment variables (see [Environment Setup](#environment-setup))
-3. Or disable evaluations you don't have:
+2. Set environment variables (see [Environment Variables](#environment-variables))
+3. Or disable evaluations you don't have by adding the following override to your command:
    ```bash
-   --trainer.callbacks.downstream_evaluator.tasks_to_run='["mados","pastis_sentinel2"]'
+   --trainer.callbacks.downstream_evaluator.tasks_to_run=[mados,pastis_sentinel2]
    ```
+   The task names correspond to the user-chosen names specified in the training configuration
 
 ---
+### Main Training Scripts
+> **🏢 AI2 Researchers - Choose Your Launch Method:**
+>
+> **For Beaker Batch Jobs (Pre-emptible):**
+> Use `python3` with the `launch` subcommand:
+> ```bash
+> python3 scripts/official/base.py launch base_run ai2/saturn
+> ```
+> Replace `ai2/saturn` with your target cluster.
+> To launch on multiple clusters, specify any cluster and append the following override to your command:
+> ```bash
+> --launch.clusters=[ai2/saturn,ai2/jupiter]
+> ```
+> **⚠️ Remember:** Commit and push your code before launching and give your run a memorable name!
+>
+> **For Beaker Sessions (Interactive Debugging):**
+> Use the `torchrun` commands shown in the table below, just like external users:
+> ```bash
+> torchrun --nproc_per_node=8 scripts/official/base.py train base_run local
+> ```
+>
+> See [Setup-Internal.md](Setup-Internal.md#launch-methods) for more details.
 
-## Launching Scripts
+Below is a table demonstrating how to launch various model sizes using `torchrun` (for external users and AI2 sessions). Adjust the dataset path and configuration overrides as needed for your setup.
 
-### Main Training Script
+| Model Size | Script | Hardware | Example Command | Notes |
+|------------|--------|----------|-----------------|-------|
+| **Nano** | [`scripts/official/nano.py`](../scripts/official/nano.py) | 4x GPUs (16GB+ VRAM each) | `torchrun --nproc_per_node=4 scripts/official/nano.py train nano_run local` | Smallest model; good for limited hardware or debugging |
+| **Tiny** | [`scripts/official/tiny.py`](../scripts/official/tiny.py) | 4-8x GPUs (24GB+ VRAM each) | `torchrun --nproc_per_node=4 scripts/official/tiny.py train tiny_run local` | Small model for experimentation |
+| **Base** | [`scripts/official/base.py`](../scripts/official/base.py) | 8x GPUs (40GB+ VRAM each) | `torchrun --nproc_per_node=8 scripts/official/base.py train base_run local` | Standard pretraining configuration |
+| **Large** | [`scripts/official/large.py`](../scripts/official/large.py) | 8x GPUs (80GB VRAM each) | `torchrun --nproc_per_node=8 scripts/official/large.py train large_run local` | Largest model; requires high-memory GPUs |
 
-The main training entry point is `scripts/official/base.py`, which is launched via `torchrun`.
+> **⚠️ Hardware Adaptation Note:**
+> You may need to adapt parameters depending on your available hardware:
+> - **Limited VRAM:** Reduce `--data_loader.global_batch_size` and/or `--train_module.rank_microbatch_size`
+> - **Fewer GPUs:** Adjust `--nproc_per_node` and scale batch size accordingly
+> - **Different GPU types:** Monitor memory usage and adjust batch sizes to avoid OOM errors
+> - **CPU constraints:** Adjust `--data_loader.num_workers` based on available CPU cores
 
-#### Basic Command Structure
+**External Users - Specifying Dataset Path:**
 
+External users must specify the path to their HDF5 dataset directory by adding `--dataset.h5py_dir=/path/to/h5py_dir` to any command above.
+
+**Example:**
 ```bash
-torchrun [TORCHRUN_OPTIONS] scripts/official/base.py train <RUN_NAME> <CLUSTER> [OVERRIDES...]
+torchrun --nproc_per_node=4 scripts/official/nano.py train nano_run local \
+  --dataset.h5py_dir=/path/to/h5py_dir
 ```
 
-**Arguments:**
-- `train`: The subcommand (always "train" for training)
-- `<RUN_NAME>`: A descriptive name for your run (e.g., `debug_pretrain`)
-- `<CLUSTER>`: Cluster identifier
-  - **External users:** Use `local`
-  - **AI2 researchers:** Use `local` for sessions or see [Setup-Internal.md](Setup-Internal.md) for Beaker clusters
-- `[OVERRIDES...]`: CLI overrides for config parameters (see [Overrides](#overrides-and-experiments))
-
-#### Example: Local Single-GPU Training
-
+**Example with Base model:**
 ```bash
-torchrun \
-  --nproc_per_node=1 \
-  scripts/official/base.py train debug_pretrain local \
-  --dataset.h5py_dir=/path/to/your/h5data/num_samples \
-  --data_loader.num_workers=4 \
-  --train_module.rank_microbatch_size=16 \
-  --data_loader.global_batch_size=64
+torchrun --nproc_per_node=8 scripts/official/base.py train base_run local \
+  --dataset.h5py_dir=/path/to/your/h5data/num_samples
 ```
 
-#### Example: Multi-GPU Training
+> **💾 Checkpoint Saving Note:**
+> When using `local` as the cluster argument, checkpoints are automatically saved to `./local_output`. You can override this location with `--common.save_folder=path/to/savefolder`.
 
-```bash
-torchrun \
-  --nproc_per_node=8 \
-  --nnodes=1 \
-  scripts/official/base.py train multi_gpu_run local \
-  --dataset.h5py_dir=/path/to/your/h5data/num_samples \
-  --data_loader.num_workers=4 \
-  --data_loader.global_batch_size=512
-```
 
-**Note:** For cloud storage (GCS):
-```bash
---dataset.h5py_dir=gs://your-bucket/path/to/h5data/num_samples
-```
 
-### Launching Ablations
 
-Ablation scripts are located in dated directories under `scripts/`. To run an ablation:
 
-1. Navigate to the appropriate script directory (e.g., `scripts/2025_10_02_phase2/`)
-2. Identify the ablation script (e.g., `train_cross_random.py`)
-3. Launch with `torchrun`:
-   ```bash
-   torchrun --nproc_per_node=8 scripts/2025_10_02_phase2/your_ablation.py train ablation_name local [OVERRIDES]
-   ```
-
-**Tip:** Most ablation scripts follow the same pattern as `base.py` but with different default configurations.
-
----
 
 ## Overrides and Experiments
 
@@ -252,7 +324,7 @@ Override model architecture (requires understanding the model config structure):
 --model.decoder_config.depth=8
 ```
 
-### Example: Full Custom Run
+### Example: Custom Training Run with Multiple Overrides
 
 ```bash
 torchrun --nproc_per_node=8 scripts/official/base.py train custom_experiment local \
@@ -271,66 +343,13 @@ For more override patterns and examples, see the [Reference Guide](Reference.md#
 
 ## Gotchas and Troubleshooting
 
-### 1. Dataset Path Must Be Overridden
+When adapting the training setup to your hardware, the following parameters commonly require adjustment:
 
-**Problem:** The default dataset path in `scripts/official/script.py` points to a specific path that may not exist in your environment.
+- **Batch size** (`--data_loader.global_batch_size` and `--train_module.rank_microbatch_size`): Reduce these if you encounter out-of-memory errors
+- **Number of workers** (`--data_loader.num_workers`): Adjust based on available CPU cores for data loading
+- **Number of GPUs** (`--nproc_per_node` in torchrun): Set to match your available GPU count
 
-**Solution:** Always override `--dataset.h5py_dir` when launching:
-```bash
---dataset.h5py_dir=/your/actual/dataset/path
-```
-
-### 2. Some Evaluations Don't Support Remote Filesystems
-
-**Problem:** Certain evaluation datasets (e.g., GeoBench) may not work with GCS paths.
-
-**Solution:**
-- Copy evaluation datasets to local storage
-- Override the evaluation dataset paths via environment variables
-- Or disable problematic evaluations:
-  ```bash
-  --trainer.callbacks.downstream_evaluator.tasks_to_run='["mados","pastis_sentinel2"]'
-  ```
-
-### 3. W&B Errors
-
-**Problem:** Training fails with W&B authentication errors.
-
-**Solution:** Either:
-- Set `WANDB_API_KEY` environment variable
-- OR disable W&B in the config:
-  ```bash
-  --trainer.callbacks.wandb.enabled=False
-  ```
-
-### 4. Out of Memory (OOM) Errors
-
-**Problem:** GPU runs out of memory during training.
-
-**Solution:**
-- Reduce microbatch size: `--train_module.rank_microbatch_size=8`
-- Reduce global batch size: `--data_loader.global_batch_size=128`
-- Reduce token budget: `--data_loader.token_budget=1500`
-
-### 5. Slow Data Loading
-
-**Problem:** Training is bottlenecked by data loading.
-
-**Solution:**
-- Increase workers: `--data_loader.num_workers=16`
-- Increase prefetch: `--data_loader.prefetch_factor=8`
-- Use faster storage (local SSD > network storage > cloud storage)
-- Consider using 128x128 tile datasets (better for some bottleneck scenarios)
-
-### 6. Multi-Node Training
-
-**Problem:** Running multi-node distributed training requires additional configuration.
-
-**Solution:** See the [olmo-core documentation](https://github.com/allenai/olmo-core) for multi-node torchrun setup with proper `--nnodes`, `--node_rank`, and `--master_addr` parameters.
-
-For more troubleshooting, see the [Reference Guide](Reference.md#troubleshooting-guide).
-
----
+For detailed troubleshooting guidance, consult the [Reference Guide](Reference.md#troubleshooting-guide).
 
 ## Additional Resources
 

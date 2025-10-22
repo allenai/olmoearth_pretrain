@@ -36,12 +36,19 @@ beaker workspace set-budget ai2/earth-systems ai2/es-platform
 ### 3. Set Beaker Secrets
 
 ```bash
-beaker secret write <your_beaker_username>_WANDB_API_KEY <your_key>
-beaker secret write <your_beaker_username>_BEAKER_TOKEN <your_token>
-beaker secret write <your_beaker_username>_GITHUB_TOKEN <your_key>
+ACCOUNT=$(beaker account whoami --format json | jq -r '.[0].name')
+beaker secret write ${ACCOUNT}_WANDB_API_KEY <your_key>
+beaker secret write ${ACCOUNT}_BEAKER_TOKEN <your_token>
+beaker secret write ${ACCOUNT}_GITHUB_TOKEN <your_key>
+```
+/* Make sure you have `jq` installed: https://stedolan.github.io/jq/ */
 ```
 
 ### 4. Create Your Script
+
+
+BELOW NEEDS UPDATING
+
 
 Create a script based on `scripts/latent_mim.py` and configure your experiment (you can override specific changes as needed).
 
