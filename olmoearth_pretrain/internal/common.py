@@ -165,7 +165,7 @@ def build_launch_config(
             # so that we can use uv tools
             'export PATH="/root/.local/bin:$PATH" ',
             "uv sync --locked --all-groups",
-            'alias python="uv run python"',
+            "alias python='uv run python'",
             'uv run python -c "import sys; print(sys.executable)"',
             'python -c "import sys; print(sys.executable)"',
         ],
