@@ -282,6 +282,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     del latent_a, latent_b
                     break
                 del latent_a, latent_b
+                missing = []
+                for name, p in self.model.named_parameters():
+                    if p.requires_grad and p.grad is None:
+                        missing.append((name, p.device, p.shape))
+                if missing:
+                    print(f"[rank {torch.distributed.get_rank()}] Missing before backward grads for {len(missing)} params:")
                 loss.backward()
                 missing = []
                 for name, p in self.model.named_parameters():
@@ -298,7 +304,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             torch.cuda.synchronize()
             logger.warning("Barrier...")
             torch.distributed.barrier()
-            raise ValueError("Stopping training for debugging")
             return
 
         self.trainer.record_metric(
