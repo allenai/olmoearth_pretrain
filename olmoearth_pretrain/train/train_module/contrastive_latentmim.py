@@ -270,7 +270,11 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     break
 
                 del latent_a, latent_b
-                loss.backward()
+                # TEMP HACK TO SEE which backward pass is causing the issue
+                if dry_run:
+                    loss.backward()
+                else:
+                    loss.backward()
 
         if dry_run:
             # add a barrier to ensure all processes are done
