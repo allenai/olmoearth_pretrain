@@ -480,6 +480,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                 modality_specific_kwargs = {"patch_size": patch_size}
             # In the fast pass we want to the sync that comes with checking for online encoder
             if fast_pass or (token_mask == MaskValue.ONLINE_ENCODER.value).any():
+                logger.warning(f"Data seen by encoder for modality {modality}")
                 buffer_name = self._get_buffer_name(modality, idx)
                 patchified_data = torch.index_select(
                     modality_data, -1, getattr(self, buffer_name)
