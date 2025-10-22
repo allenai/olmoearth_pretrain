@@ -218,17 +218,26 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 # For masked batch a and b log the number of encoded and decoded tokens of each modality
                 for modality in masked_batch_a.modalities:
                     mask = getattr(masked_batch_a, masked_batch_a.get_masked_modality_name(modality))
-                    encoded_tokens = (mask == 0).sum()
-                    decoded_tokens = (mask == 2).sum()
-                    neither_tokens = (mask == 3).sum()
-                    logger.warning(f"Modality {modality} has {encoded_tokens} encoded tokens, {decoded_tokens} decoded tokens, and {neither_tokens} neither encoded nor decoded tokens")
+                    # check the number of encoded and decoded tokens for each bandset
+                    if modality not in [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]:
+                        continue
+                    for bandset_idx in range(modality.num_band_sets):
+                        bandset_mask = mask[..., bandset_idx]
+                        encoded_tokens = (bandset_mask == 0).sum()
+                        decoded_tokens = (bandset_mask == 2).sum()
+                        neither_tokens = (bandset_mask == 3).sum()
+                        logger.warning(f"Modality {modality} has {encoded_tokens} encoded tokens, {decoded_tokens} decoded tokens, and {neither_tokens} neither encoded nor decoded tokens")
                 for modality in masked_batch_b.modalities:
                     mask = getattr(masked_batch_b, masked_batch_b.get_masked_modality_name(modality))
-                    encoded_tokens = (mask == 0).sum()
-                    decoded_tokens = (mask == 2).sum()
-                    neither_tokens = (mask == 3).sum()
-                    logger.warning(f"Modality {modality} has {encoded_tokens} encoded tokens, {decoded_tokens} decoded tokens, and {neither_tokens} neither encoded nor decoded tokens")
-                # Run Encoder and decoder on the augmented input
+                    # check the number of encoded and decoded tokens for each bandset
+                    if modality not in [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]:
+                        continue
+                    for bandset_idx in range(modality.num_band_sets):
+                        bandset_mask = mask[..., bandset_idx]
+                        encoded_tokens = (bandset_mask == 0).sum()
+                        decoded_tokens = (bandset_mask == 2).sum()
+                        neither_tokens = (bandset_mask == 3).sum()
+                        logger.warning(f"Modality {modality} has {encoded_tokens} encoded tokens, {decoded_tokens} decoded tokens, and {neither_tokens} neither encoded nor decoded tokens")
                 loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
                 )
