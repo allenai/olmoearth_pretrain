@@ -731,7 +731,7 @@ class CompositeEncodings(nn.Module):
         embedding_size: int,
         supported_modalities: list[ModalitySpec],
         max_sequence_length: int,
-        learnable_channel_embeddings: bool = False,
+        learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
     ):
         """Initialize the composite encodings.
