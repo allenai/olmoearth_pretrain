@@ -259,6 +259,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 loss.backward()
 
         if dry_run:
+            # add a barrier to ensure all processes are done
+            torch.distributed.barrier()
             return
 
         self.trainer.record_metric(
