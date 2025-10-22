@@ -190,8 +190,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
 
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
         """
-        if dry_run:
-            return
         if not dry_run:
             self.update_target_encoder()
         # Set the model to train mode
