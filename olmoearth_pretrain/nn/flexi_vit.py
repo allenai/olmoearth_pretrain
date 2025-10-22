@@ -731,7 +731,7 @@ class CompositeEncodings(nn.Module):
         embedding_size: int,
         supported_modalities: list[ModalitySpec],
         max_sequence_length: int,
-        learnable_channel_embeddings: bool = True,
+        learnable_channel_embeddings: bool = False,
         random_channel_embeddings: bool = False,
     ):
         """Initialize the composite encodings.
@@ -941,7 +941,9 @@ class CompositeEncodings(nn.Module):
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
+        logger.warning(f"Modalities to process: {modalities_to_process}")
         for modality_name in modalities_to_process:
+            logger.warning(f"Applying encodings to modality {modality_name}")
             output_dict[modality_name] = self._apply_encodings_per_modality(
                 modality_name,
                 per_modality_input_tokens[modality_name],
