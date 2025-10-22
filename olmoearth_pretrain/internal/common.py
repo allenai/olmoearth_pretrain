@@ -168,9 +168,6 @@ def build_launch_config(
             # activate the uv venv
             "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
             'source "$(dirname "$venv_path")/activate"',
-            # check this worked
-            'uv run python -c "import sys; print(sys.executable)"',
-            'python -c "import sys; print(sys.executable)"',
         ],
     )
 
