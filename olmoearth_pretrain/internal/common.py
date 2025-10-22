@@ -154,6 +154,8 @@ def build_launch_config(
         setup_steps=[
             # Write GCP credentials.
             'echo "$GCP_CREDENTIALS" > $GOOGLE_APPLICATION_CREDENTIALS',
+            "echo $PATH",
+            "ls usr/bin/uv",
             # Clone private repo.
             "uv tool install gh",
             # assumes that uv is installed which is true for
