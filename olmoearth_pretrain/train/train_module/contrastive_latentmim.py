@@ -298,6 +298,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             torch.cuda.synchronize()
             logger.warning("Barrier...")
             torch.distributed.barrier()
+            raise ValueError("Stopping training for debugging")
             return
 
         self.trainer.record_metric(
