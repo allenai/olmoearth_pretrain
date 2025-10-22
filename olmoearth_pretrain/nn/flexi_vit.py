@@ -491,6 +491,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                     patchified_data, **modality_specific_kwargs
                 )
             else:
+                logger.warning(f"No data seen by encoder for modality {modality}")
                 mask_shape = token_mask.shape + (self.embedding_size,)
                 patchified_data = torch.zeros(
                     mask_shape, dtype=token_mask.dtype, device=token_mask.device

@@ -289,6 +289,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
 
         if dry_run:
             # add a barrier to ensure all processes are done
+            torch.cuda.synchronize()
             torch.distributed.barrier()
             return
 
