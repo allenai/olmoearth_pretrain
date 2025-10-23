@@ -3,6 +3,19 @@
 > **This guide is for AI2 researchers with access to Beaker, Weka, and internal infrastructure.**
 > External users should see [Pretraining.md](Pretraining.md) instead.
 
+---
+
+## Table of Contents
+
+1. [Quick Start](#quick-start-10-minutes)
+2. [Beaker Setup](#beaker-setup)
+3. [Launch Methods](#launch-methods)
+4. [Internal Datasets](#internal-datasets)
+5. [Beaker Information](#beaker-information)
+6. [Internal-Specific Gotchas](#internal-specific-gotchas)
+
+---
+
 ## Quick Start (10 Minutes)
 
 If you're an AI2 researcher, follow these steps to get running quickly:
@@ -41,16 +54,8 @@ beaker secret write ${ACCOUNT}_WANDB_API_KEY <your_key>
 beaker secret write ${ACCOUNT}_BEAKER_TOKEN <your_token>
 beaker secret write ${ACCOUNT}_GITHUB_TOKEN <your_key>
 ```
-/* Make sure you have `jq` installed: https://stedolan.github.io/jq/ */
-```
 
-### 4. Create Your Script
-
-
-BELOW NEEDS UPDATING
-
-
-Create a script based on `scripts/latent_mim.py` and configure your experiment (you can override specific changes as needed).
+> **Note:** Make sure you have `jq` installed: https://stedolan.github.io/jq/
 
 ---
 
@@ -58,17 +63,17 @@ Create a script based on `scripts/latent_mim.py` and configure your experiment (
 
 ### Pre-emptible Jobs
 
-To launch pre-emptible jobs, we use the main entrypoint in `olmoearth_pretrain/internal/experiment.py` and write python configuration files that use it like `scripts/latent_mim.py`.
+To launch pre-emptible jobs, we use the main entrypoint in [`olmoearth_pretrain/internal/experiment.py`](../olmoearth_pretrain/internal/experiment.py) and write python configuration files in `scripts/official/`.
 
 **⚠️ Important:** Before launching your script, **MAKE SURE YOUR CODE IS COMMITTED AND PUSHED** as we clone the code on top of a docker image when we launch the job.
 
 #### Launch Command
 
 ```bash
-python3 scripts/base_debug_scripts/latent_mim.py launch test_run ai2/saturn-cirrascale
+python3 scripts/official/base.py launch my_run_name ai2/saturn
 ```
 
-This will launch a Beaker job and stream the logs to your console until you cancel. Add additional overrides as needed.
+This will launch a Beaker job and stream the logs to your console until you cancel. Add additional overrides as needed (see [Pretraining.md](Pretraining.md) for details).
 
 ---
 
@@ -107,10 +112,10 @@ To use flash attention in a session:
 For debugging in sessions, use:
 
 ```bash
-torchrun scripts/base_debug_scripts/latent_mim.py train test_run local
+torchrun --nproc_per_node=8 scripts/official/base.py train test_run local
 ```
 
-Add additional overrides as needed.
+Add additional overrides as needed (see [Pretraining.md](Pretraining.md) for examples).
 
 ---
 
@@ -130,7 +135,7 @@ See the main [README.md](../README.md#olmoearth-pretrain-dataset) for specific d
 
 ### Evaluation Datasets
 
-Evaluation datasets have default paths configured in `olmoearth_pretrain/evals/datasets/paths.py` that point to internal AI2 infrastructure. You typically don't need to override these.
+Evaluation datasets have default paths configured in [`olmoearth_pretrain/evals/datasets/paths.py`](../olmoearth_pretrain/evals/datasets/paths.py) that point to internal AI2 infrastructure. You typically don't need to override these.
 
 ---
 
@@ -163,5 +168,6 @@ If you're experiencing slow data loading, consider using the 128x128 tile versio
 ## See Also
 
 - [Pretraining.md](Pretraining.md) - Main training guide (launching, overrides, experiments)
-- [Reference.md](Reference.md) - Configuration reference and troubleshooting
 - [README.md](../README.md) - Project overview and dataset details
+
+---

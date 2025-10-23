@@ -19,11 +19,9 @@ This guide walks you through setting up and running pretraining jobs for OlmoEar
 1. [Environment Setup](#environment-setup) - External users start here
 2. [Launching Scripts](#launching-scripts) - All users
 3. [Dataset Setup](#dataset-setup) - Required for external users
-4. [Main Training Scripts](#main-training-scripts) - All users
+4. [Official Training Scripts](#official-training-scripts) - All users
 5. [Overrides and Experiments](#overrides-and-experiments) - All users
-6. [Gotchas and Troubleshooting](#gotchas-and-troubleshooting) - All users
-7. [Additional Resources](#additional-resources)
-8. [Quick Reference](#quick-reference)
+6. [Helpful Files for Understanding](#helpful-files-for-understanding) - All users
 
 ---
 
@@ -159,8 +157,6 @@ Alternatively, you can disable W&B logging in your configuration:
 --trainer.callbacks.wandb.enabled=False
 ```
 
-See the [Reference Guide](Reference.md#troubleshooting-guide) for more details.
-
 #### 2. Evaluation Dataset Paths
 
 If you want to run evaluations with custom dataset locations, you can override the default evaluation dataset paths using environment variables:
@@ -200,6 +196,46 @@ External users must specify the dataset path when launching training scripts:
 --dataset.h5py_dir=/your/path/to/h5data/num_samples
 ```
 
+### Dataset Directory and File Structure
+
+The H5 dataset follows a hierarchical directory structure (see [`set_h5py_dir` in convert_to_h5py.py](../olmoearth_pretrain/dataset/convert_to_h5py.py)):
+
+```
+<tile_path>/
+  h5py_data_w_missing_timesteps[_compression_settings][_tilesize_x_numsubtiles]/
+    <sorted_modality_names>[_required_<required_mods>]/
+      <num_samples>/
+        sample_0.h5
+        sample_1.h5
+        ...
+        sample_metadata.csv
+        latlon_distribution.npy
+        compression_settings.json
+```
+
+**Example path:**
+```
+/path/to/data/h5py_data_w_missing_timesteps_gzip_9_shuffle_256_x_16/era5_10_naip_sentinel2/4096/
+```
+
+#### Core Files in Each Dataset
+
+1. **`sample_{index}.h5`** - Individual sample files containing:
+   - **`latlon`**: Float32 array `[lat, lon]` - geographic coordinates
+   - **`timestamps`**: Integer array `[T, 3]` where T=time steps, columns are `[day, month, year]`
+   - **Modality datasets**: Named by modality (e.g., `"sentinel2"`, `"era5_10"`, `"naip"`, `"landsat"` - see all available modalities in [`constants.py`](../olmoearth_pretrain/data/constants.py))
+     - Spatial modalities: Shape `[H, W, T, C]` or `[H, W, C]` depending on temporal variation
+     - Non-spatial modalities: Shape `[T, C]`
+   - **`missing_timesteps_masks/`** group: Boolean masks per modality (shape `[T]`) indicating which timestamps from the longest timestamp array are present for that specific modality (see [`_create_missing_timesteps_masks` in convert_to_h5py.py](../olmoearth_pretrain/dataset/convert_to_h5py.py))
+
+2. **`sample_metadata.csv`** - CSV with columns `sample_index, <modality1>, <modality2>...` where values are 1 (present) or 0 (absent), tracking which modalities exist in each sample (see [`save_sample_metadata` in convert_to_h5py.py](../olmoearth_pretrain/dataset/convert_to_h5py.py))
+
+3. **`latlon_distribution.npy`** - NumPy array `[N, 2]` of all sample lat/lons for dataset statistics (see [`save_latlon_distribution` in convert_to_h5py.py](../olmoearth_pretrain/dataset/convert_to_h5py.py))
+
+4. **`compression_settings.json`** - Stores compression algorithm, compression level options, and shuffle filter settings used for all H5 files (see [`save_compression_settings` in convert_to_h5py.py](../olmoearth_pretrain/dataset/convert_to_h5py.py))
+
+**Key Invariant:** All H5 files follow the same schema with `latlon`, `timestamps`, modality datasets, and `missing_timesteps_masks` group structure, ensuring consistency across the entire dataset.
+
 ### Evaluation Datasets
 
 Evaluation datasets have default paths set in [`olmoearth_pretrain/evals/datasets/paths.py`](../olmoearth_pretrain/evals/datasets/paths.py).
@@ -210,14 +246,16 @@ Evaluation datasets have default paths set in [`olmoearth_pretrain/evals/dataset
 2. Set environment variables (see [Environment Variables](#environment-variables))
 3. If not using all evaluations, enable only the ones you have set up by adding an override:
 
-  e.g to only run mados and pastis_sentinel2 evals add the following overide.
+   For example, to only run mados and pastis_sentinel2 evals add the following override:
    ```bash
    --trainer.callbacks.downstream_evaluator.tasks_to_run=\[mados,pastis_sentinel2\]
    ```
    The task names correspond to the user-chosen names specified in the training configuration
 
 ---
-### Official Training Scripts
+
+## Official Training Scripts
+
 > **🏢 AI2 Researchers - Choose Your Launch Method:**
 >
 > **For Beaker Batch Jobs (Pre-emptible):**
@@ -277,15 +315,11 @@ torchrun --nproc_per_node=8 scripts/official/base.py train base_run local \
 > When using `local` as the cluster argument, checkpoints are automatically saved to `./local_output`. You can override this location with `--common.save_folder=path/to/savefolder`.
 
 
-
-
-
-
 ## Overrides and Experiments
 
 ### How Overrides Work
 
-The experiment framework uses a builder pattern with override capabilities. You can override any configuration parameter via CLI arguments using dotted notation.
+The experiment framework uses a builder pattern with override capabilities. Launch scripts can be edited to change the configuration or you can override any configuration parameter via CLI arguments using dotted notation.
 
 ### Common Overrides
 
@@ -348,61 +382,25 @@ torchrun --nproc_per_node=8 scripts/official/base.py train custom_experiment loc
   --trainer.max_duration.epochs=100
 ```
 
-For more override patterns and examples, see the [Reference Guide](Reference.md#override-patterns).
 
 ---
 
-## Gotchas and Troubleshooting
 
-When adapting the training setup to your hardware, the following parameters commonly require adjustment:
+## Helpful Files for Understanding
 
-- **Batch size** (`--data_loader.global_batch_size` and `--train_module.rank_microbatch_size`): Reduce these if you encounter out-of-memory errors
-- **Number of workers** (`--data_loader.num_workers`): Adjust based on available CPU cores for data loading
-- **Number of GPUs** (`--nproc_per_node` in torchrun): Set to match your available GPU count
+### Configuration Files
+- [`scripts/official/base.py`](../scripts/official/base.py) - Main entry point, model config
+- [`scripts/official/script.py`](../scripts/official/script.py) - All component builders (dataset, dataloader, trainer, callbacks)
+- [`olmoearth_pretrain/evals/datasets/paths.py`](../olmoearth_pretrain/evals/datasets/paths.py) - Evaluation dataset path configuration
 
-For detailed troubleshooting guidance, consult the [Reference Guide](Reference.md#troubleshooting-guide).
+### Dataset Files
+- [`olmoearth_pretrain/data/dataset.py`](../olmoearth_pretrain/data/dataset.py) - Dataset implementation and configuration
+- [`olmoearth_pretrain/data/dataloader.py`](../olmoearth_pretrain/data/dataloader.py) - Dataloader implementation and configuration
+- [`olmoearth_pretrain/data/constants.py`](../olmoearth_pretrain/data/constants.py) - Modality definitions and constants
 
-## Additional Resources
-
-### Documentation
-
-- **[Setup-Internal.md](Setup-Internal.md)** - AI2 researchers: Beaker, sessions, internal infrastructure
-- **[Reference.md](Reference.md)** - Deep configuration reference, troubleshooting, helpful files
-- **[README.md](../README.md)** - Project overview, datasets, evaluation suite
-
-### Key Files
-
-- `scripts/official/base.py` - Main entry point and model config
-- `scripts/official/script.py` - Component builders (dataset, dataloader, trainer)
-- `olmoearth_pretrain/evals/datasets/paths.py` - Evaluation dataset paths
-- `olmoearth_pretrain/data/dataset.py` - Dataset implementation
-
-### External Resources
-
-- [olmo-core documentation](https://github.com/allenai/olmo-core) - Underlying training framework
-- [PyTorch Distributed](https://pytorch.org/docs/stable/distributed.html) - Multi-GPU/multi-node training
+### Training Files
+- [`olmoearth_pretrain/internal/experiment.py`](../olmoearth_pretrain/internal/experiment.py) - Core experiment orchestration
+- [`olmoearth_pretrain/train/train_module/`](../olmoearth_pretrain/train/train_module/) - Training module implementations
+- [`olmoearth_pretrain/train/masking.py`](../olmoearth_pretrain/train/masking.py) - Masking strategy implementations
 
 ---
-
-## Quick Reference
-
-### Minimal Working Example
-
-```bash
-# 1. Set up environment
-export WANDB_API_KEY="your_key"  # or use --trainer.callbacks.wandb.enabled=False
-
-# 2. Launch training
-torchrun \
-  --nproc_per_node=1 \
-  scripts/official/base.py train test_run local \
-  --dataset.h5py_dir=/your/path/to/h5data/num_samples \
-  --data_loader.global_batch_size=64 \
-  --train_module.rank_microbatch_size=16
-```
-
-### Getting Help
-
-- **Open an issue:** [GitHub Issues](https://github.com/allenai/olmoearth_pretrain/issues)
-- **Check documentation:** See [Reference.md](Reference.md) for detailed troubleshooting
-- **AI2 researchers:** See internal Slack channels or [Setup-Internal.md](Setup-Internal.md)
