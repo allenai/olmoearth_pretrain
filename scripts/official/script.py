@@ -19,13 +19,17 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
+
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
+from olmoearth_pretrain.internal.common import (
+    build_common_components as build_common_components_default,
+)
+from olmoearth_pretrain.internal.experiment import CommonComponents, SubCmd
 from olmoearth_pretrain.nn.flexi_vit import (
     PoolingType,
 )
-from olmoearth_pretrain.internal.experiment import CommonComponents, SubCmd
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthSpeedMonitorCallback,
@@ -38,14 +42,15 @@ from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
 )
 
-from olmoearth_pretrain.internal.common import build_common_components as build_common_components_default
 logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
 
-def build_common_components(script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]) -> CommonComponents:
+def build_common_components(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
     """Build the common components for an experiment."""
     config = build_common_components_default(script, cmd, run_name, cluster, overrides)
     config.training_modalities = [
@@ -76,12 +81,12 @@ def build_train_module_config(
                 "decode_ratio": 0.5,
                 "allow_encoding_decoding_same_bandset": True,
                 "only_decode_modalities": [
-                    "worldcover",
-                    # "srtm",
-                    # "openstreetmap_raster",
-                    # "wri_canopy_height_map",
-                    # "cdl",
-                    # "worldcereal",
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    Modality.WRI_CANOPY_HEIGHT_MAP.name,
+                    Modality.CDL.name,
+                    Modality.WORLDCEREAL.name,
                 ],
             }
         ),
@@ -129,9 +134,9 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
 def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     """Build the dataset config for an experiment."""
     return OlmoEarthDatasetConfig(
-            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
-            training_modalities=common.training_modalities,
-        )
+        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
+        training_modalities=common.training_modalities,
+    )
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
@@ -157,7 +162,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         "m-eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
             embedding_batch_size=128,
-            num_workers=8,
+            num_workers=0,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.steps(2),
@@ -171,7 +176,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             norm_stats_from_pretrained=False,
             probe_lr=0.01,
             epochs=50,
-            eval_interval=Duration.steps(10),
+            eval_interval=Duration.steps(4000),
         ),
         "pastis": DownstreamTaskConfig(
             dataset="pastis",
@@ -255,7 +260,9 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
-        .with_callback("beaker", BeakerCallback()) # this shoukd not be here, but for now it is
+        .with_callback(
+            "beaker", BeakerCallback()
+        )  # this shoukd not be here, but for now it is
         .with_callback(
             "checkpointer",
             CheckpointerCallback(
