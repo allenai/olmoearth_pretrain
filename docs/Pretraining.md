@@ -118,7 +118,7 @@ python scripts/official/base.py
 
 **Example 1: Single-GPU Training for Debugging**
 ```bash
-python scripts/official/nano.py train_single my_debug_run local \
+torchrun scripts/official/nano.py train_ my_debug_run local \
   --dataset.h5py_dir=/path/to/data \
   --data_loader.global_batch_size=64
 ```
@@ -321,7 +321,30 @@ torchrun --nproc_per_node=8 scripts/official/base.py train base_run local \
 
 The experiment framework uses a builder pattern with override capabilities. Launch scripts can be edited to change the configuration or you can override any configuration parameter via CLI arguments using dotted notation.
 
-### Common Overrides
+### Example: Custom Training Run with Multiple Overrides
+
+```bash
+torchrun --nproc_per_node=8 scripts/official/base.py train custom_experiment local \
+  --data_loader.global_batch_size=256 \
+  --data_loader.num_workers=8 \
+  --train_module.rank_microbatch_size=8 \
+  --train_module.optim_config.lr=0.0002 \
+  --train_module.scheduler.warmup_steps=5000 \
+  --trainer.max_duration.epochs=100
+  # Optionally --dataset.h5py_dir=/your/path/to/data \
+```
+
+### Example Single GPU debug Setup
+
+```bash
+torchrun scripts/official/base.py train custom_experiment local \
+  --data_loader.global_batch_size=64 \
+  --data_loader.num_workers=4 \
+  --train_module.rank_microbatch_size=16 \
+  --trainer.callbacks.wandb.enabled=False
+  # Optionally --dataset.h5py_dir=/your/path/to/data \
+```
+---
 
 #### Dataset Configuration
 
@@ -368,31 +391,6 @@ Override model architecture (requires understanding the model config structure):
 --model.encoder_config.embedding_size=768
 --model.decoder_config.depth=8
 ```
-
-### Example: Custom Training Run with Multiple Overrides
-
-```bash
-torchrun --nproc_per_node=8 scripts/official/base.py train custom_experiment local \
-  --dataset.h5py_dir=/your/path/to/data \
-  --data_loader.global_batch_size=256 \
-  --data_loader.num_workers=8 \
-  --train_module.rank_microbatch_size=8 \
-  --train_module.optim_config.lr=0.0002 \
-  --train_module.scheduler.warmup_steps=5000 \
-  --trainer.max_duration.epochs=100
-```
-
-### Example Single GPU debug Setup
-
-```bash
-torchrun scripts/official/base.py train custom_experiment local \
-  --data_loader.global_batch_size=64 \
-  --data_loader.num_workers=4 \
-  --train_module.rank_microbatch_size=16 \
-  --trainer.callbacks.wandb.enabled=False
-  # Optionally --dataset.h5py_dir=/your/path/to/data \
-```
----
 
 
 ## Helpful Files for Understanding
