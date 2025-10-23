@@ -1173,47 +1173,51 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             # check we have more than 0 encoded and decoded tokens.
             # this should happen very rarely (only in the S2-only ablation when
             # the h, w is small)
-        #     flat_mask = torch.flatten(out_modality_mask, start_dim=1)
-        #     encoded_for_modality = (flat_mask == MaskValue.ONLINE_ENCODER.value).sum(
-        #         dim=-1
-        #     )
-        #     decoded_for_modality = (flat_mask == MaskValue.DECODER.value).sum(dim=-1)
-        #     if num_encoded is None:
-        #         num_encoded = encoded_for_modality
-        #     else:
-        #         num_encoded += encoded_for_modality
-        #     if num_decoded is None:
-        #         num_decoded = decoded_for_modality
-        #     else:
-        #         num_decoded += decoded_for_modality
+            flat_mask = torch.flatten(out_modality_mask, start_dim=1)
+            encoded_for_modality = (flat_mask == MaskValue.ONLINE_ENCODER.value).sum(
+                dim=-1
+            )
+            decoded_for_modality = (flat_mask == MaskValue.DECODER.value).sum(dim=-1)
+            if num_encoded is None:
+                num_encoded = encoded_for_modality
+            else:
+                num_encoded += encoded_for_modality
+            if num_decoded is None:
+                num_decoded = decoded_for_modality
+            else:
+                num_decoded += decoded_for_modality
             masked_batch_dict[masked_modality_name] = out_modality_mask
-        # # Again - no_encoded_indices and no_decoded_indices should have length > 0 very rarely
-        # # (so far this has only happened when we ablate S2 only, and have a small h, w), so these
-        # # loops should not be entered very often.
-        # no_encoded_indices = torch.argwhere(num_encoded == 0)
-        # no_decoded_indices = torch.argwhere(num_decoded == 0)
-        # for i in no_encoded_indices:
-        #     for key, val in masked_batch_dict.items():
-        #         if key.endswith("mask"):
-        #             modality_mask = val[i]
-        #             modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
-        #                 key
-        #             )
-        #             modality_spec = Modality.get(modality_name)
-        #             masked_batch_dict[key][i] = self._random_fill_unmasked(
-        #                 modality_mask, modality_spec, patch_size
-        #             )
-        # for i in no_decoded_indices:
-        #     for key, val in masked_batch_dict.items():
-        #         if key.endswith("mask"):
-        #             modality_mask = val[i]
-        #             modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
-        #                 key
-        #             )
-        #             modality_spec = Modality.get(modality_name)
-        #             masked_batch_dict[key][i] = self._random_fill_unmasked(
-        #                 modality_mask, modality_spec, patch_size
-        #             )
+        # Again - no_encoded_indices and no_decoded_indices should have length > 0 very rarely
+        # (so far this has only happened when we ablate S2 only, and have a small h, w), so these
+        # loops should not be entered very often.
+        no_encoded_indices = torch.argwhere(num_encoded == 0)
+        no_decoded_indices = torch.argwhere(num_decoded == 0)
+        for i in no_encoded_indices:
+            for key, val in masked_batch_dict.items():
+                if key.endswith("mask"):
+                    modality_mask = val[i]
+                    modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
+                        key
+                    )
+                    if modality_name in self.only_decode_modalities:
+                        continue
+                    modality_spec = Modality.get(modality_name)
+                    masked_batch_dict[key][i] = self._random_fill_unmasked(
+                        modality_mask, modality_spec, patch_size
+                    )
+        for i in no_decoded_indices:
+            for key, val in masked_batch_dict.items():
+                if key.endswith("mask"):
+                    modality_mask = val[i]
+                    modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
+                        key
+                    )
+                    if modality_name in self.only_decode_modalities:
+                        continue
+                    modality_spec = Modality.get(modality_name)
+                    masked_batch_dict[key][i] = self._random_fill_unmasked(
+                        modality_mask, modality_spec, patch_size
+                    )
         masked_batch = MaskedOlmoEarthSample(**masked_batch_dict)
 
         return masked_batch
