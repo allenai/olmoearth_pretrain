@@ -1,3 +1,4 @@
+"""SICKLE processor."""
 import argparse
 import glob
 import logging
@@ -20,6 +21,7 @@ from olmoearth_pretrain.evals.datasets.sickle_dataset import (
     L8_BANDS_IMPUTED,
     S1_BANDS,
     S2_BANDS,
+    L8_BANDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -430,10 +432,10 @@ def process_sickle(
     )
     processor.process()
 
-    # INSERT_YOUR_CODE
 
 
 def main():
+    """Main function to process SICKLE dataset."""
     parser = argparse.ArgumentParser(
         description="Process SICKLE dataset into PyTorch objects."
     )

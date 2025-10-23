@@ -69,6 +69,7 @@ class PASTISRDataset(Dataset):
 
         Args:
             path_to_splits: Path where .pt objects returned by process_pastis_r have been saved
+            dir_partition: Path to the partition directory, only used if partition is not "default"
             split: Split to use
             partition: Partition to use
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
