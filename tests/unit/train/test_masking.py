@@ -1206,27 +1206,43 @@ def test_cross_random_masking_with_encode_and_decode_modalities_and_hw_1() -> No
         encode_ratio=0.5,
         decode_ratio=0.5,
         allow_encoding_decoding_same_bandset=True,
-        only_decode_modalities=[Modality.WORLDCOVER.name, Modality.SRTM.name, Modality.OPENSTREETMAP_RASTER.name, Modality.WRI_CANOPY_HEIGHT_MAP.name, Modality.CDL.name, Modality.WORLDCEREAL.name],
+        only_decode_modalities=[
+            Modality.WORLDCOVER.name,
+            Modality.SRTM.name,
+            Modality.OPENSTREETMAP_RASTER.name,
+            Modality.WRI_CANOPY_HEIGHT_MAP.name,
+            Modality.CDL.name,
+            Modality.WORLDCEREAL.name,
+        ],
     )
     batch = OlmoEarthSample(
         sentinel1=torch.ones((1, 1, 1, 1, Modality.SENTINEL1.num_bands)),
         worldcover=torch.ones((1, 1, 1, 1, Modality.WORLDCOVER.num_bands)),
         srtm=torch.ones((1, 1, 1, 1, Modality.SRTM.num_bands)),
-        openstreetmap_raster=torch.ones((1, 1, 1, 1, Modality.OPENSTREETMAP_RASTER.num_bands)),
-        wri_canopy_height_map=torch.ones((1, 1, 1, 1, Modality.WRI_CANOPY_HEIGHT_MAP.num_bands)),
+        openstreetmap_raster=torch.ones(
+            (1, 1, 1, 1, Modality.OPENSTREETMAP_RASTER.num_bands)
+        ),
+        wri_canopy_height_map=torch.ones(
+            (1, 1, 1, 1, Modality.WRI_CANOPY_HEIGHT_MAP.num_bands)
+        ),
         cdl=torch.ones((1, 1, 1, 1, Modality.CDL.num_bands)),
         worldcereal=torch.ones((1, 1, 1, 1, Modality.WORLDCEREAL.num_bands)),
         timestamps=torch.ones((1, 3, 1), dtype=torch.long),
     )
     masked_sample = masking_strategy.apply_mask(batch, patch_size=1)
     # Ensure we never encode decode only modalities in this case
-    assert (masked_sample.sentinel1_mask == MaskValue.ONLINE_ENCODER.value).sum() > 0
-    assert (masked_sample.worldcover_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0
-    assert (masked_sample.srtm_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0
-    assert (masked_sample.openstreetmap_raster_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0
-    assert (masked_sample.wri_canopy_height_map_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0
-    assert (masked_sample.cdl_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0
-    assert (masked_sample.worldcereal_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0
+    assert (masked_sample.sentinel1_mask == MaskValue.ONLINE_ENCODER.value).sum() > 0 # type: ignore
+    assert (masked_sample.worldcover_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0 # type: ignore
+    assert (masked_sample.srtm_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0 # type: ignore
+    assert (
+        masked_sample.openstreetmap_raster_mask == MaskValue.ONLINE_ENCODER.value
+    ).sum() == 0 # type: ignore
+    assert (
+        masked_sample.wri_canopy_height_map_mask == MaskValue.ONLINE_ENCODER.value
+    ).sum() == 0 # type: ignore
+    assert (masked_sample.cdl_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0 # type: ignore
+    assert (masked_sample.worldcereal_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0 # type: ignore
+
 
 def test_mask_when_most_samples_are_missing() -> None:
     """Test the following failure case no longer occurs.

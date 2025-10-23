@@ -946,7 +946,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     )
                     # only say something is present if it has any encoded tokens
                     # A little hacky but basically means that we leave the bandset untouched for encoding and decoding
-                    if not is_any_tokens_encoded_for_sample and modality not in self.only_decode_modalities:
+                    if (
+                        not is_any_tokens_encoded_for_sample
+                        and modality not in self.only_decode_modalities
+                    ):
                         continue
                     present_modalities_bandsets[sample_idx].append(
                         (modality, bandset_idx)
