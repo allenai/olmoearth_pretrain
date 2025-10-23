@@ -1011,7 +1011,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
     ) -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
         """Handle single modality case: encode only, no cross-modality decoding possible."""
         encoded_bandset_idxs = set(present)
-        decoded_bandset_idxs = set()
+        decoded_bandset_idxs: set = set()
         return encoded_bandset_idxs, decoded_bandset_idxs
 
     def _select_bandsets_two_modalities(
@@ -1030,8 +1030,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         encodable = self._filter_encodable_bandsets(present)
         num_encode = self._compute_num_bandsets_to_encode(encodable, num_present)
         encoded = self._randomly_select_encoded_bandsets(encodable, num_encode)
-        num_decode = self._compute_num_bandsets_to_decode(num_present)
-        decoded = self._randomly_select_decoded_bandsets(present, encoded, num_decode)
+        min_max_decode = self._compute_num_bandsets_to_decode(num_present)
+        decoded = self._randomly_select_decoded_bandsets(
+            present, encoded, min_max_decode
+        )
         return encoded, decoded
 
     def _filter_encodable_bandsets(
@@ -1077,12 +1079,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self, encodable: list[tuple[str, int]], num_encode: int
     ) -> set[tuple[str, int]]:
         """Randomly select which bandsets to encode."""
-        encoded_idxs = np.random.choice(
-            len(encodable), size=num_encode, replace=False
-        )
+        encoded_idxs = np.random.choice(len(encodable), size=num_encode, replace=False)
         return set([encodable[i] for i in encoded_idxs])
 
-    def _compute_num_bandsets_to_decode(self, num_present: int) -> int:
+    def _compute_num_bandsets_to_decode(self, num_present: int) -> tuple[int, int]:
         """Compute how many bandsets to decode based on configuration."""
         min_decoded = min(self.min_decoded_bandsets or 1, num_present)
         max_decoded = min(self.max_decoded_bandsets or num_present, num_present)
@@ -1092,10 +1092,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self,
         present: list[tuple[str, int]],
         encoded: set[tuple[str, int]],
-        num_decode_tuple: tuple[int, int],
+        min_max_decode: tuple[int, int],
     ) -> set[tuple[str, int]]:
         """Randomly select which bandsets to decode."""
-        min_decoded, max_decoded = num_decode_tuple
+        min_decoded, max_decoded = min_max_decode
 
         if self.allow_encoding_decoding_same_bandset:
             # Can select from all present bandsets
@@ -1122,7 +1122,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
     # PHASE 2: MASK APPLICATION
     # Methods for applying encode/decode rules to mask tensors
     # =================================================================
-
 
     def apply_bandset_mask_rules(
         self,
@@ -1295,7 +1294,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 sample_idx, bandset_idx, modality_mask, out_modality_mask
             )
 
-
     def _overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
         """Overide the mask for a modality depending on the strategy being modality cross masked.
 
@@ -1327,9 +1325,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         else:
             return
 
-        logger.debug(
-            f"Setting {modality} bandset {bandset_idx} to {forced_mask_value}"
-        )
+        logger.debug(f"Setting {modality} bandset {bandset_idx} to {forced_mask_value}")
         not_missing_mask = (
             modality_mask[sample_idx, ..., bandset_idx] != MaskValue.MISSING.value
         )
@@ -1436,7 +1432,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             self._fix_sample_with_no_tokens(masked_batch_dict, i, patch_size)
 
     def _fix_sample_with_no_tokens(
-        self, masked_batch_dict: dict[str, Any], sample_idx: torch.Tensor, patch_size: int
+        self,
+        masked_batch_dict: dict[str, Any],
+        sample_idx: torch.Tensor,
+        patch_size: int,
     ) -> None:
         """Fix a single sample that has no encoded or decoded tokens using random masking."""
         for key, val in masked_batch_dict.items():
