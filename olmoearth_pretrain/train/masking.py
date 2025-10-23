@@ -1205,6 +1205,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
                         key
                     )
+                    if modality_name in self.only_decode_modalities:
+                        continue
                     modality_spec = Modality.get(modality_name)
                     masked_batch_dict[key][i] = self._random_fill_unmasked(
                         modality_mask, modality_spec, patch_size
@@ -1216,6 +1218,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
                         key
                     )
+                    if modality_name in self.only_decode_modalities:
+                        continue
                     modality_spec = Modality.get(modality_name)
                     masked_batch_dict[key][i] = self._random_fill_unmasked(
                         modality_mask, modality_spec, patch_size
