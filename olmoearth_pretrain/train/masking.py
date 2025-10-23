@@ -1168,10 +1168,11 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 modality
             )
             masked_batch_dict[masked_modality_name] = out_mask
+            # Tracking these to ensure no tokens are accumulated.
             num_encoded = self._accumulate_token_counts(num_encoded, enc_count)
             num_decoded = self._accumulate_token_counts(num_decoded, dec_count)
 
-        # Handle edge cases where samples have no encoded or decoded tokens
+        # Handle edge cases where samples have no encoded or decoded tokens (only happens for some ablations)
         self._handle_no_tokens_edge_cases(
             masked_batch_dict, num_encoded, num_decoded, patch_size
         )
