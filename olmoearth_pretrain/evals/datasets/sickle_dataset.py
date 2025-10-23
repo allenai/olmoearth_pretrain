@@ -1,6 +1,5 @@
 """SICKLE dataset class."""
 
-
 import logging
 import random
 from pathlib import Path

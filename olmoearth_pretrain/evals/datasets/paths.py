@@ -1,6 +1,7 @@
 """Dataset paths configured via environment variables."""
 
 import os
+
 from upath import UPath
 
 # Only available to internal users
@@ -25,7 +26,9 @@ MADOS_DIR = UPath(os.getenv("MADOS_DIR", _DEFAULTS["MADOS_DIR"]))
 FLOODS_DIR = UPath(os.getenv("FLOODS_DIR", _DEFAULTS["FLOODS_DIR"]))
 PASTIS_DIR = UPath(os.getenv("PASTIS_DIR", _DEFAULTS["PASTIS_DIR"]))
 PASTIS_DIR_ORIG = UPath(os.getenv("PASTIS_DIR_ORIG", _DEFAULTS["PASTIS_DIR_ORIG"]))
-PASTIS_DIR_PARTITION = UPath(os.getenv("PASTIS_DIR_PARTITION", _DEFAULTS["PASTIS_DIR_PARTITION"]))
+PASTIS_DIR_PARTITION = UPath(
+    os.getenv("PASTIS_DIR_PARTITION", _DEFAULTS["PASTIS_DIR_PARTITION"])
+)
 SICKLE_DIR = UPath(os.getenv("SICKLE_DIR", _DEFAULTS["SICKLE_DIR"]))
 NANDI_DIR = UPath(os.getenv("NANDI_DIR", _DEFAULTS["NANDI_DIR"]))
 AWF_DIR = UPath(os.getenv("AWF_DIR", _DEFAULTS["AWF_DIR"]))

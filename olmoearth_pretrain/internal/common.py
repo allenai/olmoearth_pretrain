@@ -10,7 +10,7 @@ from olmo_core.launch.beaker import (
     BeakerPriority,
     BeakerWekaBucket,
     OLMoCoreBeakerImage,
-    is_running_in_beaker
+    is_running_in_beaker,
 )
 from olmo_core.utils import generate_uuid
 from upath import UPath
@@ -45,6 +45,7 @@ WEKA_CLUSTER_NAMES = [
 LOCAL_CLUSTER_NAME = "local"
 ANONYMOUS_USER = "anonymous"
 
+
 def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig:
     """Build the visualize config for an experiment."""
     return OlmoEarthVisualizeConfig(
@@ -75,6 +76,7 @@ def get_root_dir(cluster: str) -> str:
         raise ValueError(f"Cluster {cluster} is not supported")
     return root_dir
 
+
 def extract_nccl_debug_from_overrides(overrides: list[str]) -> bool:
     """Extract the nccl_debug flag from the overrides."""
     for override in overrides:
@@ -82,9 +84,12 @@ def extract_nccl_debug_from_overrides(overrides: list[str]) -> bool:
             return override.split("=")[1].lower() in ("true", "1", "yes")
     return False
 
-def set_nccl_debug_env_vars(nccl_debug: bool, local: bool = False) -> list[BeakerEnvVar] | None:
-    """
-    Set the NCCL debug environment variables.
+
+def set_nccl_debug_env_vars(
+    nccl_debug: bool, local: bool = False
+) -> list[BeakerEnvVar] | None:
+    """Set the NCCL debug environment variables.
+
     If on_beaker is True, returns a list of BeakerEnvVar for use in a Beaker launch config.
     Otherwise, sets these variables in the local environment and returns None.
     """
@@ -100,6 +105,7 @@ def set_nccl_debug_env_vars(nccl_debug: bool, local: bool = False) -> list[Beake
         for k, v in nccl_settings.items():
             os.environ[k] = v
         return None
+
 
 def build_launch_config(
     *,
@@ -237,7 +243,7 @@ def build_common_components(
     # Extract nccl_debug from overrides if present
     nccl_debug = extract_nccl_debug_from_overrides(overrides)
     # If we are running on a local cluster, we don't need to build a launch config as we may not have beaker access
-    if (local := cluster == LOCAL_CLUSTER_NAME):
+    if local := cluster == LOCAL_CLUSTER_NAME:
         set_nccl_debug_env_vars(nccl_debug=nccl_debug, local=local)
         launch_config = None
     else:

@@ -1,6 +1,5 @@
 """Launching entrypoint for OlmoEarth Pretrain Beaker experiments."""
 
-
 from dataclasses import dataclass
 
 from beaker import ExperimentSpec

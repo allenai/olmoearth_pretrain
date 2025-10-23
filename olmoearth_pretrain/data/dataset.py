@@ -921,7 +921,9 @@ class OlmoEarthDataset(Dataset):
         sample_dict = {}
         with h5_file_path.open("rb") as f:
             with h5py.File(f, "r") as h5file:
-                logger.debug(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
+                logger.debug(
+                    f"Reading h5 file {h5_file_path} with keys {h5file.keys()}"
+                )
                 # timestamps should not be a floating string
                 sample_dict = {
                     k: v[()]

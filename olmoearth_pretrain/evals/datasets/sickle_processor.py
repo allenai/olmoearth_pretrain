@@ -1,4 +1,4 @@
-
+import argparse
 import glob
 import logging
 import os
@@ -15,8 +15,12 @@ import pandas as pd
 import rasterio
 import torch
 from upath import UPath
-import argparse
-from olmoearth_pretrain.evals.datasets.sickle_dataset import L8_BANDS_IMPUTED, S1_BANDS, S2_BANDS
+
+from olmoearth_pretrain.evals.datasets.sickle_dataset import (
+    L8_BANDS_IMPUTED,
+    S1_BANDS,
+    S2_BANDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -427,25 +431,26 @@ def process_sickle(
     processor.process()
 
     # INSERT_YOUR_CODE
-def main():
 
-    parser = argparse.ArgumentParser(description="Process SICKLE dataset into PyTorch objects.")
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Process SICKLE dataset into PyTorch objects."
+    )
     parser.add_argument(
         "--csv_path",
         type=str,
         default=str(CSV_PATH),
-        help="Path to the SICKLE tabular CSV file."
+        help="Path to the SICKLE tabular CSV file.",
     )
     parser.add_argument(
         "--data_dir",
         type=str,
         default=str(DATA_DIR),
-        help="Path to the raw SICKLE image data directory."
+        help="Path to the raw SICKLE image data directory.",
     )
     parser.add_argument(
-        "--output_dir",
-        type=str,
-        help="Output directory to save processed dataset."
+        "--output_dir", type=str, help="Output directory to save processed dataset."
     )
     args = parser.parse_args()
 
@@ -454,6 +459,7 @@ def main():
         data_dir=args.data_dir,
         output_dir=args.output_dir,
     )
+
 
 if __name__ == "__main__":
     main()

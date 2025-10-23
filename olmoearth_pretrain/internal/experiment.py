@@ -20,7 +20,6 @@ from olmo_core.utils import get_default_device, prepare_cli_environment, seed_al
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
-from olmoearth_pretrain.launch.beaker import OlmoEarthBeakerLaunchConfig
 from olmoearth_pretrain.data.dataset import (
     OlmoEarthDatasetConfig,
     collate_olmoearth_pretrain,
@@ -29,11 +28,13 @@ from olmoearth_pretrain.data.visualize import visualize_sample
 from olmoearth_pretrain.inference_benchmarking.run_throughput_benchmark import (
     ThroughputBenchmarkRunnerConfig,
 )
+from olmoearth_pretrain.launch.beaker import OlmoEarthBeakerLaunchConfig
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModuleConfig,
 )
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class CommonComponents(Config):
@@ -243,7 +244,9 @@ def launch(config: OlmoEarthExperimentConfig) -> None:
     logger.info("Launching the experiment")
     logger.info(config)
     # Set follow=False if you don't want to stream the logs to the terminal
-    config.launch.launch(follow=False, torchrun=True) # always run with torchrun so you can run distributed scripts optionally on single gpu
+    config.launch.launch(
+        follow=False, torchrun=True
+    )  # always run with torchrun so you can run distributed scripts optionally on single gpu
 
 
 def prep(config: OlmoEarthExperimentConfig) -> None:

@@ -3,12 +3,12 @@
 import json
 import logging
 from pathlib import Path
+
 import einops
 import numpy as np
 import torch
 import torch.multiprocessing
 from torch.utils.data import Dataset
-from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 # TODO: Move this into a worker init function and see if this has to do with the eval memory leak on long runs
 torch.multiprocessing.set_sharing_strategy("file_system")
-
 
 
 S2_BAND_STATS = {
@@ -49,7 +48,6 @@ S1_BAND_STATS = {
     "vv": {"mean": -10.7902, "std": 2.8360},
     "vh": {"mean": -17.3257, "std": 2.8106},
 }
-
 
 
 class PASTISRDataset(Dataset):
@@ -145,9 +143,7 @@ class PASTISRDataset(Dataset):
         if (partition != "default") and (split == "train"):
             assert dir_partition is not None, "dir_partition must be set"
             # PASTIS and PASTIS-R share the same partitions so we just use PASTIS Partitions
-            with open(
-                dir_partition / f"{partition}_partition.json"
-            ) as json_file:
+            with open(dir_partition / f"{partition}_partition.json") as json_file:
                 subset_indices = json.load(json_file)
             self.months = self.months[subset_indices]
             self.labels = self.labels[subset_indices]

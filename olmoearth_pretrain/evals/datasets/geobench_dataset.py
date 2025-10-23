@@ -2,19 +2,18 @@
 
 import logging
 import os
+import pickle
 from pathlib import Path
-from upath import UPath
 from types import MethodType
 
-from geobench.task import TaskSpecifications
 import matplotlib.pyplot as plt
 import numpy as np
 import torch.multiprocessing
 from einops import repeat
 from geobench.dataset import Stats
+from geobench.task import TaskSpecifications
 from torch.utils.data import Dataset
 from upath import UPath
-import pickle
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
@@ -59,11 +58,11 @@ def _landsathelios2geobench_name(band_name: str) -> str:
 
 def load_geobench_task_specs(dataset_dir: Path) -> TaskSpecifications:
     """Load task specifications from a dataset directory."""
-
     pkl_path = UPath(dataset_dir) / "task_specs.pkl"
     with pkl_path.open("rb") as fd:
         task_specs = pickle.load(fd)
     return task_specs
+
 
 GEOBENCH_L8_BAND_NAMES = [_landsathelios2geobench_name(b) for b in EVAL_L8_BAND_NAMES]
 

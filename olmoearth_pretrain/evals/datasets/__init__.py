@@ -7,10 +7,10 @@ from torch.utils.data import Dataset
 
 import olmoearth_pretrain.evals.datasets.paths as paths
 
-from .breizhcrops import  BreizhCropsDataset
+from .breizhcrops import BreizhCropsDataset
 from .cropharvest import CropHarvestDataset
 from .floods_dataset import Sen1Floods11Dataset
-from .geobench_dataset import  GeobenchDataset
+from .geobench_dataset import GeobenchDataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset

@@ -1,10 +1,10 @@
 """Script to process the pastis dataset."""
 
+import argparse
 import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-import argparse
 from typing import Any
 
 import numpy as np
@@ -14,6 +14,7 @@ from upath import UPath
 from olmoearth_pretrain.data.constants import Modality
 
 logger = logging.getLogger(__name__)
+
 
 class PASTISRProcessor:
     """Process PASTIS-R dataset into PyTorch objects.
@@ -281,10 +282,7 @@ class PASTISRProcessor:
             )
 
 
-def process_pastis(
-    data_dir: str,
-    output_dir: str
-) -> None:
+def process_pastis(data_dir: str, output_dir: str) -> None:
     """Process PASTIS-R dataset."""
     processor = PASTISRProcessor(
         data_dir=data_dir,
@@ -305,7 +303,9 @@ def process_pastis_orig_size(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Process PASTIS-R dataset into PyTorch objects.")
+    parser = argparse.ArgumentParser(
+        description="Process PASTIS-R dataset into PyTorch objects."
+    )
     parser.add_argument(
         "--data_dir",
         type=str,
@@ -327,6 +327,7 @@ def main():
         process_pastis_orig_size(data_dir=args.data_dir, output_dir=args.output_dir)
     else:
         process_pastis(data_dir=args.data_dir, output_dir=args.output_dir)
+
 
 if __name__ == "__main__":
     main()

@@ -18,7 +18,6 @@ from olmoearth_pretrain.nn.flexihelios import (
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 
-
 logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8

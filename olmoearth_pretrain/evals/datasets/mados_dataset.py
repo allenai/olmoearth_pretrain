@@ -11,7 +11,6 @@ import torch.nn.functional as F
 from einops import repeat
 from PIL import Image
 from torch.utils.data import Dataset
-from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
@@ -22,7 +21,6 @@ from .normalize import normalize_bands
 from .utils import load_min_max_stats
 
 torch.multiprocessing.set_sharing_strategy("file_system")
-
 
 
 BAND_STATS = {
