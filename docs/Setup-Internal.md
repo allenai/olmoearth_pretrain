@@ -67,6 +67,8 @@ To launch pre-emptible jobs, we use the main entrypoint in [`olmoearth_pretrain/
 
 **⚠️ Important:** Before launching your script, **MAKE SURE YOUR CODE IS COMMITTED AND PUSHED** as we clone the code on top of a docker image when we launch the job.
 
+**Scheduling Priority**  Jobs are launched at high priority by default to configure this use `--launch.priority=<low,normal,urgent>` to specify as an additonal ovveride
+
 #### Launch Command
 
 ```bash
