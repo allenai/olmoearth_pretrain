@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast, Optional, Any
+from typing import cast
 
 import numpy as np
 from olmo_core.config import Config, StrEnum
@@ -20,6 +20,7 @@ from olmo_core.utils import get_default_device, prepare_cli_environment, seed_al
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
+from olmoearth_pretrain.launch.beaker import OlmoEarthBeakerLaunchConfig
 from olmoearth_pretrain.data.dataset import (
     OlmoEarthDatasetConfig,
     collate_olmoearth_pretrain,
@@ -34,14 +35,6 @@ from olmoearth_pretrain.train.train_module.train_module import (
 
 logger = logging.getLogger(__name__)
 
-# Goal is to make the main script runnable without beaker installed
-try:
-    from olmoearth_pretrain.launch.beaker import OlmoEarthBeakerLaunchConfig
-    LAUNCH_CONFIG_TYPE = Optional[OlmoEarthBeakerLaunchConfig]
-except ImportError:
-    logger.warning("Beaker launch config not available, please install beaker to use it")
-    LAUNCH_CONFIG_TYPE = Optional[Any]
-
 @dataclass
 class CommonComponents(Config):
     """Any configurable items that are common to all experiments."""
@@ -49,7 +42,7 @@ class CommonComponents(Config):
     run_name: str
     save_folder: str
     training_modalities: list[str]
-    launch: LAUNCH_CONFIG_TYPE = None
+    launch: OlmoEarthBeakerLaunchConfig | None = None
     nccl_debug: bool = False
     # callbacks: dict[str, Callback]
 
@@ -91,7 +84,7 @@ class OlmoEarthExperimentConfig(Config):
     data_loader: OlmoEarthDataLoaderConfig  # will likely be fixed for us
     train_module: OlmoEarthTrainModuleConfig
     trainer: TrainerConfig
-    launch: LAUNCH_CONFIG_TYPE = None
+    launch: OlmoEarthBeakerLaunchConfig | None = None
     visualize: OlmoEarthVisualizeConfig | None = None
     init_seed: int = 12536
 
@@ -107,7 +100,7 @@ class BenchmarkExperimentConfig(Config):
     """Configuration for a throughput benchmarking run."""
 
     benchmark: ThroughputBenchmarkRunnerConfig
-    launch: LAUNCH_CONFIG_TYPE = None
+    launch: OlmoEarthBeakerLaunchConfig | None = None
 
 
 def split_common_overrides(overrides: list[str]) -> tuple[list[str], list[str]]:
