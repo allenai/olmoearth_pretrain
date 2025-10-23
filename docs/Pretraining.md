@@ -382,7 +382,16 @@ torchrun --nproc_per_node=8 scripts/official/base.py train custom_experiment loc
   --trainer.max_duration.epochs=100
 ```
 
+### Example Single GPU debug Setup
 
+```bash
+torchrun scripts/official/base.py train custom_experiment local \
+  --data_loader.global_batch_size=64 \
+  --data_loader.num_workers=4 \
+  --train_module.rank_microbatch_size=16 \
+  --trainer.callbacks.wandb.enabled=False
+  # Optionally --dataset.h5py_dir=/your/path/to/data \
+```
 ---
 
 
