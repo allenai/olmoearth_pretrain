@@ -1001,8 +1001,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         """Select encoded and decoded bandsets for a single sample based on modality count."""
         if len(present) == 1:
             return self._select_bandsets_single_modality(present)
-        elif len(present) == 2:
-            return self._select_bandsets_two_modalities(present)
         else:
             return self._select_bandsets_multiple_modalities(present)
 
@@ -1012,14 +1010,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         """Handle single modality case: encode only, no cross-modality decoding possible."""
         encoded_bandset_idxs = set(present)
         decoded_bandset_idxs: set = set()
-        return encoded_bandset_idxs, decoded_bandset_idxs
-
-    def _select_bandsets_two_modalities(
-        self, present: list[tuple[str, int]]
-    ) -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
-        """Handle two modality case: encode first, decode second."""
-        encoded_bandset_idxs = set([present[0]])
-        decoded_bandset_idxs = set([present[1]])
         return encoded_bandset_idxs, decoded_bandset_idxs
 
     def _select_bandsets_multiple_modalities(
