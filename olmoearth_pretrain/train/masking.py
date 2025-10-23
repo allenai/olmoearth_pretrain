@@ -879,7 +879,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         strategy: MaskingStrategy,
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
-        allow_encoding_decoding_same_bandset: bool = False,
+        allow_encoding_decoding_same_bandset: bool = True,
         min_encoded_bandsets: int | None = None,
         max_encoded_bandsets: int | None = None,
         min_decoded_bandsets: int | None = None,
@@ -892,8 +892,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             strategy: The base masking strategy to apply before cross-modality masking.
             encode_ratio: Ratio of tokens to encode (default: 0.5). Used by the base strategy.
             decode_ratio: Ratio of tokens to decode (default: 0.5). Used by the base strategy.
-            allow_encoding_decoding_same_bandset: If True, allows the same bandset to be both
-                encoded and decoded. If False (default), encoded and decoded bandsets are disjoint.
+            allow_encoding_decoding_same_bandset: If True (default), allows the same bandset to be both
+                encoded and decoded. If False, encoded and decoded bandsets are disjoint.
             min_encoded_bandsets: Minimum number of bandsets to encode per sample. If None (default),
                 encodes all available bandsets when there are 3+ modalities, or 1 bandset when there are 2 modalities.
             max_encoded_bandsets: Maximum number of bandsets to encode per sample. If None (default),
