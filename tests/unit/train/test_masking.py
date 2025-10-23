@@ -1231,17 +1231,17 @@ def test_cross_random_masking_with_encode_and_decode_modalities_and_hw_1() -> No
     )
     masked_sample = masking_strategy.apply_mask(batch, patch_size=1)
     # Ensure we never encode decode only modalities in this case
-    assert (masked_sample.sentinel1_mask == MaskValue.ONLINE_ENCODER.value).sum() > 0 # type: ignore
-    assert (masked_sample.worldcover_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0 # type: ignore
-    assert (masked_sample.srtm_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0 # type: ignore
+    assert (masked_sample.sentinel1_mask == MaskValue.ONLINE_ENCODER.value).sum() > 0  # type: ignore
+    assert (masked_sample.worldcover_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0  # type: ignore
+    assert (masked_sample.srtm_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0  # type: ignore
     assert (
         masked_sample.openstreetmap_raster_mask == MaskValue.ONLINE_ENCODER.value
-    ).sum() == 0 # type: ignore
+    ).sum() == 0  # type: ignore
     assert (
         masked_sample.wri_canopy_height_map_mask == MaskValue.ONLINE_ENCODER.value
-    ).sum() == 0 # type: ignore
-    assert (masked_sample.cdl_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0 # type: ignore
-    assert (masked_sample.worldcereal_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0 # type: ignore
+    ).sum() == 0  # type: ignore
+    assert (masked_sample.cdl_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0  # type: ignore
+    assert (masked_sample.worldcereal_mask == MaskValue.ONLINE_ENCODER.value).sum() == 0  # type: ignore
 
 
 def test_mask_when_most_samples_are_missing() -> None:
