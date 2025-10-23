@@ -22,7 +22,7 @@ from olmoearth_pretrain.internal.experiment import SubCmd
 
 logger = getLogger(__name__)
 
-# Fine-tune learning rates to sweep over.
+# Learning rates to sweep over.
 FT_LRS = [1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2]
 
 TASK_ARG_PREFIX = "--trainer.callbacks.downstream_evaluator.tasks"
@@ -41,6 +41,20 @@ def _format_per_task_args(overrides: dict[str, Any]) -> list[str]:
     return args
 
 
+def _format_task_specific_args(task_overrides: dict[str, dict[str, Any]]) -> list[str]:
+    """Generate overrides for specific downstream tasks."""
+    if not task_overrides:
+        return []
+    args: list[str] = []
+    for task, overrides in task_overrides.items():
+        if task not in FT_TASK_NAMES:
+            raise ValueError(f"Unknown fine-tune task override: {task}")
+        for field_name, value in overrides.items():
+            value_str = value if isinstance(value, str) else str(value)
+            args.append(f"{TASK_ARG_PREFIX}.{task}.{field_name}={value_str}")
+    return args
+
+
 FT_MODE_ARGS = _format_per_task_args({"eval_mode": "FINETUNE"})
 DATASET_STATS_ARGS = _format_per_task_args({"norm_stats_from_pretrained": "False"})
 
@@ -54,6 +68,7 @@ class ModelPreset:
     """Model-specific overrides used for evaluation normalisation."""
 
     per_task_overrides: dict[str, Any] = field(default_factory=dict)
+    task_specific_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
     global_args: tuple[str, ...] = ()
     include_dataset_stats: bool = True
     launch_script_key: str | None = None
@@ -85,7 +100,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
     "anysat": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
     ),
-    # Models with pretrained normalizer capability
+    # Models with pretrained normalizer
     "terramind": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
         global_args=("--model.use_pretrained_normalizer=False",),
@@ -101,6 +116,11 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
     "galileo": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.NORM_NO_CLIP_2_STD"},
         global_args=("--model.use_pretrained_normalizer=False",),
+        task_specific_overrides={
+            "m_sa_crop_type": {"ft_batch_size": 1, "patch_size": 8},
+            "pastis_sentinel2": {"ft_batch_size": 2},
+            "m_cashew_plant": {"ft_batch_size": 1, "patch_size": 8},
+        },
         launch_script_key="galileo",
         supports_pretrained_normalizer=True,
     ),
@@ -120,18 +140,6 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
         global_args=("--model.use_pretrained_normalizer=False",),
         launch_script_key="prithvi_v2",
-        supports_pretrained_normalizer=True,
-    ),
-    "presto": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
-        global_args=("--model.use_pretrained_normalizer=False",),
-        launch_script_key="presto",
-        supports_pretrained_normalizer=True,
-    ),
-    "tessera": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
-        global_args=("--model.use_pretrained_normalizer=False",),
-        launch_script_key="tessera",
         supports_pretrained_normalizer=True,
     ),
 }
@@ -163,6 +171,7 @@ def _build_model_args(
 
     args = list(DATASET_STATS_ARGS) if preset.include_dataset_stats else []
     args.extend(_format_per_task_args(preset.per_task_overrides))
+    args.extend(_format_task_specific_args(preset.task_specific_overrides))
     args.extend(preset.global_args)
 
     if normalizer is True and preset.supports_pretrained_normalizer:
@@ -278,12 +287,12 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     # LR sweep
     lrs = [FT_LRS[0]] if args.defaults_only else FT_LRS
 
-    # Normalizer sweep: default True, use model norm, if False, use dataset norm
-    normalizer_options: list[bool] = [True]
+    # Normalizer sweep: default False, use dataset norm, if True, use model norm
+    normalizer_options: list[bool] = [False]
     if selected_flag is not None:
         preset = MODEL_PRESETS[selected_flag]
         if args.sweep_normalizer and preset.supports_pretrained_normalizer:
-            normalizer_options = [True, False]
+            normalizer_options = [False, True]
 
     commands: list[str] = []
     for lr in lrs:
@@ -291,7 +300,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             if args.defaults_only:
                 run_suffix = "FT_defaults"
             elif args.checkpoint_path:
-                run_suffix = f"FT_lr{lr}_norm_mixed"
+                run_suffix = f"FT_lr{lr}"
             else:
                 if norm_val is True:
                     run_suffix = f"FT_lr{lr}_norm_pretrained_True"
