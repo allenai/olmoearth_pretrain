@@ -261,7 +261,7 @@ Evaluation datasets have default paths set in [`olmoearth_pretrain/evals/dataset
 > **For Beaker Batch Jobs (Pre-emptible):**
 > Use `python3` with the `launch` subcommand:
 > ```bash
-> python3 scripts/official/base.py launch base_run ai2/saturn
+> python3 scripts/official/base.py launch base_run ai2/saturn --launch.num_gpus=8
 > ```
 > Replace `ai2/saturn` with your target cluster.
 > To launch on multiple clusters, specify any cluster and append the following override to your command:
