@@ -925,7 +925,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self.only_decode_modalities = only_decode_modalities
 
     # =================================================================
-    # PUBLIC API
+    # PHASE 1: Encoder Decoder Bandset Selection
     # =================================================================
 
     def get_sample_present_modalities_bandsets(
