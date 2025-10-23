@@ -39,7 +39,7 @@ This section covers:
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.11+
 - CUDA-capable GPU (recommended: 40GB+ VRAM)
 - Linux/macOS environment
 
@@ -63,6 +63,14 @@ This section covers:
    pre-commit install
    ```
 
+### Running on Docker
+
+We run our training scripts using the `olmo-core-tch271cu128-2025-09-15` Docker image published by [ai2-olmo-core](https://github.com/allenai/OLMo-core/blob/main/README.md).
+
+**Important Notes:**
+- The code from this repository is **not included** in the Docker image to aid in active development. The code is mounted or copied at runtime.
+- This Docker image may not work on your own cluster if you have different hardware or driver/CUDA versions. The image is built for CUDA 12.8 with PyTorch 2.7.1.
+- **For adaptation:** See our [Dockerfile](../Dockerfile) to understand how to build an image compatible with your hardware and CUDA setup
 
 ## Launching Scripts
 
@@ -200,14 +208,16 @@ Evaluation datasets have default paths set in [`olmoearth_pretrain/evals/dataset
 
 1. Download/prepare the evaluation datasets locally
 2. Set environment variables (see [Environment Variables](#environment-variables))
-3. Or disable evaluations you don't have by adding the following override to your command:
+3. If not using all evaluations, enable only the ones you have set up by adding an override:
+
+  e.g to only run mados and pastis_sentinel2 evals add the following overide.
    ```bash
-   --trainer.callbacks.downstream_evaluator.tasks_to_run=[mados,pastis_sentinel2]
+   --trainer.callbacks.downstream_evaluator.tasks_to_run=\[mados,pastis_sentinel2\]
    ```
    The task names correspond to the user-chosen names specified in the training configuration
 
 ---
-### Main Training Scripts
+### Official Training Scripts
 > **🏢 AI2 Researchers - Choose Your Launch Method:**
 >
 > **For Beaker Batch Jobs (Pre-emptible):**
@@ -230,6 +240,7 @@ Evaluation datasets have default paths set in [`olmoearth_pretrain/evals/dataset
 >
 > See [Setup-Internal.md](Setup-Internal.md#launch-methods) for more details.
 
+All Official release scripts can be found at [`scripts/official/`](../scripts/official/).
 Below is a table demonstrating how to launch various model sizes using `torchrun` (for external users and AI2 sessions). Adjust the dataset path and configuration overrides as needed for your setup.
 
 | Model Size | Script | Hardware | Example Command | Notes |
