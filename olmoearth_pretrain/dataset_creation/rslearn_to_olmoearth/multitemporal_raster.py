@@ -78,7 +78,7 @@ def get_adjusted_projection_and_bounds(
 
 def convert_freq(
     window_path: UPath,
-    helios_path: UPath,
+    olmoearth_path: UPath,
     layer_name: str,
     modality: ModalitySpec,
     missing_okay: bool = False,
@@ -88,7 +88,7 @@ def convert_freq(
 
     Args:
         window_path: the rslearn window directory to read data from.
-        helios_path: OlmoEarth Pretrain dataset path to write to.
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
         layer_name: the name of the layer containing frequent data in the rslearn
             dataset. It should be configured to individually store each item from the
             two-week period that spatially intersects with the window, i.e.
@@ -196,7 +196,7 @@ def convert_freq(
 
             stacked_image = np.concatenate(band_set_images, axis=0)
             dst_fname = get_modality_fname(
-                helios_path,
+                olmoearth_path,
                 modality,
                 TimeSpan.TWO_WEEK,
                 window_metadata,
@@ -212,7 +212,7 @@ def convert_freq(
             )
 
         metadata_fname = get_modality_temp_meta_fname(
-            helios_path, modality, TimeSpan.TWO_WEEK, window.name
+            olmoearth_path, modality, TimeSpan.TWO_WEEK, window.name
         )
         metadata_fname.parent.mkdir(parents=True, exist_ok=True)
         with metadata_fname.open("w") as f:
@@ -234,7 +234,7 @@ def convert_freq(
 
 def convert_monthly(
     window_path: UPath,
-    helios_path: UPath,
+    olmoearth_path: UPath,
     layer_prefix: str,
     modality: ModalitySpec,
 ) -> None:
@@ -242,7 +242,7 @@ def convert_monthly(
 
     Args:
         window_path: the rslearn window directory to read data from.
-        helios_path: OlmoEarth Pretrain dataset path to write to.
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
         layer_prefix: the prefix for the layer names containing monthly data in the
             rslearn dataset. The layers should be named with suffixes "_mo01", "_mo02",
             ..., "_mo12", where each layer contains a single mosaic for that month.
@@ -328,7 +328,7 @@ def convert_monthly(
 
             stacked_image = np.concatenate(band_set_images, axis=0)
             dst_fname = get_modality_fname(
-                helios_path,
+                olmoearth_path,
                 modality,
                 TimeSpan.YEAR,
                 window_metadata,
@@ -344,7 +344,7 @@ def convert_monthly(
             )
 
         metadata_fname = get_modality_temp_meta_fname(
-            helios_path, modality, TimeSpan.YEAR, window.name
+            olmoearth_path, modality, TimeSpan.YEAR, window.name
         )
         metadata_fname.parent.mkdir(parents=True, exist_ok=True)
         with metadata_fname.open("w") as f:

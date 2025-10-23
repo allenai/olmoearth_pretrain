@@ -125,11 +125,11 @@ def draw_line_string(
         array[category_id, rows[valid], cols[valid]] = 1
 
 
-def rasterize_openstreetmap(helios_path: UPath, in_fname: UPath) -> None:
+def rasterize_openstreetmap(olmoearth_path: UPath, in_fname: UPath) -> None:
     """Rasterize OpenStreetMap data.
 
     Args:
-        helios_path: path to OlmoEarth Pretrain dataset where OpenStreetMap vector data has been
+        olmoearth_path: path to OlmoEarth Pretrain dataset where OpenStreetMap vector data has been
             written.
         in_fname: the input filename containing the GeoJSON data. Outputs will be
             written to a corresponding name in the openstreetmap_raster folder.
@@ -192,7 +192,7 @@ def rasterize_openstreetmap(helios_path: UPath, in_fname: UPath) -> None:
 
     # Upload the rasterized data as GeoTIFF.
     out_modality_dir = get_modality_dir(
-        helios_path, Modality.OPENSTREETMAP_RASTER, TimeSpan.STATIC
+        olmoearth_path, Modality.OPENSTREETMAP_RASTER, TimeSpan.STATIC
     )
     out_fname = out_modality_dir / f"{crs}_{col}_{row}_{OUTPUT_RESOLUTION}.tif"
     bounds = (
@@ -217,7 +217,7 @@ if __name__ == "__main__":
         description="Rasterize OpenStreetMap",
     )
     parser.add_argument(
-        "--helios_path",
+        "--olmoearth_path",
         type=str,
         help="Destination OlmoEarth Pretrain dataset path",
         required=True,
@@ -230,13 +230,13 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    helios_path = UPath(args.helios_path)
+    olmoearth_path = UPath(args.olmoearth_path)
 
     rasterize_jobs = []
-    for geojson_fname in (helios_path / "10_openstreetmap").iterdir():
+    for geojson_fname in (olmoearth_path / "10_openstreetmap").iterdir():
         rasterize_jobs.append(
             dict(
-                helios_path=helios_path,
+                olmoearth_path=olmoearth_path,
                 in_fname=geojson_fname,
             )
         )
@@ -248,13 +248,13 @@ if __name__ == "__main__":
 
     # Also copy the metadata CSV but with image_idx replaced from "N/A" to "0".
     src_modality_dir = get_modality_dir(
-        helios_path, Modality.OPENSTREETMAP, TimeSpan.STATIC
+        olmoearth_path, Modality.OPENSTREETMAP, TimeSpan.STATIC
     )
-    src_metadata_fname = helios_path / f"{src_modality_dir.name}.csv"
+    src_metadata_fname = olmoearth_path / f"{src_modality_dir.name}.csv"
     dst_modality_dir = get_modality_dir(
-        helios_path, Modality.OPENSTREETMAP_RASTER, TimeSpan.STATIC
+        olmoearth_path, Modality.OPENSTREETMAP_RASTER, TimeSpan.STATIC
     )
-    dst_metadata_fname = helios_path / f"{dst_modality_dir.name}.csv"
+    dst_metadata_fname = olmoearth_path / f"{dst_modality_dir.name}.csv"
     with src_metadata_fname.open() as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames

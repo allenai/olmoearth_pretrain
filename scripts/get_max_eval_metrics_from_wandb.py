@@ -8,8 +8,12 @@ import numpy as np
 import pandas as pd
 import wandb
 
-from helios.evals.models import BaselineModelName
-from helios.internal.all_evals import EVAL_TASKS
+from olmoearth_pretrain.evals.models import (
+    MODELS_WITH_MULTIPLE_SIZES,
+    BaselineModelName,
+)
+from olmoearth_pretrain.internal.all_evals import EVAL_TASKS
+from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
 WANDB_ENTITY = "eai-ai2"
 METRICS = EVAL_TASKS.keys()
@@ -75,7 +79,7 @@ def group_runs_by_run_prefix_and_step(
         a dictionary mapping from group name to a list of wandb.Run objects.
     """
     grouped_runs = defaultdict(list)
-    for run in api.runs(wandb_path):
+    for run in api.runs(wandb_path, lazy=False):
         if run_prefix and not run.name.startswith(run_prefix):
             continue
         group_name = get_run_group_name(run.name)
@@ -93,7 +97,9 @@ def group_runs_by_baseline_model_and_size(
         """Find the baseline model name and size key in the run config."""
         for name in list(BaselineModelName):
             if name.value in run.name:
-                return name, run.config["model"].get("size", None)
+                model_config = run.config["model"]
+                print(f"Model config: {model_config} type: {type(model_config)}")
+                return name, model_config.get("size", None)
         raise ValueError(f"No baseline model name found in run {run.name}")
 
     def _get_group_name(model_name: BaselineModelName, size: str | None) -> str:
@@ -103,12 +109,23 @@ def group_runs_by_baseline_model_and_size(
         return f"{model_name.value}_{size}"
 
     grouped_runs = defaultdict(list)
-    for run in api.runs(wandb_path):
+    for run in api.runs(wandb_path, lazy=False):
+        print(f"Processing run {run.name} ({run.id})")
         model_name, size = _find_model_name_and_size(run)
+        if model_name in MODELS_WITH_MULTIPLE_SIZES and size is None:
+            print(
+                f"Skipping run {run.name} ({run.id}) because it has no size specified and is a model with multiple sizes"
+            )
+            continue
         group_name = _get_group_name(model_name, size)
         grouped_runs[group_name].append(run)
         print(f"Found run {run.name} ({run.id}) -> group: {group_name}")
     return grouped_runs
+
+
+def _get_corresponding_test_key(key: str) -> str:
+    """Get the corresponding test key for a given metric key."""
+    return key.replace("eval/", "eval/test/")
 
 
 def get_max_metrics_grouped(
@@ -125,13 +142,57 @@ def get_max_metrics_grouped(
     group_max_runs_per_metric = {}
     for group_name, runs in grouped_runs.items():
         print(f"\nProcessing group: {group_name} ({len(runs)} runs)")
+        #  Get the run that has test metrics with the highest validation score for each metric
         metrics = {}
         max_runs_per_metric = {}
         for run in runs:
             for key, value in run.summary.items():
                 # TODO: Make these metrics names constants
-                if not key.startswith("eval/") or key.startswith("eval/test/"):
+                if not key.startswith("eval/"):
                     continue
+                if key.startswith("eval/test/"):
+                    print(
+                        f"Skipping test metric {key} for run {run.name} because it is a test metric"
+                    )
+                    # DO NOT select on test metrics
+                    continue
+                # Ensure the run has test metrics
+                if run.summary.get(_get_corresponding_test_key(key), None) is None:
+                    # DOn't select top val metrics if there is no corresponding test metric
+                    print(
+                        f"Skipping metric {key} for run {run.name} because it has no corresponding test metric"
+                    )
+                    continue
+
+                # If for the given metric, it is a linear probe task skip if it was not done with early stop linear porbing
+                task_name = key.split("/")[1]
+                task_config = run.config["trainer"]["callbacks"][
+                    "downstream_evaluator"
+                ]["tasks"][task_name]
+
+                eval_mode = task_config.get("eval_mode", None)
+                is_linear_probe_task = (
+                    EvalMode(eval_mode.lower()) == EvalMode.LINEAR_PROBE
+                    if eval_mode is not None
+                    else False
+                )
+                is_select_final_test_miou_based_on_epoch_of_max_val_miou = (
+                    task_config.get(
+                        "select_final_test_miou_based_on_epoch_of_max_val_miou", False
+                    )
+                )
+                if (
+                    is_linear_probe_task
+                    and not is_select_final_test_miou_based_on_epoch_of_max_val_miou
+                ):
+                    print(
+                        f"Skipping metric {key} for run {run.name} because it is a linear probe task but not done with early stop linear probing"
+                    )
+                    continue
+                print(
+                    f"Selecting metric {key} for run {run.name} because it matches criteria"
+                )
+
                 prev_max_val = metrics.get(key, float("-inf"))
                 metrics[key] = max(prev_max_val, value)
                 if value > prev_max_val:
@@ -190,7 +251,7 @@ def get_max_metrics_per_partition(
 
         # List all the runs in the project and find the subset matching the prefix and partition
         run_ids: list[str] = []
-        for run in api.runs(f"{WANDB_ENTITY}/{project_name}"):
+        for run in api.runs(f"{WANDB_ENTITY}/{project_name}", lazy=False):
             if not run.name.startswith(run_prefix):
                 continue
             # Check if run name contains the partition
@@ -241,7 +302,7 @@ def get_max_metrics(project_name: str, run_prefix: str) -> dict[str, float]:
 
     # List all the runs in the project and find the subset matching the prefix.
     run_ids: list[str] = []
-    for run in api.runs(f"{WANDB_ENTITY}/{project_name}"):
+    for run in api.runs(f"{WANDB_ENTITY}/{project_name}", lazy=False):
         if not run.name.startswith(run_prefix):
             continue
         print(f"Found run {run.name} ({run.id})")
@@ -363,15 +424,7 @@ if __name__ == "__main__":
         print(f"\nPer-partition metrics written to {args.output_file}")
 
     else:
-        if args.run_prefix:
-            print(
-                f"Getting max metrics grouped by run prefix before '_step' (filtering by '{args.run_prefix}')..."
-            )
-        else:
-            print(
-                "Getting max metrics grouped by run prefix before '_step' (all runs in project)..."
-            )
-
+        print(f"Running with the following arguments: {args}")
         run_groups = get_run_groups(
             args.project_name, args.run_prefix, args.group_baseline_model_and_size
         )
@@ -421,5 +474,5 @@ if __name__ == "__main__":
             output_csv = f"{args.project_name}_eval_metrics.csv"
             test_output_csv = f"{args.project_name}_eval_metrics_test.csv"
         save_metrics_to_csv(group_metrics, output_csv)
-        save_metrics_to_csv(group_test_metrics, test_output_csv)
-        # TODO: save the anmes of the max runs per metric as a json
+        if args.get_test_metrics:
+            save_metrics_to_csv(group_test_metrics, test_output_csv)

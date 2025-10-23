@@ -1,11 +1,10 @@
-"""Post-process ingested WorldCereal data into the OlmoEarth Pretrain dataset."""
+"""Post-process ingested WorldPop data into the OlmoEarth Pretrain dataset."""
 
 import argparse
 import csv
 import multiprocessing
 from datetime import UTC, datetime
 
-import numpy as np
 import tqdm
 from rslearn.dataset import Window
 from rslearn.utils.mp import star_imap_unordered
@@ -17,71 +16,44 @@ from olmoearth_pretrain.dataset.utils import get_modality_fname
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
 
-START_TIME = datetime(2021, 1, 1, tzinfo=UTC)
-END_TIME = datetime(2022, 1, 1, tzinfo=UTC)
+START_TIME = datetime(2020, 1, 1, tzinfo=UTC)
+END_TIME = datetime(2021, 1, 1, tzinfo=UTC)
+
+# Layer name in the input rslearn dataset.
+LAYER_NAME = "worldpop"
 
 
-def _fill_nones_with_zeros(ndarrays: list[np.ndarray | None]) -> np.ndarray | None:
-    filler = None
-    for x in ndarrays:
-        if x is not None:
-            filler = np.zeros_like(x)
-            break
-    if filler is None:
-        return None
-
-    return_list = []
-    for x in ndarrays:
-        if x is not None:
-            return_list.append(x)
-        else:
-            return_list.append(filler.copy())
-    return np.concatenate(return_list, axis=0)
-
-
-def convert_worldcereal(window_path: UPath, helios_path: UPath) -> None:
-    """Add WorldCereal data for this window to the OlmoEarth Pretrain dataset.
+def convert_worldpop(window_path: UPath, olmoearth_path: UPath) -> None:
+    """Add WorldPop data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
         window_path: the rslearn window directory to read data from.
-        helios_path: OlmoEarth Pretrain dataset path to write to.
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
-    ndarrays: list[np.ndarray | None] = []
-    assert len(Modality.WORLDCEREAL.band_sets) == 1
-    band_set = Modality.WORLDCEREAL.band_sets[0]
     window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
-    for band in band_set.bands:
-        if not window.is_layer_completed(band):
-            ndarrays.append(None)
-            continue
-        window_dir = window.get_raster_dir(band, [band])
 
-        ndarrays.append(
-            GEOTIFF_RASTER_FORMAT.decode_raster(
-                path=window_dir, projection=window.projection, bounds=window.bounds
-            )
-        )
+    if not window.is_layer_completed(LAYER_NAME):
+        return
 
-    assert len(ndarrays) == len(band_set.bands), (
-        f"Expected {len(band_set.bands)} arrays, got {len(ndarrays)}"
+    assert len(Modality.WORLDPOP.band_sets) == 1
+    band_set = Modality.WORLDPOP.band_sets[0]
+    raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
+    image = GEOTIFF_RASTER_FORMAT.decode_raster(
+        raster_dir, window.projection, window.bounds
     )
-    concatenated_arrays = _fill_nones_with_zeros(ndarrays)
 
-    if concatenated_arrays is None:
-        return None
-
-    # 255 = missing data, which we will treat as 0s
-    # 254 = not cropland. This only occurs in crop type products
-    # in addition, because of our resampling we rarely get
-    # other values (e.g. 252). Lets set them all to 0
-    concatenated_arrays[concatenated_arrays > 100] = 0
-    assert concatenated_arrays.min() >= 0
-    assert concatenated_arrays.max() <= 100
+    # Clip population count to 0. NODATA is -99999 and includes locations that are
+    # mapped as "unsettled" but really that is 0 population.
+    image[image < 0] = 0
+    # Skip areas that are fully nodata since it is more likely to be wrong and also is
+    # a less useful target.
+    if image.max() == 0:
+        return
 
     dst_fname = get_modality_fname(
-        helios_path,
-        Modality.WORLDCEREAL,
+        olmoearth_path,
+        Modality.WORLDPOP,
         TimeSpan.STATIC,
         window_metadata,
         band_set.get_resolution(),
@@ -91,11 +63,11 @@ def convert_worldcereal(window_path: UPath, helios_path: UPath) -> None:
         path=dst_fname.parent,
         projection=window.projection,
         bounds=window.bounds,
-        array=concatenated_arrays,
+        array=image,
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(
-        helios_path, Modality.WORLDCEREAL, TimeSpan.STATIC, window.name
+        olmoearth_path, Modality.WORLDPOP, TimeSpan.STATIC, window.name
     )
     metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with metadata_fname.open("w") as f:
@@ -127,7 +99,7 @@ if __name__ == "__main__":
         required=True,
     )
     parser.add_argument(
-        "--helios_path",
+        "--olmoearth_path",
         type=str,
         help="Destination OlmoEarth Pretrain dataset path",
         required=True,
@@ -141,20 +113,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     ds_path = UPath(args.ds_path)
-    helios_path = UPath(args.helios_path)
+    olmoearth_path = UPath(args.olmoearth_path)
 
-    metadata_fnames = ds_path.glob("windows/*/*/metadata.json")
+    metadata_fnames = ds_path.glob("windows/res_10/*/metadata.json")
     jobs = []
     for metadata_fname in metadata_fnames:
         jobs.append(
             dict(
                 window_path=metadata_fname.parent,
-                helios_path=helios_path,
+                olmoearth_path=olmoearth_path,
             )
         )
 
     p = multiprocessing.Pool(args.workers)
-    outputs = star_imap_unordered(p, convert_worldcereal, jobs)
+    outputs = star_imap_unordered(p, convert_worldpop, jobs)
     for _ in tqdm.tqdm(outputs, total=len(jobs)):
         pass
     p.close()

@@ -903,7 +903,7 @@ class OlmoEarthDataset(Dataset):
         """Read the h5 file."""
         if self.cache_dir is not None:
             cache_file_path = self.cache_dir / h5_file_path.name
-            logger.info(f"Caching H5 file {h5_file_path} to {cache_file_path}")
+            logger.debug(f"Caching H5 file {h5_file_path} to {cache_file_path}")
             if not cache_file_path.exists():
                 self._apply_throttling()
                 # Copy to a temp file first and then atomically rename it to avoid
@@ -931,10 +931,6 @@ class OlmoEarthDataset(Dataset):
                     # TODO: Fix the floating string issue
                     or k in ["timestamps"]
                 }
-
-                # Log the dtype for each modality
-                for k, v in sample_dict.items():
-                    logger.debug(f"Modality {k} has dtype {v.dtype}")
 
                 if (
                     missing_mask_group_name

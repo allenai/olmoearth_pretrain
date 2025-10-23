@@ -17,6 +17,7 @@ from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     main,
@@ -543,13 +544,11 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     METRICS_COLLECT_INTERVAL = 10
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
-    WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "helios_in_loop_evals"
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = OlmoEarthWandBCallback(
         name=common.run_name,
-        project=WANDB_PROJECT,
-        entity=WANDB_USERNAME,
+        project=EVAL_WANDB_PROJECT,
+        entity=WANDB_ENTITY,
         enabled=True,  # set to False to avoid wandb errors
     )
     # Safe to collect everys tep for now

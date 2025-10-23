@@ -17,7 +17,6 @@ from olmo_core.io import copy_file, file_exists, join_path
 from olmo_core.train.callbacks import ProfilerCallback, WandBCallback
 from olmo_core.train.trainer import PathOrStr
 
-from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.data.constants import BASE_GSD, Modality
 from olmoearth_pretrain.inference_benchmarking import constants
 from olmoearth_pretrain.inference_benchmarking.data_models import RunParams
@@ -97,11 +96,6 @@ class OlmoEarth(torch.nn.Module):
             patch_size=patch_size,
             fast_pass=fast_pass,
         )["tokens_and_masks"]
-
-
-Helios = _deprecated_class_alias(
-    OlmoEarth, "helios.inference_benchmarking.run_throughput_benchmark.Helios"
-)
 
 
 @dataclass
@@ -251,7 +245,7 @@ class ThroughputBenchmarkRunner:
         """
         model = self.build_model(run_params)
         if torch.cuda.is_available() and run_params.gpu_type == "cuda":
-            logger.info("helios loaded and on gpu")
+            logger.info("Model loaded and on gpu")
             model.to(run_params.gpu_type)
         device = next(model.parameters()).device
         batch_size = run_params.batch_size

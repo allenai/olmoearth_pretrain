@@ -77,7 +77,7 @@ def launch_job(
     runnable.container.image_uri = image
     runnable.container.entrypoint = "python"
     runnable.container.commands = [
-        "helios/dataset_creation/scripts/sentinel2_l1c/entrypoint.py",
+        "olmoearth_pretrain/dataset_creation/scripts/sentinel2_l1c/entrypoint.py",
         "--ds_path",
         ds_path,
         "--windows",
@@ -108,7 +108,7 @@ def launch_job(
     instances.policy = policy
     service_account = batch_v1.ServiceAccount()
     service_account.email = (
-        "helios-dataset-creation@earthsystem-dev-c3po.iam.gserviceaccount.com"
+        "olmoearth-dataset-creation@earthsystem-dev-c3po.iam.gserviceaccount.com"
     )
     allocation_policy = batch_v1.AllocationPolicy()
     allocation_policy.instances = [instances]
@@ -124,7 +124,7 @@ def launch_job(
     create_request = batch_v1.CreateJobRequest()
     create_request.job = job
     task_uuid = str(uuid.uuid4())[0:16]
-    create_request.job_id = f"helios-sentinel2-l1c-{task_uuid}"
+    create_request.job_id = f"olmoearth-sentinel2-l1c-{task_uuid}"
     create_request.parent = f"projects/{project}/locations/{region}"
 
     client.create_job(create_request)
