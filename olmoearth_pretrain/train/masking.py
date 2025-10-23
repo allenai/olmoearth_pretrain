@@ -924,6 +924,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self.max_decoded_bandsets = max_decoded_bandsets
         self.only_decode_modalities = only_decode_modalities
 
+    # =================================================================
+    # PUBLIC API
+    # =================================================================
+
     def get_sample_present_modalities_bandsets(
         self, batch: MaskedOlmoEarthSample
     ) -> list[list[tuple[str, int]]]:
@@ -1114,13 +1118,11 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             )
             return set([available[i] for i in decoded_idxs])
 
-    def overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
-        """Overide the mask for a modality depending on the strategy being modality cross masked.
+    # =================================================================
+    # PHASE 2: MASK APPLICATION
+    # Methods for applying encode/decode rules to mask tensors
+    # =================================================================
 
-        e.g in time masking, static in time data is randomly masked but we want that data to be either used to predict temporally masked data or
-        predicted from temporal data.
-        """
-        return False
 
     def apply_bandset_mask_rules(
         self,
@@ -1268,7 +1270,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         is_decoded = (modality, bandset_idx) in decoded_bandset_idxs
 
         # Handle special modalities that need override (e.g., static in time/space)
-        if self.overide_strategy_mask(modality_spec):
+        if self._overide_strategy_mask(modality_spec):
             self._force_override_mask(
                 sample_idx,
                 bandset_idx,
@@ -1292,6 +1294,15 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             self._suppress_undecoded_bandset(
                 sample_idx, bandset_idx, modality_mask, out_modality_mask
             )
+
+
+    def _overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
+        """Overide the mask for a modality depending on the strategy being modality cross masked.
+
+        e.g in time masking, static in time data is randomly masked but we want that data to be either used to predict temporally masked data or
+        predicted from temporal data.
+        """
+        return False
 
     def _force_override_mask(
         self,
@@ -1371,6 +1382,11 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             modality_mask[sample_idx, ..., bandset_idx],
         )
 
+    # =================================================================
+    # PHASE 3: COUNTING & VALIDATION
+    # Methods for counting tokens and accumulating counts across modalities
+    # =================================================================
+
     def _count_modality_tokens(
         self, modality_mask: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1387,6 +1403,11 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         if current is None:
             return new_count
         return current + new_count
+
+    # =================================================================
+    # PHASE 4: EDGE CASE HANDLING
+    # Methods for handling rare edge cases (e.g., samples with no tokens)
+    # =================================================================
 
     def _handle_no_tokens_edge_cases(
         self,
@@ -1432,10 +1453,22 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 modality_mask, modality_spec, patch_size
             )
 
+    # =================================================================
+    # MAIN ENTRY POINT
+    # =================================================================
+
     def apply_mask(
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
     ) -> MaskedOlmoEarthSample:
-        """Apply space masking to the input data."""
+        """Apply cross-modality masking to the input data.
+
+        This is the main entry point that orchestrates the entire masking process:
+        1. Apply base masking strategy (e.g., space/time masking)
+        2. Identify present modalities and bandsets for each sample
+        3. Select which bandsets to encode vs decode
+        4. Apply bandset-level masking rules
+        5. Handle edge cases
+        """
         if patch_size is None:
             # this is because we use a random-masking proxy in case of
             # no encoded or decoded tokens.
@@ -1487,7 +1520,7 @@ class ModalityCrossSpaceMaskingStrategy(ModalityCrossMaskingStrategy):
             only_decode_modalities=only_decode_modalities,
         )
 
-    def overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
+    def _overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
         """Overide the random mask  for the given modality by the encoding and decoding bandsets."""
         # For space masking non spatial data is randomly masked but we want to use the encoding and decoding bandsets
         # to determine the mask for the non spatial data
@@ -1526,7 +1559,7 @@ class ModalityCrossTimeMaskingStrategy(ModalityCrossMaskingStrategy):
             only_decode_modalities=only_decode_modalities,
         )
 
-    def overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
+    def _overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
         """Overide the random mask  for the given modality by the encoding and decoding bandsets."""
         # For time masking static data is randomly masked but we want to use the encoding and decoding bandsets
         # to determine the mask for the static data
