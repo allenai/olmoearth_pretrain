@@ -480,7 +480,15 @@ class MultiModalPatchEmbeddings(nn.Module):
                 modality_specific_kwargs = {"patch_size": patch_size}
             # In the fast pass we want to the sync that comes with checking for online encoder
             if fast_pass or (token_mask == MaskValue.ONLINE_ENCODER.value).any():
-                logger.warning(f"Data seen by encoder for modality {modality}")
+                # logger.warning(
+                #     f"Data seen by encoder for modality {modality}; grad enabled: {torch.is_grad_enabled()}"
+                # )
+                if modality not in [        Modality.SENTINEL2_L2A.name,Modality.SENTINEL1.name,Modality.LANDSAT.name,] and torch.is_grad_enabled():
+                    logger.warning(f"Grad is enabled for modality {modality} but it is not a gradient enabled modality")
+                    # num encoded tokens
+                    num_encoded_tokens = torch.sum(token_mask == MaskValue.ONLINE_ENCODER.value)
+                    logger.warning(f"Num encoded tokens: {num_encoded_tokens}")
+                    raise ValueError(f"Grad is enabled for modality {modality} but it is not a gradient enabled modality inputs num encoded tokens: {num_encoded_tokens} for mask of shape {token_mask.shape}")
                 buffer_name = self._get_buffer_name(modality, idx)
                 patchified_data = torch.index_select(
                     modality_data, -1, getattr(self, buffer_name)
@@ -492,7 +500,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                     patchified_data, **modality_specific_kwargs
                 )
             else:
-                logger.warning(f"No data seen by encoder for modality {modality}")
+                # logger.warning(f"No data seen by encoder for modality {modality}")
                 mask_shape = token_mask.shape + (self.embedding_size,)
                 patchified_data = torch.zeros(
                     mask_shape, dtype=token_mask.dtype, device=token_mask.device
@@ -943,7 +951,6 @@ class CompositeEncodings(nn.Module):
         )
         logger.warning(f"Modalities to process: {modalities_to_process}")
         for modality_name in modalities_to_process:
-            logger.warning(f"Applying encodings to modality {modality_name}")
             output_dict[modality_name] = self._apply_encodings_per_modality(
                 modality_name,
                 per_modality_input_tokens[modality_name],

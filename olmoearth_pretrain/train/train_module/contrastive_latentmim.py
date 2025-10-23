@@ -218,7 +218,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 # For masked batch a and b log the number of encoded and decoded tokens of each modality
                 for modality in masked_batch_a.modalities:
                     mask = getattr(masked_batch_a, masked_batch_a.get_masked_modality_name(modality))
+                    logger.warning(f"Modality {modality} has mask shape {mask.shape}")
                     num_band_sets = mask.shape[-1]
+                    if modality not in [
+                    "worldcover",
+                    "srtm",
+                    "openstreetmap_raster",
+                    "wri_canopy_height_map",
+                    "cdl",
+                    "worldcereal",
+                    ]:
+                        continue
                     for bandset_idx in range(num_band_sets):
                         bandset_mask = mask[..., bandset_idx]
                         encoded_tokens = (bandset_mask == 0).sum()
@@ -230,8 +240,14 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 for modality in masked_batch_b.modalities:
                     mask = getattr(masked_batch_b, masked_batch_b.get_masked_modality_name(modality))
                     num_band_sets = mask.shape[-1]
-                    # check the number of encoded and decoded tokens for each bandset
-                    if modality not in [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]:
+                    if modality not in [
+                    "worldcover",
+                    "srtm",
+                    "openstreetmap_raster",
+                    "wri_canopy_height_map",
+                    "cdl",
+                    "worldcereal",
+                    ]:
                         continue
                     for bandset_idx in range(num_band_sets):
                         bandset_mask = mask[..., bandset_idx]
@@ -282,12 +298,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     del latent_a, latent_b
                     break
                 del latent_a, latent_b
-                missing = []
-                for name, p in self.model.named_parameters():
-                    if p.requires_grad and p.grad is None:
-                        missing.append((name, p.device, p.shape))
-                if missing:
-                    print(f"[rank {torch.distributed.get_rank()}] Missing before backward grads for {len(missing)} params:")
                 loss.backward()
                 missing = []
                 for name, p in self.model.named_parameters():
@@ -295,8 +305,10 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                         missing.append((name, p.device, p.shape))
                 if missing:
                     print(f"[rank {torch.distributed.get_rank()}] Missing grads for {len(missing)} params:")
-                    for n, d, s in missing:
-                        print("  ", n, d, s)
+                    if len(missing) < 12:
+                        for n, d, s in missing:
+                            print("  ", n, d, s)
+
 
         if dry_run:
             # add a barrier to ensure all processes are done
