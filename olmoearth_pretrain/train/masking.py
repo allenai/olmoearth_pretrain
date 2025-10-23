@@ -1051,28 +1051,23 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
     ) -> int:
         """Compute how many bandsets to encode based on configuration."""
         num_encodable = len(encodable)
-        # Determine upper limit for encoding
         upper_limit = num_encodable
         if not self.allow_encoding_decoding_same_bandset:
-            # Need to reserve at least one for decoding
+
             upper_limit -= 1
 
-        # Apply configured max, if any
         if self.max_encoded_bandsets is None:
             max_encoded_bandsets = upper_limit
         else:
             max_encoded_bandsets = min(self.max_encoded_bandsets, upper_limit)
 
-        # Apply configured min, if any
         if self.min_encoded_bandsets is None:
             min_encoded_bandsets = num_encodable
         else:
             min_encoded_bandsets = min(self.min_encoded_bandsets, num_encodable)
 
-        # Ensure min <= max
         min_encoded_bandsets = min(min_encoded_bandsets, max_encoded_bandsets)
 
-        # Randomly sample within the range
         return np.random.randint(min_encoded_bandsets, max_encoded_bandsets + 1)
 
     def _randomly_select_encoded_bandsets(
@@ -1096,27 +1091,16 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
     ) -> set[tuple[str, int]]:
         """Randomly select which bandsets to decode."""
         min_decoded, max_decoded = min_max_decode
-
         if self.allow_encoding_decoding_same_bandset:
-            # Can select from all present bandsets
-            num_decoded_bandsets = np.random.randint(min_decoded, max_decoded + 1)
-            decoded_idxs = np.random.choice(
-                len(present), size=num_decoded_bandsets, replace=False
-            )
-            return set([present[i] for i in decoded_idxs])
+            available = present
         else:
-            # Can only select from bandsets not used for encoding
-            # When disjoint, we decode ALL bandsets not used for encoding
             available = list(set(present) - encoded)
-            num_available = len(available)
-            min_decoded = min(min_decoded, num_available)
-            max_decoded = min(max_decoded, num_available)
-            # Select all available decoded bandsets
-            num_decoded_bandsets = num_available
-            decoded_idxs = np.random.choice(
-                len(available), size=num_decoded_bandsets, replace=False
-            )
-            return set([available[i] for i in decoded_idxs])
+
+        num_decoded_bandsets = np.random.randint(min_decoded, max_decoded + 1)
+        decoded_idxs = np.random.choice(
+            len(available), size=min(num_decoded_bandsets, len(available)), replace=False
+        )
+        return set([available[i] for i in decoded_idxs])
 
     # =================================================================
     # PHASE 2: MASK APPLICATION
