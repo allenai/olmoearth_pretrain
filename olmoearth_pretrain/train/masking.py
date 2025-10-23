@@ -854,7 +854,25 @@ class ModalitySpaceTimeMaskingStrategy(MaskingStrategy):
 
 
 class ModalityCrossMaskingStrategy(MaskingStrategy):
-    """Abstract class for masking strategies that select a seperate set of bandsets to encode and decode on top of another masking strategy."""
+    """Cross-modality masking strategy that separates bandsets for encoding and decoding.
+
+    This strategy wraps a base masking strategy and adds cross-modality logic on top. It selects
+    which bandsets (modality, bandset_idx pairs) should be used for encoding vs decoding, enabling
+    the model to learn cross-modality relationships.
+
+    Algorithm Overview:
+    1. Apply the base masking strategy (e.g., space/time masking)
+    2. Identify which modalities/bandsets are present in each sample
+    3. For each sample, select which bandsets to encode vs decode based on modality count:
+       - 1 modality: encode only (no cross-modality decoding possible)
+       - 2 modalities: encode first, decode second (simple cross-modality)
+       - 3+ modalities: randomly select subset to encode, rest to decode
+    4. Apply bandset-level masking rules:
+       - Bandsets not selected for encoding: suppress ONLINE_ENCODER tokens
+       - Bandsets not selected for decoding: suppress DECODER tokens
+    5. Handle edge cases where samples end up with no encoded/decoded tokens
+       (rare, typically only in S2-only ablations with small spatial dimensions)
+    """
 
     def __init__(
         self,
@@ -959,111 +977,142 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
     def select_encoded_decoded_bandsets(
         self, present_modalities_bandsets: list[list[tuple[str, int]]]
     ) -> list[tuple[set[tuple[str, int]], set[tuple[str, int]]]]:
-        """Select the encoded and decoded bandsets for each sample."""
+        """Select the encoded and decoded bandsets for each sample.
+
+        Routes each sample to the appropriate handler based on the number of present modalities.
+        Returns a list of (encoded_bandsets, decoded_bandsets) tuples, one per sample.
+        """
         encoded_decoded_bandsets: list[
             tuple[set[tuple[str, int]], set[tuple[str, int]]]
         ] = []
         for sample_idx in range(len(present_modalities_bandsets)):
-            present_modalities_bandsets_for_sample = present_modalities_bandsets[
-                sample_idx
-            ]
-            # If there is only one modality, we only encode not decode
-            if len(present_modalities_bandsets_for_sample) == 1:
-                encoded_bandset_idxs = set(present_modalities_bandsets_for_sample)
-                decoded_bandset_idxs = set()
-            # If there are two modalities, we encode one and decode the other
-            elif len(present_modalities_bandsets_for_sample) == 2:
-                encoded_bandset_idxs = set([present_modalities_bandsets_for_sample[0]])
-                decoded_bandset_idxs = set([present_modalities_bandsets_for_sample[1]])
-            # If there are more than two modalities, we randomly select some to encode and the rest to decode
-            else:
-                # Select Indices to Encode
-                num_present_modalities = len(present_modalities_bandsets_for_sample)
-                encodable_modality_bandsets = [
-                    modality_bandset
-                    for modality_bandset in present_modalities_bandsets_for_sample
-                    if modality_bandset[0] not in self.only_decode_modalities
-                ]
-                num_encodable_modality_bandsets = len(encodable_modality_bandsets)
-                # if min and max are none we will always encode all encodable bandsets
-                # if min is none, max must be none
-                upper_limit = num_encodable_modality_bandsets
-                if not self.allow_encoding_decoding_same_bandset:
-                    # Otherwise no decoding will be done
-                    upper_limit -= 1
-                if self.max_encoded_bandsets is None:
-                    max_encoded_bandsets = upper_limit
-                else:
-                    max_encoded_bandsets = min(self.max_encoded_bandsets, upper_limit)
-
-                if self.min_encoded_bandsets is None:
-                    min_encoded_bandsets = num_encodable_modality_bandsets
-                else:
-                    min_encoded_bandsets = min(
-                        self.min_encoded_bandsets, num_encodable_modality_bandsets
-                    )
-                # Ensure min is less than max
-                min_encoded_bandsets = min(min_encoded_bandsets, max_encoded_bandsets)
-                num_bandsets_to_encode = np.random.randint(
-                    min_encoded_bandsets, max_encoded_bandsets + 1
-                )
-                encoded_idxs = np.random.choice(
-                    len(encodable_modality_bandsets),
-                    size=num_bandsets_to_encode,
-                    replace=False,
-                )
-                encoded_bandset_idxs = set(
-                    [encodable_modality_bandsets[i] for i in encoded_idxs]
-                )
-                # Select Indices to Decode
-                min_decoded_bandsets = min(
-                    self.min_decoded_bandsets or 1, num_present_modalities
-                )
-                max_decoded_bandsets = min(
-                    self.max_decoded_bandsets or num_present_modalities,
-                    num_present_modalities,
-                )
-                if self.allow_encoding_decoding_same_bandset:
-                    # Otherwise randomly choose between min and max
-                    num_decoded_bandsets = np.random.randint(
-                        min_decoded_bandsets, max_decoded_bandsets + 1
-                    )
-                    decoded_idxs = np.random.choice(
-                        len(present_modalities_bandsets_for_sample),
-                        size=num_decoded_bandsets,
-                        replace=False,
-                    )
-                    decoded_bandset_idxs = set(
-                        [
-                            present_modalities_bandsets_for_sample[i]
-                            for i in decoded_idxs
-                        ]
-                    )
-                else:
-                    available_decoded_bandset_idxs = list(
-                        set(present_modalities_bandsets_for_sample)
-                        - encoded_bandset_idxs
-                    )
-                    num_decoded_bandsets = len(available_decoded_bandset_idxs)
-                    min_decoded_bandsets = min(
-                        min_decoded_bandsets, num_decoded_bandsets
-                    )
-                    max_decoded_bandsets = min(
-                        max_decoded_bandsets, num_decoded_bandsets
-                    )
-                    # select the decoded bandsets
-                    decoded_idxs = np.random.choice(
-                        len(available_decoded_bandset_idxs),
-                        size=num_decoded_bandsets,
-                        replace=False,
-                    )
-                    decoded_bandset_idxs = set(
-                        [available_decoded_bandset_idxs[i] for i in decoded_idxs]
-                    )
-            encoded_decoded_bandsets.append(
-                (encoded_bandset_idxs, decoded_bandset_idxs)
-            )
+            present = present_modalities_bandsets[sample_idx]
+            encoded, decoded = self._select_bandsets_for_sample(present)
+            encoded_decoded_bandsets.append((encoded, decoded))
         return encoded_decoded_bandsets
+
+    def _select_bandsets_for_sample(
+        self, present: list[tuple[str, int]]
+    ) -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
+        """Select encoded and decoded bandsets for a single sample based on modality count."""
+        if len(present) == 1:
+            return self._select_bandsets_single_modality(present)
+        elif len(present) == 2:
+            return self._select_bandsets_two_modalities(present)
+        else:
+            return self._select_bandsets_multiple_modalities(present)
+
+    def _select_bandsets_single_modality(
+        self, present: list[tuple[str, int]]
+    ) -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
+        """Handle single modality case: encode only, no cross-modality decoding possible."""
+        encoded_bandset_idxs = set(present)
+        decoded_bandset_idxs = set()
+        return encoded_bandset_idxs, decoded_bandset_idxs
+
+    def _select_bandsets_two_modalities(
+        self, present: list[tuple[str, int]]
+    ) -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
+        """Handle two modality case: encode first, decode second."""
+        encoded_bandset_idxs = set([present[0]])
+        decoded_bandset_idxs = set([present[1]])
+        return encoded_bandset_idxs, decoded_bandset_idxs
+
+    def _select_bandsets_multiple_modalities(
+        self, present: list[tuple[str, int]]
+    ) -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
+        """Handle 3+ modality case: randomly select subset to encode, rest to decode."""
+        num_present = len(present)
+        encodable = self._filter_encodable_bandsets(present)
+        num_encode = self._compute_num_bandsets_to_encode(encodable, num_present)
+        encoded = self._randomly_select_encoded_bandsets(encodable, num_encode)
+        num_decode = self._compute_num_bandsets_to_decode(num_present)
+        decoded = self._randomly_select_decoded_bandsets(present, encoded, num_decode)
+        return encoded, decoded
+
+    def _filter_encodable_bandsets(
+        self, present: list[tuple[str, int]]
+    ) -> list[tuple[str, int]]:
+        """Filter out bandsets that are restricted to decoding only."""
+        return [
+            modality_bandset
+            for modality_bandset in present
+            if modality_bandset[0] not in self.only_decode_modalities
+        ]
+
+    def _compute_num_bandsets_to_encode(
+        self, encodable: list[tuple[str, int]], num_present: int
+    ) -> int:
+        """Compute how many bandsets to encode based on configuration."""
+        num_encodable = len(encodable)
+        # Determine upper limit for encoding
+        upper_limit = num_encodable
+        if not self.allow_encoding_decoding_same_bandset:
+            # Need to reserve at least one for decoding
+            upper_limit -= 1
+
+        # Apply configured max, if any
+        if self.max_encoded_bandsets is None:
+            max_encoded_bandsets = upper_limit
+        else:
+            max_encoded_bandsets = min(self.max_encoded_bandsets, upper_limit)
+
+        # Apply configured min, if any
+        if self.min_encoded_bandsets is None:
+            min_encoded_bandsets = num_encodable
+        else:
+            min_encoded_bandsets = min(self.min_encoded_bandsets, num_encodable)
+
+        # Ensure min <= max
+        min_encoded_bandsets = min(min_encoded_bandsets, max_encoded_bandsets)
+
+        # Randomly sample within the range
+        return np.random.randint(min_encoded_bandsets, max_encoded_bandsets + 1)
+
+    def _randomly_select_encoded_bandsets(
+        self, encodable: list[tuple[str, int]], num_encode: int
+    ) -> set[tuple[str, int]]:
+        """Randomly select which bandsets to encode."""
+        encoded_idxs = np.random.choice(
+            len(encodable), size=num_encode, replace=False
+        )
+        return set([encodable[i] for i in encoded_idxs])
+
+    def _compute_num_bandsets_to_decode(self, num_present: int) -> int:
+        """Compute how many bandsets to decode based on configuration."""
+        min_decoded = min(self.min_decoded_bandsets or 1, num_present)
+        max_decoded = min(self.max_decoded_bandsets or num_present, num_present)
+        return min_decoded, max_decoded
+
+    def _randomly_select_decoded_bandsets(
+        self,
+        present: list[tuple[str, int]],
+        encoded: set[tuple[str, int]],
+        num_decode_tuple: tuple[int, int],
+    ) -> set[tuple[str, int]]:
+        """Randomly select which bandsets to decode."""
+        min_decoded, max_decoded = num_decode_tuple
+
+        if self.allow_encoding_decoding_same_bandset:
+            # Can select from all present bandsets
+            num_decoded_bandsets = np.random.randint(min_decoded, max_decoded + 1)
+            decoded_idxs = np.random.choice(
+                len(present), size=num_decoded_bandsets, replace=False
+            )
+            return set([present[i] for i in decoded_idxs])
+        else:
+            # Can only select from bandsets not used for encoding
+            # When disjoint, we decode ALL bandsets not used for encoding
+            available = list(set(present) - encoded)
+            num_available = len(available)
+            min_decoded = min(min_decoded, num_available)
+            max_decoded = min(max_decoded, num_available)
+            # Select all available decoded bandsets
+            num_decoded_bandsets = num_available
+            decoded_idxs = np.random.choice(
+                len(available), size=num_decoded_bandsets, replace=False
+            )
+            return set([available[i] for i in decoded_idxs])
 
     def overide_strategy_mask(self, modality_spec: ModalitySpec) -> bool:
         """Overide the mask for a modality depending on the strategy being modality cross masked.
@@ -1086,6 +1135,11 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
 
         The encoded and decoded bandsets are typically computed by the select_encoded_decoded_bandsets method.
 
+        This method applies the bandset-level masking rules:
+        - Bandsets not selected for encoding: ONLINE_ENCODER → TARGET_ENCODER_ONLY
+        - Bandsets not selected for decoding: DECODER → TARGET_ENCODER_ONLY
+        - Special modalities (e.g., static in time/space): force all to ONLINE_ENCODER or DECODER
+
         Args:
             masked_batch: The masked batch to apply the mask to.
             encoded_decoded_bandsets: The encoded and decoded bandsets for each sample.
@@ -1098,138 +1152,284 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         masked_batch_dict = masked_batch.as_dict(return_none=False)
         num_encoded: None | torch.Tensor = None
         num_decoded: None | torch.Tensor = None
+
+        # Apply bandset rules for each modality
         for modality in masked_batch.modalities:
             if modality == "timestamps":
                 continue
+            out_mask, enc_count, dec_count = self._apply_bandset_rules_to_modality(
+                modality,
+                masked_batch,
+                masked_batch_dict,
+                encoded_decoded_bandsets,
+                present_modalities_bandsets,
+            )
             masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
                 modality
             )
-            modality_spec = Modality.get(modality)
-            modality_mask = masked_batch_dict[masked_modality_name]
-            # with 1-12 patch size I got a run time aliasing error when writing to the modality mask
-            out_modality_mask = modality_mask.clone()
-            num_bandsets = modality_mask.shape[-1]
+            masked_batch_dict[masked_modality_name] = out_mask
+            num_encoded = self._accumulate_token_counts(num_encoded, enc_count)
+            num_decoded = self._accumulate_token_counts(num_decoded, dec_count)
 
-            for sample_idx in range(masked_batch.timestamps.shape[0]):
-                encoded_bandset_idxs, decoded_bandset_idxs = encoded_decoded_bandsets[
-                    sample_idx
-                ]
-                available_modalities = [
-                    modality_bandset[0]
-                    for modality_bandset in present_modalities_bandsets[sample_idx]
-                ]
-                if modality not in available_modalities:
-                    logger.debug(
-                        f"Modality {modality} not present for sample {sample_idx}"
-                    )
-                    continue
+        # Handle edge cases where samples have no encoded or decoded tokens
+        self._handle_no_tokens_edge_cases(
+            masked_batch_dict, num_encoded, num_decoded, patch_size
+        )
 
-                for bandset_idx in range(num_bandsets):
-                    is_encoded = (modality, bandset_idx) in encoded_bandset_idxs
-                    is_decoded = (modality, bandset_idx) in decoded_bandset_idxs
+        masked_batch = MaskedOlmoEarthSample(**masked_batch_dict)
+        return masked_batch
 
-                    # For different masking strategies, some modalities may not be able to follow the structured masking strategy
-                    # e.g static in space is randomly masked in space masking
-                    # e.g static in time is randomly masked in time masking
-                    # By setting to all encode or decode depending on the strategy,
-                    # the modality the structure of the strategy is maintained
-                    if self.overide_strategy_mask(modality_spec):
-                        if is_encoded:
-                            forced_mask_value = MaskValue.ONLINE_ENCODER.value
-                        elif is_decoded:
-                            forced_mask_value = MaskValue.DECODER.value
-                        else:
-                            continue
-                        logger.debug(
-                            f"Setting {modality} bandset {bandset_idx} to {forced_mask_value}"
-                        )
-                        not_missing_mask = (
-                            modality_mask[sample_idx, ..., bandset_idx]
-                            != MaskValue.MISSING.value
-                        )
-                        out_modality_mask[sample_idx, ..., bandset_idx] = torch.where(
-                            not_missing_mask,
-                            forced_mask_value,
-                            modality_mask[sample_idx, ..., bandset_idx],
-                        )
-                        continue
+    def _apply_bandset_rules_to_modality(
+        self,
+        modality: str,
+        masked_batch: MaskedOlmoEarthSample,
+        masked_batch_dict: dict[str, Any],
+        encoded_decoded_bandsets: list[
+            tuple[set[tuple[str, int]], set[tuple[str, int]]]
+        ],
+        present_modalities_bandsets: list[list[tuple[str, int]]],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Apply encode/decode bandset rules to all samples for this modality.
 
-                    if not is_encoded:
-                        # Supress all encoded values for a not encoded bandset
-                        online_encoder_mask = (
-                            modality_mask[sample_idx, ..., bandset_idx]
-                            == MaskValue.ONLINE_ENCODER.value
-                        )
+        Returns:
+            Tuple of (out_modality_mask, encoded_count, decoded_count)
+        """
+        masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+        modality_spec = Modality.get(modality)
+        modality_mask = masked_batch_dict[masked_modality_name]
+        # Clone to avoid aliasing errors (seen with variable patch sizes 1-12)
+        out_modality_mask = modality_mask.clone()
+        num_bandsets = modality_mask.shape[-1]
+        batch_size = masked_batch.timestamps.shape[0]
 
-                        out_modality_mask[sample_idx, ..., bandset_idx] = torch.where(
-                            online_encoder_mask.clone(),
-                            MaskValue.TARGET_ENCODER_ONLY.value,
-                            modality_mask[sample_idx, ..., bandset_idx],
-                        )
-                        continue
-
-                    if not is_decoded:
-                        decoder_mask = (
-                            modality_mask[sample_idx, ..., bandset_idx]
-                            == MaskValue.DECODER.value
-                        )
-
-                        out_modality_mask[sample_idx, ..., bandset_idx] = torch.where(
-                            decoder_mask,
-                            MaskValue.TARGET_ENCODER_ONLY.value,
-                            modality_mask[sample_idx, ..., bandset_idx],
-                        )
-            # check we have more than 0 encoded and decoded tokens.
-            # this should happen very rarely (only in the S2-only ablation when
-            # the h, w is small)
-            flat_mask = torch.flatten(out_modality_mask, start_dim=1)
-            encoded_for_modality = (flat_mask == MaskValue.ONLINE_ENCODER.value).sum(
-                dim=-1
+        # Apply rules for each sample
+        for sample_idx in range(batch_size):
+            self._apply_bandset_mask_for_sample(
+                sample_idx,
+                modality,
+                modality_spec,
+                modality_mask,
+                out_modality_mask,
+                num_bandsets,
+                encoded_decoded_bandsets[sample_idx],
+                present_modalities_bandsets[sample_idx],
             )
-            decoded_for_modality = (flat_mask == MaskValue.DECODER.value).sum(dim=-1)
-            if num_encoded is None:
-                num_encoded = encoded_for_modality
-            else:
-                num_encoded += encoded_for_modality
-            if num_decoded is None:
-                num_decoded = decoded_for_modality
-            else:
-                num_decoded += decoded_for_modality
-            masked_batch_dict[masked_modality_name] = out_modality_mask
-        # Again - no_encoded_indices and no_decoded_indices should have length > 0 very rarely
-        # (so far this has only happened when we ablate S2 only, and have a small h, w), so these
-        # loops should not be entered very often.
+
+        # Count how many tokens are encoded/decoded for this modality
+        encoded_count, decoded_count = self._count_modality_tokens(out_modality_mask)
+        return out_modality_mask, encoded_count, decoded_count
+
+    def _apply_bandset_mask_for_sample(
+        self,
+        sample_idx: int,
+        modality: str,
+        modality_spec: ModalitySpec,
+        modality_mask: torch.Tensor,
+        out_modality_mask: torch.Tensor,
+        num_bandsets: int,
+        encoded_decoded: tuple[set[tuple[str, int]], set[tuple[str, int]]],
+        present_bandsets: list[tuple[str, int]],
+    ) -> None:
+        """Apply bandset mask rules for a single sample."""
+        encoded_bandset_idxs, decoded_bandset_idxs = encoded_decoded
+        available_modalities = [mb[0] for mb in present_bandsets]
+
+        if modality not in available_modalities:
+            logger.debug(f"Modality {modality} not present for sample {sample_idx}")
+            return
+
+        # Apply rules for each bandset
+        for bandset_idx in range(num_bandsets):
+            self._apply_single_bandset_mask(
+                sample_idx,
+                bandset_idx,
+                modality,
+                modality_spec,
+                modality_mask,
+                out_modality_mask,
+                encoded_bandset_idxs,
+                decoded_bandset_idxs,
+            )
+
+    def _apply_single_bandset_mask(
+        self,
+        sample_idx: int,
+        bandset_idx: int,
+        modality: str,
+        modality_spec: ModalitySpec,
+        modality_mask: torch.Tensor,
+        out_modality_mask: torch.Tensor,
+        encoded_bandset_idxs: set[tuple[str, int]],
+        decoded_bandset_idxs: set[tuple[str, int]],
+    ) -> None:
+        """Apply mask rules for a single bandset within a sample."""
+        is_encoded = (modality, bandset_idx) in encoded_bandset_idxs
+        is_decoded = (modality, bandset_idx) in decoded_bandset_idxs
+
+        # Handle special modalities that need override (e.g., static in time/space)
+        if self.overide_strategy_mask(modality_spec):
+            self._force_override_mask(
+                sample_idx,
+                bandset_idx,
+                is_encoded,
+                is_decoded,
+                modality,
+                modality_mask,
+                out_modality_mask,
+            )
+            return
+
+        # Suppress ONLINE_ENCODER tokens for bandsets not selected for encoding
+        if not is_encoded:
+            self._suppress_unencoded_bandset(
+                sample_idx, bandset_idx, modality_mask, out_modality_mask
+            )
+            return
+
+        # Suppress DECODER tokens for bandsets not selected for decoding
+        if not is_decoded:
+            self._suppress_undecoded_bandset(
+                sample_idx, bandset_idx, modality_mask, out_modality_mask
+            )
+
+    def _force_override_mask(
+        self,
+        sample_idx: int,
+        bandset_idx: int,
+        is_encoded: bool,
+        is_decoded: bool,
+        modality: str,
+        modality_mask: torch.Tensor,
+        out_modality_mask: torch.Tensor,
+    ) -> None:
+        """Force all non-missing tokens to ONLINE_ENCODER or DECODER for special modalities.
+
+        Some modalities don't follow the base strategy structure (e.g., static in space
+        is randomly masked in space masking). We force them to all ONLINE_ENCODER or DECODER
+        to maintain the cross-modality structure.
+        """
+        if is_encoded:
+            forced_mask_value = MaskValue.ONLINE_ENCODER.value
+        elif is_decoded:
+            forced_mask_value = MaskValue.DECODER.value
+        else:
+            return
+
+        logger.debug(
+            f"Setting {modality} bandset {bandset_idx} to {forced_mask_value}"
+        )
+        not_missing_mask = (
+            modality_mask[sample_idx, ..., bandset_idx] != MaskValue.MISSING.value
+        )
+        out_modality_mask[sample_idx, ..., bandset_idx] = torch.where(
+            not_missing_mask,
+            forced_mask_value,
+            modality_mask[sample_idx, ..., bandset_idx],
+        )
+
+    def _suppress_unencoded_bandset(
+        self,
+        sample_idx: int,
+        bandset_idx: int,
+        modality_mask: torch.Tensor,
+        out_modality_mask: torch.Tensor,
+    ) -> None:
+        """Suppress all ONLINE_ENCODER tokens for bandsets not selected for encoding.
+
+        Converts ONLINE_ENCODER → TARGET_ENCODER_ONLY so these tokens are only
+        seen by the target encoder, not the online encoder.
+        """
+        online_encoder_mask = (
+            modality_mask[sample_idx, ..., bandset_idx]
+            == MaskValue.ONLINE_ENCODER.value
+        )
+        out_modality_mask[sample_idx, ..., bandset_idx] = torch.where(
+            online_encoder_mask.clone(),
+            MaskValue.TARGET_ENCODER_ONLY.value,
+            modality_mask[sample_idx, ..., bandset_idx],
+        )
+
+    def _suppress_undecoded_bandset(
+        self,
+        sample_idx: int,
+        bandset_idx: int,
+        modality_mask: torch.Tensor,
+        out_modality_mask: torch.Tensor,
+    ) -> None:
+        """Suppress all DECODER tokens for bandsets not selected for decoding.
+
+        Converts DECODER → TARGET_ENCODER_ONLY so these tokens are only
+        seen by the target encoder, not decoded by the online model.
+        """
+        decoder_mask = (
+            modality_mask[sample_idx, ..., bandset_idx] == MaskValue.DECODER.value
+        )
+        out_modality_mask[sample_idx, ..., bandset_idx] = torch.where(
+            decoder_mask,
+            MaskValue.TARGET_ENCODER_ONLY.value,
+            modality_mask[sample_idx, ..., bandset_idx],
+        )
+
+    def _count_modality_tokens(
+        self, modality_mask: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Count encoded and decoded tokens for a modality across all samples."""
+        flat_mask = torch.flatten(modality_mask, start_dim=1)
+        encoded_count = (flat_mask == MaskValue.ONLINE_ENCODER.value).sum(dim=-1)
+        decoded_count = (flat_mask == MaskValue.DECODER.value).sum(dim=-1)
+        return encoded_count, decoded_count
+
+    def _accumulate_token_counts(
+        self, current: torch.Tensor | None, new_count: torch.Tensor
+    ) -> torch.Tensor:
+        """Accumulate token counts across modalities."""
+        if current is None:
+            return new_count
+        return current + new_count
+
+    def _handle_no_tokens_edge_cases(
+        self,
+        masked_batch_dict: dict[str, Any],
+        num_encoded: torch.Tensor | None,
+        num_decoded: torch.Tensor | None,
+        patch_size: int,
+    ) -> None:
+        """Handle samples that ended up with no encoded or decoded tokens.
+
+        This is a rare edge case that happens in specific scenarios like S2-only
+        ablations with small spatial dimensions (h, w). When it occurs, we fall back
+        to random masking to ensure each sample has some tokens to encode/decode.
+
+        Note: These loops should be entered very rarely in practice.
+        """
         no_encoded_indices = torch.argwhere(num_encoded == 0)
         no_decoded_indices = torch.argwhere(num_decoded == 0)
-        for i in no_encoded_indices:
-            for key, val in masked_batch_dict.items():
-                if key.endswith("mask"):
-                    modality_mask = val[i]
-                    modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
-                        key
-                    )
-                    if modality_name in self.only_decode_modalities:
-                        continue
-                    modality_spec = Modality.get(modality_name)
-                    masked_batch_dict[key][i] = self._random_fill_unmasked(
-                        modality_mask, modality_spec, patch_size
-                    )
-        for i in no_decoded_indices:
-            for key, val in masked_batch_dict.items():
-                if key.endswith("mask"):
-                    modality_mask = val[i]
-                    modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
-                        key
-                    )
-                    if modality_name in self.only_decode_modalities:
-                        continue
-                    modality_spec = Modality.get(modality_name)
-                    masked_batch_dict[key][i] = self._random_fill_unmasked(
-                        modality_mask, modality_spec, patch_size
-                    )
-        masked_batch = MaskedOlmoEarthSample(**masked_batch_dict)
 
-        return masked_batch
+        # Fix samples with no encoded tokens
+        for i in no_encoded_indices:
+            self._fix_sample_with_no_tokens(masked_batch_dict, i, patch_size)
+
+        # Fix samples with no decoded tokens
+        for i in no_decoded_indices:
+            self._fix_sample_with_no_tokens(masked_batch_dict, i, patch_size)
+
+    def _fix_sample_with_no_tokens(
+        self, masked_batch_dict: dict[str, Any], sample_idx: torch.Tensor, patch_size: int
+    ) -> None:
+        """Fix a single sample that has no encoded or decoded tokens using random masking."""
+        for key, val in masked_batch_dict.items():
+            if not key.endswith("mask"):
+                continue
+
+            modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(key)
+            if modality_name in self.only_decode_modalities:
+                continue
+
+            modality_mask = val[sample_idx]
+            modality_spec = Modality.get(modality_name)
+            masked_batch_dict[key][sample_idx] = self._random_fill_unmasked(
+                modality_mask, modality_spec, patch_size
+            )
 
     def apply_mask(
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
