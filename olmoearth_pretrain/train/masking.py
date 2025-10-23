@@ -946,7 +946,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     )
                     # only say something is present if it has any encoded tokens
                     # A little hacky but basically means that we leave the bandset untouched for encoding and decoding
-                    if not is_any_tokens_encoded_for_sample:
+                    if (
+                        not is_any_tokens_encoded_for_sample
+                        and modality not in self.only_decode_modalities
+                    ):
                         continue
                     present_modalities_bandsets[sample_idx].append(
                         (modality, bandset_idx)
@@ -1205,6 +1208,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
                         key
                     )
+                    if modality_name in self.only_decode_modalities:
+                        continue
                     modality_spec = Modality.get(modality_name)
                     masked_batch_dict[key][i] = self._random_fill_unmasked(
                         modality_mask, modality_spec, patch_size
@@ -1216,6 +1221,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
                         key
                     )
+                    if modality_name in self.only_decode_modalities:
+                        continue
                     modality_spec = Modality.get(modality_name)
                     masked_batch_dict[key][i] = self._random_fill_unmasked(
                         modality_mask, modality_spec, patch_size
