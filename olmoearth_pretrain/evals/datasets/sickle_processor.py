@@ -1,4 +1,5 @@
 """SICKLE processor."""
+
 import argparse
 import glob
 import logging
@@ -18,10 +19,10 @@ import torch
 from upath import UPath
 
 from olmoearth_pretrain.evals.datasets.sickle_dataset import (
+    L8_BANDS,
     L8_BANDS_IMPUTED,
     S1_BANDS,
     S2_BANDS,
-    L8_BANDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -431,7 +432,6 @@ def process_sickle(
         output_dir=output_dir,
     )
     processor.process()
-
 
 
 def main():
