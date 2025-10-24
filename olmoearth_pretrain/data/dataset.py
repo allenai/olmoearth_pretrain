@@ -702,7 +702,8 @@ class OlmoEarthDataset(Dataset):
         Updates the sample indices numpy array to only include the indices we want to train on.
         """
         # Read the metadata CSV
-        metadata_df = pd.read_csv(self.sample_metadata_path)
+        # TODO: Pandas can't read gcs upaths
+        metadata_df = pd.read_csv(str(self.sample_metadata_path))
         logger.info(f"Metadata CSV has {len(metadata_df)} samples")
         logger.info(f"columns: {metadata_df.columns}")
 
@@ -823,7 +824,7 @@ class OlmoEarthDataset(Dataset):
     ) -> OlmoEarthSample:
         """Fill an array of shape of modality with the missing value."""
         expected_shape = sample.get_expected_shape(modality)
-        logger.info(f"Filling {modality} with shape {expected_shape}")
+        logger.debug(f"Filling {modality} with shape {expected_shape}")
         return np.full(
             expected_shape,
             fill_value=MISSING_VALUE,

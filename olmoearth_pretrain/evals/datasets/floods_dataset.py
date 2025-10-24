@@ -10,7 +10,6 @@ import torch
 from einops import rearrange, repeat
 from torch.utils.data import Dataset
 from tqdm import tqdm
-from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
@@ -24,9 +23,6 @@ BAND_STATS = {
     "vv": {"mean": -11.27174944, "std": 4.81716083},
     "vh": {"mean": -18.4847947, "std": 5.79660676},
 }
-
-
-FLOODS_DIR = UPath("/weka/dfive-default/presto_eval_sets/floods")
 
 
 class Sen1Floods11Processor:

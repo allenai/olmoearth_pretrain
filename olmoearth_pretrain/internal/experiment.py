@@ -7,10 +7,8 @@ from dataclasses import dataclass
 from typing import cast
 
 import numpy as np
-from beaker import ExperimentSpec
 from olmo_core.config import Config, StrEnum
 from olmo_core.distributed.utils import get_local_rank
-from olmo_core.launch.beaker import BeakerLaunchConfig
 from olmo_core.train import (
     TrainerConfig,
     prepare_training_environment,
@@ -30,6 +28,7 @@ from olmoearth_pretrain.data.visualize import visualize_sample
 from olmoearth_pretrain.inference_benchmarking.run_throughput_benchmark import (
     ThroughputBenchmarkRunnerConfig,
 )
+from olmoearth_pretrain.launch.beaker import OlmoEarthBeakerLaunchConfig
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModuleConfig,
 )
@@ -38,43 +37,13 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class OlmoEarthBeakerLaunchConfig(BeakerLaunchConfig):
-    """Extend BeakerLaunchConfig with hostnames option.
-
-    This enables targeting specific Beaker hosts.
-    """
-
-    hostnames: list[str] | None = None
-
-    def build_experiment_spec(
-        self, torchrun: bool = True, entrypoint: str | None = None
-    ) -> ExperimentSpec:
-        """Build the experiment spec."""
-        # We simply call the superclass build_experiment_spec, but just replace cluster
-        # setting in the Constraints with hostname setting if user provided hostname
-        # list.
-        spec = super().build_experiment_spec(torchrun, entrypoint)
-        if self.hostnames:
-            constraints = spec.tasks[0].constraints
-            constraints.cluster = None
-            constraints.hostname = self.hostnames
-        return spec
-
-
-HeliosBeakerLaunchConfig = _deprecated_class_alias(
-    OlmoEarthBeakerLaunchConfig,
-    "helios.internal.experiment.HeliosBeakerLaunchConfig",
-)
-
-
-@dataclass
 class CommonComponents(Config):
     """Any configurable items that are common to all experiments."""
 
     run_name: str
     save_folder: str
-    launch: OlmoEarthBeakerLaunchConfig
     training_modalities: list[str]
+    launch: OlmoEarthBeakerLaunchConfig | None = None
     nccl_debug: bool = False
     # callbacks: dict[str, Callback]
 
@@ -111,12 +80,12 @@ class OlmoEarthExperimentConfig(Config):
     """Configuration for a OlmoEarth Pretrain experiment."""
 
     run_name: str
-    launch: OlmoEarthBeakerLaunchConfig
     model: Config
     dataset: Config  # will likely be fixed for us
     data_loader: OlmoEarthDataLoaderConfig  # will likely be fixed for us
     train_module: OlmoEarthTrainModuleConfig
     trainer: TrainerConfig
+    launch: OlmoEarthBeakerLaunchConfig | None = None
     visualize: OlmoEarthVisualizeConfig | None = None
     init_seed: int = 12536
 
@@ -131,8 +100,8 @@ HeliosExperimentConfig = _deprecated_class_alias(
 class BenchmarkExperimentConfig(Config):
     """Configuration for a throughput benchmarking run."""
 
-    launch: OlmoEarthBeakerLaunchConfig
     benchmark: ThroughputBenchmarkRunnerConfig
+    launch: OlmoEarthBeakerLaunchConfig | None = None
 
 
 def split_common_overrides(overrides: list[str]) -> tuple[list[str], list[str]]:
@@ -275,7 +244,9 @@ def launch(config: OlmoEarthExperimentConfig) -> None:
     logger.info("Launching the experiment")
     logger.info(config)
     # Set follow=False if you don't want to stream the logs to the terminal
-    config.launch.launch(follow=False)
+    config.launch.launch(
+        follow=False, torchrun=True
+    )  # always run with torchrun so you can run distributed scripts optionally on single gpu
 
 
 def prep(config: OlmoEarthExperimentConfig) -> None:
@@ -437,7 +408,6 @@ If running command on a local machine ie from a session, you can use the [b]loca
         sys.exit(1)
 
     script, cmd, run_name, cluster, *overrides = sys.argv
-    # TODO: we should probably have a single common components builder that can be used for all experiments
     common = common_components_builder(script, cmd, run_name, cluster, overrides)
 
     cmd = SubCmd(cmd)

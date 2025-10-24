@@ -5,15 +5,17 @@ import logging
 from olmo_core.config import StrEnum
 from torch.utils.data import Dataset
 
-from .breizhcrops import BREIZHCROPS_DIR, BreizhCropsDataset
-from .cropharvest import CROPHARVEST_DIR, CropHarvestDataset
-from .floods_dataset import FLOODS_DIR, Sen1Floods11Dataset
-from .geobench_dataset import GEOBENCH_DIR, GeobenchDataset
-from .mados_dataset import MADOS_DIR, MADOSDataset
+import olmoearth_pretrain.evals.datasets.paths as paths
+
+from .breizhcrops import BreizhCropsDataset
+from .cropharvest import CropHarvestDataset
+from .floods_dataset import Sen1Floods11Dataset
+from .geobench_dataset import GeobenchDataset
+from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
-from .pastis_dataset import PASTIS_DIR, PASTIS_DIR_ORIG, PASTISRDataset
+from .pastis_dataset import PASTISRDataset
 from .rslearn_dataset import RslearnToOlmoEarthDataset
-from .sickle_dataset import SICKLE_DIR, SICKLEDataset
+from .sickle_dataset import SICKLEDataset
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,7 @@ def get_eval_dataset(
     if eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
         return GeobenchDataset(
-            geobench_dir=GEOBENCH_DIR,
+            geobench_dir=paths.GEOBENCH_DIR,
             dataset=eval_dataset,
             split=split,
             partition=partition,
@@ -71,7 +73,7 @@ def get_eval_dataset(
                 "MADOS has very different norm stats than our pretraining dataset"
             )
         return MADOSDataset(
-            path_to_splits=MADOS_DIR,
+            path_to_splits=paths.MADOS_DIR,
             split=split,
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
@@ -79,7 +81,7 @@ def get_eval_dataset(
         )
     elif eval_dataset == "sen1floods11":
         return Sen1Floods11Dataset(
-            path_to_splits=FLOODS_DIR,
+            path_to_splits=paths.FLOODS_DIR,
             split=split,
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
@@ -92,16 +94,17 @@ def get_eval_dataset(
             "norm_stats_from_pretrained": norm_stats_from_pretrained,
             "input_modalities": input_modalities,
             "norm_method": norm_method,
+            "dir_partition": paths.PASTIS_DIR_PARTITION,
         }
         if "128" in eval_dataset:
             # "pastis128"
-            kwargs["path_to_splits"] = PASTIS_DIR_ORIG
+            kwargs["path_to_splits"] = paths.PASTIS_DIR_ORIG
         else:
-            kwargs["path_to_splits"] = PASTIS_DIR
+            kwargs["path_to_splits"] = paths.PASTIS_DIR
         return PASTISRDataset(**kwargs)  # type: ignore
     elif eval_dataset == "breizhcrops":
         return BreizhCropsDataset(
-            path_to_splits=BREIZHCROPS_DIR,
+            path_to_splits=paths.BREIZHCROPS_DIR,
             split=split,
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
@@ -109,7 +112,7 @@ def get_eval_dataset(
         )
     elif eval_dataset == "sickle":
         return SICKLEDataset(
-            path_to_splits=SICKLE_DIR,
+            path_to_splits=paths.SICKLE_DIR,
             split=split,
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
@@ -125,7 +128,7 @@ def get_eval_dataset(
                 "CropHarvest tasks should have the following naming format: cropharvest_<country>_<timesteps> (e.g. 'cropharvest_Togo_12')"
             )
         return CropHarvestDataset(
-            cropharvest_dir=CROPHARVEST_DIR,
+            cropharvest_dir=paths.CROPHARVEST_DIR,
             country=country,
             split=split,
             partition=partition,
@@ -136,7 +139,7 @@ def get_eval_dataset(
         )
     elif eval_dataset == "nandi":
         return RslearnToOlmoEarthDataset(
-            ds_path="/weka/dfive-default/rslearn-eai/datasets/crop/kenya_nandi/20250625",
+            ds_path=paths.NANDI_DIR,
             ds_groups=["groundtruth_polygon_split_window_32"],
             layers=input_layers,
             input_size=4,
@@ -153,7 +156,7 @@ def get_eval_dataset(
         )
     elif eval_dataset == "awf":
         return RslearnToOlmoEarthDataset(
-            ds_path="/weka/dfive-default/rslearn-eai/datasets/crop/awf_2023",
+            ds_path=paths.AWF_DIR,
             ds_groups=["20250822"],
             layers=input_layers,
             input_size=32,

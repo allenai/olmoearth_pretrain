@@ -1,4 +1,4 @@
-ai2-olmo-core @ git+https://github.com/allenai/OLMo-core.git@abc12e50ba756c21e575452cfc6f150dafa9509e # Pin here until >2.1.0 is released.
+ai2-olmo-core==2.3.0
 albumentations
 cartopy
 class-registry

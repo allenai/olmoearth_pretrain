@@ -9,7 +9,6 @@ from breizhcrops import BreizhCrops
 from breizhcrops.datasets.breizhcrops import SELECTED_BANDS
 from einops import repeat
 from torch.utils.data import ConcatDataset, Dataset
-from upath import UPath
 
 from olmoearth_pretrain.train.masking import (
     MaskedOlmoEarthSample,
@@ -51,8 +50,6 @@ BAND_STATS = {
     "11 - SWIR": {"mean": 4290.2134, "std": 11693.7297},
     "12 - SWIR": {"mean": 1697.6628, "std": 1239.9095},
 }
-
-BREIZHCROPS_DIR = UPath("/weka/dfive-default/skylight/presto_eval_sets/breizhcrops")
 
 
 class BreizhCropsDataset(Dataset):

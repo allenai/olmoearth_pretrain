@@ -10,6 +10,7 @@ from olmo_core.launch.beaker import (
     BeakerPriority,
     BeakerWekaBucket,
     OLMoCoreBeakerImage,
+    is_running_in_beaker,
 )
 from olmo_core.utils import generate_uuid
 from upath import UPath
@@ -41,6 +42,9 @@ WEKA_CLUSTER_NAMES = [
     "rhea",
 ]
 
+LOCAL_CLUSTER_NAME = "local"
+ANONYMOUS_USER = "anonymous"
+
 
 def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig:
     """Build the visualize config for an experiment."""
@@ -66,11 +70,41 @@ def get_root_dir(cluster: str) -> str:
         # should work but it is not meant to be used like this, it is just meant to be
         # a placeholder.
         root_dir = f"/unused/{PROJECT_NAME}"
-    elif "local" in cluster:
+    elif LOCAL_CLUSTER_NAME in cluster:
         root_dir = "./local_output"
     else:
         raise ValueError(f"Cluster {cluster} is not supported")
     return root_dir
+
+
+def extract_nccl_debug_from_overrides(overrides: list[str]) -> bool:
+    """Extract the nccl_debug flag from the overrides."""
+    for override in overrides:
+        if override.startswith("--common.nccl_debug="):
+            return override.split("=")[1].lower() in ("true", "1", "yes")
+    return False
+
+
+def set_nccl_debug_env_vars(
+    nccl_debug: bool, local: bool = False
+) -> list[BeakerEnvVar] | None:
+    """Set the NCCL debug environment variables.
+
+    If on_beaker is True, returns a list of BeakerEnvVar for use in a Beaker launch config.
+    Otherwise, sets these variables in the local environment and returns None.
+    """
+    nccl_settings = {
+        "NCCL_DEBUG": "DETAIL" if nccl_debug else "WARN",
+        "TORCH_NCCL_TRACE_BUFFER_SIZE": "1000000000" if nccl_debug else "0",
+        "TORCH_NCCL_BLOCKING_WAIT": "1" if nccl_debug else "0",
+    }
+
+    if not local:
+        return [BeakerEnvVar(name=k, value=v) for k, v in nccl_settings.items()]
+    else:
+        for k, v in nccl_settings.items():
+            os.environ[k] = v
+        return None
 
 
 def build_launch_config(
@@ -114,16 +148,11 @@ def build_launch_config(
     beaker_user = get_beaker_username()
     # Propagate the train module path to the experiment if set
     env_vars = [
-        BeakerEnvVar(name="NCCL_DEBUG", value="DETAIL" if nccl_debug else "WARN"),
-        BeakerEnvVar(
-            name="TORCH_NCCL_TRACE_BUFFER_SIZE",
-            value="1000000000" if nccl_debug else "0",
-        ),
-        BeakerEnvVar(name="NCCL_BLOCKING_WAIT", value="1" if nccl_debug else "0"),
         BeakerEnvVar(
             name="GOOGLE_APPLICATION_CREDENTIALS", value="/etc/gcp_credentials.json"
         ),
     ]
+    env_vars.extend(set_nccl_debug_env_vars(nccl_debug=nccl_debug))
     # Propagate the train module path to the experiment if set
     train_script_path = os.environ.get("TRAIN_SCRIPT_PATH")
     if train_script_path is not None:
@@ -202,31 +231,34 @@ def build_common_components(
         # Modality.NAIP_10.name,
         # Modality.ERA5_10.name,
     ]
-    cmd_to_launch = SubCmd.train
-    if cmd == SubCmd.launch_prep:
+    if cmd == SubCmd.launch:
+        cmd_to_launch = SubCmd.train
+    elif cmd == SubCmd.launch_prep:
         cmd_to_launch = SubCmd.prep
-
-    if cmd == SubCmd.launch_benchmark:
+    elif cmd == SubCmd.launch_benchmark:
         cmd_to_launch = SubCmd.benchmark
+    else:
+        cmd_to_launch = cmd
 
     # Extract nccl_debug from overrides if present
-    nccl_debug = False
-    for override in overrides:
-        if override.startswith("--common.nccl_debug="):
-            logger.info(f"Setting nccl_debug to {override}")
-            nccl_debug = override.split("=")[1].lower() in ("true", "1", "yes")
-            break
-    launch_config = build_launch_config(
-        name=f"{run_name}-{cmd_to_launch}",
-        cmd=[script, cmd_to_launch, run_name, cluster, *overrides],
-        clusters=cluster,
-        nccl_debug=nccl_debug,
-    )
+    nccl_debug = extract_nccl_debug_from_overrides(overrides)
+    # If we are running on a local cluster, we don't need to build a launch config as we may not have beaker access
+    if local := cluster == LOCAL_CLUSTER_NAME:
+        set_nccl_debug_env_vars(nccl_debug=nccl_debug, local=local)
+        launch_config = None
+    else:
+        launch_config = build_launch_config(
+            name=f"{run_name}-{cmd_to_launch}",
+            cmd=[script, cmd_to_launch, run_name, cluster, *overrides],
+            clusters=cluster,
+            nccl_debug=nccl_debug,
+        )
     root_dir = get_root_dir(cluster)
-    beaker_user = get_beaker_username()
-    if beaker_user is None:
+
+    beaker_user = get_beaker_username() or ANONYMOUS_USER
+    if is_running_in_beaker() and beaker_user is None:
         raise ValueError(
-            "Failed to get Beaker username. Make sure you are authenticated with Beaker."
+            "Failed to get Beaker username. Make sure you are authenticated with Beaker if you are not running on a local cluster."
         )
     return CommonComponents(
         run_name=run_name,
