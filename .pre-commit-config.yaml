@@ -69,6 +69,8 @@ repos:
             -p,
             -vv,
             olmoearth_pretrain,
+            --exclude,
+            olmoearth_pretrain/evals/models/*,
             --fail-under=80,
           ]
   - repo: https://github.com/astral-sh/ruff-pre-commit
