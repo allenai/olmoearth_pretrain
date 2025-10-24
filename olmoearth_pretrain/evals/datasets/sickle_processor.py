@@ -434,7 +434,7 @@ def process_sickle(
     processor.process()
 
 
-def main():
+def main() -> None:
     """Main function to process SICKLE dataset."""
     parser = argparse.ArgumentParser(
         description="Process SICKLE dataset into PyTorch objects."

@@ -302,7 +302,7 @@ def process_pastis_orig_size(
     processor.process()
 
 
-def main():
+def main() -> None:
     """Main function to process PASTIS-R dataset."""
     parser = argparse.ArgumentParser(
         description="Process PASTIS-R dataset into PyTorch objects."
