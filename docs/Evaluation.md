@@ -27,10 +27,10 @@ This guide explains how we launch evaluation sweeps for OlmoEarth checkpoints an
 
 ## Evaluation Overview
 
-We run evaluations through the same `experiment.py` entrypoint used for training. The helper scripts below build the underlying launch commands and fan out the learning-rate, normalization, and pooling sweeps we use in papers.
+We run evaluations through the same `olmoearth_pretrain/internal/experiment.py` entrypoint used for pretraining. The helper scripts below build the underlying launch commands and fan out the learning rate, normalization, and pooling sweeps we used in paper.
 
-- `olmoearth_pretrain/internal/full_eval_sweep.py` launches frozen-feature evaluations (KNN, linear probes, zero-shot) against a checkpoint or a supported baseline model.
-- `olmoearth_pretrain/internal/full_eval_sweep_finetune.py` launches downstream fine-tuning evaluations, including optional sweeps over pretrained normalizers.
+- `olmoearth_pretrain/internal/full_eval_sweep.py` launches KNN (for classification) and linear probing (for segmentation) against an OlmoEarth checkpoint or a supported baseline model.
+- `olmoearth_pretrain/internal/full_eval_sweep_finetune.py` launches finetuning evaluations, including optional sweeps over pretrained and dataset normalizers.
 
 Both scripts rely on:
 - [`olmoearth_pretrain/internal/all_evals.py`](../olmoearth_pretrain/internal/all_evals.py) for the task registry.
