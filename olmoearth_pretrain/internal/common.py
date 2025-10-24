@@ -152,7 +152,9 @@ def build_launch_config(
             name="GOOGLE_APPLICATION_CREDENTIALS", value="/etc/gcp_credentials.json"
         ),
     ]
-    env_vars.extend(set_nccl_debug_env_vars(nccl_debug=nccl_debug))
+    nccl_debug_env_vars = set_nccl_debug_env_vars(nccl_debug=nccl_debug)
+    if nccl_debug_env_vars is not None:
+        env_vars.extend(nccl_debug_env_vars)
     # Propagate the train module path to the experiment if set
     train_script_path = os.environ.get("TRAIN_SCRIPT_PATH")
     if train_script_path is not None:
