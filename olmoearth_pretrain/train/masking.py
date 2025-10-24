@@ -1043,7 +1043,6 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         num_encodable = len(encodable)
         upper_limit = num_encodable
         if not self.allow_encoding_decoding_same_bandset:
-
             upper_limit -= 1
 
         if self.max_encoded_bandsets is None:
@@ -1088,7 +1087,9 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
 
         num_decoded_bandsets = np.random.randint(min_decoded, max_decoded + 1)
         decoded_idxs = np.random.choice(
-            len(available), size=min(num_decoded_bandsets, len(available)), replace=False
+            len(available),
+            size=min(num_decoded_bandsets, len(available)),
+            replace=False,
         )
         return set([available[i] for i in decoded_idxs])
 
