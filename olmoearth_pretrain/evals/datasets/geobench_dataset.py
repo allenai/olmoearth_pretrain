@@ -2,7 +2,6 @@
 
 import logging
 import os
-import pickle
 from pathlib import Path
 from types import MethodType
 
@@ -11,9 +10,8 @@ import numpy as np
 import torch.multiprocessing
 from einops import repeat
 from geobench.dataset import Stats
-from geobench.task import TaskSpecifications
+from geobench.task import load_task_specs
 from torch.utils.data import Dataset
-from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
@@ -54,14 +52,6 @@ def _landsathelios2geobench_name(band_name: str) -> str:
         "B11": "10 - Tirs1",
     }
     return transform[band_name]
-
-
-def load_geobench_task_specs(dataset_dir: Path) -> TaskSpecifications:
-    """Load task specifications from a dataset directory."""
-    pkl_path = UPath(dataset_dir) / "task_specs.pkl"
-    with pkl_path.open("rb") as fd:
-        task_specs = pickle.load(fd)
-    return task_specs
 
 
 GEOBENCH_L8_BAND_NAMES = [_landsathelios2geobench_name(b) for b in EVAL_L8_BAND_NAMES]
@@ -114,7 +104,7 @@ class GeobenchDataset(Dataset):
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
         # GEOBENCH cannot handle remote upath objects
         dataset_dir = geobench_dir / f"{config.task_type.value}_v1.0" / dataset
-        task = load_geobench_task_specs(dataset_dir)
+        task = load_task_specs(dataset_dir)  # Note: Cannot handle remote paths
         # hack: https://github.com/ServiceNow/geo-bench/issues/22
         task.get_dataset_dir = MethodType(
             lambda self: geobench_dir / f"{config.task_type.value}_v1.0" / dataset,
