@@ -44,6 +44,11 @@ Both scripts rely on:
 - W&B API key (`WANDB_API_KEY`) if you want metrics to stream automatically.
 - For AI2 infra: valid Beaker cluster name (`ai2/saturn`, `ai2/titan`, etc.).
 
+### Supported Models
+
+- **OlmoEarth checkpoints:** Any checkpoint compatible with the evaluation `experiment.py` entrypoint.
+- **Baseline presets:** `dino_v3`, `panopticon`, `galileo`, `satlas`, `croma`, `copernicusfm`, `presto`, `anysat`, `tessera`, `prithvi_v2`, `terramind`, `clay`. Multi-size variants (e.g. `croma_large`, `galileo_large`, `terramind_large`) are handled automatically by the sweep scripts when requested.
+
 ---
 
 ## Quick Start
@@ -74,7 +79,7 @@ Remove `--dry_run` once the command looks correct. On local GPUs the helper scri
 
 ## KNN / Linear Probing
 
-Use this script for frozen-feature evaluations (KNN, linear probes, zero-shot). Invoke it either through `python -m olmoearth_pretrain.internal.full_eval_sweep` or by running the file directly.
+Use this script for KNN and linear probing evaluations. Invoke it either through `python -m olmoearth_pretrain.internal.full_eval_sweep` or by running the file directly.
 
 ### Required flags
 
@@ -95,7 +100,7 @@ Use this script for frozen-feature evaluations (KNN, linear probes, zero-shot). 
 - `--dry_run`: Print commands without launching.
 - Extra CLI arguments (e.g. `--trainer.max_duration.unit=epochs`) are forwarded to the underlying train module.
 
-### Example: Frozen evaluation against a checkpoint (local debug)
+### Example: Launch OlmoEarth evaluation against a checkpoint (local debug)
 
 ```bash
 python -m olmoearth_pretrain.internal.full_eval_sweep \
@@ -121,7 +126,7 @@ When `--model=all`, the script automatically switches to the correct launcher fo
 
 ## Finetune Sweep
 
-Use `olmoearth_pretrain/internal/full_eval_sweep_finetune.py` for downstream fine-tuning tasks. It shares many flags with the frozen sweep but adds fine-tune–specific knobs.
+Use `olmoearth_pretrain/internal/full_eval_sweep_finetune.py` for downstream fine-tuning tasks. It shares many flags with the KNN and linear probing sweep but adds fine-tune–specific knobs.
 
 ### Required flags
 
@@ -140,7 +145,7 @@ Use `olmoearth_pretrain/internal/full_eval_sweep_finetune.py` for downstream fin
 
 The script sets `FINETUNE=1` in the environment before launching so downstream code enables fine-tuning heads automatically.
 
-### Example: Checkpoint fine-tune sweep (Beaker)
+### Example: OlmoEarth checkpoint fine-tune sweep (Beaker)
 
 ```bash
 python -m olmoearth_pretrain.internal.full_eval_sweep_finetune \
