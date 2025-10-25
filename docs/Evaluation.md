@@ -10,7 +10,7 @@ This guide explains how we launch evaluation sweeps for OlmoEarth checkpoints an
 > You have access to Beaker/Weka clusters and shared checkpoints. Skim [Setup-Internal.md](Setup-Internal.md) for environment details, then follow the launch instructions below.
 
 > **🌍 External Users:**
-> You can run a reduced version of these workflows on local/cloud GPUs. You will need the datasets referenced in [Dataset Setup](Pretraining.md#dataset-setup).
+> You can run these workflows on local/cloud GPUs. You will need the datasets referenced in [Dataset Setup](Pretraining.md#dataset-setup).
 
 ---
 
@@ -19,7 +19,7 @@ This guide explains how we launch evaluation sweeps for OlmoEarth checkpoints an
 1. [Evaluation Overview](#evaluation-overview)
 2. [Quick Start](#quick-start)
 3. [KNN / Linear Probing](#knn--linear-probing)
-4. [Finetune Sweep](#finetune-sweep)
+4. [Finetune](#finetune-sweep)
 5. [Monitoring & Outputs](#monitoring--outputs)
 6. [Helpful Files](#helpful-files)
 
@@ -35,7 +35,6 @@ We run evaluations through the same `olmoearth_pretrain/internal/experiment.py` 
 Both scripts rely on:
 - [`olmoearth_pretrain/internal/all_evals.py`](../olmoearth_pretrain/internal/all_evals.py) for the task registry.
 - [`olmoearth_pretrain/evals`](../olmoearth_pretrain/evals) for dataset/model wrappers.
-- `EVAL_LAUNCH_PATH` in [`internal/constants.py`](../olmoearth_pretrain/internal/constants.py) to point at the shared evaluation launcher module.
 
 ### Prerequisites
 
