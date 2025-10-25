@@ -306,9 +306,9 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                 run_suffix = f"FT_lr{lr}_freezeunfreeze"
             else:
                 if norm_val is True:
-                    run_suffix = f"FT_lr{lr}_norm_pretrained_True"
+                    run_suffix = f"FT_lr{lr}_norm_pretrained_True_freezeunfreeze"
                 else:
-                    run_suffix = f"FT_lr{lr}_norm_pretrained_False"
+                    run_suffix = f"FT_lr{lr}_norm_pretrained_False_freezeunfreeze"
 
             run_name = f"{base_run_name}_{run_suffix}"
             model_args = _build_model_args(selected_preset, norm_val)
