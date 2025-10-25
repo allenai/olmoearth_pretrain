@@ -3,7 +3,7 @@
 Example run:
 python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --project_name 2025_10_08_phase2_finetune --module_path olmoearth_pretrain/evals/models/clay/clay_launch.py --cluster ai2/titan --model clay --defaults_only
 
-python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200 --project_name 2025_10_08_phase2_finetune --module_path scripts/2025_10_02_phase2/base.py --cluster ai2/titan --defaults_only
+python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200 --project_name 2025_10_24_phase2_finetune --module_path scripts/2025_10_02_phase2/base.py --cluster ai2/titan --defaults_only
 """
 
 import argparse
@@ -103,7 +103,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
             "m_sa_crop_type": {"ft_batch_size": 8, "patch_size": 8},
             "pastis_sentinel2": {"ft_batch_size": 4},
             "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 8},
-            # "m_forestnet": {"ft_batch_size": 2, "patch_size": 16},
+            "m_forestnet": {"ft_batch_size": 2, "patch_size": 16},
         },
     ),
     # Models with pretrained normalizer
