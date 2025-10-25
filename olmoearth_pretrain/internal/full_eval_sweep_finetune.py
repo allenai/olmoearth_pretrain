@@ -303,7 +303,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             if args.defaults_only:
                 run_suffix = "FT_defaults"
             elif args.checkpoint_path:
-                run_suffix = f"FT_lr{lr}_freezeunfreeze_cashewplant"
+                run_suffix = f"FT_lr{lr}_freezeunfreeze_ps_8"
             else:
                 if norm_val is True:
                     run_suffix = f"FT_lr{lr}_norm_pretrained_True_freezeunfreeze"
