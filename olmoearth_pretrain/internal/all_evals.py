@@ -426,7 +426,7 @@ FT_EVAL_TASKS = {
     ),
     "m_sa_crop_type": DownstreamTaskConfig(
         dataset="m-sa-crop-type",
-        ft_batch_size=32,
+        ft_batch_size=16,
         num_workers=2,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
@@ -469,7 +469,7 @@ FT_EVAL_TASKS = {
     ),
     "m_cashew_plant": DownstreamTaskConfig(
         dataset="m-cashew-plant",
-        ft_batch_size=32,
+        ft_batch_size=16,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
