@@ -23,7 +23,7 @@ from olmoearth_pretrain.internal.experiment import SubCmd
 logger = getLogger(__name__)
 
 # Learning rates to sweep over.
-FT_LRS = [1e-6, 5e-5, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3]
+FT_LRS = [1e-6, 5e-6, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3]
 
 TASK_ARG_PREFIX = "--trainer.callbacks.downstream_evaluator.tasks"
 FT_TASK_NAMES = list(FT_EVAL_TASKS.keys())
