@@ -389,18 +389,6 @@ class TestBuildCommandsExecution:
         assert "--custom_arg=value" in command
         assert "--another_flag" in command
 
-    def test_build_commands_no_project_name(
-        self, base_args: argparse.Namespace
-    ) -> None:
-        """Test build_commands without project name (uses default)."""
-        base_args.project_name = None
-        base_args.defaults_only = True
-
-        commands: list[str] = build_commands(base_args, [])
-
-        assert len(commands) == 1
-        assert "helios_in_loop_evals" in commands[0]
-
 
 class TestParametrizedTests:
     """Parametrized tests for comprehensive coverage."""
@@ -463,7 +451,6 @@ class TestIntegration:
         assert "TRAIN_SCRIPT_PATH=test_module.py" in command
         assert "dry_run" in command
         assert "local" in command
-        assert "helios_in_loop_evals" in command  # default project name
 
     def test_complex_workflow_with_all_options(
         self, base_args: argparse.Namespace

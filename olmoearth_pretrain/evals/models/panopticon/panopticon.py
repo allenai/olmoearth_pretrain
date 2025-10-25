@@ -23,6 +23,7 @@ class Panopticon(nn.Module):
     """Class containing the Panopticon model that can ingest MaskedOlmoEarthSample objects."""
 
     patch_size: int = 14
+    image_resolution: int = 224
     supported_modalities: list[str] = [
         Modality.SENTINEL2_L2A.name,
         Modality.LANDSAT.name,
@@ -84,7 +85,9 @@ class Panopticon(nn.Module):
         for i in range(t_dim):
             data_i = rearrange(data[:, :, :, i, :], "b h w c -> b c h w")
 
-            new_height = self.patch_size if original_height == 1 else 224
+            new_height = (
+                self.patch_size if original_height == 1 else self.image_resolution
+            )
 
             data_i = F.interpolate(
                 data_i,

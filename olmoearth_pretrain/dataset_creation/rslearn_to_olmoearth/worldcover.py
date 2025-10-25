@@ -1,11 +1,10 @@
-"""Post-process ingested WRI Canopy Height Map data into the OlmoEarth Pretrain dataset."""
+"""Post-process ingested WorldCover data into the OlmoEarth Pretrain dataset."""
 
 import argparse
 import csv
 import multiprocessing
 from datetime import UTC, datetime
 
-import numpy as np
 import tqdm
 from rslearn.dataset import Window
 from rslearn.utils.mp import star_imap_unordered
@@ -17,20 +16,19 @@ from olmoearth_pretrain.dataset.utils import get_modality_fname
 from ..constants import GEOTIFF_RASTER_FORMAT, METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
 
-# Fake time range, it actually varies across the data.
-START_TIME = datetime(2020, 1, 1, tzinfo=UTC)
-END_TIME = datetime(2021, 1, 1, tzinfo=UTC)
+START_TIME = datetime(2021, 1, 1, tzinfo=UTC)
+END_TIME = datetime(2022, 1, 1, tzinfo=UTC)
 
 # Layer name in the input rslearn dataset.
-LAYER_NAME = "wri_canopy_height_map"
+LAYER_NAME = "worldcover"
 
 
-def convert_chm(window_path: UPath, helios_path: UPath) -> None:
-    """Add WRI CHM data for this window to the OlmoEarth Pretrain dataset.
+def convert_worldcover(window_path: UPath, olmoearth_path: UPath) -> None:
+    """Add WorldCover data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
         window_path: the rslearn window directory to read data from.
-        helios_path: OlmoEarth Pretrain dataset path to write to.
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
     window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
@@ -38,23 +36,15 @@ def convert_chm(window_path: UPath, helios_path: UPath) -> None:
     if not window.is_layer_completed(LAYER_NAME):
         return
 
-    assert len(Modality.WRI_CANOPY_HEIGHT_MAP.band_sets) == 1
-    band_set = Modality.WRI_CANOPY_HEIGHT_MAP.band_sets[0]
+    assert len(Modality.WORLDCOVER.band_sets) == 1
+    band_set = Modality.WORLDCOVER.band_sets[0]
     raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands)
     image = GEOTIFF_RASTER_FORMAT.decode_raster(
         raster_dir, window.projection, window.bounds
     )
-
-    # Skip areas with any nodata (255).
-    if image.max() == 255:
-        return
-    # Also skip if there are not enough positive pixels.
-    if np.count_nonzero(image) / image.size < 0.2:
-        return
-
     dst_fname = get_modality_fname(
-        helios_path,
-        Modality.WRI_CANOPY_HEIGHT_MAP,
+        olmoearth_path,
+        Modality.WORLDCOVER,
         TimeSpan.STATIC,
         window_metadata,
         band_set.get_resolution(),
@@ -68,7 +58,7 @@ def convert_chm(window_path: UPath, helios_path: UPath) -> None:
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(
-        helios_path, Modality.WRI_CANOPY_HEIGHT_MAP, TimeSpan.STATIC, window.name
+        olmoearth_path, Modality.WORLDCOVER, TimeSpan.STATIC, window.name
     )
     metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with metadata_fname.open("w") as f:
@@ -100,7 +90,7 @@ if __name__ == "__main__":
         required=True,
     )
     parser.add_argument(
-        "--helios_path",
+        "--olmoearth_path",
         type=str,
         help="Destination OlmoEarth Pretrain dataset path",
         required=True,
@@ -114,20 +104,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     ds_path = UPath(args.ds_path)
-    helios_path = UPath(args.helios_path)
+    olmoearth_path = UPath(args.olmoearth_path)
 
-    metadata_fnames = ds_path.glob("windows/res_10/*/metadata.json")
+    metadata_fnames = ds_path.glob("windows/*/*/metadata.json")
     jobs = []
     for metadata_fname in metadata_fnames:
         jobs.append(
             dict(
                 window_path=metadata_fname.parent,
-                helios_path=helios_path,
+                olmoearth_path=olmoearth_path,
             )
         )
 
     p = multiprocessing.Pool(args.workers)
-    outputs = star_imap_unordered(p, convert_chm, jobs)
+    outputs = star_imap_unordered(p, convert_worldcover, jobs)
     for _ in tqdm.tqdm(outputs, total=len(jobs)):
         pass
     p.close()

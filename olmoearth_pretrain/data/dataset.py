@@ -904,7 +904,7 @@ class OlmoEarthDataset(Dataset):
         """Read the h5 file."""
         if self.cache_dir is not None:
             cache_file_path = self.cache_dir / h5_file_path.name
-            logger.info(f"Caching H5 file {h5_file_path} to {cache_file_path}")
+            logger.debug(f"Caching H5 file {h5_file_path} to {cache_file_path}")
             if not cache_file_path.exists():
                 self._apply_throttling()
                 # Copy to a temp file first and then atomically rename it to avoid

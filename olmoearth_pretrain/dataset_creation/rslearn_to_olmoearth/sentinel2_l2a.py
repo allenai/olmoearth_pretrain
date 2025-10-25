@@ -1,4 +1,4 @@
-"""Post-process ingested Sentinel-2 data into the OlmoEarth Pretrain dataset."""
+"""Post-process ingested Sentinel-2 L2A data into the OlmoEarth Pretrain dataset."""
 
 import argparse
 import multiprocessing
@@ -12,28 +12,28 @@ from olmoearth_pretrain.data.constants import Modality
 from .multitemporal_raster import convert_freq, convert_monthly
 
 # rslearn layer for frequent data.
-LAYER_FREQ = "sentinel2_freq"
+LAYER_FREQ = "sentinel2_l2a_freq"
 
 # rslearn layer prefix for monthly data.
-LAYER_MONTHLY = "sentinel2"
+LAYER_MONTHLY = "sentinel2_l2a"
 
 
-def convert_sentinel2(window_path: UPath, helios_path: UPath) -> None:
+def convert_sentinel2_l2a(window_path: UPath, olmoearth_path: UPath) -> None:
     """Add Sentinel-2 data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
         window_path: the rslearn window directory to read data from.
-        helios_path: OlmoEarth Pretrain dataset path to write to.
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
     convert_freq(
         window_path,
-        helios_path,
+        olmoearth_path,
         LAYER_FREQ,
-        Modality.SENTINEL2,
+        Modality.SENTINEL2_L2A,
         missing_okay=True,
         unprepared_okay=True,
     )
-    convert_monthly(window_path, helios_path, LAYER_MONTHLY, Modality.SENTINEL2)
+    convert_monthly(window_path, olmoearth_path, LAYER_MONTHLY, Modality.SENTINEL2_L2A)
 
 
 if __name__ == "__main__":
@@ -49,7 +49,7 @@ if __name__ == "__main__":
         required=True,
     )
     parser.add_argument(
-        "--helios_path",
+        "--olmoearth_path",
         type=str,
         help="Destination OlmoEarth Pretrain dataset path",
         required=True,
@@ -63,20 +63,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     ds_path = UPath(args.ds_path)
-    helios_path = UPath(args.helios_path)
+    olmoearth_path = UPath(args.olmoearth_path)
 
+    metadata_fnames = ds_path.glob("windows/res_10/*/metadata.json")
     jobs = []
-    group_dir = ds_path / "windows" / "res_10"
-    for window_dir in group_dir.iterdir():
+    for metadata_fname in metadata_fnames:
         jobs.append(
             dict(
-                window_path=window_dir,
-                helios_path=helios_path,
+                window_path=metadata_fname.parent,
+                olmoearth_path=olmoearth_path,
             )
         )
 
     p = multiprocessing.Pool(args.workers)
-    outputs = star_imap_unordered(p, convert_sentinel2, jobs)
+    outputs = star_imap_unordered(p, convert_sentinel2_l2a, jobs)
     for _ in tqdm.tqdm(outputs, total=len(jobs)):
         pass
     p.close()

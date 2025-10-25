@@ -21,12 +21,12 @@ from ..util import get_modality_temp_meta_fname, get_window_metadata
 LAYER_NAME = "gse"
 
 
-def convert_gse(window_path: UPath, helios_path: UPath) -> None:
+def convert_gse(window_path: UPath, olmoearth_path: UPath) -> None:
     """Add Google Satellite Embedding data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
         window_path: the rslearn window directory to read data from.
-        helios_path: OlmoEarth Pretrain dataset path to write to.
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
     window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
@@ -58,7 +58,7 @@ def convert_gse(window_path: UPath, helios_path: UPath) -> None:
         raster_dir, window.projection, window.bounds
     )
     dst_fname = get_modality_fname(
-        helios_path,
+        olmoearth_path,
         Modality.GSE,
         TimeSpan.STATIC,
         window_metadata,
@@ -73,7 +73,7 @@ def convert_gse(window_path: UPath, helios_path: UPath) -> None:
         fname=dst_fname.name,
     )
     metadata_fname = get_modality_temp_meta_fname(
-        helios_path, Modality.GSE, TimeSpan.STATIC, window.name
+        olmoearth_path, Modality.GSE, TimeSpan.STATIC, window.name
     )
     metadata_fname.parent.mkdir(parents=True, exist_ok=True)
     with metadata_fname.open("w") as f:
@@ -105,7 +105,7 @@ if __name__ == "__main__":
         required=True,
     )
     parser.add_argument(
-        "--helios_path",
+        "--olmoearth_path",
         type=str,
         help="Destination OlmoEarth Pretrain dataset path",
         required=True,
@@ -119,7 +119,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     ds_path = UPath(args.ds_path)
-    helios_path = UPath(args.helios_path)
+    olmoearth_path = UPath(args.olmoearth_path)
 
     metadata_fnames = ds_path.glob("windows/res_10/*/metadata.json")
     jobs = []
@@ -127,7 +127,7 @@ if __name__ == "__main__":
         jobs.append(
             dict(
                 window_path=metadata_fname.parent,
-                helios_path=helios_path,
+                olmoearth_path=olmoearth_path,
             )
         )
 
