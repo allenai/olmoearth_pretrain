@@ -400,30 +400,30 @@ EVAL_TASKS = {
 }
 
 FT_EVAL_TASKS = {
-    # "m_eurosat": DownstreamTaskConfig(
-    #     dataset="m-eurosat",
-    #     ft_batch_size=64,
-    #     num_workers=0,
-    #     pooling_type=PoolingType.MEAN,
-    #     norm_stats_from_pretrained=True,
-    #     epochs=50,
-    # ),
-    # "m_bigearthnet": DownstreamTaskConfig(
-    #     dataset="m-bigearthnet",
-    #     ft_batch_size=16,
-    #     num_workers=4,
-    #     pooling_type=PoolingType.MEAN,
-    #     norm_stats_from_pretrained=True,
-    #     epochs=50,
-    # ),
-    # "m_so2sat": DownstreamTaskConfig(
-    #     dataset="m-so2sat",
-    #     ft_batch_size=32,
-    #     num_workers=4,
-    #     pooling_type=PoolingType.MEAN,
-    #     norm_stats_from_pretrained=True,
-    #     epochs=50,
-    # ),
+    "m_eurosat": DownstreamTaskConfig(
+        dataset="m-eurosat",
+        ft_batch_size=64,
+        num_workers=0,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        epochs=50,
+    ),
+    "m_bigearthnet": DownstreamTaskConfig(
+        dataset="m-bigearthnet",
+        ft_batch_size=16,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        epochs=50,
+    ),
+    "m_so2sat": DownstreamTaskConfig(
+        dataset="m-so2sat",
+        ft_batch_size=32,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        epochs=50,
+    ),
     "m_sa_crop_type": DownstreamTaskConfig(
         dataset="m-sa-crop-type",
         ft_batch_size=32,
@@ -451,14 +451,14 @@ FT_EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
     ),
-    # "m_brick_kiln": DownstreamTaskConfig(
-    #     dataset="m-brick-kiln",
-    #     ft_batch_size=64,
-    #     num_workers=4,
-    #     pooling_type=PoolingType.MEAN,
-    #     norm_stats_from_pretrained=True,
-    #     epochs=50,
-    # ),
+    "m_brick_kiln": DownstreamTaskConfig(
+        dataset="m-brick-kiln",
+        ft_batch_size=64,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        epochs=50,
+    ),
     "sen1floods11": DownstreamTaskConfig(
         dataset="sen1floods11",
         ft_batch_size=32,
@@ -476,15 +476,15 @@ FT_EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         epochs=50,
     ),
-    # "m_forestnet": DownstreamTaskConfig(
-    #     dataset="m-forestnet",
-    #     ft_batch_size=16,
-    #     num_workers=4,
-    #     pooling_type=PoolingType.MEAN,
-    #     norm_stats_from_pretrained=False,
-    #     norm_method=NormMethod.NORM_NO_CLIP_2_STD,
-    #     epochs=50,
-    # ),
+    "m_forestnet": DownstreamTaskConfig(
+        dataset="m-forestnet",
+        ft_batch_size=16,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        epochs=50,
+    ),
 }
 
 
