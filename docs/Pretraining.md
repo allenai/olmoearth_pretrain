@@ -19,9 +19,11 @@ This guide walks you through setting up and running pretraining jobs for OlmoEar
 1. [Environment Setup](#environment-setup) - External users start here
 2. [Launching Scripts](#launching-scripts) - All users
 3. [Dataset Setup](#dataset-setup) - Required for external users
-4. [Official Training Scripts](#official-training-scripts) - All users
-5. [Overrides and Experiments](#overrides-and-experiments) - All users
-6. [Helpful Files for Understanding](#helpful-files-for-understanding) - All users
+4. [Experiment Tracking](#experiment-tracking) - All users
+5. [Official Training Scripts](#official-training-scripts) - All users
+6. [Ablations](#ablations) - All users
+7. [Overrides and Experiments](#overrides-and-experiments) - All users
+8. [Helpful Files for Understanding](#helpful-files-for-understanding) - All users
 
 ---
 
@@ -170,26 +172,26 @@ Evaluation datasets have default paths set in [`olmoearth_pretrain/evals/dataset
 1. Download/prepare the evaluation datasets locally (TODO: Add instructions once on HF)
 2. Set environment variables for each dataset path to override defaults in [`olmoearth_pretrain/evals/datasets/paths.py`](../olmoearth_pretrain/evals/datasets/paths.py)
 
-```bash
-export GEOBENCH_DIR="/your/path/to/geobench"
-export CROPHARVEST_DIR="/your/path/to/cropharvest"
-export BREIZHCROPS_DIR="/your/path/to/breizhcrops"
-export MADOS_DIR="/your/path/to/mados"
-export FLOODS_DIR="/your/path/to/floods"
-export PASTIS_DIR="/your/path/to/pastis"
-export SICKLE_DIR="/your/path/to/sickle"
-export NANDI_DIR="/your/path/to/nandi"
-export AWF_DIR="/your/path/to/awf"
-```
-4. If you wish to only use a subset of the evaluations, add the following override:
+   ```bash
+   export GEOBENCH_DIR="/your/path/to/geobench"
+   export CROPHARVEST_DIR="/your/path/to/cropharvest"
+   export BREIZHCROPS_DIR="/your/path/to/breizhcrops"
+   export MADOS_DIR="/your/path/to/mados"
+   export FLOODS_DIR="/your/path/to/floods"
+   export PASTIS_DIR="/your/path/to/pastis"
+   export SICKLE_DIR="/your/path/to/sickle"
+   export NANDI_DIR="/your/path/to/nandi"
+   export AWF_DIR="/your/path/to/awf"
+   ```
+3. If you wish to only use a subset of the evaluations, add the following override:
 
    For example, to only run mados and pastis_sentinel2 evals add the following override:
    ```bash
    --trainer.callbacks.downstream_evaluator.tasks_to_run=\[mados,pastis_sentinel2\]
    ```
    The task names correspond to the user-chosen names specified in the training configuration
-5. If you do not want to run **any** evaluations during training, add the following overide to your command:
-     ```bash
+4. If you do not want to run **any** evaluations during training, add the following override to your command:
+   ```bash
    --trainer.callbacks.downstream_evaluator.enabled=False
    ```
 
@@ -220,7 +222,7 @@ Alternatively, you can disable W&B logging in your configuration:
 > Replace `ai2/saturn` with your target cluster.
 > To launch on multiple clusters, specify any cluster and append the following override to your command:
 > ```bash
-> --launch.clusters=/[ai2/saturn,ai2/jupiter/]
+> --launch.clusters=\[ai2/saturn,ai2/jupiter\]
 > ```
 > **⚠️ Remember:** Commit and push your code before launching and give your run a memorable name!
 >
@@ -270,7 +272,10 @@ torchrun --nproc_per_node=8 scripts/official/base.py train base_run local \
 
 ## Ablations
 
-Ablations can be run in a similar fashion and are found in [`scripts/official/ablations`](..scripts/official/ablations)
+Ablations can be run in a similar fashion and are found in [`scripts/official/ablations`](../scripts/official/ablations)
+
+---
+
 ## Overrides and Experiments
 
 ### How Overrides Work
