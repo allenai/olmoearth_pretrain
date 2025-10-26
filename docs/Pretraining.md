@@ -81,7 +81,7 @@ All training scripts configure builder functions used in the main entrypoint: [`
 python scripts/official/<SCRIPT>.py <SUBCOMMAND> <RUN_NAME> <CLUSTER> [OVERRIDES...]
 ```
 
-For distributed training, use `torchrun`:
+For multi-gpu training, use `torchrun`:
 ```bash
 torchrun [TORCHRUN_OPTIONS] scripts/official/<SCRIPT>.py <SUBCOMMAND> <RUN_NAME> <CLUSTER> [OVERRIDES...]
 ```
@@ -118,7 +118,7 @@ python scripts/official/base.py
 
 **Example 1: Single-GPU Training for Debugging**
 ```bash
-torchrun scripts/official/nano.py train_ my_debug_run local \
+torchrun scripts/official/nano.py train my_debug_run local \
   --dataset.h5py_dir=/path/to/data \
   --data_loader.global_batch_size=64
 ```
@@ -142,41 +142,6 @@ python scripts/official/large.py launch my_large_model ai2/saturn \
   --trainer.max_duration.value=300
 ```
 
-
-
-### Environment Variables
-
-#### 1. W&B API Key (For Logging)
-
-```bash
-export WANDB_API_KEY="your_wandb_api_key_here"
-```
-
-Alternatively, you can disable W&B logging in your configuration:
-```bash
---trainer.callbacks.wandb.enabled=False
-```
-
-#### 2. Evaluation Dataset Paths
-
-If you want to run evaluations with custom dataset locations, you can override the default evaluation dataset paths using environment variables:
-
-```bash
-export GEOBENCH_DIR="/your/path/to/geobench"
-export CROPHARVEST_DIR="/your/path/to/cropharvest"
-export BREIZHCROPS_DIR="/your/path/to/breizhcrops"
-export MADOS_DIR="/your/path/to/mados"
-export FLOODS_DIR="/your/path/to/floods"
-export PASTIS_DIR="/your/path/to/pastis"
-export SICKLE_DIR="/your/path/to/sickle"
-export NANDI_DIR="/your/path/to/nandi"
-export AWF_DIR="/your/path/to/awf"
-```
-
-You only need to set those you want to override; others will use their defaults (which point to AI2 internal paths).
-
----
-
 ## Dataset Setup
 
 > **Note for AI2 Researchers:** Training datasets are already available on Weka at `/weka/dfive-default/helios/dataset/`. See the [README](../README.md#olmoearth-pretrain-dataset) for specific paths. You can skip the rest of this section.
@@ -185,7 +150,7 @@ You only need to set those you want to override; others will use their defaults 
 
 Your training data must be in **H5 format**. The dataset can be stored:
 - **Locally:** `/path/to/h5data/num_samples`
-- **Google Cloud Storage:** `gs://bucket_path/to/h5data/num_samples`
+- **Remote File System**: e.g `gs://bucket_path/to/h5data/num_samples`
 
 
 ### Dataset Path Configuration
@@ -202,17 +167,46 @@ Evaluation datasets have default paths set in [`olmoearth_pretrain/evals/dataset
 
 **For external users:** These defaults point to AI2 internal infrastructure. To use evaluations:
 
-1. Download/prepare the evaluation datasets locally
-2. Set environment variables (see [Environment Variables](#environment-variables))
-3. If not using all evaluations, enable only the ones you have set up by adding an override:
+1. Download/prepare the evaluation datasets locally (TODO: Add instructions once on HF)
+2. Set environment variables for each dataset path to override defaults in [`olmoearth_pretrain/evals/datasets/paths.py`](../olmoearth_pretrain/evals/datasets/paths.py)
+
+```bash
+export GEOBENCH_DIR="/your/path/to/geobench"
+export CROPHARVEST_DIR="/your/path/to/cropharvest"
+export BREIZHCROPS_DIR="/your/path/to/breizhcrops"
+export MADOS_DIR="/your/path/to/mados"
+export FLOODS_DIR="/your/path/to/floods"
+export PASTIS_DIR="/your/path/to/pastis"
+export SICKLE_DIR="/your/path/to/sickle"
+export NANDI_DIR="/your/path/to/nandi"
+export AWF_DIR="/your/path/to/awf"
+```
+4. If you wish to only use a subset of the evaluations, add the following override:
 
    For example, to only run mados and pastis_sentinel2 evals add the following override:
    ```bash
    --trainer.callbacks.downstream_evaluator.tasks_to_run=\[mados,pastis_sentinel2\]
    ```
    The task names correspond to the user-chosen names specified in the training configuration
+5. If you do not want to run **any** evaluations during training, add the following overide to your command:
+     ```bash
+   --trainer.callbacks.downstream_evaluator.enabled=False
+   ```
 
 ---
+
+## Experiment Tracking
+
+#### 1. W&B API Key (For Logging)
+
+```bash
+export WANDB_API_KEY="your_wandb_api_key_here"
+```
+
+Alternatively, you can disable W&B logging in your configuration:
+```bash
+--trainer.callbacks.wandb.enabled=False
+```
 
 ## Official Training Scripts
 
@@ -226,7 +220,7 @@ Evaluation datasets have default paths set in [`olmoearth_pretrain/evals/dataset
 > Replace `ai2/saturn` with your target cluster.
 > To launch on multiple clusters, specify any cluster and append the following override to your command:
 > ```bash
-> --launch.clusters=[ai2/saturn,ai2/jupiter]
+> --launch.clusters=/[ai2/saturn,ai2/jupiter/]
 > ```
 > **⚠️ Remember:** Commit and push your code before launching and give your run a memorable name!
 >
