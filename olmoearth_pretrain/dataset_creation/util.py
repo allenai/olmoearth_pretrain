@@ -30,33 +30,33 @@ def get_window_metadata(window: Window) -> WindowMetadata:
 
 
 def get_modality_temp_meta_dir(
-    helios_path: UPath, modality: ModalitySpec, time_span: TimeSpan
+    olmoearth_path: UPath, modality: ModalitySpec, time_span: TimeSpan
 ) -> UPath:
     """Get the directory to store per-example metadata files for a given modality.
 
     Args:
-        helios_path: the OlmoEarth Pretrain dataset root.
+        olmoearth_path: the OlmoEarth Pretrain dataset root.
         modality: the modality.
         time_span: the time span of this data.
 
     Returns:
         the directory to store the metadata files.
     """
-    modality_dir = get_modality_dir(helios_path, modality, time_span)
-    return helios_path / (modality_dir.name + "_meta")
+    modality_dir = get_modality_dir(olmoearth_path, modality, time_span)
+    return olmoearth_path / (modality_dir.name + "_meta")
 
 
 def get_modality_temp_meta_fname(
-    helios_path: UPath, modality: ModalitySpec, time_span: TimeSpan, example_id: str
+    olmoearth_path: UPath, modality: ModalitySpec, time_span: TimeSpan, example_id: str
 ) -> UPath:
     """Get the temporary filename to store the metadata for an example and modality.
 
-    This is created by the helios.dataset_creation.rslearn_to_helios scripts. It will
-    then be read by helios.dataset_creation.make_meta_summary to create the final
+    This is created by the olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth scripts. It will
+    then be read by olmoearth_prertain.dataset_creation.make_meta_summary to create the final
     metadata CSV.
 
     Args:
-        helios_path: the OlmoEarth Pretrain dataset root.
+        olmoearth_path: the OlmoEarth Pretrain dataset root.
         modality: the modality name.
         time_span: the TimeSpan.
         example_id: the example ID.
@@ -64,5 +64,5 @@ def get_modality_temp_meta_fname(
     Returns:
         the filename for the per-example metadata CSV.
     """
-    temp_meta_dir = get_modality_temp_meta_dir(helios_path, modality, time_span)
+    temp_meta_dir = get_modality_temp_meta_dir(olmoearth_path, modality, time_span)
     return temp_meta_dir / f"{example_id}.csv"

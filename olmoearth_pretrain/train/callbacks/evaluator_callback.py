@@ -214,14 +214,14 @@ class DownstreamEvaluator:
             model = self.trainer.train_module.model
 
         if hasattr(model, "patch_size"):
-            logger.info(
-                f"Using patch size {model.patch_size} for {self.dataset} with set patch size {self.patch_size}"
-            )
-            # For non-olmoearth models we override the task patch size with the model patch size
+            # For non-helios models we override the task patch size with the model patch size
             self.patch_size = model.patch_size
+            logger.info(
+                f"Using patch size {self.patch_size} for {self.dataset} with model patch size {model.patch_size} and task patch size {self.patch_size}"
+            )
         else:
             logger.info(
-                f"No patch size found from model, using patch size {self.patch_size}"
+                f"No patch size found from model for {self.dataset}, using task patch size {self.patch_size}"
             )
 
         # Superset of the kwargs the wrapper may need
@@ -315,10 +315,10 @@ class DownstreamEvaluator:
         # Resolve patch size if model exposes it
         if hasattr(model, "patch_size"):
             logger.info(
-                f"Using patch size {model.patch_size} for {self.dataset} "
-                f"(requested {self.patch_size})"
+                f"Using patch size {max(self.patch_size, model.patch_size)} for {self.dataset} with model patch size {model.patch_size} and task patch size {self.patch_size}"
             )
-            self.patch_size = model.patch_size
+            # For sa_crop_type, though Galileo patch size is 4, we can only use 8
+            self.patch_size = max(self.patch_size, model.patch_size)
         else:
             logger.info(
                 f"No patch size found for {self.dataset}, using patch size {self.patch_size}"

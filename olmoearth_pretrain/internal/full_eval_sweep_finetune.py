@@ -1,9 +1,9 @@
-"""Launch fine-tune evaluation sweeps for OlmoEarth Pretrain checkpoints.
+"""Launch fine-tune evaluation sweeps for OlmoEarth and other models.
 
 Example run:
-python helios/internal/full_eval_sweep_finetune.py --project_name 2025_10_06_phase1_finetune --module_path olmoearth_pretrain/evals/models/dinov3/dino_v3_launch.py --cluster ai2/jupiter --model_name dino_v3 --defaults_only
+python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --project_name 2025_10_08_phase2_finetune --module_path olmoearth_pretrain/evals/models/clay/clay_launch.py --cluster ai2/titan --model clay --defaults_only
 
-python helios/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/helios/checkpoints/yawenzzzz/base_v6_default/step400000 --project_name 2025_10_06_phase1_finetune --module_path scripts/2025_09_10_phase1/script.py --cluster ai2/jupiter --defaults_only
+python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200 --project_name 2025_10_08_phase2_finetune --module_path scripts/2025_10_02_phase2/base.py --cluster ai2/titan --defaults_only
 """
 
 import argparse
@@ -17,12 +17,13 @@ from typing import Any
 
 from olmoearth_pretrain.evals.models import get_launch_script_path
 from olmoearth_pretrain.internal.all_evals import FT_EVAL_TASKS
+from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
 from olmoearth_pretrain.internal.experiment import SubCmd
 
 logger = getLogger(__name__)
 
-# Fine-tune learning rates to sweep over.
-FT_LRS = [1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2]
+# Learning rates to sweep over.
+FT_LRS = [1e-5, 5e-5, 1e-4, 5e-4, 1e-3]
 
 TASK_ARG_PREFIX = "--trainer.callbacks.downstream_evaluator.tasks"
 FT_TASK_NAMES = list(FT_EVAL_TASKS.keys())
@@ -40,7 +41,21 @@ def _format_per_task_args(overrides: dict[str, Any]) -> list[str]:
     return args
 
 
-FT_MODE_ARGS = _format_per_task_args({"eval_mode": "finetune"})
+def _format_task_specific_args(task_overrides: dict[str, dict[str, Any]]) -> list[str]:
+    """Generate overrides for specific downstream tasks."""
+    if not task_overrides:
+        return []
+    args: list[str] = []
+    for task, overrides in task_overrides.items():
+        if task not in FT_TASK_NAMES:
+            raise ValueError(f"Unknown fine-tune task override: {task}")
+        for field_name, value in overrides.items():
+            value_str = value if isinstance(value, str) else str(value)
+            args.append(f"{TASK_ARG_PREFIX}.{task}.{field_name}={value_str}")
+    return args
+
+
+FT_MODE_ARGS = _format_per_task_args({"eval_mode": "FINETUNE"})
 DATASET_STATS_ARGS = _format_per_task_args({"norm_stats_from_pretrained": "False"})
 
 
@@ -53,13 +68,14 @@ class ModelPreset:
     """Model-specific overrides used for evaluation normalisation."""
 
     per_task_overrides: dict[str, Any] = field(default_factory=dict)
+    task_specific_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
     global_args: tuple[str, ...] = ()
-    # By default, we include the dataset stats.
     include_dataset_stats: bool = True
     launch_script_key: str | None = None
+    # Whether this model supports --model.use_pretrained_normalizer
+    supports_pretrained_normalizer: bool = False
 
 
-# TODO: We need to add the final norm settings for each model.
 MODEL_PRESETS: dict[str, ModelPreset] = {
     "dino_v3": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP_MIN_MAX_INT"},
@@ -69,96 +85,118 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
         launch_script_key="panopticon",
     ),
-    "terramind": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
-        global_args=("--model.use_pretrained_normalizer=True",),
-        launch_script_key="terramind",
-    ),
-    "galileo": ModelPreset(
-        per_task_overrides={
-            "norm_method": "NormMethod.NO_NORM",
-            "embedding_batch_size": "8",
-        },
-        global_args=("--model.use_pretrained_normalizer=True",),
-        launch_script_key="galileo",
-    ),
-    "satlas": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
-        global_args=("--model.use_pretrained_normalizer=True",),
-        launch_script_key="satlas",
-    ),
     "croma": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP_2_STD"},
         launch_script_key="croma",
     ),
-    "clay": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
-        global_args=("--model.use_pretrained_normalizer=True",),
-        launch_script_key="clay",
+    "croma_large": ModelPreset(
+        per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP_2_STD"},
+        global_args=("--model.size=large",),
+        launch_script_key="croma",
     ),
     "copernicusfm": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP_2_STD"},
     ),
-    "presto": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
-        global_args=("--model.use_pretrained_normalizer=True",),
-        launch_script_key="presto",
-    ),
     "anysat": ModelPreset(
-        per_task_overrides={
-            "norm_method": "NormMethod.STANDARDIZE",
-            "embedding_batch_size": "4",
+        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        task_specific_overrides={
+            "m_sa_crop_type": {"ft_batch_size": 8, "patch_size": 8},
+            "pastis_sentinel2": {"ft_batch_size": 4},
+            "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 8},
+            "m_forestnet": {"ft_batch_size": 2, "patch_size": 16},
         },
     ),
-    "tessera": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
-        global_args=("--model.use_pretrained_normalizer=True",),
-        launch_script_key="tessera",
+    # Models with pretrained normalizer
+    "terramind": ModelPreset(
+        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        global_args=("--model.use_pretrained_normalizer=False",),
+        launch_script_key="terramind",
+        supports_pretrained_normalizer=True,
+    ),
+    "terramind_large": ModelPreset(
+        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        global_args=("--model.use_pretrained_normalizer=False", "--model.size=large"),
+        launch_script_key="terramind",
+        supports_pretrained_normalizer=True,
+    ),
+    "galileo": ModelPreset(
+        per_task_overrides={"norm_method": "NormMethod.NORM_NO_CLIP_2_STD"},
+        global_args=("--model.use_pretrained_normalizer=False",),
+        task_specific_overrides={
+            "m_sa_crop_type": {"ft_batch_size": 1, "patch_size": 8},
+            "pastis_sentinel2": {"ft_batch_size": 2},
+            "m_cashew_plant": {"ft_batch_size": 1, "patch_size": 8},
+        },
+        launch_script_key="galileo",
+        supports_pretrained_normalizer=True,
+    ),
+    "satlas": ModelPreset(
+        per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP"},
+        global_args=("--model.use_pretrained_normalizer=False",),
+        task_specific_overrides={
+            "pastis_sentinel2": {"ft_batch_size": 8},
+        },
+        launch_script_key="satlas",
+        supports_pretrained_normalizer=True,
+    ),
+    "clay": ModelPreset(
+        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        global_args=("--model.use_pretrained_normalizer=False",),
+        launch_script_key="clay",
+        supports_pretrained_normalizer=True,
     ),
     "prithvi_v2": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NO_NORM"},
-        global_args=("--model.use_pretrained_normalizer=True",),
+        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        global_args=("--model.use_pretrained_normalizer=False",),
         launch_script_key="prithvi_v2",
+        supports_pretrained_normalizer=True,
     ),
 }
 
 
-def _selected_model_flag(args: argparse.Namespace) -> str | None:
-    """Get the selected model flag."""
-    flags = [name for name in MODEL_PRESETS if getattr(args, name)]
-    if len(flags) > 1:
-        raise ValueError(
-            f"Specify at most one model preset flag (got: {', '.join(sorted(flags))})."
-        )
-    return flags[0] if flags else None
+def _build_model_args(
+    selected_preset: str | None, normalizer: bool | None = None
+) -> list[str]:
+    """Build the model arguments.
 
-
-def _build_model_args(selected_flag: str | None) -> list[str]:
-    """Build the model arguments."""
-    if selected_flag is None:
+    Default: return preset's per-task overrides + preset.global_args
+             (which set use_pretrained_normalizer=False for supporting models).
+    If normalizer=True (sweep case): force --model.use_pretrained_normalizer=True
+             and set per-task norm to NO_NORM (on top of the preset).
+    """
+    if selected_preset is None:
         return []
-    preset = MODEL_PRESETS[selected_flag]
+    preset = MODEL_PRESETS[selected_preset]
+
     args = list(DATASET_STATS_ARGS) if preset.include_dataset_stats else []
     args.extend(_format_per_task_args(preset.per_task_overrides))
+    args.extend(_format_task_specific_args(preset.task_specific_overrides))
     args.extend(preset.global_args)
+
+    if normalizer is True and preset.supports_pretrained_normalizer:
+        # Force the model flag to True (overrides any default).
+        args.append("--model.use_pretrained_normalizer=True")
+        # For the "True" variant, normalize with NO_NORM consistently.
+        args.extend(_format_per_task_args({"norm_method": "NormMethod.NO_NORM"}))
+
     return args
 
 
-def _resolve_module_path(args: argparse.Namespace, selected_flag: str | None) -> str:
+def _resolve_module_path(args: argparse.Namespace, selected_preset: str | None) -> str:
     """Get the module path."""
     if args.module_path:
         logger.info(f"Using module path {args.module_path}")
         return args.module_path
 
-    if selected_flag is None:
+    if selected_preset is None:
         raise ValueError(
-            "Provide --module_path or specify a model preset flag that implies one."
+            "Provide --module_path or select a model preset key that implies one."
         )
 
-    preset = MODEL_PRESETS[selected_flag]
+    preset = MODEL_PRESETS[selected_preset]
     if preset.launch_script_key is None:
         raise ValueError(
-            f"--{selected_flag} has no default launch script. Pass --module_path explicitly."
+            f"Model preset '{selected_preset}' has no default launch script. Pass --module_path explicitly."
         )
 
     module_path = get_launch_script_path(preset.launch_script_key)
@@ -175,15 +213,18 @@ def _get_sub_command(args: argparse.Namespace) -> str:
     return SubCmd.launch
 
 
-def _get_base_run_name(args: argparse.Namespace) -> str:
+def _get_base_run_name(args: argparse.Namespace, selected_preset: str | None) -> str:
     """Get the base run name."""
-    if args.model_name is not None:
-        logger.info("Overriding checkpoint name with %s", args.model_name)
-        return args.model_name
+    if args.model is not None:
+        logger.info("Overriding checkpoint name with %s", args.model)
+        return args.model
     if args.checkpoint_path is not None:
         parent_dir = os.path.basename(os.path.dirname(args.checkpoint_path))[:100]
         step_num = os.path.basename(args.checkpoint_path)
         return f"{parent_dir}_{step_num}"
+    if selected_preset is not None:
+        logger.info("Using model preset key %s as base run name", selected_preset)
+        return selected_preset
     logger.warning("No model name or checkpoint path provided; using random run name")
     return str(uuid.uuid4())[:8]
 
@@ -212,12 +253,17 @@ def _format_launch_command(
     parts = [
         f"TRAIN_SCRIPT_PATH={module_path}",
         launch_command,
-        "helios/internal/all_evals.py",
+        EVAL_LAUNCH_PATH,
         sub_command,
         run_name,
         cluster,
-        "--launch.priority=high",
+        "--launch.priority=urgent",
+        "--launch.num_gpus=1",
+        "--launch.preemptible=True",
         "--launch.task_name=eval",
+        # Overwrite the max duration to enable eval of the last step of the checkpoint
+        "--trainer.max_duration.value=1000000",
+        "--trainer.max_duration.unit=steps",
     ]
     parts.extend(checkpoint_args)
     parts.append(f"--trainer.callbacks.wandb.project={project_name}")
@@ -231,40 +277,55 @@ def _format_launch_command(
 
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     """Build the commands for the sweep."""
-    project_name = args.project_name or "helios_in_loop_evals"
+    project_name = args.project_name or EVAL_WANDB_PROJECT
     sub_command = _get_sub_command(args)
-    base_run_name = _get_base_run_name(args)
+    selected_preset = args.model
+    base_run_name = _get_base_run_name(args, selected_preset)
     launch_command = "python3" if sub_command != SubCmd.train else "torchrun"
 
-    selected_flag = _selected_model_flag(args)
-    model_args = _build_model_args(selected_flag)
-    module_path = _resolve_module_path(args, selected_flag)
+    module_path = _resolve_module_path(args, selected_preset)
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
 
+    # LR sweep
     lrs = [FT_LRS[0]] if args.defaults_only else FT_LRS
+
+    # Normalizer sweep: default False, use dataset norm, if True, use model norm
+    normalizer_options: list[bool] = [False]
+    if selected_preset is not None:
+        preset = MODEL_PRESETS[selected_preset]
+        if args.sweep_normalizer and preset.supports_pretrained_normalizer:
+            normalizer_options = [False, True]
+
     commands: list[str] = []
     for lr in lrs:
-        if args.defaults_only:
-            logger.info("Running FT defaults with lr=%s", lr)
-            run_suffix = "FT_defaults"
-        else:
-            logger.info("Running FT with lr=%s", lr)
-            run_suffix = f"FT_lr{lr}"
-        run_name = f"{base_run_name}_{run_suffix}"
-        commands.append(
-            _format_launch_command(
-                module_path=module_path,
-                launch_command=launch_command,
-                sub_command=sub_command,
-                run_name=run_name,
-                cluster=args.cluster,
-                project_name=project_name,
-                checkpoint_args=checkpoint_args,
-                extra_cli=extra_cli,
-                model_args=model_args,
-                lr=lr,
+        for norm_val in normalizer_options:
+            if args.defaults_only:
+                run_suffix = "FT_defaults"
+            elif args.checkpoint_path:
+                run_suffix = f"FT_lr{lr}"
+            else:
+                if norm_val is True:
+                    run_suffix = f"FT_lr{lr}_norm_pretrained_True"
+                else:
+                    run_suffix = f"FT_lr{lr}_norm_pretrained_False"
+
+            run_name = f"{base_run_name}_{run_suffix}"
+            model_args = _build_model_args(selected_preset, norm_val)
+
+            commands.append(
+                _format_launch_command(
+                    module_path=module_path,
+                    launch_command=launch_command,
+                    sub_command=sub_command,
+                    run_name=run_name,
+                    cluster=args.cluster,
+                    project_name=project_name,
+                    checkpoint_args=checkpoint_args,
+                    extra_cli=extra_cli,
+                    model_args=model_args,
+                    lr=lr,
+                )
             )
-        )
     return commands
 
 
@@ -303,14 +364,15 @@ def main() -> None:
         help="Print the commands without launching them",
     )
     parser.add_argument(
-        "--model_name",
-        type=str,
-        required=False,
-        help="Use this as the base run name",
+        "--model",
+        choices=sorted(MODEL_PRESETS.keys()),
+        help="Model preset key to apply (defaults to none).",
     )
-
-    for flag, preset in MODEL_PRESETS.items():
-        parser.add_argument(f"--{flag}", action="store_true")
+    parser.add_argument(
+        "--sweep_normalizer",
+        action="store_true",
+        help="Sweep normalization methods (pretrained and dataset stats).",
+    )
 
     args, extra_cli = parser.parse_known_args()
 

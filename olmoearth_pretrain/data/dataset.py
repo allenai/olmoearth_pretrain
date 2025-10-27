@@ -823,7 +823,7 @@ class OlmoEarthDataset(Dataset):
     ) -> OlmoEarthSample:
         """Fill an array of shape of modality with the missing value."""
         expected_shape = sample.get_expected_shape(modality)
-        logger.info(f"Filling {modality} with shape {expected_shape}")
+        logger.debug(f"Filling {modality} with shape {expected_shape}")
         return np.full(
             expected_shape,
             fill_value=MISSING_VALUE,
@@ -903,7 +903,7 @@ class OlmoEarthDataset(Dataset):
         """Read the h5 file."""
         if self.cache_dir is not None:
             cache_file_path = self.cache_dir / h5_file_path.name
-            logger.info(f"Caching H5 file {h5_file_path} to {cache_file_path}")
+            logger.debug(f"Caching H5 file {h5_file_path} to {cache_file_path}")
             if not cache_file_path.exists():
                 self._apply_throttling()
                 # Copy to a temp file first and then atomically rename it to avoid
@@ -920,7 +920,9 @@ class OlmoEarthDataset(Dataset):
         sample_dict = {}
         with h5_file_path.open("rb") as f:
             with h5py.File(f, "r") as h5file:
-                logger.info(f"Reading h5 file {h5_file_path} with keys {h5file.keys()}")
+                logger.debug(
+                    f"Reading h5 file {h5_file_path} with keys {h5file.keys()}"
+                )
                 # timestamps should not be a floating string
                 sample_dict = {
                     k: v[()]
@@ -929,10 +931,6 @@ class OlmoEarthDataset(Dataset):
                     # TODO: Fix the floating string issue
                     or k in ["timestamps"]
                 }
-
-                # Log the dtype for each modality
-                for k, v in sample_dict.items():
-                    logger.info(f"Modality {k} has dtype {v.dtype}")
 
                 if (
                     missing_mask_group_name
@@ -1022,11 +1020,11 @@ class OlmoEarthDataset(Dataset):
                     continue
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality_name in missing_modalities:
-                    logger.info(
+                    logger.debug(
                         f"Skipping normalization for {modality_name} because it is in missing_modalities"
                     )
                     continue
-                logger.info(f"Normalizing {modality_name}")
+                logger.debug(f"Normalizing {modality_name}")
                 modality_data = sample_dict[modality_name]
                 missing_mask = modality_data == MISSING_VALUE
                 normalized_data = self.normalize_image(

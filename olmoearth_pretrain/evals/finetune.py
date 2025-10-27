@@ -21,7 +21,7 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 logger = getLogger(__name__)
 
 
-class _BackboneWithHead(nn.Module):
+class BackboneWithHead(nn.Module):
     """Backbone model with a classification or segmentation head."""
 
     def __init__(
@@ -33,6 +33,7 @@ class _BackboneWithHead(nn.Module):
         num_classes: int,
         use_pooled_tokens: bool = False,
     ) -> None:
+        """Initialize the backbone with head."""
         super().__init__()
         self.backbone = model
         self.wrapper = get_eval_wrapper(
@@ -42,6 +43,8 @@ class _BackboneWithHead(nn.Module):
             pooling_type=pooling_type,
             concat_features=False,
             use_pooled_tokens=use_pooled_tokens,
+            # Set this to False to avoid downsampling embeddings and labels for AnySat
+            is_train=False,
         )
         self.task_type = task_type
         self.patch_size = patch_size
@@ -66,15 +69,14 @@ class _BackboneWithHead(nn.Module):
     ) -> torch.Tensor:
         """Forward pass through the model and head."""
         dev = next(self.wrapper.parameters()).device
-        # classification: (B, D), segmentation: (B, H, W, D)
-        emb, _ = self.wrapper(batch, None)
+        emb, labels = self.wrapper(batch, labels)
         emb = cast(torch.Tensor, emb)
         emb_dim = emb.shape[-1]
         if not self._inited:
             self._init_head(emb_dim, dev)
         if emb.device != dev:
             emb = emb.to(dev, non_blocking=True)
-        return self._head(emb)
+        return self._head(emb), labels
 
 
 def _to_device(
@@ -92,7 +94,7 @@ def _to_device(
 
 @torch.no_grad()
 def _eval_cls(
-    module: _BackboneWithHead,
+    module: BackboneWithHead,
     loader: DataLoader,
     device: torch.device,
     is_multilabel: bool,
@@ -104,7 +106,7 @@ def _eval_cls(
         label = label.to(device=device)
         masked = _to_device(masked, device)
         with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-            logits = module(masked, label)  # (B, C)
+            logits, _ = module(masked, label)  # (B, C)
         logits_all.append(logits.float().cpu())
         labels_all.append(label.cpu())
     logits = torch.cat(logits_all, 0)
@@ -124,7 +126,7 @@ def _eval_cls(
 
 @torch.no_grad()
 def _eval_seg(
-    module: _BackboneWithHead,
+    module: BackboneWithHead,
     loader: DataLoader,
     device: torch.device,
     num_classes: int,
@@ -137,7 +139,7 @@ def _eval_seg(
         label = label.to(device=device)
         masked = _to_device(masked, device)
         with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-            logits = module(masked, label)  # (B, H, W, C*p*p)
+            logits, _ = module(masked, label)  # (B, H, W, C*p*p)
             H, W = logits.shape[1], logits.shape[2]
             logits = rearrange(
                 logits,
@@ -162,11 +164,17 @@ def _eval_seg(
     return mean_iou(preds, labels, num_classes=num_classes, ignore_label=-1)
 
 
-def count_params(module: nn.Module) -> tuple[int, int]:
-    """Count total and trainable parameters in a module."""
-    total = sum(p.numel() for p in module.parameters())
-    trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
-    return total, trainable
+def count_params(backbone: nn.Module, head: nn.Module) -> tuple[int, int, int, int]:
+    """Count total and trainable parameters separately for the backbone and the linear head."""
+    total_backbone = sum(p.numel() for p in backbone.parameters())
+    trainable_backbone = sum(
+        p.numel() for p in backbone.parameters() if p.requires_grad
+    )
+
+    total_head = sum(p.numel() for p in head.parameters())
+    trainable_head = sum(p.numel() for p in head.parameters() if p.requires_grad)
+
+    return total_backbone, trainable_backbone, total_head, trainable_head
 
 
 def _snapshot_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
@@ -188,7 +196,7 @@ def run_finetune_eval(
     test_loader: DataLoader | None,
 ) -> tuple[float, float]:
     """Finetune the model on a downstream task and evaluate."""
-    ft = _BackboneWithHead(
+    ft = BackboneWithHead(
         model=model,
         task_type=task_config.task_type,
         patch_size=patch_size,
@@ -200,11 +208,15 @@ def run_finetune_eval(
     # Trigger _init_head once with a tiny dry pass
     with torch.no_grad(), torch.autocast(device_type=device.type, dtype=torch.bfloat16):
         sample_batch, label = next(iter(train_loader))
-        _ = ft(_to_device(sample_batch, device), label.to(device))
+        _, _ = ft(_to_device(sample_batch, device), label.to(device))
 
-    total, trainable = count_params(ft)
-    logger.info(f"Total parameters: {total:,}")
-    logger.info(f"Trainable parameters: {trainable:,}")
+    total_backbone, trainable_backbone, total_head, trainable_head = count_params(
+        ft.backbone, ft._head
+    )
+    logger.info(f"Total backbone parameters: {total_backbone:,}")
+    logger.info(f"Trainable backbone parameters: {trainable_backbone:,}")
+    logger.info(f"Total head parameters: {total_head:,}")
+    logger.info(f"Trainable head parameters: {trainable_head:,}")
 
     opt = torch.optim.AdamW(ft.parameters(), lr=lr)
     if task_config.task_type == TaskType.CLASSIFICATION:
@@ -216,7 +228,8 @@ def run_finetune_eval(
     else:
         loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
 
-    patience = max(1, int(0.1 * epochs)) if epochs > 0 else 1
+    # Set patience to higher so that we don't missed the best model
+    patience = max(1, int(0.2 * epochs)) if epochs > 0 else 1
     logger.info(f"Using early stopping patience of {patience} epochs")
 
     best_state = _snapshot_state_dict(ft)
@@ -230,7 +243,7 @@ def run_finetune_eval(
             label = label.to(device=device)
             masked = _to_device(masked, device)
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-                logits = ft(masked, label)
+                logits, label = ft(masked, label)
                 if task_config.task_type == TaskType.SEGMENTATION:
                     H, W = logits.shape[1], logits.shape[2]
                     logits = rearrange(
@@ -260,9 +273,8 @@ def run_finetune_eval(
                 total_epochs=epochs,
                 warmup_epochs=max(1, int(0.1 * epochs)),
                 max_lr=lr,
-                min_lr=1.0e-5,
+                min_lr=1.0e-6,
             )
-            # torch.nn.utils.clip_grad_norm_(ft.parameters(), 1.0)
             opt.step()
             opt.zero_grad()
 

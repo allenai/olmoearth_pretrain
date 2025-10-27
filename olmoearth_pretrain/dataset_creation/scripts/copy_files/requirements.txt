@@ -1,3 +1,0 @@
-gcsfs>=2025.7.0
-tqdm
-universal_pathlib>=0.2.6

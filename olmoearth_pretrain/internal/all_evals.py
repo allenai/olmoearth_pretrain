@@ -17,6 +17,8 @@ from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     main,
@@ -78,6 +80,7 @@ EVAL_TASKS = {
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         eval_interval=Duration.epochs(5),
         eval_mode=EvalMode.KNN,
     ),
@@ -115,6 +118,7 @@ EVAL_TASKS = {
         num_workers=2,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
         eval_mode=EvalMode.LINEAR_PROBE,
@@ -125,7 +129,8 @@ EVAL_TASKS = {
         probe_batch_size=8,
         num_workers=2,
         pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
         eval_mode=EvalMode.LINEAR_PROBE,
@@ -137,6 +142,7 @@ EVAL_TASKS = {
         num_workers=8,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
         eval_mode=EvalMode.LINEAR_PROBE,
@@ -147,7 +153,7 @@ EVAL_TASKS = {
         probe_batch_size=128,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=False,
+        norm_stats_from_pretrained=True,
         probe_lr=0.1,
         eval_interval=Duration.epochs(10),
         eval_mode=EvalMode.LINEAR_PROBE,
@@ -404,7 +410,7 @@ FT_EVAL_TASKS = {
     ),
     "m_bigearthnet": DownstreamTaskConfig(
         dataset="m-bigearthnet",
-        ft_batch_size=32,
+        ft_batch_size=16,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
@@ -424,96 +430,16 @@ FT_EVAL_TASKS = {
         num_workers=2,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         epochs=50,
     ),
     "mados": DownstreamTaskConfig(
         dataset="mados",
-        ft_batch_size=32,
+        ft_batch_size=16,
         num_workers=8,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
-        epochs=50,
-    ),
-    "cropharvest_Togo_12_sentinel2": DownstreamTaskConfig(
-        dataset="cropharvest_Togo_12",
-        ft_batch_size=32,
-        num_workers=2,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        patch_size=1,
-        epochs=50,
-    ),
-    "cropharvest_Togo_12_sentinel1": DownstreamTaskConfig(
-        dataset="cropharvest_Togo_12",
-        ft_batch_size=32,
-        num_workers=2,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        input_modalities=[Modality.SENTINEL1.name],
-        patch_size=1,
-        epochs=50,
-    ),
-    # example of "in season" cropland mapping - 6 indicates only the
-    # first 6 timesteps are passed to the model
-    "cropharvest_Peoples_Republic_of_China_6": DownstreamTaskConfig(
-        dataset="cropharvest_People's Republic of China_6",
-        ft_batch_size=32,
-        num_workers=2,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        patch_size=1,
-        epochs=50,
-    ),
-    "cropharvest_Peoples_Republic_of_China_6_sentinel1": DownstreamTaskConfig(
-        dataset="cropharvest_People's Republic of China_6",
-        ft_batch_size=32,
-        num_workers=2,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        input_modalities=[Modality.SENTINEL1.name],
-        patch_size=1,
-        epochs=50,
-    ),
-    "nandi_sentinel2": DownstreamTaskConfig(
-        dataset="nandi",
-        ft_batch_size=32,
-        num_workers=0,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        input_layers=["sentinel2"],
-        epochs=50,
-    ),
-    "nandi_landsat": DownstreamTaskConfig(
-        dataset="nandi",
-        ft_batch_size=32,
-        num_workers=0,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        input_modalities=[Modality.LANDSAT.name],
-        input_layers=["landsat"],
-        epochs=50,
-    ),
-    "awf_sentinel2": DownstreamTaskConfig(
-        dataset="awf",
-        ft_batch_size=32,
-        num_workers=0,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        input_layers=["sentinel2"],
-        epochs=50,
-    ),
-    "awf_landsat": DownstreamTaskConfig(
-        dataset="awf",
-        ft_batch_size=32,
-        num_workers=0,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        input_modalities=[Modality.LANDSAT.name],
-        input_layers=["landsat"],
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         epochs=50,
     ),
     "pastis_sentinel2": DownstreamTaskConfig(
@@ -525,13 +451,38 @@ FT_EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
     ),
-    "breizhcrops": DownstreamTaskConfig(
-        dataset="breizhcrops",
+    "m_brick_kiln": DownstreamTaskConfig(
+        dataset="m-brick-kiln",
         ft_batch_size=64,
-        num_workers=0,
+        num_workers=4,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
-        patch_size=1,
+        epochs=50,
+    ),
+    "sen1floods11": DownstreamTaskConfig(
+        dataset="sen1floods11",
+        ft_batch_size=32,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        epochs=50,
+    ),
+    "m_cashew_plant": DownstreamTaskConfig(
+        dataset="m-cashew-plant",
+        ft_batch_size=32,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        epochs=50,
+    ),
+    "m_forestnet": DownstreamTaskConfig(
+        dataset="m-forestnet",
+        ft_batch_size=16,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         epochs=50,
     ),
 }
@@ -543,13 +494,11 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     METRICS_COLLECT_INTERVAL = 10
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.if_available
-    WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "helios_in_loop_evals"
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = OlmoEarthWandBCallback(
         name=common.run_name,
-        project=WANDB_PROJECT,
-        entity=WANDB_USERNAME,
+        project=EVAL_WANDB_PROJECT,
+        entity=WANDB_ENTITY,
         enabled=True,  # set to False to avoid wandb errors
     )
     # Safe to collect everys tep for now

@@ -7,11 +7,10 @@ Earth system foundation model: data, training, and evaluation
 launching training runs on beaker
 ## General Setup
 
-1. Create a virtual environment in prefered directory with python 3.12 `python3.12 -m venv .venv-olmoearth_pretrain`
-2. Activate the virtual environment `source .venv-olmoearth_pretrain/bin/activate`
-3. Navigate to root directory of this repo and run `pip install -e .`
-4. Run `pip install pre-commit`
-5. Run `pre-commit install`
+1. Install uv: `curl -LsSf https://astral.sh/uv/install.sh | sh` (other ways to do it are documented [here](https://docs.astral.sh/uv/getting-started/installation/))
+2. Navigate to root directory of this repo and run `uv sync --locked --all-groups`
+3. Install the pre-commit tool `uv tool install pre-commit --with pre-commit-uv --force-reinstall`
+4. uv installs everything into a venv, so to keep using `python` commands you can activate uv's venv: `source .venv/bin/activate`. Otherwise, swap to `uv run python`.
 
 ## Training Setup
 1. Create a Github Token that is able to clone this repo on beaker. You can generate a token [here](https://github.com/settings/tokens) Following permissions are sufficient

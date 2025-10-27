@@ -95,7 +95,6 @@ def build_launch_config(
     # We just check if the first cluster is Augusta here since we assume users
     # targeting Augusta won't target any other cluster.
     weka_buckets = [DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET]
-    pytorch_upgrade: str = ""
     for c in clusters:
         if "augusta" in c:
             if len(clusters) > 1:
@@ -103,13 +102,6 @@ def build_launch_config(
                     "Jobs targeting Augusta should not target other clusters since Weka will not be mounted"
                 )
             weka_buckets = []
-        if "titan" in c:
-            pass
-            # if len(clusters) > 1:
-            #    raise ValueError(
-            #        "Jobs targeting Titan should not target other clusters since Titan uses pytorch 2.7"
-            #    )
-            # pytorch_upgrade = "pip install --upgrade --pre --no-cache-dir torch==2.8.0.dev20250528+cu128 torchvision==0.22.0.dev20250528+cu128 --index-url https://download.pytorch.org/whl/nightly/cu128"
 
     beaker_user = get_beaker_username()
     # Propagate the train module path to the experiment if set
@@ -169,16 +161,13 @@ def build_launch_config(
             "gh repo clone $REPO_URL .",
             'git checkout "$GIT_REF"',
             "git submodule update --init --recursive",
-            # Setup python environment.
-            "conda shell.bash activate base",
-            # Install torch==2.7 if we're targetting titan
-            "pip install -e '.[all]'",
-            # Don't auto upgrade beaker-py, there's conflict with olmo-core
-            # "pip install --upgrade beaker-py",
-            # Quickly try a new version of PyTorch like this
-            #  "pip install --upgrade --pre torch==2.6.0.dev20241112+cu121 --index-url https://download.pytorch.org/whl/nightly/cu121",
-            pytorch_upgrade,
-            "pip freeze",
+            "pip install uv",
+            # so that we can use uv tools
+            'export PATH="/root/.local/bin:$PATH" ',
+            "uv sync --locked --all-groups",
+            # activate the uv venv
+            "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
+            'source "$(dirname "$venv_path")/activate"',
         ],
     )
 

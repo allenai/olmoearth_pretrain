@@ -1,6 +1,0 @@
-GitPython>=3.0,<4.0
-interrogate
-pre-commit
-pytest
-pytest-xdist
-ruff

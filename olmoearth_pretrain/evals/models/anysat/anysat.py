@@ -135,6 +135,7 @@ class AnySat(nn.Module):
         # based on https://arxiv.org/pdf/2412.14123, a patch size of
         # 40 is the minimum used for images of 128x128. Since smaller patches
         # = more tokens, this should lead to the best performance
+        # TODO: this is not taking into account the input image size, e.g. 256x256
         h_in_m = h * 10
         patch_size = min(40, h_in_m)
         return patch_size

@@ -1,7 +1,7 @@
 """Compute the normalization stats for a given dataset.
 
 Example usage:
-    python /weka/dfive-default/yawenz/helios/helios/internal/compute_h5_norm.py --h5py_dir /weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_zstd_3_128_x_4/era5_10_landsat_naip_10_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469736 --supported_modalities "era5_10,landsat,naip_10,sentinel1,sentinel2_l2a,srtm,worldcover" --estimate_from 100 --output_path /weka/dfive-default/yawenz/helios/helios/data/norm_configs/computed_20250722.json
+    python3 olmoearth_pretrain/internal/compute_h5_norm.py --h5py_dir /path/to/h5pydir  --supported_modalities "era5_10,landsat,naip_10,sentinel1,sentinel2_l2a,srtm,worldcover" --estimate_from 100 --output_path /weka/dfive-default/yawenz/helios/helios/data/norm_configs/computed_20250722.json
 """
 
 import argparse

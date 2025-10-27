@@ -14,6 +14,7 @@ from olmo_core.config import Config
 
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality, ModalitySpec
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
@@ -501,6 +502,9 @@ class TimeMaskingStrategy(MaskingStrategy):
         return MaskedOlmoEarthSample(**output_dict)
 
 
+@experimental(
+    "This masking strategy is experimental and may not work with all combinations of modalities"
+)
 @MASKING_STRATEGY_REGISTRY.register("space")
 class SpaceMaskingStrategy(MaskingStrategy):
     """Spatially structured random masking of the input data."""
@@ -942,7 +946,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     )
                     # only say something is present if it has any encoded tokens
                     # A little hacky but basically means that we leave the bandset untouched for encoding and decoding
-                    if not is_any_tokens_encoded_for_sample:
+                    if (
+                        not is_any_tokens_encoded_for_sample
+                        and modality not in self.only_decode_modalities
+                    ):
                         continue
                     present_modalities_bandsets[sample_idx].append(
                         (modality, bandset_idx)
@@ -1201,6 +1208,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
                         key
                     )
+                    if modality_name in self.only_decode_modalities:
+                        continue
                     modality_spec = Modality.get(modality_name)
                     masked_batch_dict[key][i] = self._random_fill_unmasked(
                         modality_mask, modality_spec, patch_size
@@ -1212,6 +1221,8 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(
                         key
                     )
+                    if modality_name in self.only_decode_modalities:
+                        continue
                     modality_spec = Modality.get(modality_name)
                     masked_batch_dict[key][i] = self._random_fill_unmasked(
                         modality_mask, modality_spec, patch_size
@@ -1282,6 +1293,9 @@ class ModalityCrossSpaceMaskingStrategy(ModalityCrossMaskingStrategy):
         return not modality_spec.is_spatial
 
 
+@experimental(
+    "This masking strategy is experimental and may not work with all combinations of modalities"
+)
 @MASKING_STRATEGY_REGISTRY.register("modality_cross_time")
 class ModalityCrossTimeMaskingStrategy(ModalityCrossMaskingStrategy):
     """Randomly select a modality and apply time masking to it."""
