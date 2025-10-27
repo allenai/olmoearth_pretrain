@@ -1,4 +1,4 @@
-# Dockerfile for running barebones server for generating embeddings
+# Dockerfile for running script for generating embeddings
 # To build: `docker build -t litserve -f scripts/litserve/Dockerfile .` from root directory
 # To run:   `docker run -p 8000:8000 litserve`
 # To test:  `python scripts/litserve/client.py`

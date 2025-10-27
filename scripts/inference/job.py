@@ -1,4 +1,4 @@
-# Barebones server for generating embeddings
+# Barebones script for generating embeddings
 from datetime import datetime as dt
 from google.cloud import storage
 from pathlib import Path

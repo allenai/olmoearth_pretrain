@@ -40,11 +40,3 @@ echo "5/$STEPS: Pushing docker container to cloud."
 docker push "$TAG"
 
 echo "You can now create a Google Cloud Run Job using this container."
-# echo gcloud run jobs create JOB_NAME \
-#         --image "$TAG" \
-#         --cpu=4 \
-#         --memory=16Gi \
-#         --region="$REGION" \
-#         --concurrency 1 \
-#         --gpu 1 \
-#         --no-gpu-zonal-redundancy 
