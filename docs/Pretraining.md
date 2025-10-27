@@ -272,7 +272,58 @@ torchrun --nproc_per_node=8 scripts/official/base.py train base_run local \
 
 ## Ablations
 
-Ablations can be run in a similar fashion and are found in [`scripts/official/ablations`](../scripts/official/ablations)
+Ablation studies isolate the impact of specific components in the base model configuration. All ablations can be launched similarly to the official training scripts (see the table in [Official Training Scripts](#official-training-scripts)).
+
+### Available Ablations
+
+The bash script [`scripts/official/ablations/base_launch_ablations.sh`](../scripts/official/ablations/base_launch_ablations.sh) contains all base model ablations. These are grouped into two categories:
+
+#### Loss & Training Strategy Ablations
+
+These ablations modify the training objective or strategy:
+
+- **No contrastive loss** - Disables the contrastive loss component (sets weight to 0.0)
+- **Random masking** - Uses random masking instead of structured masking strategy
+- **MAE (Masked Autoencoder)** - Switches to a pure MAE training approach
+- **Random target init** - Reinitializes target projections randomly instead of using pretrained weights
+- **Original patch disc loss** - Uses the legacy patch discrimination loss implementation
+- **EMA active** - Re-enables exponential moving average for target encoder
+
+#### Modality Ablations
+
+These ablations progressively remove modalities to measure their contribution:
+
+- **No ag maps** - Removes agricultural map modalities (WorldCereal, CDL)
+- **No maps** - Removes all map modalities (ag maps + WorldCover, OpenStreetMap, canopy height)
+- **No decode modalities** - Removes all decode-only modalities (maps + SRTM)
+- **No Landsat** - Removes Landsat imagery
+- **S2 only** - Sentinel-2 only (removes Sentinel-1 as well)
+
+### Running Ablations
+
+**For AI2 Researchers:** Launch all ablations at once using the bash script:
+```bash
+bash scripts/official/ablations/base_launch_ablations.sh
+```
+
+**For External Users or Individual Ablations:** Run specific ablations with `torchrun`:
+
+Example - No contrastive loss ablation:
+```bash
+torchrun --nproc_per_node=8 scripts/official/base.py train base_no_contrastive local \
+  --train_module.contrastive_config.loss_config.weight=0.0 \
+  --dataset.h5py_dir=/path/to/data
+```
+
+Example - S2-only modality ablation:
+```bash
+torchrun --nproc_per_node=8 scripts/official/base.py train base_s2_only local \
+  --common.training_modalities='[sentinel2_l2a]' \
+  --train_module.masking_config.strategy_config.only_decode_modalities='[]' \
+  --dataset.h5py_dir=/path/to/data
+```
+
+> **💡 Tip:** Check [`scripts/official/ablations/base_launch_ablations.sh`](../scripts/official/ablations/base_launch_ablations.sh) for the exact override parameters used in each ablation.
 
 ---
 
