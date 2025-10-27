@@ -12,7 +12,7 @@ _DEFAULTS = {
     "MADOS_DIR": "/weka/dfive-default/presto_eval_sets/mados",
     "FLOODS_DIR": "/weka/dfive-default/presto_eval_sets/floods",
     "PASTIS_DIR": "/weka/dfive-default/presto_eval_sets/pastis_r",
-    "PASTIS_DIR_ORIG": "/weka/dfive-default/helios/evaluation/PASTIS-R",
+    "PASTIS_DIR_ORIG": "/weka/dfive-default/presto_eval_sets/pastis_r_origsize",
     "PASTIS_DIR_PARTITION": "/weka/dfive-default/presto_eval_sets/pastis",
     "SICKLE_DIR": "/weka/dfive-default/presto_eval_sets/sickle",
     "NANDI_DIR": "/weka/dfive-default/rslearn-eai/datasets/crop/kenya_nandi/20250625",
