@@ -199,6 +199,7 @@ def get_max_metrics_grouped(
 
         group_metrics[group_name] = metrics
         group_max_runs_per_metric[group_name] = max_runs_per_metric
+        print(f"Group max runs per metric: {group_max_runs_per_metric}")
 
     grouped_test_metrics = {}
     if get_test_metrics:
