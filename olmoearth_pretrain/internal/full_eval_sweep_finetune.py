@@ -309,14 +309,14 @@ def build_commands(
     for lr in lrs:
         for norm_val in normalizer_options:
             if args.defaults_only:
-                run_suffix = "FT_defaults_logging"
+                run_suffix = "FT_defaults_fix"
             elif args.checkpoint_path:
-                run_suffix = f"FT_lr{lr}_logging"
+                run_suffix = f"FT_lr{lr}_fix"
             else:
                 if norm_val is True:
-                    run_suffix = f"FT_lr{lr}_norm_pretrained_True_logging"
+                    run_suffix = f"FT_lr{lr}_norm_pretrained_True_fix"
                 else:
-                    run_suffix = f"FT_lr{lr}_norm_pretrained_False_logging"
+                    run_suffix = f"FT_lr{lr}_norm_pretrained_False_fix"
 
             seed_suffix = (
                 f"_seed{args.finetune_seed}" if args.finetune_seed is not None else ""
