@@ -299,8 +299,9 @@ python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.rasterize_ope
 
 ## Create H5s
 
-We can now create the H5 files used during training from the OlmoEarth dataset. Note
-that here we split up each 256x256 example in the dataset into four 128x128 examples.
+We can now create the H5 files used during training from the OlmoEarth dataset. The H5s
+are better optimized for reading during training. Note that here we split up each
+256x256 example in the dataset into four 128x128 examples.
 
 ```
 python -m olmoearth_pretrain.internal.run_h5_conversion --tile_path=$OLMOEARTH_PATH --supported_modality_names='[cdl,era5_10,landsat,naip_10,openstreetmap_raster,sentinel1,sentinel2_l2a,srtm,worldcereal,worldcover,wri_canopy_height_map]' --compression=zstd --compression_opts=3 --tile_size=128
