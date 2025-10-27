@@ -7,8 +7,10 @@ Earth system foundation model: data, training, and evaluation
 launching training runs on beaker
 ## General Setup
 
+**Requirements:** Python 3.11 or higher (Python 3.12 recommended)
+
 1. Install uv: `curl -LsSf https://astral.sh/uv/install.sh | sh` (other ways to do it are documented [here](https://docs.astral.sh/uv/getting-started/installation/))
-2. Navigate to root directory of this repo and run `uv sync --locked --all-groups`
+2. Navigate to root directory of this repo and run `uv sync --locked --all-groups --python 3.12`
 3. Install the pre-commit tool `uv tool install pre-commit --with pre-commit-uv --force-reinstall`
 4. uv installs everything into a venv, so to keep using `python` commands you can activate uv's venv: `source .venv/bin/activate`. Otherwise, swap to `uv run python`.
 

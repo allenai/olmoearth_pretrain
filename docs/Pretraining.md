@@ -31,37 +31,16 @@ This guide walks you through setting up and running pretraining jobs for OlmoEar
 
 > **Note for AI2 Researchers:** You can skip this section. See [Setup-Internal.md](Setup-Internal.md) for Beaker-specific setup.
 
-This section covers:
-- Setting up your Python environment for local training
-- Installing required dependencies
-- Configuring your system for both containerized and non-containerized workflows
-- Running minimal single-GPU commands for debugging or limited hardware
+### Python Environment Setup
 
-### Prerequisites
+**Prerequisites:** Python 3.11 or higher (Python 3.12 recommended)
 
-- Python 3.11+
-- CUDA-capable GPU (recommended: 40GB+ VRAM)
-- Linux/macOS environment
+Follow the setup instructions in the [main README](../README.md#general-setup) to install dependencies using `uv`.
 
-### Installation
-
-1. **Create a virtual environment:**
-   ```bash
-   python3.12 -m venv .venv-olmoearth_pretrain
-   source .venv-olmoearth_pretrain/bin/activate
-   ```
-
-2. **Install the package:**
-   ```bash
-   cd /path/to/olmoearth_pretrain
-   pip install -e '.[all]'
-   ```
-
-3. **Set up pre-commit hooks (optional but recommended):**
-   ```bash
-   pip install pre-commit
-   pre-commit install
-   ```
+Once setup is complete, activate the virtual environment before running training scripts:
+```bash
+source .venv/bin/activate
+```
 
 ### Running on Docker
 
