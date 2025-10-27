@@ -46,6 +46,9 @@ def mean_iou(
 
     # Calculate mean IoU (excluding classes with zero union)
     valid_classes = union > 0
+    # log the iou for each class by just looping through the shape of the classes tensor
+    for class_id in range(valid_classes.shape[0]):
+        print(f"IoU for class {class_id}: {iou[class_id].item():.4f}")
     mean_iou = iou[valid_classes].mean()
 
     return mean_iou.item()

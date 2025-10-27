@@ -114,7 +114,15 @@ class OlmoEarthEvalWrapper(EvalWrapper):
             batch_embeddings: TokensAndMasks = self.model(
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
             )["tokens_and_masks"]  # (bsz, dim)
+            embedding_dict = batch_embeddings.as_dict()
+            if embedding_dict["landsat"] is not None:
+                logger.info(f"landsat shape in eval wrapper: {embedding_dict['landsat'].shape}")
+                embedding_dict["landsat"] = embedding_dict["landsat"][..., 1:, :]
+                embedding_dict["landsat_mask"] = embedding_dict["landsat_mask"][..., 1:]
+                logger.info(f"landsat shape in eval wrapper after slicing: {embedding_dict['landsat'].shape}")
+            batch_embeddings = TokensAndMasks(**embedding_dict)
             # Concat features across modalities in space averaged across time
+            # For lansat only keep the second bandset
             batch_embeddings = batch_embeddings.pool_unmasked_tokens(
                 self.pooling_type,
                 spatial_pooling=self.spatial_pool,

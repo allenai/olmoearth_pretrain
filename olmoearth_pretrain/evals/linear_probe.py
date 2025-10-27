@@ -123,6 +123,7 @@ def train_and_eval_probe(
     eval_interval: int = 50,
     probe_type: ProbeType = ProbeType.LINEAR,
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False,
+    use_class_weights: bool = False,
 ) -> tuple[float, float]:
     """Run a linear probe on the OlmoEarth Pretrain model."""
     logger.info(f"Probe type {probe_type}")
@@ -192,6 +193,7 @@ def train_and_eval_probe(
             num_classes=config.num_classes,
             num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
             device=device,
+            use_class_weights=use_class_weights,
         )
         val_miou = evaluate_probe(
             data_loader=DataLoader(
@@ -224,7 +226,7 @@ def train_and_eval_probe(
                 task_type=config.task_type,
                 probe_type=probe_type,
             )
-            logger.debug(f"Epoch {end_epoch}, Test MIoU: {test_miou}")
+            logger.info(f"Epoch {end_epoch}, Test MIoU: {test_miou}")
             test_mious.append(test_miou)
     for i in range(len(val_mious)):
         logger.debug(f"Epoch {(i + 1) * eval_interval}, MIoU: {val_mious[i]}")
@@ -263,18 +265,19 @@ def train_probe(
     device: torch.device,
     task_type: TaskType,
     num_output_pixels_per_side_of_patch: int | None = None,
+    use_class_weights: bool = False,
 ) -> nn.Module:
     """Train a linear probe on a segmentation task."""
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
 
     probe = probe.train()
-    loss_function = nn.CrossEntropyLoss(ignore_index=-1)  # for MADOS, but ok for others
     start_epoch = current_epoch
     for epoch in range(start_epoch, epochs):
         for i, batch in enumerate(data_loader):
             batch_emb, batch_labels = batch  # (bsz, t_h, t_w, dim), (bsz, H, W)
             spatial_patches_per_dim = batch_emb.shape[1]
             batch_emb = batch_emb.to(device)
+            batch_labels = batch_labels.to(device)
 
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 outputs = probe(
@@ -306,7 +309,30 @@ def train_probe(
                             mode="bilinear",
                             align_corners=True,
                         )  # (bsz, num_classes, H, W)
-                loss = loss_function(logits, batch_labels.to(device))
+
+                # Calculate class weights dynamically if enabled
+                class_weights = None
+                if use_class_weights:
+                    # Get valid labels (excluding ignore_index=-1)
+                    valid_labels = batch_labels[batch_labels != -1]
+                    if len(valid_labels) > 0:
+                        # Count occurrences of each class
+                        class_counts = torch.zeros(num_classes, device=device)
+                        for c in range(num_classes):
+                            class_counts[c] = (valid_labels == c).sum()
+
+                        # Calculate inverse frequency weights
+                        # Add small epsilon to avoid division by zero
+                        class_weights = 1.0 / (class_counts + 1e-6)
+                        # Normalize so weights sum to num_classes
+                        class_weights = class_weights / class_weights.sum() * num_classes
+
+                loss = F.cross_entropy(
+                    logits,
+                    batch_labels,
+                    weight=class_weights,
+                    ignore_index=-1
+                )
 
             loss.backward()
             adjust_learning_rate(
