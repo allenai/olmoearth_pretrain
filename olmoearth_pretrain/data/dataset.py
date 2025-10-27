@@ -823,7 +823,7 @@ class OlmoEarthDataset(Dataset):
     ) -> OlmoEarthSample:
         """Fill an array of shape of modality with the missing value."""
         expected_shape = sample.get_expected_shape(modality)
-        logger.info(f"Filling {modality} with shape {expected_shape}")
+        logger.debug(f"Filling {modality} with shape {expected_shape}")
         return np.full(
             expected_shape,
             fill_value=MISSING_VALUE,

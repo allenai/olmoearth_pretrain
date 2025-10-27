@@ -297,7 +297,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
-                logger.info("Target Encoder forward pass...")
+                logger.debug("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(
                     batch.unmask(),
                     patch_size=patch_size,

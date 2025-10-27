@@ -339,7 +339,9 @@ class OlmoEarthTrainModule(TrainModule):
         """Get the state dict."""
         return self._get_state_dict(self.state_dict_save_opts)
 
-    def state_dict_to_load(self, metadata: Metadata) -> dict[str, Any]:
+    def state_dict_to_load(
+        self, metadata: Metadata, optim: bool | None = None
+    ) -> dict[str, Any]:
         """Get the state dict to load."""
         load_opts = self.state_dict_load_opts
         return self._get_state_dict(load_opts)

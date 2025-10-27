@@ -275,7 +275,8 @@ def launch(config: OlmoEarthExperimentConfig) -> None:
     logger.info("Launching the experiment")
     logger.info(config)
     # Set follow=False if you don't want to stream the logs to the terminal
-    config.launch.launch(follow=False)
+    # Default to enabling torchrun so we can run multi gpu scripts on single gpu
+    config.launch.launch(follow=False, torchrun=True)
 
 
 def prep(config: OlmoEarthExperimentConfig) -> None:
