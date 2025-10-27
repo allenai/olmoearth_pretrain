@@ -129,6 +129,8 @@ python scripts/official/large.py launch my_large_model ai2/saturn \
 
 ### Training Dataset Setup
 
+The pretraining dataset can be found here: https://huggingface.co/datasets/allenai/olmoearth_pretrain_dataset . \
+
 1. Download dataset `hf downloadallenai/olmoearth_pretrain_dataset --repo-type dataset --local-dir /path/to/save/location --include  "h5py_data/*" `
 2. Extract dataset from tar files
   ```
