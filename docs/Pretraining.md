@@ -127,11 +127,23 @@ python scripts/official/large.py launch my_large_model ai2/saturn \
 
 > **Note for AI2 Researchers:** Training datasets are already available on Weka at `/weka/dfive-default/helios/dataset/`. See the [README](../README.md#olmoearth-pretrain-dataset) for specific paths. You can skip the rest of this section.
 
-### Training Dataset Requirements
+### Training Dataset Setup
 
-Your training data must be in **H5 format**. The dataset can be stored:
-- **Locally:** `/path/to/h5data/num_samples`
-- **Remote File System**: e.g `gs://bucket_path/to/h5data/num_samples`
+1. Download dataset `hf downloadallenai/olmoearth_pretrain_dataset --repo-type dataset --local-dir /path/to/save/location --include  "h5py_data/*" `
+2. Extract dataset from tar files
+  ```
+  export H5_DIR=/path/to/extraction/location
+  export TAR_DIR=/path/to/save/location
+
+  mkdir -p "$H5_DIR"
+  cd "$TAR_DIR"
+
+  for tar_file in *.tar; do
+    tar -xf "$tar_file" -C "$H5_DIR"
+  done
+
+  echo "Dataset downloaded at ${H5_DIR}/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
+  ```
 
 
 ### Dataset Path Configuration
