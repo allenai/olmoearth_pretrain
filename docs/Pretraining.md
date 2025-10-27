@@ -132,17 +132,19 @@ python scripts/official/large.py launch my_large_model ai2/saturn \
 1. Download dataset `hf downloadallenai/olmoearth_pretrain_dataset --repo-type dataset --local-dir /path/to/save/location --include  "h5py_data/*" `
 2. Extract dataset from tar files
   ```
-  export H5_DIR=/path/to/extraction/location
-  export TAR_DIR=/path/to/save/location
+  export H5_DIR=/path/to/extraction/location/
+  export TAR_DIR=/path/to/save/location/
 
   mkdir -p "$H5_DIR"
   cd "$TAR_DIR"
 
-  for tar_file in *.tar; do
-    tar -xf "$tar_file" -C "$H5_DIR"
-  done
+  # run one tar per core; tune -P if disk gets saturated
+  find . -maxdepth 1 -name '*.tar' -print0 \
+  | xargs -0 -n1 -P"$(nproc)" -I{} \
+    tar -xf "{}" -C "$H5_DIR" \
+      --no-same-owner --numeric-owner --delay-directory-restore
 
-  echo "Dataset downloaded at ${H5_DIR}/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
+  echo "Dataset downloaded at ${H5_DIR}h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
   ```
 
 
