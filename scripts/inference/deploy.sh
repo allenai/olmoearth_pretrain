@@ -1,4 +1,4 @@
-# Script to deploy olmoearth server to Vertex AI
+# Script to deploy OlmoEarth docker container
 # Has to be run from olmoearth_pretrain root directory: sh scripts/inference/deploy.sh
 set -e
 GCLOUD_PROJECT="ai2-ivan"
