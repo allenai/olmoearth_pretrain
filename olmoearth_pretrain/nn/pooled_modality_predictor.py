@@ -12,6 +12,7 @@ from einops import rearrange
 from torch import Tensor
 
 from olmoearth_pretrain.data.constants import BASE_GSD, Modality
+from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.attention import Mlp
 from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
@@ -38,6 +39,7 @@ class DimsToPool(StrEnum):
     ALL = "all"  # 4
 
 
+@experimental()
 class AttnPool(nn.Module):
     """Multi-query attention pooling with gated averaging.
 
@@ -169,6 +171,7 @@ class AttnPool(nn.Module):
         return self.out_proj(z)
 
 
+@experimental()
 class EncodeEarlyAttnPool(Encoder):
     """Encoder that pools the tokens across modalities."""
 
@@ -698,6 +701,7 @@ class EncoderEarlyAttnPoolConfig(EncoderConfig):
         return EncodeEarlyAttnPool(**kwargs)
 
 
+@experimental()
 class PooledModalityPredictor(PredictorBase):
     """Predictor that pools the tokens across modalities."""
 

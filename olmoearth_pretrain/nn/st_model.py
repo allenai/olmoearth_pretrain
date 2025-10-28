@@ -14,6 +14,7 @@ from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.dataset.utils import get_modality_specs_from_names
+from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.flexi_vit import (
     BASE_GSD,
@@ -38,6 +39,7 @@ class AttentionMode(Enum):
     WINDOWED = 3
 
 
+@experimental()
 class STBase(nn.Module):
     """STBase is a base class for ST models."""
 
@@ -715,6 +717,7 @@ class STBase(nn.Module):
             block.apply_compile()
 
 
+@experimental()
 class STEncoder(STBase):
     """Encoder module that processes masked input samples into token representations."""
 
@@ -1133,6 +1136,7 @@ class STEncoder(STBase):
         fully_shard(self, **fsdp_kwargs)
 
 
+@experimental()
 class STPredictor(STBase):
     """Predictor module that generates predictions from encoded tokens."""
 

@@ -502,9 +502,6 @@ class TimeMaskingStrategy(MaskingStrategy):
         return MaskedOlmoEarthSample(**output_dict)
 
 
-@experimental(
-    "This masking strategy is experimental and may not work with all combinations of modalities"
-)
 @MASKING_STRATEGY_REGISTRY.register("space")
 class SpaceMaskingStrategy(MaskingStrategy):
     """Spatially structured random masking of the input data."""
@@ -676,82 +673,6 @@ class SpaceMaskingStrategy(MaskingStrategy):
         return MaskedOlmoEarthSample(**output_dict)
 
 
-@MASKING_STRATEGY_REGISTRY.register("modality")
-class ModalityMaskingStrategy(MaskingStrategy):
-    """Modality structured random masking of the input data."""
-
-    def __init__(
-        self,
-        encode_ratio: float = 0.5,
-        decode_ratio: float = 0.5,
-    ) -> None:
-        """Initialize the masking strategy."""
-        self._encode_ratio = encode_ratio
-        self._decode_ratio = decode_ratio
-
-    def apply_mask(
-        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedOlmoEarthSample:
-        """Randomly mask out modalities in the input data.
-
-        Entire modalities (per instance) are assigned the same mask.
-
-        Args:
-            batch: Input data of type OlmoEarthSample
-            patch_size: Optional patch size for spatial masking strategies
-            **kwargs: Additional arguments for maskings
-
-        Returns:
-            MaskedOlmoEarthSample containing the masked data and mask
-        """
-        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
-        present_modalities = [b for b in batch.modalities if b != "timestamps"]
-
-        num_present_modalities = len(present_modalities)
-        encode_modalities = max(1, int(self.encode_ratio * num_present_modalities))
-        decode_modalities = max(1, int(self.decode_ratio * num_present_modalities))
-        target_modalities = (
-            num_present_modalities - encode_modalities - decode_modalities
-        )
-
-        # TODO get device for this
-        band_mask_per_instance = torch.cat(
-            [
-                torch.full((encode_modalities,), MaskValue.ONLINE_ENCODER.value),
-                torch.full((decode_modalities,), MaskValue.DECODER.value),
-                torch.full((target_modalities,), MaskValue.TARGET_ENCODER_ONLY.value),
-            ]
-        )
-        batch_masks = [
-            band_mask_per_instance[torch.randperm(num_present_modalities)]
-            for i in range(batch.batch_size)
-        ]
-        random_batch_mask = torch.stack(batch_masks)
-        for idx, modality_name in enumerate(present_modalities):
-            instance = getattr(batch, modality_name)
-            output_dict[modality_name] = instance
-            modality = Modality.get(modality_name)
-
-            if isinstance(instance, torch.Tensor):
-                device: torch.device | None = instance.device
-            else:
-                device = None
-
-            modality_mask = torch.tensor(random_batch_mask[:, idx], device=device)
-            shape = instance.shape
-            b_s = modality.num_band_sets
-            b, h, w, t = list(shape[:-1]) + [1] * (4 - len(shape[:-1]))
-            mask = repeat(modality_mask, "b -> b h w t b_s", h=h, w=w, b_s=b_s, t=t)
-            # Ensure we don't do index_put_ on expanded tensors is deprecated.
-            mask = mask.view(*shape[:-1], b_s).contiguous()
-            mask = self.fill_mask_with_missing_values(instance, mask, modality)
-            output_dict[
-                MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
-            ] = mask
-
-        return MaskedOlmoEarthSample(**output_dict)
-
-
 @MASKING_STRATEGY_REGISTRY.register("space_time")
 class SpaceTimeMaskingStrategy(MaskingStrategy):
     """Randomly select space or time masking and apply it to the input data."""
@@ -813,44 +734,6 @@ class RandomSpaceMaskingStrategy(MaskingStrategy):
         else:
             logger.info("Applying random masking")
             return self.random_strategy.apply_mask(batch, patch_size, **kwargs)
-
-
-@MASKING_STRATEGY_REGISTRY.register("modality_space_time")
-class ModalitySpaceTimeMaskingStrategy(MaskingStrategy):
-    """Randomly select modality, space or time masking and apply it to the input data."""
-
-    def __init__(
-        self,
-        encode_ratio: float = 0.5,
-        decode_ratio: float = 0.5,
-    ) -> None:
-        """Initialize the masking strategy."""
-        self._encode_ratio = encode_ratio
-        self._decode_ratio = decode_ratio
-        self.generator = np.random.default_rng(0)
-
-        self.space_strategy = SpaceMaskingStrategy(encode_ratio, decode_ratio)
-        self.time_strategy = TimeMaskingStrategy(encode_ratio, decode_ratio)
-        self.modality_strategy = ModalityMaskingStrategy(encode_ratio, decode_ratio)
-
-    def apply_mask(
-        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
-    ) -> MaskedOlmoEarthSample:
-        """Apply band or space or time masking to the input data."""
-        has_enough_timesteps = batch.valid_time >= 3
-        has_enough_modalities = (len(batch.as_dict()) - 1) >= 2
-
-        possible_strategies: list[MaskingStrategy] = [self.space_strategy]
-        if has_enough_timesteps:
-            possible_strategies.append(self.time_strategy)
-        if has_enough_modalities:
-            possible_strategies.append(self.modality_strategy)
-
-        selected_strategy: MaskingStrategy = self.generator.choice(possible_strategies)
-        if not isinstance(selected_strategy, ModalityMaskingStrategy):
-            kwargs["patch_size"] = patch_size
-
-        return selected_strategy.apply_mask(batch, **kwargs)
 
 
 class ModalityCrossMaskingStrategy(MaskingStrategy):
@@ -1332,6 +1215,9 @@ class ModalityCrossTimeMaskingStrategy(ModalityCrossMaskingStrategy):
         return not modality_spec.is_spatial
 
 
+@experimental(
+    "This masking strategy is experimental and may not work with all combinations of modalities"
+)
 @MASKING_STRATEGY_REGISTRY.register("modality_cross_space_time")
 class ModalityCrossSpaceTimeMaskingStrategy(MaskingStrategy):
     """Randomly apply space cross modality masking and time cross modality masking."""

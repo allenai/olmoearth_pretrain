@@ -9,7 +9,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 C = TypeVar("C", bound=type)
 
 
-def experimental(reason: str = "") -> Callable[[F], F]:
+def experimental(reason: str = "This is an experimental feature") -> Callable[[F], F]:
     """Mark a function or class as experimental.
 
     Experimental features may not be fully tested, may change without notice,
