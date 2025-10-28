@@ -330,8 +330,10 @@ def run_finetune_eval(
                 finetune_step = epoch * num_batches + i
                 if wandb_logger is not None:
                     wandb_logger.log(
-                        {f"finetune/{task_name}/train_loss": loss.item()},
-                        finetune_step=finetune_step,
+                        {
+                            "finetune_step": finetune_step,
+                            f"finetune/{task_name}/train_loss": loss.item(),
+                        }
                     )
                 logger.info(
                     f"Finetune Epoch [{epoch + 1}/{epochs}] Step [{i + 1}/{len(train_loader)}] Loss: {loss.item():.4f}"
@@ -352,8 +354,10 @@ def run_finetune_eval(
             )
         if wandb_logger is not None:
             wandb_logger.log(
-                {f"finetune/{task_name}/val_metric": val_metric},
-                finetune_step=finetune_step,
+                {
+                    "finetune_step": (epoch + 1) * num_batches,
+                    f"finetune/{task_name}/val_metric": val_metric,
+                }
             )
         logger.info(
             f"Finetune Epoch [{epoch + 1}/{epochs}] Validation Metric: {val_metric:.4f}"
