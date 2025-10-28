@@ -67,22 +67,6 @@ For multi-gpu training, use `torchrun`:
 torchrun [TORCHRUN_OPTIONS] scripts/official/<SCRIPT>.py <SUBCOMMAND> <RUN_NAME> <CLUSTER> [OVERRIDES...]
 ```
 
-**Required Arguments:**
-- `<SUBCOMMAND>`: The operation to perform (see [Available Subcommands](#available-subcommands) below)
-- `<RUN_NAME>`: A unique, descriptive name for your training run (e.g., `my_base_experiment`)
-  - Used to identify checkpoints, logs, and W&B runs
-  - Should be memorable and descriptive
-- `<CLUSTER>`: Cluster identifier that determines where outputs are saved
-  - **External users:** Always use `local`
-  - **AI2 researchers:** Use `local` for interactive sessions, or cluster names like `ai2/saturn` for batch jobs
-  - Determines the root directory for checkpoints and logs
-
-**Optional Arguments:**
-- `[OVERRIDES...]`: Configuration overrides in dot notation format
-  - Format: `--path.to.parameter=value`
-  - Example: `--data_loader.global_batch_size=256`
-  - See [Overrides](#overrides-and-experiments) section for details
-
 #### Available Subcommands
 
 The most commonly used subcommands are:
