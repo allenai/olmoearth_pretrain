@@ -29,7 +29,7 @@ This guide walks you through setting up and running pretraining jobs for OlmoEar
 
 ## Environment Setup
 
-> **Note for AI2 Researchers:** You can skip this section. See [Setup-Internal.md](Setup-Internal.md) for Beaker-specific setup.
+> **Note for Ai2 Researchers:** You can skip this section. See [Setup-Internal.md](Setup-Internal.md) for Beaker-specific setup.
 
 ### Python Environment Setup
 
@@ -232,12 +232,12 @@ Alternatively, you can disable W&B logging in your configuration:
 All Official release scripts can be found at [`scripts/official/`](../scripts/official/).
 Below is a table demonstrating how to launch various model sizes using `torchrun` (for external users and AI2 sessions). Adjust the dataset path and configuration overrides as needed for your setup.
 
-| Model Size | Script | Hardware | Example Command | Notes |
-|------------|--------|----------|-----------------|-------|
-| **Nano** | [`scripts/official/nano.py`](../scripts/official/nano.py) | 4x GPUs (16GB+ VRAM each) | `torchrun --nproc_per_node=4 scripts/official/nano.py train nano_run local` | Smallest model; good for limited hardware or debugging |
-| **Tiny** | [`scripts/official/tiny.py`](../scripts/official/tiny.py) | 4-8x GPUs (24GB+ VRAM each) | `torchrun --nproc_per_node=4 scripts/official/tiny.py train tiny_run local` | Small model for experimentation |
-| **Base** | [`scripts/official/base.py`](../scripts/official/base.py) | 8x GPUs (40GB+ VRAM each) | `torchrun --nproc_per_node=8 scripts/official/base.py train base_run local` | Standard pretraining configuration |
-| **Large** | [`scripts/official/large.py`](../scripts/official/large.py) | 8x GPUs (80GB VRAM each) | `torchrun --nproc_per_node=8 scripts/official/large.py train large_run local` | Largest model; requires high-memory GPUs |
+| Model Size | Script | Hardware | Example Command |
+|------------|--------|----------|-----------------|
+| **Nano** | [`scripts/official/nano.py`](../scripts/official/nano.py) | 4x GPUs (16GB+ VRAM each) | `torchrun --nproc_per_node=4 scripts/official/nano.py train nano_run local` |
+| **Tiny** | [`scripts/official/tiny.py`](../scripts/official/tiny.py) | 4-8x GPUs (24GB+ VRAM each) | `torchrun --nproc_per_node=4 scripts/official/tiny.py train tiny_run local` |
+| **Base** | [`scripts/official/base.py`](../scripts/official/base.py) | 8x GPUs (40GB+ VRAM each) | `torchrun --nproc_per_node=8 scripts/official/base.py train base_run local` |
+| **Large** | [`scripts/official/large.py`](../scripts/official/large.py) | 8x GPUs (80GB VRAM each) | `torchrun --nproc_per_node=8 scripts/official/large.py train large_run local` |
 
 > **⚠️ Hardware Adaptation Note:**
 > You may need to adapt parameters depending on your available hardware:
