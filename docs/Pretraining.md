@@ -49,7 +49,7 @@ We run our training scripts using the `olmo-core-tch271cu128-2025-09-15` Docker 
 **Important Notes:**
 - The code from this repository is **not included** in the Docker image to aid in active development. The code is mounted or copied at runtime.
 - This Docker image may not work on your own cluster if you have different hardware or driver/CUDA versions. The image is built for CUDA 12.8 with PyTorch 2.7.1.
-- **For adaptation:** See our [Dockerfile](../Dockerfile) to understand how to build an image compatible with your hardware and CUDA setup
+- **For adaptation:** See the Dockerfile in [ai2-olmo-core](https://github.com/allenai/OLMo-core/blob/main/README) to understand how to build an image compatible with your hardware and CUDA setup
 
 ## Launching Scripts
 
