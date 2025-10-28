@@ -6,7 +6,7 @@ import math
 import os
 import random
 from logging import getLogger
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -21,9 +21,18 @@ from torch.utils.data import DataLoader
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.metrics import mean_iou
+from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = getLogger(__name__)
+
+
+def _get_wandb_logger(trainer: Trainer) -> Any | None:
+    """Return the wandb module from the OlmoEarth callback, if available."""
+    for callback in trainer._iter_callbacks():
+        if isinstance(callback, OlmoEarthWandBCallback) and callback.enabled:
+            return callback.wandb
+    return None
 
 
 class BackboneWithHead(nn.Module):
@@ -271,6 +280,13 @@ def run_finetune_eval(
     best_val_metric = float("-inf")
 
     ft.train()
+    wandb_logger = _get_wandb_logger(trainer)
+    num_batches = len(train_loader)
+    if wandb_logger is None:
+        logger.debug(
+            "No active OlmoEarthWandBCallback; finetune metrics will not be logged to Weights & Biases."
+        )
+
     for epoch in range(epochs):
         # Reset epoch and global step
         trainer.global_step = epoch * len(train_loader)
@@ -312,9 +328,12 @@ def run_finetune_eval(
                         )
                 loss = loss_fn(logits, label)
                 trainer.global_step += 1
-
-                trainer.record_metric(f"{task_name}/train/loss", loss.item())
-                trainer._log_metrics()
+                finetune_step = epoch * num_batches + i
+                if wandb_logger is not None:
+                    wandb_logger.log(
+                        {f"finetune/{task_name}/train_loss": loss.item()},
+                        step=finetune_step,
+                    )
                 logger.info(
                     f"Finetune Epoch [{epoch + 1}/{epochs}] Step [{i + 1}/{len(train_loader)}] Loss: {loss.item():.4f}"
                 )
@@ -332,8 +351,11 @@ def run_finetune_eval(
                 task_config.num_classes,
                 patch_size,
             )
-        trainer.record_metric(f"{task_name}/val/metric", val_metric)
-        trainer._log_metrics()
+        if wandb_logger is not None:
+            wandb_logger.log(
+                {f"finetune/{task_name}/val_metric": val_metric},
+                step=(epoch + 1) * num_batches,
+            )
         logger.info(
             f"Finetune Epoch [{epoch + 1}/{epochs}] Validation Metric: {val_metric:.4f}"
         )
