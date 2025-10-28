@@ -307,7 +307,7 @@ def run_finetune_eval(
                             align_corners=True,
                         )
                 loss = loss_fn(logits, label)
-                trainer.global_step = epoch * len(train_loader) + i
+                trainer.global_step += 1
                 trainer.record_metric(f"finetune/{task_name}/train/loss", loss.item())
                 trainer._log_metrics()
                 logger.info(

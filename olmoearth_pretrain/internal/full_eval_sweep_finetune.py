@@ -121,9 +121,9 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
     "galileo": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.NORM_NO_CLIP_2_STD"},
         task_specific_overrides={
-            # "m_sa_crop_type": {"ft_batch_size": 1, "patch_size": 8},
+            "m_sa_crop_type": {"ft_batch_size": 1, "patch_size": 8},
             "pastis_sentinel2": {"ft_batch_size": 2},
-            # "m_cashew_plant": {"ft_batch_size": 1, "patch_size": 8},
+            "m_cashew_plant": {"ft_batch_size": 1, "patch_size": 8},
         },
         launch_script_key="galileo",
         supports_pretrained_normalizer=True,
@@ -257,7 +257,7 @@ def _format_launch_command(
         "--launch.preemptible=True",
         "--launch.task_name=eval",
         # Overwrite the max duration to enable eval of the last step of the checkpoint
-        "--trainer.max_duration.value=1000000",
+        "--trainer.max_duration.value=10000000",
         "--trainer.max_duration.unit=steps",
     ]
     parts.extend(checkpoint_args)
@@ -311,7 +311,7 @@ def build_commands(
         if args.defaults_only:
             run_suffix = "FT_defaults"
         elif args.checkpoint_path:
-            run_suffix = f"FT_lr{lr}"
+            run_suffix = f"FT_lr{lr}_fix"
         else:
             norm_suffix = ""
             if normalizer_value is not None:

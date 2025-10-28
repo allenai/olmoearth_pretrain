@@ -2,6 +2,7 @@
 
 import gc
 import logging
+import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -357,9 +358,25 @@ class DownstreamEvaluator:
                 f"No patch size found for {self.dataset}, using patch size {self.patch_size}"
             )
 
+        # Check if best checkpoint already exists
+        best_checkpoint_path = os.path.join(
+            self.trainer.save_folder,
+            self.evaluation_name,
+            f"lr{self.ft_lr}",
+            "best.ckpt",
+        )
+        if os.path.exists(best_checkpoint_path):
+            logger.info(
+                f"Best checkpoint already exists for {self.evaluation_name}, skipping finetuning"
+            )
+            return 0.0, 0.0
+        else:
+            logger.info(
+                f"Best checkpoint does not exist for {self.evaluation_name}, running finetuning"
+            )
+
         try:
             # Save the original global step
-            original_global_step = self.trainer.global_step
             val_result, test_result = run_finetune_eval(
                 task_name=self.evaluation_name,
                 task_config=self.config,
@@ -380,8 +397,6 @@ class DownstreamEvaluator:
             logger.info(
                 f"Downstream evaluator {self.evaluation_name} val score: {val_result}, test score: {test_result}"
             )
-            # Restore the original global step
-            self.trainer.global_step = original_global_step
         finally:
             model.load_state_dict(original_state)
             if original_training_mode:
