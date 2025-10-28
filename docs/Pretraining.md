@@ -341,65 +341,8 @@ torchrun --nproc_per_node=8 scripts/official/base.py train custom_experiment loc
   # Optionally --dataset.h5py_dir=/your/path/to/data \
 ```
 
-### Example Single GPU debug Setup
 
-```bash
-torchrun scripts/official/base.py train custom_experiment local \
-  --data_loader.global_batch_size=64 \
-  --data_loader.num_workers=4 \
-  --train_module.rank_microbatch_size=16 \
-  --trainer.callbacks.wandb.enabled=False
-  # Optionally --dataset.h5py_dir=/your/path/to/data \
-```
----
-
-#### Dataset Configuration
-
-```bash
---dataset.h5py_dir=/path/to/h5py/data
---dataset.training_modalities='["SENTINEL2_L2A","SENTINEL1","LANDSAT"]'
-```
-
-#### Data Loader Configuration
-
-```bash
---data_loader.num_workers=16
---data_loader.global_batch_size=512
---data_loader.token_budget=2250
---data_loader.prefetch_factor=4
---data_loader.seed=3622
-```
-
-#### Training Module Configuration
-
-```bash
---train_module.rank_microbatch_size=32
---train_module.max_grad_norm=1.0
---train_module.optim_config.lr=0.0001
---train_module.optim_config.weight_decay=0.02
---train_module.scheduler.warmup_steps=8000
-```
-
-#### Trainer Configuration
-
-```bash
---trainer.max_duration.epochs=300
---trainer.metrics_collect_interval=10
---trainer.save_interval=5000
-```
-
-#### Model Configuration
-
-Override model architecture (requires understanding the model config structure):
-
-```bash
---model.encoder_config.depth=24
---model.encoder_config.num_heads=16
---model.encoder_config.embedding_size=768
---model.decoder_config.depth=8
-```
-
-### Dataset Directory and File Structure
+## Dataset Directory and File Structure
 
 The H5 dataset follows a hierarchical directory structure (see [`set_h5py_dir` in convert_to_h5py.py](../olmoearth_pretrain/dataset/convert_to_h5py.py)):
 
