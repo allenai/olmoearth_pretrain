@@ -251,6 +251,7 @@ def build_common_components(
         raise ValueError(
             "Failed to get Beaker username. Make sure you are authenticated with Beaker if you are not running on a local cluster."
         )
+    logger.info("launch_config", launch_config)
     return CommonComponents(
         run_name=run_name,
         save_folder=f"{root_dir}/checkpoints/{beaker_user.lower()}/{run_name}",
