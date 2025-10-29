@@ -77,9 +77,6 @@ class DownstreamTaskConfig:
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
-    # Bootstrap sampling for uncertainty estimation (KNN only)
-    n_bootstrap: int = 0  # Number of bootstrap samples (0 = no bootstrap)
-    bootstrap_seed: int = 42  # Random seed for bootstrap sampling
 
 
 class DownstreamEvaluator:
@@ -92,6 +89,8 @@ class DownstreamEvaluator:
         trainer: Trainer,
         device: torch.device | None = None,
         run_on_test: bool = False,
+        n_bootstrap: int = 0,
+        bootstrap_seed: int = 42,
     ) -> None:
         """Initialize the downstream evaluator.
 
@@ -102,6 +101,8 @@ class DownstreamEvaluator:
             device: Device to evaluate on.
             run_on_test: Whether to run the evaluators on the val set
                 only (=False) or on the test and val set (=True)
+            n_bootstrap: Number of bootstrap samples for uncertainty estimation (0 = no bootstrap)
+            bootstrap_seed: Random seed for bootstrap sampling
         """
         self.evaluation_name = evaluation_name
         self.config = dataset_to_config(task.dataset)
@@ -132,8 +133,8 @@ class DownstreamEvaluator:
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
         self.run_on_test = run_on_test
-        self.n_bootstrap = task.n_bootstrap
-        self.bootstrap_seed = task.bootstrap_seed
+        self.n_bootstrap = n_bootstrap
+        self.bootstrap_seed = bootstrap_seed
         if self.select_final_test_miou_based_on_epoch_of_max_val_miou:
             assert self.run_on_test, (
                 "if select_final_test_miou_based_on_epoch_of_max_val_miou is True, "
@@ -172,8 +173,7 @@ class DownstreamEvaluator:
         self.eval_function = (
             partial(
                 run_knn,
-                n_bootstrap=self.n_bootstrap,
-                bootstrap_seed=self.bootstrap_seed,
+
             )
             if self.eval_mode == EvalMode.KNN
             else partial(
@@ -292,6 +292,8 @@ class DownstreamEvaluator:
             "test_embeddings": test_embeddings,
             "test_labels": test_labels,
             "device": self.device,
+            "n_bootstrap": self.n_bootstrap,
+            "bootstrap_seed": self.bootstrap_seed,
         }
         result = self.eval_function(**kwargs)  # type: ignore
 
@@ -396,6 +398,8 @@ class DownstreamEvaluatorCallback(Callback):
     eval_on_startup: bool = False
     cancel_after_first_eval: bool = False
     run_on_test: bool = False
+    n_bootstrap: int = 0
+    bootstrap_seed: int = 42
 
     def _check_supported_modalities(self, evaluator: DownstreamEvaluator) -> bool:
         """Check if the evaluator is supported by the model."""
@@ -588,6 +592,9 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     # whether to run the evaluators on the val set only (=False) or on the test and val set (=True)
     run_on_test: bool = False
     filter_for_eval_mode: EvalMode | None = None
+    # Bootstrap sampling for uncertainty estimation (applies to KNN and Linear Probe)
+    n_bootstrap: int = 0  # Number of bootstrap samples (0 = no bootstrap)
+    bootstrap_seed: int = 42  # Random seed for bootstrap sampling
 
     def verify_input_modalities(
         self, task: DownstreamTaskConfig, config: EvalDatasetConfig
@@ -673,6 +680,8 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     trainer=trainer,
                     device=trainer.device,
                     run_on_test=self.run_on_test,
+                    n_bootstrap=self.n_bootstrap,
+                    bootstrap_seed=self.bootstrap_seed,
                 )
             )
         return DownstreamEvaluatorCallback(
@@ -680,4 +689,6 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             eval_on_startup=self.eval_on_startup,
             cancel_after_first_eval=self.cancel_after_first_eval,
             run_on_test=self.run_on_test,
+            n_bootstrap=self.n_bootstrap,
+            bootstrap_seed=self.bootstrap_seed,
         )

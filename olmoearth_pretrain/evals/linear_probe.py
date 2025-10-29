@@ -1,9 +1,11 @@
 """Train and evaluate a linear probe."""
 
+import copy
 import math
 from enum import StrEnum
 from logging import getLogger
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -123,7 +125,9 @@ def train_and_eval_probe(
     eval_interval: int = 50,
     probe_type: ProbeType = ProbeType.LINEAR,
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False,
-) -> tuple[float, float]:
+    n_bootstrap: int = 0,
+    bootstrap_seed: int = 42,
+) -> tuple[float, float] | tuple[float, float, dict]:
     """Run a linear probe on the OlmoEarth Pretrain model."""
     logger.info(f"Probe type {probe_type}")
     if train_embeddings.shape[-1] != val_embeddings.shape[-1]:
@@ -168,7 +172,11 @@ def train_and_eval_probe(
     num_times_to_run_eval = math.ceil(epochs / eval_interval)
     data_loader = None
     val_mious = []
-    test_mious = []
+    best_probe_state = None
+    best_val_miou = float("-inf")
+    best_epoch = 0
+
+    # Training loop: only evaluate on validation set
     for i in range(num_times_to_run_eval):
         start_epoch = i * eval_interval
         end_epoch = min(start_epoch + eval_interval, epochs)
@@ -206,11 +214,94 @@ def train_and_eval_probe(
             task_type=config.task_type,
             probe_type=probe_type,
         )
-        logger.info(f"Epoch {end_epoch}, MIoU: {val_miou}")
+        logger.info(f"Epoch {end_epoch}, Val MIoU: {val_miou}")
         val_mious.append(val_miou)
-        if test_embeddings is not None:
-            if test_labels is None:
-                raise ValueError("Can't have test embeddings without test labels")
+
+        # Save best probe state
+        if val_miou > best_val_miou:
+            best_val_miou = val_miou
+            best_epoch = end_epoch
+            best_probe_state = copy.deepcopy(probe.state_dict())
+
+    # Log all validation results
+    for i, val_miou in enumerate(val_mious):
+        logger.debug(f"Epoch {(i + 1) * eval_interval}, Val MIoU: {val_miou}")
+    logger.debug(f"Best Val MIoU: {best_val_miou} at epoch {best_epoch}")
+
+    # Determine final validation MIoU
+    if select_final_test_miou_based_on_epoch_of_max_val_miou:
+        val_miou = best_val_miou
+    else:
+        val_miou = val_mious[-1]
+        if val_miou < best_val_miou:
+            logger.warning(
+                f"Final Val MIoU: {val_miou} at epoch {epochs} is less than best Val MIoU: "
+                f"{best_val_miou} at epoch {best_epoch}"
+            )
+
+    # Evaluate test set only once with the best probe
+    if test_embeddings is not None:
+        if test_labels is None:
+            raise ValueError("Can't have test embeddings without test labels")
+
+        # Load best probe state
+        if best_probe_state is not None:
+            probe.load_state_dict(best_probe_state)
+            logger.info(f"Evaluating test set with best probe (epoch {best_epoch})")
+
+        bootstrap_stats = None
+        if n_bootstrap > 0:
+            # Bootstrap sampling: create n bootstrap samples and evaluate each
+            rng = np.random.RandomState(bootstrap_seed)
+            n_test_samples = test_embeddings.shape[0]
+            bootstrap_scores = []
+            logger.info(
+                f"Running {n_bootstrap} bootstrap iterations on {n_test_samples} test samples..."
+            )
+
+            for i in range(n_bootstrap):
+                # Sample with replacement
+                bootstrap_indices = torch.from_numpy(
+                    rng.choice(n_test_samples, size=n_test_samples, replace=True)
+                )
+                bootstrap_test_embeddings = test_embeddings[bootstrap_indices]
+                bootstrap_test_labels = test_labels[bootstrap_indices]
+
+                score = evaluate_probe(
+                    data_loader=DataLoader(
+                        TensorDataset(bootstrap_test_embeddings, bootstrap_test_labels),
+                        batch_size=batch_size,
+                        shuffle=False,
+                    ),
+                    probe=probe,
+                    num_classes=config.num_classes,
+                    num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
+                    device=device,
+                    task_type=config.task_type,
+                    probe_type=probe_type,
+                )
+                bootstrap_scores.append(score)
+
+                if (i + 1) % 100 == 0:
+                    logger.debug(f"Bootstrap iteration {i + 1}/{n_bootstrap}, current mean: {np.mean(bootstrap_scores):.4f}")
+
+            bootstrap_scores_array = np.array(bootstrap_scores)
+            test_miou = float(np.mean(bootstrap_scores_array))
+            std_metric = float(np.std(bootstrap_scores_array))
+            ci_lower = float(np.percentile(bootstrap_scores_array, 2.5))
+            ci_upper = float(np.percentile(bootstrap_scores_array, 97.5))
+            bootstrap_stats = {
+                "bootstrap_scores": bootstrap_scores,
+                "mean": test_miou,
+                "std": std_metric,
+                "ci_lower": ci_lower,
+                "ci_upper": ci_upper,
+            }
+            logger.info(
+                f"Bootstrap test MIoU: {test_miou:.4f} ± {std_metric:.4f} "
+                f"[{ci_lower:.4f}, {ci_upper:.4f}]"
+            )
+        else:
             test_miou = evaluate_probe(
                 data_loader=DataLoader(
                     TensorDataset(test_embeddings, test_labels),
@@ -224,31 +315,13 @@ def train_and_eval_probe(
                 task_type=config.task_type,
                 probe_type=probe_type,
             )
-            logger.debug(f"Epoch {end_epoch}, Test MIoU: {test_miou}")
-            test_mious.append(test_miou)
-    for i in range(len(val_mious)):
-        logger.debug(f"Epoch {(i + 1) * eval_interval}, MIoU: {val_mious[i]}")
-    max_val_miou = max(val_mious)
-    max_epoch = (val_mious.index(max_val_miou) + 1) * eval_interval
-    logger.debug(f"Max MIoU: {max_val_miou} at epoch {max_epoch}")
-    if select_final_test_miou_based_on_epoch_of_max_val_miou:
-        assert len(test_mious) == len(val_mious), (
-            "if select_final_test_miou_based_on_epoch_of_max_val_miou is True, "
-            "test_mious and val_mious must have the same length"
-        )
-        test_miou = test_mious[val_mious.index(max_val_miou)]
-        val_miou = max_val_miou
+            logger.info(f"Test MIoU: {test_miou}")
+
+        if n_bootstrap > 0:
+            return val_miou, test_miou, bootstrap_stats
     else:
-        val_miou = val_mious[-1]
-        if val_miou < max_val_miou:
-            logger.warning(
-                f"Final MIoU: {val_miou} at epoch {epochs} is less than max MIoU: "
-                f"{max_val_miou} at epoch {max_epoch}"
-            )
-        if len(test_mious) > 0:
-            test_miou = test_mious[-1]
-        else:
-            test_miou = 0.0
+        test_miou = 0.0
+
     return val_miou, test_miou
 
 
