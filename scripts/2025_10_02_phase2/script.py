@@ -148,7 +148,7 @@ def build_train_module_config(
                 "weight": 0.1,
             }
         ),
-        token_exit_cfg={modality: 12 for modality in common.training_modalities},
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup_steps=8000),
         ema_decay=(1.0, 1.0),
