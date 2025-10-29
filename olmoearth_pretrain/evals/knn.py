@@ -5,6 +5,7 @@ import logging
 import numpy as np
 import torch
 import torch.nn as nn
+from olmo_core.data.utils import get_rng
 from sklearn.metrics import accuracy_score, f1_score
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
@@ -202,7 +203,7 @@ def _bootstrap_knn_test(
             - ci_lower: lower bound of 95% confidence interval
             - ci_upper: upper bound of 95% confidence interval
     """
-    rng = np.random.RandomState(seed)
+    rng = get_rng(seed)
     n_test_samples = test_embeddings.shape[0]
     bootstrap_scores = []
 

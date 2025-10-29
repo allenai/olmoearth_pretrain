@@ -8,8 +8,10 @@ from logging import getLogger
 import numpy as np
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 import torch.nn.functional as F
 from einops import rearrange
+from olmo_core.data.utils import get_rng
 from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -252,16 +254,17 @@ def train_and_eval_probe(
         bootstrap_stats = None
         if n_bootstrap > 0:
             # Bootstrap sampling: create n bootstrap samples and evaluate each
-            rng = np.random.RandomState(bootstrap_seed)
+            # TODO: we should use a generator rather than a random state
+            rng = get_rng(bootstrap_seed)
             n_test_samples = test_embeddings.shape[0]
             bootstrap_scores = []
             logger.info(
                 f"Running {n_bootstrap} bootstrap iterations on {n_test_samples} test samples..."
             )
 
-            for i in range(n_bootstrap):
+            for i in tqdm(range(n_bootstrap), desc="Bootstrapping", leave=False):
                 # Sample with replacement
-                bootstrap_indices = torch.from_numpy(
+                bootstrap_indices = rng.choice(
                     rng.choice(n_test_samples, size=n_test_samples, replace=True)
                 )
                 bootstrap_test_embeddings = test_embeddings[bootstrap_indices]
