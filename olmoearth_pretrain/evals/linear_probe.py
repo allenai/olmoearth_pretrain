@@ -264,8 +264,8 @@ def train_and_eval_probe(
 
             for i in tqdm(range(n_bootstrap), desc="Bootstrapping", leave=False):
                 # Sample with replacement
-                bootstrap_indices = rng.choice(
-                    rng.choice(n_test_samples, size=n_test_samples, replace=True)
+                bootstrap_indices = torch.from_numpy(rng.choice(
+                    n_test_samples, size=n_test_samples, replace=True)
                 )
                 bootstrap_test_embeddings = test_embeddings[bootstrap_indices]
                 bootstrap_test_labels = test_labels[bootstrap_indices]

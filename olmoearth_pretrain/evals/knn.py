@@ -213,9 +213,9 @@ def _bootstrap_knn_test(
 
     for i in range(n_bootstrap):
         # Sample with replacement
-        bootstrap_indices = rng.choice(
+        bootstrap_indices = torch.from_numpy(rng.choice(
             n_test_samples, size=n_test_samples, replace=True
-        )
+        ))
         bootstrap_test_embeddings = test_embeddings[bootstrap_indices]
         bootstrap_test_labels = test_labels[bootstrap_indices]
 
