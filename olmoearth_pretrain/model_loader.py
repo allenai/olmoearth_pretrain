@@ -25,10 +25,14 @@ The weights are converted to pth file from distributed checkpoint like this:
 import json
 from enum import StrEnum
 from os import PathLike
+from pathlib import Path
 
 import torch
 from huggingface_hub import hf_hub_download
 from olmo_core.config import Config
+
+CONFIG_FILENAME = "config.json"
+WEIGHTS_FILENAME = "weights.pth"
 
 
 class ModelID(StrEnum):
@@ -43,60 +47,68 @@ class ModelID(StrEnum):
         return f"allenai/{self.value}"
 
 
-def load_model(
-    model_id_or_path: ModelID | PathLike, load_weights: bool = True
-) -> torch.nn.Module:
-    """Initialize and load the weights for the specified model.
-
-    If the model ID is a ModelID, the config and weights will be downloaded from Hugging Face.
-    Otherwise, the config and weights will be loaded from the specified path.
+def load_model_from_id(model_id: ModelID, load_weights: bool = True) -> torch.nn.Module:
+    """Initialize and load the weights for the specified model from Hugging Face.
 
     Args:
-        model_id_or_path: the model ID or path to load.
+        model_id: the model ID to load.
         load_weights: whether to load the weights. Set false to skip downloading the
             weights from Hugging Face and leave them randomly initialized. Note that
             the config.json will still be downloaded from Hugging Face.
     """
-    model_config = _load_model_config(model_id_or_path)
-    model: torch.nn.Module = model_config.build()
+    config_fpath = _resolve_artifact_path(model_id, CONFIG_FILENAME)
+    model = _load_model_from_config(config_fpath)
 
     if not load_weights:
         return model
 
-    state_dict = _load_state_dict(model_id_or_path)
+    state_dict_fpath = _resolve_artifact_path(model_id, WEIGHTS_FILENAME)
+    state_dict = _load_state_dict(state_dict_fpath)
     model.load_state_dict(state_dict)
     return model
 
 
-def _load_model_config(model_id_or_path: ModelID | PathLike) -> Config:
-    """Load the model config from the specified model ID out of hfhub or from a path."""
-    if isinstance(model_id_or_path, ModelID):
-        # We ignore bandit warnings here since we are just downloading config and weights,
-        # not any code.
-        config_fname = hf_hub_download(
-            repo_id=model_id_or_path.repo_id(), filename="config.json"
-        )  # nosec
-    else:
-        config_fname = model_id_or_path
+def load_model_from_path(
+    model_path: PathLike, load_weights: bool = True
+) -> torch.nn.Module:
+    """Initialize and load the weights for the specified model from a path.
 
-    with open(config_fname) as f:
+    Args:
+        model_path: the path to the model.
+        load_weights: whether to load the weights. Set false to skip downloading the
+            weights from Hugging Face and leave them randomly initialized. Note that
+    """
+    config_fpath = _resolve_artifact_path(model_path, CONFIG_FILENAME)
+    model = _load_model_from_config(config_fpath)
+
+    if not load_weights:
+        return model
+
+    state_dict_fpath = _resolve_artifact_path(model_path, WEIGHTS_FILENAME)
+    state_dict = _load_state_dict(state_dict_fpath)
+    model.load_state_dict(state_dict)
+    return model
+
+
+def _resolve_artifact_path(model_id_or_path: ModelID | PathLike, filename: str) -> Path:
+    """Resolve the artifact file path for the specified model ID or path, downloading it from Hugging Face if necessary."""
+    if isinstance(model_id_or_path, ModelID):
+        return Path(
+            hf_hub_download(repo_id=model_id_or_path.repo_id(), filename=filename)  # nosec
+        )
+    else:
+        return Path(model_id_or_path) / filename
+
+
+def _load_model_from_config(path: PathLike) -> torch.nn.Module:
+    """Load the model config from the specified path."""
+    with open(path) as f:
         config_dict = json.load(f)
         model_config = Config.from_dict(config_dict["model"])
+    return model_config.build()
 
-    return model_config
 
-
-def _load_state_dict(
-    model_id_or_path: ModelID | PathLike,
-) -> dict[str, torch.Tensor]:
-    """Load the model state dict from the specified model ID out of hfhub or from a path."""
-    if isinstance(model_id_or_path, ModelID):
-        # We ignore bandit warnings here since we are just downloading config and weights,
-        # not any code.
-        state_dict_fname = hf_hub_download(
-            repo_id=model_id_or_path.repo_id(), filename="weights.pth"
-        )  # nosec
-    else:
-        state_dict_fname = model_id_or_path
-    state_dict = torch.load(state_dict_fname, map_location="cpu")
+def _load_state_dict(path: PathLike) -> dict[str, torch.Tensor]:
+    """Load the model state dict from the specified path."""
+    state_dict = torch.load(path, map_location="cpu")
     return state_dict
