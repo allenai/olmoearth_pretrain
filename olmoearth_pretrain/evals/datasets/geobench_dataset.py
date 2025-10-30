@@ -265,6 +265,9 @@ class GeobenchDataset(Dataset):
                 :,
                 EVAL_TO_HELIOS_L8_BANDS,
             ]
+            if self.dataset == "m-forestnet":
+                # For Landsat (ForestNet), we only use the cropped 320x320 image
+                landsat = landsat[0:320, 0:320, :, :]
             # Normalize using the pretrained dataset's normalization stats
             if self.norm_stats_from_pretrained:
                 landsat = self.normalizer_computed.normalize(Modality.LANDSAT, landsat)
