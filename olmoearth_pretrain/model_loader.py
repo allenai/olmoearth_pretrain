@@ -110,7 +110,8 @@ def _load_model_from_config(path: UPath) -> torch.nn.Module:
     return model_config.build()
 
 
-def _load_state_dict(path: PathLike) -> dict[str, torch.Tensor]:
+def _load_state_dict(path: UPath) -> dict[str, torch.Tensor]:
     """Load the model state dict from the specified path."""
-    state_dict = torch.load(path, map_location="cpu")
+    with path.open("rb") as f:
+        state_dict = torch.load(f, map_location="cpu")
     return state_dict
