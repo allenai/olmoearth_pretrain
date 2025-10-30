@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 import torch
+from google.api_core.exceptions import NotFound
 from upath import UPath
 
 from olmoearth_pretrain.model_loader import (
@@ -104,6 +105,15 @@ class TestLoadModelFromPath:
         model = load_model_from_path(temp_model_dir, load_weights=False)
         assert model is not None
         assert isinstance(model, torch.nn.Module)
+
+    def test_load_with_gcs_path(self) -> None:
+        """Test that GCS paths are handled correctly (will fail with 404, not type error)."""
+        gcs_path = "gs://fake-bucket-that-does-not-exist/fake-model-path"
+
+        # This should fail with a GCS 404/NotFound, not a type error about open()
+        # The fact that it tries to access GCS means UPath is working correctly
+        with pytest.raises((NotFound, FileNotFoundError, OSError)):
+            load_model_from_path(gcs_path, load_weights=False)
 
 
 class TestLoadModelFromId:

@@ -92,7 +92,7 @@ def load_model_from_path(
 
 def _resolve_artifact_path(
     model_id_or_path: ModelID | PathLike | str, filename: str
-) -> PathLike:
+) -> UPath:
     """Resolve the artifact file path for the specified model ID or path, downloading it from Hugging Face if necessary."""
     if isinstance(model_id_or_path, ModelID):
         return UPath(
@@ -102,9 +102,9 @@ def _resolve_artifact_path(
     return base / filename
 
 
-def _load_model_from_config(path: PathLike) -> torch.nn.Module:
+def _load_model_from_config(path: UPath) -> torch.nn.Module:
     """Load the model config from the specified path."""
-    with open(path) as f:
+    with path.open() as f:
         config_dict = json.load(f)
         model_config = Config.from_dict(config_dict["model"])
     return model_config.build()
