@@ -20,20 +20,15 @@ def mean_iou(
     Returns:
     float: Mean IoU across all classes
     """
-    # Ensure inputs are on the same device
+
     device = predictions.device
     labels = labels.to(device)
 
-    # Create a mask for valid pixels (i.e., not ignore_label)
     valid_mask = labels != ignore_label
 
-    # Flatten and filter to valid pixels only
     predictions_valid = predictions[valid_mask]
     labels_valid = labels[valid_mask]
 
-    # Vectorized computation using bincount
-    # Create unique identifiers for pred-label pairs
-    # This computes the confusion matrix efficiently
     n = num_classes
     confusion = torch.bincount(
         n * labels_valid + predictions_valid,
