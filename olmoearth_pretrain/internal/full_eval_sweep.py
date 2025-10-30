@@ -4,6 +4,7 @@ e.g. python -m olmoearth_pretrain.internal.full_eval_sweep --cluster=ai2/saturn-
 """
 
 import argparse
+import json
 import os
 import subprocess  # nosec
 import uuid
@@ -673,6 +674,36 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 
             for size in model_sizes:
                 base_run_name = _get_base_run_name(args, size)
+
+                # Optionally load imported settings from json file
+                if args.load_eval_settings_from_json:
+                    with open(args.load_eval_settings_from_json) as f:
+                        eval_settings = json.load(f)
+                    base_run_name += "_serialized_val_settings"
+                    eval_settings_dict = eval_settings[args.model][base_run_name][
+                        "settings"
+                    ]
+                    params = {
+                        "pooling_type": eval_settings_dict["pooling_type"],
+                        "probe_lr": eval_settings_dict["probe_lr"],
+                        "norm_mode": "pre_trained"
+                        if eval_settings_dict["norm_stats_from_pretrained"]
+                        else "dataset",
+                    }
+                    cmd = _build_hyperparameter_command(
+                        args,
+                        params,
+                        base_run_name,
+                        sub_command,
+                        launch_command,
+                        checkpoint_args,
+                        project_name,
+                        extra,
+                        size,
+                    )
+                    commands_to_run.append(cmd)
+                    continue
+
                 hp_params = loop_through_params(
                     no_norm=(args.model in dataset_norm_only_models)
                 )
@@ -783,6 +814,12 @@ def main() -> None:
         type=str,
         required=False,
         help="Model size to use",
+    )
+    parser.add_argument(
+        "--load_eval_settings_from_json",
+        type=str,
+        required=False,
+        help="Path to the eval settings json file",
     )
 
     args, extra_cli = parser.parse_known_args()
