@@ -792,6 +792,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                         eval_settings = json.load(f)
                     # Get all tasks for this group/run
                     base_run_name_og = _get_base_run_name(args, size, use_uuid=False)
+                    if "step" in base_run_name_og:
+                        base_run_name_og = base_run_name_og.split("_step")[0]
                     suffixes_to_try = ["", "_base", "_large"]
                     eval_settings_dict = None
 
