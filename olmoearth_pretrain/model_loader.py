@@ -69,7 +69,7 @@ def load_model_from_id(model_id: ModelID, load_weights: bool = True) -> torch.nn
 
 
 def load_model_from_path(
-    model_path: PathLike, load_weights: bool = True
+    model_path: PathLike | str, load_weights: bool = True
 ) -> torch.nn.Module:
     """Initialize and load the weights for the specified model from a path.
 
@@ -91,7 +91,7 @@ def load_model_from_path(
 
 
 def _resolve_artifact_path(
-    model_id_or_path: ModelID | PathLike, filename: str
+    model_id_or_path: ModelID | PathLike | str, filename: str
 ) -> PathLike:
     """Resolve the artifact file path for the specified model ID or path, downloading it from Hugging Face if necessary."""
     if isinstance(model_id_or_path, ModelID):
