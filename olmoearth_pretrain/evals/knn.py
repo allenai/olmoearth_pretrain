@@ -203,56 +203,58 @@ def _bootstrap_knn_test(
             - ci_lower: lower bound of 95% confidence interval
             - ci_upper: upper bound of 95% confidence interval
     """
-    rng = get_rng(seed)
-    n_test_samples = test_embeddings.shape[0]
-    bootstrap_scores = []
+    # Optimized bootstrap: compute predictions once, then resample
+    logger.info(f"Computing predictions once for {test_embeddings.shape[0]} test samples...")
 
-    logger.info(
-        f"Running {n_bootstrap} bootstrap iterations on {n_test_samples} test samples..."
-    )
-
-    for i in range(n_bootstrap):
-        # Sample with replacement
-        bootstrap_indices = torch.from_numpy(rng.choice(
-            n_test_samples, size=n_test_samples, replace=True
-        ))
-        bootstrap_test_embeddings = test_embeddings[bootstrap_indices]
-        bootstrap_test_labels = test_labels[bootstrap_indices]
-
-        # Run KNN on bootstrap sample
-        if not config.is_multilabel:
-            bootstrap_predictions = _run_knn_for_k(
+    # Compute predictions ONCE for all test samples
+    if not config.is_multilabel:
+        all_predictions = _run_knn_for_k(
+            train_embeddings=train_embeddings,
+            train_labels=train_labels,
+            test_embeddings=test_embeddings,
+            num_classes=config.num_classes,
+            k=k,
+            device=device,
+            skip_idx=skip_idx,
+        )
+    else:
+        # Multilabel case: compute predictions once per class
+        all_predictions = []
+        for class_idx in range(config.num_classes):
+            train_single_labels = train_labels[:, class_idx]
+            single_predictions = _run_knn_for_k(
                 train_embeddings=train_embeddings,
-                train_labels=train_labels,
-                test_embeddings=bootstrap_test_embeddings,
-                num_classes=config.num_classes,
+                train_labels=train_single_labels,
+                test_embeddings=test_embeddings,
+                num_classes=2,
                 k=k,
                 device=device,
                 skip_idx=skip_idx,
             )
-            score = accuracy_score(
-                y_true=bootstrap_test_labels, y_pred=bootstrap_predictions
-            )
-        else:
-            # Multilabel case
-            bootstrap_predictions = []
-            for class_idx in range(config.num_classes):
-                train_single_labels = train_labels[:, class_idx]
-                single_bootstrap_predictions = _run_knn_for_k(
-                    train_embeddings=train_embeddings,
-                    train_labels=train_single_labels,
-                    test_embeddings=bootstrap_test_embeddings,
-                    num_classes=2,
-                    k=k,
-                    device=device,
-                    skip_idx=skip_idx,
-                )
-                bootstrap_predictions.append(single_bootstrap_predictions)
+            all_predictions.append(single_predictions)
+        all_predictions = torch.stack(all_predictions, dim=1)
 
-            bootstrap_predictions = torch.stack(bootstrap_predictions, dim=1)
+    # Bootstrap resample the predictions (very fast!)
+    rng = get_rng(seed)
+    n_test_samples = test_embeddings.shape[0]
+    bootstrap_scores = []
+
+    logger.info(f"Running {n_bootstrap} bootstrap iterations on precomputed predictions...")
+
+    for i in range(n_bootstrap):
+        # Resample indices only - no cosine similarity computation!
+        bootstrap_indices = rng.choice(n_test_samples, size=n_test_samples, replace=True)
+
+        bootstrap_preds = all_predictions[bootstrap_indices]
+        bootstrap_labels = test_labels[bootstrap_indices]
+
+        # Compute metric on resampled predictions
+        if not config.is_multilabel:
+            score = accuracy_score(y_true=bootstrap_labels, y_pred=bootstrap_preds)
+        else:
             score = f1_score(
-                y_true=bootstrap_test_labels,
-                y_pred=bootstrap_predictions,
+                y_true=bootstrap_labels,
+                y_pred=bootstrap_preds,
                 average="micro",
             )
 

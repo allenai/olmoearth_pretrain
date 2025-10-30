@@ -251,37 +251,44 @@ def train_and_eval_probe(
             probe.load_state_dict(best_probe_state)
             logger.info(f"Evaluating test set with best probe (epoch {best_epoch})")
 
+        # Compute predictions once (regardless of bootstrap)
+        logger.info(f"Computing predictions for {test_embeddings.shape[0]} test samples...")
+        test_data_loader = DataLoader(
+            TensorDataset(test_embeddings, test_labels),
+            batch_size=batch_size,
+            shuffle=False,
+        )
+        all_preds, all_labels = get_probe_predictions(
+            data_loader=test_data_loader,
+            probe=probe,
+            num_classes=config.num_classes,
+            device=device,
+            task_type=config.task_type,
+            probe_type=probe_type,
+            num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
+        )
+
         bootstrap_stats = None
         if n_bootstrap > 0:
-            # Bootstrap sampling: create n bootstrap samples and evaluate each
-            # TODO: we should use a generator rather than a random state
+            # Bootstrap resample the predictions (very fast!)
             rng = get_rng(bootstrap_seed)
-            n_test_samples = test_embeddings.shape[0]
+            n_test_samples = all_preds.shape[0]
             bootstrap_scores = []
-            logger.info(
-                f"Running {n_bootstrap} bootstrap iterations on {n_test_samples} test samples..."
-            )
+
+            logger.info(f"Running {n_bootstrap} bootstrap iterations on precomputed predictions...")
 
             for i in tqdm(range(n_bootstrap), desc="Bootstrapping", leave=False):
-                # Sample with replacement
-                bootstrap_indices = torch.from_numpy(rng.choice(
-                    n_test_samples, size=n_test_samples, replace=True)
-                )
-                bootstrap_test_embeddings = test_embeddings[bootstrap_indices]
-                bootstrap_test_labels = test_labels[bootstrap_indices]
+                # Resample indices only - no model forward pass!
+                bootstrap_indices = rng.choice(n_test_samples, size=n_test_samples, replace=True)
 
-                score = evaluate_probe(
-                    data_loader=DataLoader(
-                        TensorDataset(bootstrap_test_embeddings, bootstrap_test_labels),
-                        batch_size=batch_size,
-                        shuffle=False,
-                    ),
-                    probe=probe,
+                bootstrap_preds = all_preds[bootstrap_indices]
+                bootstrap_labels = all_labels[bootstrap_indices]
+
+                # Compute metric on resampled predictions
+                score = compute_metric(
+                    bootstrap_preds, bootstrap_labels,
                     num_classes=config.num_classes,
-                    num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
-                    device=device,
                     task_type=config.task_type,
-                    probe_type=probe_type,
                 )
                 bootstrap_scores.append(score)
 
@@ -294,7 +301,7 @@ def train_and_eval_probe(
             ci_lower = float(np.percentile(bootstrap_scores_array, 2.5))
             ci_upper = float(np.percentile(bootstrap_scores_array, 97.5))
             bootstrap_stats = {
-                "bootstrap_scores": bootstrap_scores,
+                "bootstrap_scores": bootstrap_scores_array.tolist(),
                 "mean": test_miou,
                 "std": std_metric,
                 "ci_lower": ci_lower,
@@ -305,18 +312,11 @@ def train_and_eval_probe(
                 f"[{ci_lower:.4f}, {ci_upper:.4f}]"
             )
         else:
-            test_miou = evaluate_probe(
-                data_loader=DataLoader(
-                    TensorDataset(test_embeddings, test_labels),
-                    batch_size=batch_size,
-                    shuffle=False,
-                ),
-                probe=probe,
+            # No bootstrap - just compute metric from predictions
+            test_miou = compute_metric(
+                all_preds, all_labels,
                 num_classes=config.num_classes,
-                num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
-                device=device,
                 task_type=config.task_type,
-                probe_type=probe_type,
             )
             logger.info(f"Test MIoU: {test_miou}")
 
@@ -400,7 +400,7 @@ def train_probe(
     return probe, data_loader
 
 
-def evaluate_probe(
+def get_probe_predictions(
     data_loader: DataLoader,
     probe: nn.Module,
     num_classes: int,
@@ -408,8 +408,12 @@ def evaluate_probe(
     task_type: TaskType,
     probe_type: ProbeType,
     num_output_pixels_per_side_of_patch: int | None = None,
-) -> float:
-    """Evaluate a trained linear probe on a segmentation or classification task."""
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Get predictions from a trained linear probe.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]: (predictions, labels)
+    """
     probe = probe.eval()
 
     all_preds = []
@@ -460,10 +464,52 @@ def evaluate_probe(
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
+    return all_preds, all_labels
+
+
+def compute_metric(
+    preds: torch.Tensor,
+    labels: torch.Tensor,
+    num_classes: int,
+    task_type: TaskType,
+) -> float:
+    """Compute metric from predictions and labels.
+
+    Args:
+        preds: Predictions tensor
+        labels: Labels tensor
+        num_classes: Number of classes
+        task_type: Type of task (classification or segmentation)
+
+    Returns:
+        float: Computed metric (accuracy for classification, mIoU for segmentation)
+    """
     if task_type == TaskType.SEGMENTATION:
         metric = mean_iou(
-            all_preds, all_labels, num_classes=num_classes, ignore_label=-1
+            preds, labels, num_classes=num_classes, ignore_label=-1
         )
     else:
-        metric = accuracy_score(all_labels, all_preds)
+        metric = accuracy_score(labels.numpy(), preds.numpy())
     return metric
+
+
+def evaluate_probe(
+    data_loader: DataLoader,
+    probe: nn.Module,
+    num_classes: int,
+    device: torch.device,
+    task_type: TaskType,
+    probe_type: ProbeType,
+    num_output_pixels_per_side_of_patch: int | None = None,
+) -> float:
+    """Evaluate a trained linear probe on a segmentation or classification task."""
+    preds, labels = get_probe_predictions(
+        data_loader=data_loader,
+        probe=probe,
+        num_classes=num_classes,
+        device=device,
+        task_type=task_type,
+        probe_type=probe_type,
+        num_output_pixels_per_side_of_patch=num_output_pixels_per_side_of_patch,
+    )
+    return compute_metric(preds, labels, num_classes, task_type)
