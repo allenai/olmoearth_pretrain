@@ -119,7 +119,7 @@ def run_inference_on_tile(tile, timestamps):
                     data = src.read(window=win)
                     masked_sample = prepare_masked_olmo_earth_sample(data, bands, timestamps, device)
                     with torch.no_grad():
-                        preds = model(masked_sample, patch_size=1)
+                        preds = model(masked_sample, patch_size=1, fast_pass=True)
                     embeddings = preds["project_aggregated"].cpu().numpy().transpose(1, 0)
                     embeddings_reshaped = embeddings.reshape(embeddings.shape[0], data.shape[1], data.shape[2])
                     dst.write(embeddings_reshaped.astype("float32"), window=win)
@@ -136,8 +136,8 @@ def run_inference_on_tile(tile, timestamps):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-r', '--run')
-    parser.add_argument('-t', '--tiles', nargs='+', default=[])
+    parser.add_argument('-r', '--run', required=True)
+    parser.add_argument('-t', '--tiles', nargs='+', default=[], required=True)
     args = parser.parse_args()
 
     # Derive timestamps
