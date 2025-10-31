@@ -7,7 +7,7 @@ authors = [
 ]
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.11"
+requires-python = ">=3.11, <3.14" # For torch  2.7.1 compatibility
 dependencies = [
     "ai2-olmo-core==2.3.0",
     "albumentations>=1.4.10",
