@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 class AnySat(nn.Module):
     """AnySat wrapper for MaskedHelioSample."""
 
+    resolution: int = 10
     # these are the bands which AnySat accepts
     # https://github.com/gastruc/AnySat?tab=readme-ov-file#format-your-data
     ANYSAT_S2_BAND_ORDERING = [
@@ -61,9 +62,11 @@ class AnySat(nn.Module):
 
     supports_multiple_modalities_at_once = True
 
-    def __init__(self) -> None:
+    def __init__(self, patch_size: int = 4) -> None:
         """AnySat wrapper."""
         super().__init__()
+        # This is the default we use as the minimum in calculate_patch_size
+        self.patch_size = patch_size
         self.model = torch.hub.load(
             "gastruc/anysat",
             "anysat",
@@ -136,8 +139,9 @@ class AnySat(nn.Module):
         # 40 is the minimum used for images of 128x128. Since smaller patches
         # = more tokens, this should lead to the best performance
         # TODO: this is not taking into account the input image size, e.g. 256x256
-        h_in_m = h * 10
-        patch_size = min(40, h_in_m)
+        h_in_m = h * self.resolution
+        default_patch_size = self.patch_size * self.resolution
+        patch_size = min(default_patch_size, h_in_m)
         return patch_size
 
     def _process_modality_data(self, data: torch.Tensor, modality: str) -> torch.Tensor:
@@ -249,6 +253,8 @@ class AnySat(nn.Module):
 class AnySatConfig(Config):
     """olmo_core style config for AnySat."""
 
+    patch_size: int = 4 # minimum patch size is 4 in 10m token
+
     def build(self) -> AnySat:
         """Build the Croma model."""
-        return AnySat()
+        return AnySat(patch_size=self.patch_size)
