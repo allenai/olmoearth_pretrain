@@ -177,6 +177,8 @@ def build_launch_config(
             # "pip install --upgrade beaker-py",
             # Quickly try a new version of PyTorch like this
             #  "pip install --upgrade --pre torch==2.6.0.dev20241112+cu121 --index-url https://download.pytorch.org/whl/nightly/cu121",
+            # DEBUGGING and then show the arch
+            "python -c 'import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.get_arch_list())'",
             pytorch_upgrade,
             "pip freeze",
         ],
