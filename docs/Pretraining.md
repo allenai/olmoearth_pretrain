@@ -148,17 +148,26 @@ Evaluation datasets have default paths set in [`olmoearth_pretrain/evals/dataset
 
 **For external users:** These defaults point to AI2 internal infrastructure. To use evaluations:
 
-1. Download/prepare the evaluation datasets locally (TODO: Add instructions once on HF)
+1. Download/prepare the evaluation datasets locally
+
+Geobench is on HuggingFace and can be downloaded directly (https://huggingface.co/datasets/recursix/geo-bench-1.0)
+Use this script: https://github.com/ServiceNow/geo-bench/blob/main/geobench/geobench_download.py
+CropHarvest: https://zenodo.org/records/10251170 (confirm with Gabi, is this the latest version?)
+Breizhcrop: https://github.com/dl4sits/BreizhCrops/blob/master/breizhcrops/datasets/breizhcrops.py, test script here!
+MADOS: https://zenodo.org/records/10664073, need processor
+Flood: https://github.com/cloudtostreet/Sen1Floods11
+PASTIS-R: https://zenodo.org/records/5735646
+
+
 2. Set environment variables for each dataset path to override defaults in [`olmoearth_pretrain/evals/datasets/paths.py`](../olmoearth_pretrain/evals/datasets/paths.py)
 
    ```bash
    export GEOBENCH_DIR="/your/path/to/geobench"
-   export BREIZHCROPS_DIR="/your/path/to/breizhcrops"
    export MADOS_DIR="/your/path/to/mados"
    export FLOODS_DIR="/your/path/to/floods"
    export PASTIS_DIR="/your/path/to/pastis"
-   export NANDI_DIR="/your/path/to/nandi"
-   export AWF_DIR="/your/path/to/awf"
+   export BREIZHCROPS_DIR="/your/path/to/breizhcrops"
+   export CROPHARVEST_DIR="/your/path/to/cropharvest"
    ```
 3. If you wish to only use a subset of the evaluations, add the following override:
 
