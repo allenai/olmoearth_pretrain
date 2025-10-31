@@ -320,7 +320,7 @@ def build_commands(
                     if normalizer_value
                     else "_norm_pretrained_False"
                 )
-            run_suffix = f"FT_lr{lr}{norm_suffix}_fix_forestnet"
+            run_suffix = f"FT_lr{lr}{norm_suffix}"
 
         seed_suffix = (
             f"_seed{args.finetune_seed}" if args.finetune_seed is not None else ""

@@ -87,6 +87,11 @@ $SCRIPT --project_name $PROJECT_NAME --module_path olmoearth_pretrain/evals/mode
 $SCRIPT --project_name $PROJECT_NAME --module_path olmoearth_pretrain/evals/models/prithviv2/prithviv2_launch.py --cluster $CLUSTER --model prithvi_v2 --finetune_seed 42 --launch.priority=high
 $SCRIPT --project_name $PROJECT_NAME --module_path olmoearth_pretrain/evals/models/prithviv2/prithviv2_launch.py --cluster $CLUSTER --model prithvi_v2 --finetune_seed 0 --launch.priority=high
 
+# Prithvi V2
+$SCRIPT --project_name $PROJECT_NAME --module_path olmoearth_pretrain/evals/models/prithviv2/prithviv2_launch.py --cluster $CLUSTER --model prithvi_v2 --finetune_seed 1234 --use_dataset_normalizer  --launch.preemptible=False
+$SCRIPT --project_name $PROJECT_NAME --module_path olmoearth_pretrain/evals/models/prithviv2/prithviv2_launch.py --cluster $CLUSTER --model prithvi_v2 --finetune_seed 42 --use_dataset_normalizer --launch.preemptible=False
+$SCRIPT --project_name $PROJECT_NAME --module_path olmoearth_pretrain/evals/models/prithviv2/prithviv2_launch.py --cluster $CLUSTER --model prithvi_v2 --finetune_seed 0 --use_dataset_normalizer --launch.preemptible=False
+
 # Terramind
 $SCRIPT --project_name $PROJECT_NAME --module_path olmoearth_pretrain/evals/models/terramind/terramind_launch.py --cluster $CLUSTER --model terramind --finetune_seed 1234
 $SCRIPT --project_name $PROJECT_NAME --module_path olmoearth_pretrain/evals/models/terramind/terramind_launch.py --cluster $CLUSTER --model terramind --finetune_seed 42
@@ -109,3 +114,35 @@ $SCRIPT --project_name $PROJECT_NAME --module_path olmoearth_pretrain/evals/mode
 
 # Get metrics
 python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_25_phase2_finetune --run_prefix nano_lr0.001_wd0.002_step370000_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_25_phase2_finetune --run_prefix tiny_lr0.0002_wd0.02_step360000_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_25_phase2_finetune --run_prefix phase2.0_base_lr0.0001_wd0.02_step667200_seed --finetune --get_test_metrics
+
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_phase2_finetune --run_prefix dino_v3_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_phase2_finetune --run_prefix anysat_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_phase2_finetune --run_prefix panopticon_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_phase2_finetune --run_prefix croma_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_phase2_finetune --run_prefix croma_large_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_phase2_finetune --run_prefix copernicusfm_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_phase2_finetune --run_prefix prithvi_v2_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_phase2_finetune --run_prefix galileo_seed --finetune --get_test_metrics
+
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix nano_lr0.001_wd0.002_step370000_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix tiny_lr0.0002_wd0.02_step360000_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix phase2.0_base_lr0.0001_wd0.02_step667200_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix phase2.0_large_lr0.0001_wd0.002_step560000_seed --finetune --get_test_metrics
+
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix anysat_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix clay_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix copernicusfm_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix croma_seed --finetune --get_test_metrics
+
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix croma_large_seed --finetune --get_test_metrics
+
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix dino_v3_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix panopticon_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix satlas_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix galileo_seed --finetune --get_test_metrics
+
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix prithvi_v2_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix terramind_seed --finetune --get_test_metrics
+python scripts/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix terramind_large_seed --finetune --get_test_metrics
