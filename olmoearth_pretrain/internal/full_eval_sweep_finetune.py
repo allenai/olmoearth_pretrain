@@ -100,10 +100,10 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
     "anysat": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
         task_specific_overrides={
-            "m_sa_crop_type": {"ft_batch_size": 4, "patch_size": 8},
-            "pastis_sentinel2": {"ft_batch_size": 4},
-            "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 8},
-            "m_forestnet": {"ft_batch_size": 2, "patch_size": 16},
+            # "m_sa_crop_type": {"ft_batch_size": 4, "patch_size": 8},
+            # "pastis_sentinel2": {"ft_batch_size": 4},
+            # "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 8},
+            "m_forestnet": {"ft_batch_size": 4, "patch_size": 16},
         },
     ),
     # Models with pretrained normalizer
@@ -320,7 +320,7 @@ def build_commands(
                     if normalizer_value
                     else "_norm_pretrained_False"
                 )
-            run_suffix = f"FT_lr{lr}{norm_suffix}"
+            run_suffix = f"FT_lr{lr}{norm_suffix}_fix_forestnet"
 
         seed_suffix = (
             f"_seed{args.finetune_seed}" if args.finetune_seed is not None else ""
