@@ -107,6 +107,13 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
             "m_forestnet": {"ft_batch_size": 4},
         },
     ),
+    "anysat_ps8": ModelPreset(
+        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        global_args=("--model.patch_size=8",),
+        task_specific_overrides={
+            "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 8},
+        },
+    ),
     "anysat_ps16": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
         global_args=("--model.patch_size=16",),
@@ -138,12 +145,20 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         launch_script_key="galileo",
         supports_pretrained_normalizer=True,
     ),
+    "galileo_ps8": ModelPreset(
+        per_task_overrides={"norm_method": "NormMethod.NORM_NO_CLIP_2_STD"},
+        global_args=("--model.patch_size=8",),
+        task_specific_overrides={
+            "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 8},
+        },
+        launch_script_key="galileo",
+        supports_pretrained_normalizer=True,
+    ),
     "galileo_ps16": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.NORM_NO_CLIP_2_STD"},
         global_args=("--model.patch_size=16",),
         task_specific_overrides={
             "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 16},
-            "m_forestnet": {"ft_batch_size": 4, "patch_size": 16},
         },
         launch_script_key="galileo",
         supports_pretrained_normalizer=True,
