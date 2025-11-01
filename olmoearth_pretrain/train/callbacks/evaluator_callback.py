@@ -89,6 +89,8 @@ class DownstreamEvaluator:
         trainer: Trainer,
         device: torch.device | None = None,
         run_on_test: bool = False,
+        n_bootstrap: int = 0,
+        bootstrap_seed: int = 42,
     ) -> None:
         """Initialize the downstream evaluator.
 
@@ -99,6 +101,8 @@ class DownstreamEvaluator:
             device: Device to evaluate on.
             run_on_test: Whether to run the evaluators on the val set
                 only (=False) or on the test and val set (=True)
+            n_bootstrap: Number of bootstrap samples for uncertainty estimation (0 = no bootstrap)
+            bootstrap_seed: Random seed for bootstrap sampling
         """
         self.evaluation_name = evaluation_name
         self.config = dataset_to_config(task.dataset)
@@ -129,6 +133,8 @@ class DownstreamEvaluator:
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
         self.run_on_test = run_on_test
+        self.n_bootstrap = n_bootstrap
+        self.bootstrap_seed = bootstrap_seed
         if self.select_final_test_miou_based_on_epoch_of_max_val_miou:
             assert self.run_on_test, (
                 "if select_final_test_miou_based_on_epoch_of_max_val_miou is True, "
@@ -165,7 +171,10 @@ class DownstreamEvaluator:
                     raise ValueError("Image height / width indivisable by patch size.")
 
         self.eval_function = (
-            run_knn
+            partial(
+                run_knn,
+
+            )
             if self.eval_mode == EvalMode.KNN
             else partial(
                 # TODO: THis is updated dynamically in the get_embeddings function
@@ -283,8 +292,27 @@ class DownstreamEvaluator:
             "test_embeddings": test_embeddings,
             "test_labels": test_labels,
             "device": self.device,
+            "n_bootstrap": self.n_bootstrap,
+            "bootstrap_seed": self.bootstrap_seed,
         }
-        val_result, test_result = self.eval_function(**kwargs)  # type: ignore
+        result = self.eval_function(**kwargs)  # type: ignore
+
+        # Handle both 2-tuple and 3-tuple returns (with bootstrap stats)
+        if len(result) == 3:
+            val_result, test_result, bootstrap_stats = result
+            # Log bootstrap statistics if available
+            if bootstrap_stats:
+                logger.info(
+                    f"Downstream evaluator {self.evaluation_name} bootstrap stats: "
+                    f"mean={bootstrap_stats.get('mean', 'N/A'):.4f}, "
+                    f"std={bootstrap_stats.get('std', 'N/A'):.4f}, "
+                    f"95% CI=[{bootstrap_stats.get('ci_lower', 'N/A'):.4f}, "
+                    f"{bootstrap_stats.get('ci_upper', 'N/A'):.4f}]"
+                )
+        else:
+            val_result, test_result = result
+            bootstrap_stats = None
+
         logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
 
         # Free memory aggressively between evals
@@ -292,7 +320,7 @@ class DownstreamEvaluator:
         torch.cuda.empty_cache()
         gc.collect()
 
-        return val_result, test_result
+        return val_result, test_result, bootstrap_stats
 
     def _val_finetune(self) -> tuple[float, float]:
         """Validate the model using finetuning."""
@@ -345,12 +373,19 @@ class DownstreamEvaluator:
         gc.collect()
         return val_result, test_result
 
-    def val(self) -> tuple[float, float]:
-        """Validate the model on the downstream task."""
+    def val(self) -> tuple[float, float, dict | None]:
+        """Validate the model on the downstream task.
+
+        Returns:
+            val_score: Validation score
+            test_score: Test score
+            bootstrap_stats: Bootstrap statistics (if available, else None)
+        """
         if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
             return self._val_embed_probe()
         elif self.eval_mode == EvalMode.FINETUNE:
-            return self._val_finetune()
+            val_score, test_score = self._val_finetune()
+            return val_score, test_score, None
         else:
             raise ValueError(f"Unsupported eval_mode: {self.eval_mode}")
 
@@ -363,6 +398,8 @@ class DownstreamEvaluatorCallback(Callback):
     eval_on_startup: bool = False
     cancel_after_first_eval: bool = False
     run_on_test: bool = False
+    n_bootstrap: int = 0
+    bootstrap_seed: int = 42
 
     def _check_supported_modalities(self, evaluator: DownstreamEvaluator) -> bool:
         """Check if the evaluator is supported by the model."""
@@ -440,7 +477,9 @@ class DownstreamEvaluatorCallback(Callback):
                         f"Skipping {evaluator.evaluation_name} because it doesn't match input requirements of the model"
                     )
                     continue
-                val_result, test_result, eval_time = self._perform_eval(evaluator)
+                val_result, test_result, eval_time, bootstrap_stats = (
+                    self._perform_eval(evaluator)
+                )
                 if wandb_callback.enabled:
                     wandb_callback.wandb.log(
                         {"eval/" + evaluator.evaluation_name: val_result}
@@ -451,6 +490,24 @@ class DownstreamEvaluatorCallback(Callback):
                     if self.run_on_test:
                         wandb_callback.wandb.log(
                             {"eval/test/" + evaluator.evaluation_name: test_result}
+                        )
+                    # Log bootstrap statistics if available
+                    if bootstrap_stats:
+                        wandb_callback.wandb.log(
+                            {
+                                f"eval/test/{evaluator.evaluation_name}_bootstrap_mean": bootstrap_stats.get(
+                                    "mean"
+                                ),
+                                f"eval/test/{evaluator.evaluation_name}_bootstrap_std": bootstrap_stats.get(
+                                    "std"
+                                ),
+                                f"eval/test/{evaluator.evaluation_name}_bootstrap_ci_lower": bootstrap_stats.get(
+                                    "ci_lower"
+                                ),
+                                f"eval/test/{evaluator.evaluation_name}_bootstrap_ci_upper": bootstrap_stats.get(
+                                    "ci_upper"
+                                ),
+                            }
                         )
 
         if self.cancel_after_first_eval:
@@ -476,22 +533,47 @@ class DownstreamEvaluatorCallback(Callback):
 
     def _perform_eval(
         self, evaluator: DownstreamEvaluator
-    ) -> tuple[float, float, float]:
-        """Run the evaluator."""
+    ) -> tuple[float, float, float, dict | None]:
+        """Run the evaluator.
+
+        Returns:
+            val_result: Validation score
+            test_result: Test score
+            eval_time: Evaluation time in seconds
+            bootstrap_stats: Bootstrap statistics (if available, else None)
+        """
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
         start_time = time.monotonic()
-        val_result, test_result = evaluator.val()
+        val_result, test_result, bootstrap_stats = evaluator.val()
         self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
         if self.run_on_test:
             self.trainer.record_metric(
                 f"eval/test/{evaluator.evaluation_name}", test_result
+            )
+        # Log bootstrap statistics if available
+        if bootstrap_stats:
+            self.trainer.record_metric(
+                f"eval/test/{evaluator.evaluation_name}_bootstrap_mean",
+                bootstrap_stats.get("mean"),
+            )
+            self.trainer.record_metric(
+                f"eval/test/{evaluator.evaluation_name}_bootstrap_std",
+                bootstrap_stats.get("std"),
+            )
+            self.trainer.record_metric(
+                f"eval/test/{evaluator.evaluation_name}_bootstrap_ci_lower",
+                bootstrap_stats.get("ci_lower"),
+            )
+            self.trainer.record_metric(
+                f"eval/test/{evaluator.evaluation_name}_bootstrap_ci_upper",
+                bootstrap_stats.get("ci_upper"),
             )
         eval_time = time.monotonic() - start_time
         self.trainer.record_metric(f"eval_time/{evaluator.evaluation_name}", eval_time)
         logger.info(
             f"Finished {evaluator.evaluation_name} evaluations in {eval_time:.1f} seconds."
         )
-        return val_result, test_result, eval_time
+        return val_result, test_result, eval_time, bootstrap_stats
 
 
 @dataclass
@@ -510,6 +592,9 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     # whether to run the evaluators on the val set only (=False) or on the test and val set (=True)
     run_on_test: bool = False
     filter_for_eval_mode: EvalMode | None = None
+    # Bootstrap sampling for uncertainty estimation (applies to KNN and Linear Probe)
+    n_bootstrap: int = 0  # Number of bootstrap samples (0 = no bootstrap)
+    bootstrap_seed: int = 42  # Random seed for bootstrap sampling
 
     def verify_input_modalities(
         self, task: DownstreamTaskConfig, config: EvalDatasetConfig
@@ -595,6 +680,8 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     trainer=trainer,
                     device=trainer.device,
                     run_on_test=self.run_on_test,
+                    n_bootstrap=self.n_bootstrap,
+                    bootstrap_seed=self.bootstrap_seed,
                 )
             )
         return DownstreamEvaluatorCallback(
@@ -602,4 +689,6 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             eval_on_startup=self.eval_on_startup,
             cancel_after_first_eval=self.cancel_after_first_eval,
             run_on_test=self.run_on_test,
+            n_bootstrap=self.n_bootstrap,
+            bootstrap_seed=self.bootstrap_seed,
         )

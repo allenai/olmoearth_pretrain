@@ -496,6 +496,9 @@ def _get_pooling_type_str(pooling_type: str) -> str:
     return pooling_type_str
 
 
+LAUNCH_OVERRIDES = "--launch.priority=high --launch.num_gpus=1 --launch.task_name=eval"
+
+
 def _build_default_command(
     args: argparse.Namespace,
     base_run_name: str,
@@ -527,10 +530,11 @@ def _build_default_command(
     logger.info(f"Using module path {module_path}")
     cmd_args += _get_model_size_args(args.model, size)
     cmd_args += _get_load_checkpoints_args(args.model)
+    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch else ""
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
-        f"{sub_command} {run_name} {args.cluster} --launch.priority=high --launch.num_gpus=1 "
-        f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
+        f"{sub_command} {run_name} {args.cluster} {launch_overrides} "
+        f"{checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
     )
 
 
@@ -577,10 +581,11 @@ def _build_hyperparameter_command(
     cmd_args += _get_load_checkpoints_args(args.model)
     cmd_args += _get_model_size_args(args.model, size)
 
+    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch else ""
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
-        f"{sub_command} {run_name} {args.cluster} --launch.priority=high --launch.num_gpus=1 {cmd_args} "
-        f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
+        f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
+        f"{checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
     )
 
 
