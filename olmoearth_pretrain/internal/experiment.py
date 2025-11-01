@@ -128,6 +128,16 @@ HeliosExperimentConfig = _deprecated_class_alias(
 
 
 @dataclass
+class OlmoEarthEvaluateConfig(Config):
+    """Configuration for a OlmoEarth Evaluate experiment."""
+
+    run_name: str
+    model: Config
+    train_module: OlmoEarthTrainModuleConfig
+    trainer: TrainerConfig
+
+
+@dataclass
 class BenchmarkExperimentConfig(Config):
     """Configuration for a throughput benchmarking run."""
 
@@ -189,6 +199,35 @@ def build_config(
     )
     logger.info("Overrides: %s", overrides)
     config = config.merge(overrides)
+    return config
+
+
+def build_evaluate_config(
+    common: CommonComponents,
+    model_config_builder: Callable[[CommonComponents], Config],
+    train_module_config_builder: Callable[
+        [CommonComponents],
+        OlmoEarthTrainModuleConfig,
+    ],
+    trainer_config_builder: Callable[[CommonComponents], TrainerConfig],
+    overrides: list[str],
+) -> OlmoEarthEvaluateConfig:
+    """Build a OlmoEarth Evaluate experiment configuration."""
+    common_overrides, overrides = split_common_overrides(overrides)
+    logger.info("Common overrides: %s", common_overrides)
+    common = common.merge(common_overrides)
+    logger.info("Common: %s", common)
+    model_config = model_config_builder(common)
+    train_module_config = train_module_config_builder(common)
+    trainer_config = trainer_config_builder(common)
+    config = OlmoEarthEvaluateConfig(
+        run_name=common.run_name,
+        model=model_config,
+        train_module=train_module_config,
+        trainer=trainer_config,
+    )
+    config = config.merge(overrides)
+    logger.info("Evaluate config: %s", config)
     return config
 
 
@@ -477,6 +516,17 @@ If running command on a local machine ie from a session, you can use the [b]loca
         config = build_benchmark_config(
             common=common,
             inference_benchmarking_config_builder=inference_benchmarking_config_builder,
+            overrides=overrides,
+        )
+    elif cmd == SubCmd.evaluate:
+        assert model_config_builder is not None
+        assert train_module_config_builder is not None
+        assert trainer_config_builder is not None
+        config = build_evaluate_config(
+            common=common,
+            model_config_builder=model_config_builder,
+            train_module_config_builder=train_module_config_builder,
+            trainer_config_builder=trainer_config_builder,
             overrides=overrides,
         )
     else:
