@@ -699,6 +699,9 @@ def _build_command_from_eval_settings(
     cmd_args += _get_model_size_args(args.model, size)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch else ""
+    # if init_seed is set add to base run name
+    if "init_seed" in extra:
+        run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
