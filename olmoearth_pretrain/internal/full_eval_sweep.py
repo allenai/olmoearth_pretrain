@@ -588,6 +588,11 @@ def _build_hyperparameter_command(
     cmd_args += _get_model_size_args(args.model, size)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch else ""
+    if sub_command == SubCmd.launch and args.model in ["anysat", "prithvi_v2"]:
+        args.cluster = "ai2/titan"
+    # if init_seed is set add to base run name
+    if "init_seed" in extra:
+        run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
