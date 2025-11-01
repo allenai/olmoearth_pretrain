@@ -137,6 +137,7 @@ class OlmoEarthEvaluateConfig(Config):
     run_name: str
     model: Config
     trainer: TrainerConfig
+    launch: OlmoEarthBeakerLaunchConfig | None = None
     init_seed: int = 12536
 
 
