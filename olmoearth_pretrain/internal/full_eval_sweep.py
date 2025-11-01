@@ -5,6 +5,7 @@ e.g. python -m olmoearth_pretrain.internal.full_eval_sweep --cluster=ai2/saturn-
 
 import argparse
 import os
+import re
 import subprocess  # nosec
 import uuid
 from collections.abc import Generator
@@ -388,6 +389,7 @@ def _get_base_run_name(args: argparse.Namespace, size: str | None = None) -> str
             "No model name provided or checkpoint path, using random run name"
         )
         run_name = str(uuid.uuid4())[:4]
+
     return run_name
 
 
@@ -582,6 +584,10 @@ def _build_hyperparameter_command(
     cmd_args += _get_model_size_args(args.model, size)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch else ""
+    # parse patch size if it is in extra and add it to the run name
+    patch_size = re.search(r"patch_size=(\d+)", extra)
+    if patch_size:
+        run_name += f"_patch_size{patch_size.group(1)}"
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
