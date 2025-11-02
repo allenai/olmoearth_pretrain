@@ -387,6 +387,7 @@ class SubCmd(StrEnum):
         if self in (
             SubCmd.launch,
             SubCmd.dry_run,
+            SubCmd.dry_run_evaluate,
             SubCmd.prep,
             SubCmd.launch_prep,
             SubCmd.visualize,

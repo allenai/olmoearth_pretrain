@@ -168,3 +168,9 @@ python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --module_path olm
 # Test pth checkpoint
 python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/yawenz/OlmoEarth-v1-Nano --project_name 2025_11_01_test_local_evaluation --module_path scripts/archived/2025_10_02_phase2/nano.py --cluster ai2/ceres --defaults_only
 python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/yawenz/OlmoEarth-v1-Nano --project_name 2025_11_01_test_local_evaluation --module_path scripts/archived/2025_10_02_phase2/nano.py --cluster local --defaults_only
+
+# Test dry run evaluation
+python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/yawenz/OlmoEarth-v1-Nano --project_name 2025_11_01_test_local_evaluation --module_path scripts/archived/2025_10_02_phase2/nano.py --cluster ai2/ceres --defaults_only --dry_run
+python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --module_path olmoearth_pretrain/evals/models/terramind/terramind_launch.py --project_name 2025_11_01_test_local_evaluation --model terramind --cluster ai2/ceres --defaults_only --dry_run
+python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/yawenz/OlmoEarth-v1-Nano --project_name 2025_11_01_test_local_evaluation --module_path scripts/archived/2025_10_02_phase2/nano.py --cluster local --defaults_only --dry_run
+python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --module_path olmoearth_pretrain/evals/models/terramind/terramind_launch.py --project_name 2025_11_01_test_local_evaluation --model terramind --cluster local --defaults_only --dry_run
