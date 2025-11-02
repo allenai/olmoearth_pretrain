@@ -23,7 +23,7 @@ from .utils import load_min_max_stats
 LEVEL = "L1C"
 
 
-def _helios2bc_name(band_name: str) -> str:
+def _olmoearth2bc_name(band_name: str) -> str:
     """Transform OlmoEarth Pretrain S2 band name to Breizhcrops S2 band name."""
     band_number = band_name.split(" ")[0]
     if band_number.startswith("0"):
@@ -32,7 +32,7 @@ def _helios2bc_name(band_name: str) -> str:
 
 
 INPUT_TO_OUTPUT_BAND_MAPPING = [
-    SELECTED_BANDS[LEVEL].index(_helios2bc_name(b)) for b in EVAL_S2_BAND_NAMES
+    SELECTED_BANDS[LEVEL].index(_olmoearth2bc_name(b)) for b in EVAL_S2_BAND_NAMES
 ]
 
 BAND_STATS = {

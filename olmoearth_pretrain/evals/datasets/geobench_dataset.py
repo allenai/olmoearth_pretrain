@@ -31,7 +31,7 @@ torch.multiprocessing.set_sharing_strategy("file_system")
 logger = logging.getLogger(__name__)
 
 
-def _landsathelios2geobench_name(band_name: str) -> str:
+def _landsatolmoearth2geobench_name(band_name: str) -> str:
     """Transform OlmoEarth Pretrain Landsat band name to Geobench Landsat band name."""
     # transforms are documented here:
     # https://github.com/ServiceNow/geo-bench/blob/main/geobench/dataset.py#L350
@@ -54,7 +54,9 @@ def _landsathelios2geobench_name(band_name: str) -> str:
     return transform[band_name]
 
 
-GEOBENCH_L8_BAND_NAMES = [_landsathelios2geobench_name(b) for b in EVAL_L8_BAND_NAMES]
+GEOBENCH_L8_BAND_NAMES = [
+    _landsatolmoearth2geobench_name(b) for b in EVAL_L8_BAND_NAMES
+]
 
 
 class GeobenchDataset(Dataset):
@@ -127,7 +129,7 @@ class GeobenchDataset(Dataset):
         self.original_band_indices_after_imputation: list[int] = []
         if self.is_landsat:
             band_order_in_geobench_names = [
-                _landsathelios2geobench_name(b) for b in Modality.LANDSAT.band_order
+                _landsatolmoearth2geobench_name(b) for b in Modality.LANDSAT.band_order
             ]
             self.original_band_indices_after_imputation = [
                 band_order_in_geobench_names.index(b) for b in original_band_names
