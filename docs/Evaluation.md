@@ -17,11 +17,12 @@ This guide explains how we launch evaluations for OlmoEarth checkpoints and base
 ## Table of Contents
 
 1. [Evaluation Overview](#evaluation-overview)
-2. [Quick Start](#quick-start)
-3. [KNN / Linear Probing](#knn--linear-probing)
-4. [Finetune](#finetune-sweep)
-5. [Monitoring & Outputs](#monitoring--outputs)
-6. [Helpful Files](#helpful-files)
+2. [Assets & Paths](#assets--paths)
+3. [Quick Start](#quick-start)
+4. [KNN / Linear Probing](#knn--linear-probing)
+5. [Finetune](#finetune-sweep)
+6. [Monitoring & Outputs](#monitoring--outputs)
+7. [Helpful Files](#helpful-files)
 
 ---
 
@@ -36,16 +37,41 @@ Both scripts rely on:
 - [`olmoearth_pretrain/internal/all_evals.py`](../olmoearth_pretrain/internal/all_evals.py) for the task registry.
 - [`olmoearth_pretrain/evals`](../olmoearth_pretrain/evals) for dataset/model wrappers.
 
+Every launch ultimately calls the new evaluation subcommands in `experiment.py`:
+
+- `dry_run_evaluate`: Pretty-prints the config and exits. Triggered automatically by `--dry_run`.
+- `evaluate`: Executes the job locally (`--cluster=local`).
+- `launch_evaluate`: Submits to Beaker for any other cluster name.
+
+The sweep scripts set `TRAIN_SCRIPT_PATH` and choose `python3` for local execution, `torchrun` for Beaker launches.
+
 ### Prerequisites
 
 - Python environment configured as described in [Pretraining.md](Pretraining.md#environment-setup).
-- Access to evaluation datasets (see [`evals/datasets/paths.py`](../olmoearth_pretrain/evals/datasets/paths.py)).
 - W&B API key (`WANDB_API_KEY`) if you want metrics to stream automatically.
 
 ### Supported Models
 
 - **OlmoEarth models:** Nano, Tiny, Base, and Large size.
 - **Others:** `dino_v3`, `panopticon`, `galileo`, `satlas`, `croma`, `copernicusfm`, `presto`, `anysat`, `tessera`, `prithvi_v2`, `terramind`, `clay`. Multi-size variants (e.g. `croma_large`, `galileo_large`, `terramind_large`) are handled automatically by the sweep scripts when requested.
+
+---
+
+## Assets & Paths
+
+- **Evaluation datasets**
+  - *Internal*: All datasets live on Weka; the defaults in [`evals/datasets/paths.py`](../olmoearth_pretrain/evals/datasets/paths.py) point to shared mounts.
+  - *External*: Download from `gs://ai2-olmoearth-projects-public-data/research_benchmarks` (e.g. with `gsutil -m rsync`). Update the same `paths.py` file or override the environment variables (`GEOBENCH_DIR`, `CROPHARVEST_DIR`, etc.) so the loaders can resolve local copies.
+- **OlmoEarth checkpoints**
+  - Clone the release repos from Hugging Face, e.g.:
+    ```bash
+    git clone git@hf.co:allenai/OlmoEarth-v1-Nano
+    git clone git@hf.co:allenai/OlmoEarth-v1-Tiny
+    git clone git@hf.co:allenai/OlmoEarth-v1-Base
+    git clone git@hf.co:allenai/OlmoEarth-v1-Large
+    ```
+  - Pass the desired checkpoint directory via `--checkpoint_path` when invoking the sweeps (or set it inside your finetune/LP launch scripts).
+- **Baselines**: When using `--model=<name>`, the sweeps download/load checkpoints through the model wrappers; no extra setup required beyond dataset paths.
 
 ---
 
@@ -67,11 +93,43 @@ python -m olmoearth_pretrain.internal.full_eval_sweep \
   --dry_run
 ```
 
-This prints the exact `torchrun`/`python3` command that will be executed for each task and hyperparameter combination.
+This prints the exact command that would run inside `experiment.py dry_run_evaluate`.
 
 ### 3. Launch for real
 
-Remove `--dry_run` once the command looks correct. On local GPUs the helper scripts will call `torchrun`; on Beaker they call `python3` with the launch module defined by `EVAL_LAUNCH_PATH`.
+Remove `--dry_run` once the command looks correct. The helper picks the right subcommand for you:
+
+- **Local GPUs (`--cluster=local`)**
+
+  ```bash
+  python -m olmoearth_pretrain.internal.full_eval_sweep \
+    --cluster=local \
+    --checkpoint_path=/data/checkpoints/phase2_base/step667200 \
+    --module_path=scripts/2025_10_02_phase2/base.py \
+    --defaults_only
+  ```
+
+  Runs `python3 olmoearth_pretrain/internal/experiment.py evaluate ...`.
+
+- **Beaker (`--cluster=<ai2 cluster>`)**
+
+  ```bash
+  python -m olmoearth_pretrain.internal.full_eval_sweep \
+    --cluster=ai2/saturn-cirrascale \
+    --model=dino_v3 \
+    --project_name=2025_10_eval_comparison \
+    --lr_only
+  ```
+
+  Submits via `torchrun ... launch_evaluate ...` with the usual Beaker launch flags.
+
+Want to debug a single job manually? You can call `olmoearth_pretrain/internal/experiment.py` directly:
+
+```bash
+TRAIN_SCRIPT_PATH=scripts/2025_10_02_phase2/base.py \
+python3 olmoearth_pretrain/internal/experiment.py dry_run_evaluate demo local \
+  --trainer.callbacks.wandb.project=test_eval
+```
 
 ---
 
@@ -95,28 +153,8 @@ Use this script for KNN and linear probing evaluations. Invoke it either through
 - `--all_sizes` or `--size=<variant>`: Evaluate every published size for multi-size baselines.
 - `--model-skip-names=a,b`: Skip a subset when using `--model=all`.
 - `--select_best_val`: Uses validation MIoU to pick the best epoch before reporting test metrics.
-- `--dry_run`: Print commands without launching.
+- `--dry_run`: Print commands without launching (`dry_run_evaluate`).
 - Extra CLI arguments (e.g. `--trainer.max_duration.unit=epochs`) are forwarded to the underlying train module.
-
-### Example: Launch OlmoEarth evaluation against a checkpoint (local debug)
-
-```bash
-python -m olmoearth_pretrain.internal.full_eval_sweep \
-  --cluster=local \
-  --checkpoint_path=/data/checkpoints/phase2_base/step667200 \
-  --module_path=scripts/2025_10_02_phase2/base.py \
-  --defaults_only
-```
-
-### Example: Launch baseline sweep on Beaker
-
-```bash
-python -m olmoearth_pretrain.internal.full_eval_sweep \
-  --cluster=ai2/saturn-cirrascale \
-  --model=dino_v3 \
-  --project_name=2025_10_eval_comparison \
-  --lr_only
-```
 
 When `--model=all`, the script automatically switches to the correct launcher for each model and constructs run names like `<checkpoint>_lr1e-3_norm_dataset_pool_mean`.
 
@@ -139,9 +177,11 @@ Use `olmoearth_pretrain/internal/full_eval_sweep_finetune.py` for downstream fin
 - `--sweep_normalizer`: For models with pretrained normalizers, run both dataset stats and pretrained normalizer variants.
 - `--module_path`: Override the launch script (defaults to the preset’s launcher).
 - Extra CLI arguments append to every command (e.g. `--trainer.max_duration.value=50000`).
-- `--dry_run`: Preview commands.
+- `--dry_run`: Preview commands (`dry_run_evaluate`).
 
 The script sets `FINETUNE=1` in the environment before launching so downstream code enables fine-tuning heads automatically.
+
+Launch behavior mirrors the linear-probe sweep: `--cluster=local` runs `evaluate`, any other cluster uses `launch_evaluate`.
 
 ### Example: OlmoEarth checkpoint fine-tune sweep (Beaker)
 
@@ -161,6 +201,8 @@ python -m olmoearth_pretrain.internal.full_eval_sweep_finetune \
   --model=galileo \
   --sweep_normalizer
 ```
+
+For a local sanity check, add `--cluster=local --dry_run` first, then drop `--dry_run` to execute on your workstation.
 
 ---
 
