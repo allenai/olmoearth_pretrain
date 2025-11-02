@@ -122,9 +122,17 @@ def build_train_module_config(
         rank_microbatch_size=32,
         masking_config=MaskingConfig(
             strategy_config={
-                "type": "random",
+                "type": "random_fixed_modality",
                 "encode_ratio": 0.5,
                 "decode_ratio": 0.5,
+                "decoded_modalities": [
+                    "worldcover",
+                    "srtm",
+                    "openstreetmap_raster",
+                    "wri_canopy_height_map",
+                    "cdl",
+                    "worldcereal",
+                ],
             }
         ),
         loss_config=LossConfig(

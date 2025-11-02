@@ -199,6 +199,10 @@ def build_launch_config(
             # activate the uv venv
             "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
             'source "$(dirname "$venv_path")/activate"',
+            # debugging - check torch version
+            "uv pip show torch",
+            # and then show the arch
+            "uv run python -c 'import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.get_arch_list())'",
         ],
     )
 
