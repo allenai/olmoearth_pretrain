@@ -241,7 +241,7 @@ def get_anysat_args() -> str:
     )
     anysat_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=4"
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=2"
             for task_name in EVAL_TASKS.keys()
         ]
     )
