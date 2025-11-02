@@ -1699,7 +1699,7 @@ class GalileoWrapper(nn.Module):
     def __init__(
         self,
         pretrained_path: UPath,
-        patch_size: int = 8,
+        patch_size: int = 4,
         month: int = 6,
         add_layernorm_on_exit: bool = True,
         use_pretrained_normalizer: bool = True,
@@ -1878,6 +1878,7 @@ class GalileoWrapper(nn.Module):
             months=x.timestamps[:, :, 1] if x.timestamps is not None else None,
         )
         patch_size = self.patch_size
+        logger.info(f"Using patch size {patch_size} for Galileo")
         if s_t_x.shape[1] < self.patch_size:
             logger.info(f"tile size {s_t_x.shape[1]} < self.patch size {self.patch_size}. Using tile size as patch size.")
             patch_size = s_t_x.shape[1]

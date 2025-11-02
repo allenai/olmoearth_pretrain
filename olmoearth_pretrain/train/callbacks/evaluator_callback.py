@@ -2,11 +2,14 @@
 
 import gc
 import logging
+import os
+import random
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
 
+import numpy as np
 import torch
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.common import Duration
@@ -35,6 +38,14 @@ from olmoearth_pretrain.nn.flexi_vit import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
 logger = logging.getLogger(__name__)
+
+
+def _seed_worker(worker_id: int, base_seed: int) -> None:
+    """Seed DataLoader worker RNGs deterministically."""
+    worker_seed = base_seed + worker_id
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
 
 
 class EvalMode(StrEnum):
@@ -66,6 +77,7 @@ class DownstreamTaskConfig:
     # FT
     ft_lr: float | None = None
     ft_batch_size: int = 32
+    finetune_seed: int = 42
     # LP / FT
     epochs: int = 50
     # LP / KNN / FT
@@ -116,6 +128,7 @@ class DownstreamEvaluator:
         self.probe_batch_size = task.probe_batch_size
         self.ft_lr = task.ft_lr
         self.ft_batch_size = task.ft_batch_size
+        self.finetune_seed = task.finetune_seed
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
@@ -181,11 +194,23 @@ class DownstreamEvaluator:
             else None  # "finetune" handled explictly below in .val()
         )
 
-    def _get_data_loader(self, split: str, batch_size: int) -> DataLoader:
+    def _get_data_loader(
+        self, split: str, batch_size: int, seed: int | None = None
+    ) -> DataLoader:
         """Get the data loader for the given split."""
         logger.info(
             f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}"
         )
+
+        generator = None
+        worker_init_fn = None
+        if seed is not None:
+            split_offsets = {"train": 0, "valid": 1, "test": 2}
+            split_seed = seed + split_offsets.get(split, 0)
+            generator = torch.Generator()
+            generator.manual_seed(split_seed)
+            worker_init_fn = partial(_seed_worker, base_seed=split_seed)
+
         return DataLoader(
             get_eval_dataset(
                 eval_dataset=self.dataset,
@@ -199,6 +224,9 @@ class DownstreamEvaluator:
             collate_fn=eval_collate_fn,
             batch_size=batch_size,
             num_workers=self.num_workers,
+            generator=generator,
+            worker_init_fn=worker_init_fn,
+            shuffle=(split == "train"),  # Only shuffle train data
         )
 
     def _get_embeddings(
@@ -231,10 +259,9 @@ class DownstreamEvaluator:
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
-            "is_train": is_train,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
-        return get_embeddings(data_loader=data_loader, model=model)
+        return get_embeddings(data_loader=data_loader, model=model, is_train=is_train)
 
     def _val_embed_probe(self) -> tuple[float, float]:
         """Validate the model using embeddings and probe (knn or linear probe)."""
@@ -294,11 +321,23 @@ class DownstreamEvaluator:
 
         return val_result, test_result
 
+    def _get_best_checkpoint_path(self) -> str:
+        """Get the best checkpoint path."""
+        best_checkpoint_path = os.path.join(
+            self.trainer.save_folder,
+            self.evaluation_name,
+            f"lr{self.ft_lr}",
+            "best.ckpt",
+        )
+        return best_checkpoint_path
+
     def _val_finetune(self) -> tuple[float, float]:
         """Validate the model using finetuning."""
         logger.info(f"Validating {self.dataset} with finetune")
 
-        train_loader = self._get_data_loader("train", self.ft_batch_size)
+        train_loader = self._get_data_loader(
+            "train", self.ft_batch_size, seed=self.finetune_seed
+        )
         val_loader = self._get_data_loader("valid", self.ft_batch_size)
 
         if self.run_on_test:
@@ -312,38 +351,56 @@ class DownstreamEvaluator:
         else:
             model = self.trainer.train_module.model
 
+        original_state = {
+            k: v.detach().cpu().clone() for k, v in model.state_dict().items()
+        }
+
         # Resolve patch size if model exposes it
         if hasattr(model, "patch_size"):
             logger.info(
-                f"Using patch size {max(self.patch_size, model.patch_size)} for {self.dataset} with model patch size {model.patch_size} and task patch size {self.patch_size}"
+                f"Using patch size {max(self.patch_size, model.patch_size)} for {self.dataset}\
+                with model patch size {model.patch_size} and task patch size {self.patch_size}\
+                (max of {self.patch_size} and {model.patch_size})"
             )
-            # For sa_crop_type, though Galileo patch size is 4, we can only use 8
+            # Use the max patch size of the model and the task
             self.patch_size = max(self.patch_size, model.patch_size)
         else:
             logger.info(
                 f"No patch size found for {self.dataset}, using patch size {self.patch_size}"
             )
 
-        val_result, test_result = run_finetune_eval(
-            task_config=self.config,
-            model=model,
-            device=self.device or self.trainer.device,
-            lr=self.ft_lr,  # type: ignore
-            epochs=self.epochs,
-            patch_size=self.patch_size,
-            pooling_type=self.pooling_type,
-            use_pooled_tokens=self.use_pooled_tokens,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            test_loader=test_loader,
-        )
-        logger.info(
-            f"Downstream evaluator {self.evaluation_name} val score: {val_result}, test score: {test_result}"
-        )
+        # Skip task if best checkpoint already exists
+        best_checkpoint_path = self._get_best_checkpoint_path()
+        if os.path.exists(best_checkpoint_path):
+            logger.info("Best checkpoint already exists, skipping finetuning")
+            return 0.0, 0.0
+        else:
+            logger.info("Best checkpoint does not exist, running finetuning")
+            val_result, test_result = run_finetune_eval(
+                task_name=self.evaluation_name,
+                task_config=self.config,
+                trainer=self.trainer,
+                model=model,
+                device=self.device or self.trainer.device,
+                lr=self.ft_lr,  # type: ignore
+                epochs=self.epochs,
+                patch_size=self.patch_size,
+                pooling_type=self.pooling_type,
+                use_pooled_tokens=self.use_pooled_tokens,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                test_loader=test_loader,
+                seed=self.finetune_seed,
+                best_checkpoint_path=best_checkpoint_path,
+            )
+            logger.info(
+                f"Downstream evaluator {self.evaluation_name} val score: {val_result}, test score: {test_result}"
+            )
+            model.load_state_dict(original_state)
 
-        torch.cuda.empty_cache()
-        gc.collect()
-        return val_result, test_result
+            torch.cuda.empty_cache()
+            gc.collect()
+            return val_result, test_result
 
     def val(self) -> tuple[float, float]:
         """Validate the model on the downstream task."""
@@ -440,18 +497,32 @@ class DownstreamEvaluatorCallback(Callback):
                         f"Skipping {evaluator.evaluation_name} because it doesn't match input requirements of the model"
                     )
                     continue
-                val_result, test_result, eval_time = self._perform_eval(evaluator)
-                if wandb_callback.enabled:
-                    wandb_callback.wandb.log(
-                        {"eval/" + evaluator.evaluation_name: val_result}
-                    )
-                    wandb_callback.wandb.log(
-                        {"eval_time/" + evaluator.evaluation_name: eval_time}
-                    )
-                    if self.run_on_test:
-                        wandb_callback.wandb.log(
-                            {"eval/test/" + evaluator.evaluation_name: test_result}
+
+                # Separate finetune step metric per task
+                if evaluator.eval_mode == EvalMode.FINETUNE:
+                    if wandb_callback.enabled:
+                        wandb_callback.wandb.define_metric(
+                            f"{evaluator.evaluation_name}/*",
+                            step_metric=f"{evaluator.evaluation_name}_step",
                         )
+                        wandb_callback.wandb.log(
+                            {f"{evaluator.evaluation_name}_step": 0}
+                        )
+
+                val_result, test_result, eval_time = self._perform_eval(evaluator)
+                # Only logging valid results to wandb
+                if val_result > 0 and test_result > 0:
+                    if wandb_callback.enabled:
+                        wandb_callback.wandb.log(
+                            {"eval/" + evaluator.evaluation_name: val_result}
+                        )
+                        wandb_callback.wandb.log(
+                            {"eval_time/" + evaluator.evaluation_name: eval_time}
+                        )
+                        if self.run_on_test:
+                            wandb_callback.wandb.log(
+                                {"eval/test/" + evaluator.evaluation_name: test_result}
+                            )
 
         if self.cancel_after_first_eval:
             self.trainer.cancel_run(

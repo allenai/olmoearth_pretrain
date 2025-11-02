@@ -50,7 +50,6 @@ class EvalWrapper:
         pooling_type: PoolingType,
         concat_features: bool = False,
         use_pooled_tokens: bool = False,
-        is_train: bool = True,
     ):
         """Initialize the eval wrapper.
 
@@ -75,7 +74,6 @@ class EvalWrapper:
             assert isinstance(self.model, EncodeEarlyAttnPool), (
                 "Pooled tokens are only supported for EncodeEarlyAttnPool"
             )
-        self.is_train = is_train
 
     @property
     def device(self) -> torch.device:
@@ -97,7 +95,10 @@ class EvalWrapper:
         return getattr(self.model, name)
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         raise NotImplementedError("Subclasses must implement this method")
@@ -107,7 +108,10 @@ class OlmoEarthEvalWrapper(EvalWrapper):
     """Wrapper for OlmoEarth Pretrain models."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
@@ -155,7 +159,10 @@ class TerramindEvalWrapper(EvalWrapper):
     """Wrapper for Terramind models."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
@@ -170,7 +177,10 @@ class PanopticonEvalWrapper(EvalWrapper):
     """Wrapper for Panopticon models."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         if self.spatial_pool:
@@ -189,7 +199,10 @@ class GalileoEvalWrapper(EvalWrapper):
     """Wrapper for Galileo models."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         embeddings = self.model(
@@ -204,7 +217,10 @@ class AnySatEvalWrapper(EvalWrapper):
     """Wrapper for AnySat model."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         embeddings = self.model(
@@ -212,7 +228,7 @@ class AnySatEvalWrapper(EvalWrapper):
             pooling=self.pooling_type,
             spatial_pool=self.spatial_pool,
         )
-        if self.is_train and (self.task_type == TaskType.SEGMENTATION):
+        if is_train and (self.task_type == TaskType.SEGMENTATION):
             # this is a special case for AnySat. Since it outputs per-pixel embeddings,
             # we subsample training pixels to keep the memory requirements reasonable.
             # From https://arxiv.org/abs/2502.09356:
@@ -248,7 +264,10 @@ class PrithviV2EvalWrapper(EvalWrapper):
     """Wrapper for PrithviV2 model."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         embeddings = self.model(
@@ -263,7 +282,10 @@ class DINOv2EvalWrapper(EvalWrapper):
     """Wrapper for DINOv2 models."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         # i need to do the apply imagenet normalizer thing in here
@@ -286,7 +308,10 @@ class ClayEvalWrapper(EvalWrapper):
     """Wrapper for Clay models."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
@@ -301,7 +326,10 @@ class CromaEvalWrapper(EvalWrapper):
     """Wrapper for Croma models."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
@@ -316,7 +344,10 @@ class CopernicusFMWrapper(EvalWrapper):
     """Wrapper for CopernicusFM model."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
@@ -331,7 +362,10 @@ class PrestoEvalWrapper(EvalWrapper):
     """Wrapper for Presto model."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
@@ -346,7 +380,10 @@ class DINOv3EvalWrapper(EvalWrapper):
     """Wrapper for DINOv3 models."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         # i need to do the apply imagenet normalizer thing in here
@@ -369,7 +406,10 @@ class SatlasEvalWrapper(EvalWrapper):
     """Wrapper for Satlas models."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
@@ -384,7 +424,10 @@ class TesseraEvalWrapper(EvalWrapper):
     """Wrapper for Tessera models."""
 
     def __call__(
-        self, masked_olmoearth_sample: MaskedOlmoEarthSample, labels: torch.Tensor
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         batch_embeddings = self.model(
