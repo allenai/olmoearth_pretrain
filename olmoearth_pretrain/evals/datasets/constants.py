@@ -43,7 +43,7 @@ EVAL_SRTM_BAND_NAMES = ["srtm"]
 
 
 # Get the corresponding index from either Sentinel2 L1C or L2A band names
-def _eval_s2_band_index_from_helios_name(
+def _eval_s2_band_index_from_olmoearth_name(
     helios_name: str, band_names: list[str]
 ) -> int:
     for idx, band_name in enumerate(band_names):
@@ -52,14 +52,14 @@ def _eval_s2_band_index_from_helios_name(
     raise ValueError(f"Unmatched band name {helios_name}")
 
 
-def _eval_s1_band_index_from_helios_name(helios_name: str) -> int:
+def _eval_s1_band_index_from_olmoearth_name(helios_name: str) -> int:
     for idx, band_name in enumerate(EVAL_S1_BAND_NAMES):
         if helios_name == band_name:
             return idx
     raise ValueError(f"Unmatched band name {helios_name}")
 
 
-def _eval_l8_band_index_from_helios_name(helios_name: str) -> int:
+def _eval_l8_band_index_from_olmoearth_name(helios_name: str) -> int:
     for idx, band_name in enumerate(EVAL_L8_BAND_NAMES):
         if helios_name == band_name:
             return idx
@@ -67,21 +67,21 @@ def _eval_l8_band_index_from_helios_name(helios_name: str) -> int:
 
 
 EVAL_TO_HELIOS_S2_BANDS = [
-    _eval_s2_band_index_from_helios_name(b, EVAL_S2_BAND_NAMES)
+    _eval_s2_band_index_from_olmoearth_name(b, EVAL_S2_BAND_NAMES)
     for b in Modality.SENTINEL2_L2A.band_order
 ]
 
 EVAL_TO_HELIOS_S2_L2A_BANDS = [
-    _eval_s2_band_index_from_helios_name(b, EVAL_S2_L2A_BAND_NAMES)
+    _eval_s2_band_index_from_olmoearth_name(b, EVAL_S2_L2A_BAND_NAMES)
     for b in Modality.SENTINEL2_L2A.band_order
 ]
 
 EVAL_TO_HELIOS_S1_BANDS = [
-    _eval_s1_band_index_from_helios_name(b) for b in Modality.SENTINEL1.band_order
+    _eval_s1_band_index_from_olmoearth_name(b) for b in Modality.SENTINEL1.band_order
 ]
 
 EVAL_TO_HELIOS_L8_BANDS = [
-    _eval_l8_band_index_from_helios_name(b) for b in Modality.LANDSAT.band_order
+    _eval_l8_band_index_from_olmoearth_name(b) for b in Modality.LANDSAT.band_order
 ]
 
 # one to one mapping
