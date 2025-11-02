@@ -15,7 +15,7 @@ from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
-from .constants import EVAL_S1_BAND_NAMES, EVAL_TO_HELIOS_S1_BANDS
+from .constants import EVAL_S1_BAND_NAMES, EVAL_TO_OLMOEARTH_S1_BANDS
 from .normalize import normalize_bands
 from .utils import load_min_max_stats
 
@@ -299,7 +299,7 @@ class Sen1Floods11Dataset(Dataset):
             :,
             :,
             :,
-            EVAL_TO_HELIOS_S1_BANDS,
+            EVAL_TO_OLMOEARTH_S1_BANDS,
         ]
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL1, image)

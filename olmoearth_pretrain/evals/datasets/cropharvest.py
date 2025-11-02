@@ -18,9 +18,9 @@ from .configs import dataset_to_config
 from .constants import (
     EVAL_S1_BAND_NAMES,
     EVAL_S2_BAND_NAMES,
-    EVAL_TO_HELIOS_S1_BANDS,
-    EVAL_TO_HELIOS_S2_BANDS,
-    EVAL_TO_HELIOS_SRTM_BANDS,
+    EVAL_TO_OLMOEARTH_S1_BANDS,
+    EVAL_TO_OLMOEARTH_S2_BANDS,
+    EVAL_TO_OLMOEARTH_SRTM_BANDS,
 )
 from .cropharvest_package.bands import BANDS
 from .cropharvest_package.datasets import CropHarvest
@@ -342,14 +342,14 @@ class CropHarvestDataset(Dataset):
             self.config.imputes,
         )
 
-        s2 = s2[:, :, :, EVAL_TO_HELIOS_S2_BANDS]
+        s2 = s2[:, :, :, EVAL_TO_OLMOEARTH_S2_BANDS]
         s1 = x_hw[:, :, : self.timesteps, S1_INPUT_TO_OUTPUT_BAND_MAPPING][
-            :, :, :, EVAL_TO_HELIOS_S1_BANDS
+            :, :, :, EVAL_TO_OLMOEARTH_S1_BANDS
         ]
 
         # srtm is only one timestep
         srtm = x_hw[:, :, :1, SRTM_TO_OUTPUT_BAND_MAPPING][
-            :, :, :, EVAL_TO_HELIOS_SRTM_BANDS
+            :, :, :, EVAL_TO_OLMOEARTH_SRTM_BANDS
         ]
 
         months = torch.tensor(

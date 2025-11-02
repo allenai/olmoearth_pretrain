@@ -15,9 +15,9 @@ from olmoearth_pretrain.evals.datasets.constants import (
     EVAL_L8_BAND_NAMES,
     EVAL_S1_BAND_NAMES,
     EVAL_S2_L2A_BAND_NAMES,
-    EVAL_TO_HELIOS_L8_BANDS,
-    EVAL_TO_HELIOS_S1_BANDS,
-    EVAL_TO_HELIOS_S2_L2A_BANDS,
+    EVAL_TO_OLMOEARTH_L8_BANDS,
+    EVAL_TO_OLMOEARTH_S1_BANDS,
+    EVAL_TO_OLMOEARTH_S2_L2A_BANDS,
 )
 from olmoearth_pretrain.evals.datasets.normalize import normalize_bands
 from olmoearth_pretrain.evals.datasets.utils import load_min_max_stats
@@ -253,15 +253,15 @@ class SICKLEDataset(Dataset):
 
         l8_image = torch.load(self.l8_images_dir / f"{idx}.pt")
         l8_image = einops.rearrange(l8_image, "t c h w -> h w t c")  # (32, 32, 5, 11)
-        l8_image = l8_image[:, :, :, EVAL_TO_HELIOS_L8_BANDS]
+        l8_image = l8_image[:, :, :, EVAL_TO_OLMOEARTH_L8_BANDS]
 
         s2_image = torch.load(self.s2_images_dir / f"{idx}.pt")
         s2_image = einops.rearrange(s2_image, "t c h w -> h w t c")  # (32, 32, 5, 13)
-        s2_image = s2_image[:, :, :, EVAL_TO_HELIOS_S2_L2A_BANDS]
+        s2_image = s2_image[:, :, :, EVAL_TO_OLMOEARTH_S2_L2A_BANDS]
 
         s1_image = torch.load(self.s1_images_dir / f"{idx}.pt")
         s1_image = einops.rearrange(s1_image, "t c h w -> h w t c")  # (32, 32, 5, 2)
-        s1_image = s1_image[:, :, :, EVAL_TO_HELIOS_S1_BANDS]
+        s1_image = s1_image[:, :, :, EVAL_TO_OLMOEARTH_S1_BANDS]
 
         labels = self.labels[idx]  # (32, 32)
         months = self.months[idx]  # (5)

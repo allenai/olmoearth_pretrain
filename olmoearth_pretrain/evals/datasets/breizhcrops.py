@@ -16,7 +16,7 @@ from olmoearth_pretrain.train.masking import (
     OlmoEarthSample,
 )
 
-from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_HELIOS_S2_BANDS
+from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_OLMOEARTH_S2_BANDS
 from .normalize import normalize_bands
 from .utils import load_min_max_stats
 
@@ -178,7 +178,7 @@ class BreizhCropsDataset(Dataset):
             :,
             :,
             INPUT_TO_OUTPUT_BAND_MAPPING,
-        ][:, :, :, EVAL_TO_HELIOS_S2_BANDS]
+        ][:, :, :, EVAL_TO_OLMOEARTH_S2_BANDS]
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
 
