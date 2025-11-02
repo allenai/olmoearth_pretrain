@@ -44,26 +44,26 @@ EVAL_SRTM_BAND_NAMES = ["srtm"]
 
 # Get the corresponding index from either Sentinel2 L1C or L2A band names
 def _eval_s2_band_index_from_olmoearth_name(
-    helios_name: str, band_names: list[str]
+    olmoearth_name: str, band_names: list[str]
 ) -> int:
     for idx, band_name in enumerate(band_names):
-        if helios_name.endswith(band_name.split(" ")[0][-2:]):
+        if olmoearth_name.endswith(band_name.split(" ")[0][-2:]):
             return idx
-    raise ValueError(f"Unmatched band name {helios_name}")
+    raise ValueError(f"Unmatched band name {olmoearth_name}")
 
 
-def _eval_s1_band_index_from_olmoearth_name(helios_name: str) -> int:
+def _eval_s1_band_index_from_olmoearth_name(olmoearth_name: str) -> int:
     for idx, band_name in enumerate(EVAL_S1_BAND_NAMES):
-        if helios_name == band_name:
+        if olmoearth_name == band_name:
             return idx
-    raise ValueError(f"Unmatched band name {helios_name}")
+    raise ValueError(f"Unmatched band name {olmoearth_name}")
 
 
-def _eval_l8_band_index_from_olmoearth_name(helios_name: str) -> int:
+def _eval_l8_band_index_from_olmoearth_name(olmoearth_name: str) -> int:
     for idx, band_name in enumerate(EVAL_L8_BAND_NAMES):
-        if helios_name == band_name:
+        if olmoearth_name == band_name:
             return idx
-    raise ValueError(f"Unmatched band name {helios_name}")
+    raise ValueError(f"Unmatched band name {olmoearth_name}")
 
 
 EVAL_TO_OLMOEARTH_S2_BANDS = [
