@@ -66,7 +66,7 @@ def build_train_module_config(
         max_grad_norm=1.0,
         scheduler=scheduler,
         ema_decay=(1.0, 1.0),
-        dp_config=None,  # FSDP is not supported for DINOv2
+        dp_config=None,
     )
 
 

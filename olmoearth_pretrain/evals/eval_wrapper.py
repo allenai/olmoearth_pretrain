@@ -14,7 +14,6 @@ from olmoearth_pretrain.evals.models import (
     Clay,
     CopernicusFM,
     Croma,
-    DINOv2,
     DINOv3,
     GalileoWrapper,
     Panopticon,
@@ -83,7 +82,6 @@ class EvalWrapper:
         if isinstance(dev, torch.device):
             return dev
 
-        # DinoV2 returns a string
         if isinstance(dev, str):
             return torch.device(dev)
 
@@ -278,32 +276,6 @@ class PrithviV2EvalWrapper(EvalWrapper):
         return embeddings, labels
 
 
-class DINOv2EvalWrapper(EvalWrapper):
-    """Wrapper for DINOv2 models."""
-
-    def __call__(
-        self,
-        masked_olmoearth_sample: MaskedOlmoEarthSample,
-        labels: torch.Tensor,
-        is_train: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through the model produces the embedding specified by initialization."""
-        # i need to do the apply imagenet normalizer thing in here
-        if self.spatial_pool:
-            # Intermediate features are not yet working because of some bug internal to the model
-            batch_embeddings = self.model.forward_features(
-                masked_olmoearth_sample,
-                pooling=self.pooling_type,
-            )
-        else:
-            # should this call model ditectly
-            batch_embeddings = self.model(
-                masked_olmoearth_sample,
-                pooling=self.pooling_type,
-            )
-        return batch_embeddings, labels
-
-
 class ClayEvalWrapper(EvalWrapper):
     """Wrapper for Clay models."""
 
@@ -454,9 +426,6 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     elif isinstance(model, Panopticon):
         logger.info("Using PanopticonEvalWrapper")
         return PanopticonEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, DINOv2):
-        logger.info("Using DINOv2EvalWrapper")
-        return DINOv2EvalWrapper(model=model, **kwargs)
     elif isinstance(model, DINOv3):
         logger.info("Using DINOv3EvalWrapper")
         return DINOv3EvalWrapper(model=model, **kwargs)

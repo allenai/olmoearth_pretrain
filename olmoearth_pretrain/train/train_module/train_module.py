@@ -324,7 +324,7 @@ class OlmoEarthTrainModule(TrainModule):
                 f"micro-batch size ({self.rank_microbatch_size:,d}) x DP world size ({ws})"
             )
         if not hasattr(self.model, "encoder"):
-            # hack to allow DInov2 and panopticon for EVAL
+            # hack to allow other models for EVAL
             return
         if self.trainer.data_loader.min_patch_size != self.model.encoder.min_patch_size:
             raise ValueError(
