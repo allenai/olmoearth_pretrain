@@ -2,23 +2,37 @@
 
 from __future__ import annotations
 
+import math
+import os
+import random
 from logging import getLogger
-from typing import cast
+from typing import Any, cast
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
+from olmo_core.train.trainer import Trainer
 from sklearn.metrics import accuracy_score, f1_score
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.metrics import mean_iou
-from olmoearth_pretrain.evals.utils import adjust_learning_rate
+from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = getLogger(__name__)
+
+
+def _get_wandb_logger(trainer: Trainer) -> Any | None:
+    """Return the wandb module from the OlmoEarth callback, if available."""
+    for callback in trainer._iter_callbacks():
+        if isinstance(callback, OlmoEarthWandBCallback) and callback.enabled:
+            return callback.wandb
+    return None
 
 
 class BackboneWithHead(nn.Module):
@@ -43,8 +57,6 @@ class BackboneWithHead(nn.Module):
             pooling_type=pooling_type,
             concat_features=False,
             use_pooled_tokens=use_pooled_tokens,
-            # Set this to False to avoid downsampling embeddings and labels for AnySat
-            is_train=False,
         )
         self.task_type = task_type
         self.patch_size = patch_size
@@ -65,11 +77,11 @@ class BackboneWithHead(nn.Module):
         self._inited = True
 
     def forward(
-        self, batch: MaskedOlmoEarthSample, labels: torch.Tensor
+        self, batch: MaskedOlmoEarthSample, labels: torch.Tensor, is_train: bool = True
     ) -> torch.Tensor:
         """Forward pass through the model and head."""
         dev = next(self.wrapper.parameters()).device
-        emb, labels = self.wrapper(batch, labels)
+        emb, labels = self.wrapper(batch, labels, is_train=is_train)
         emb = cast(torch.Tensor, emb)
         emb_dim = emb.shape[-1]
         if not self._inited:
@@ -106,7 +118,7 @@ def _eval_cls(
         label = label.to(device=device)
         masked = _to_device(masked, device)
         with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-            logits, _ = module(masked, label)  # (B, C)
+            logits, _ = module(masked, label, is_train=False)  # (B, C)
         logits_all.append(logits.float().cpu())
         labels_all.append(label.cpu())
     logits = torch.cat(logits_all, 0)
@@ -139,7 +151,7 @@ def _eval_seg(
         label = label.to(device=device)
         masked = _to_device(masked, device)
         with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
-            logits, _ = module(masked, label)  # (B, H, W, C*p*p)
+            logits, _ = module(masked, label, is_train=False)  # (B, H, W, C*p*p)
             H, W = logits.shape[1], logits.shape[2]
             logits = rearrange(
                 logits,
@@ -182,8 +194,16 @@ def _snapshot_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
     return {k: v.detach().cpu().clone() for k, v in module.state_dict().items()}
 
 
+def _set_backbone_trainable(backbone: nn.Module, requires_grad: bool) -> None:
+    """Toggle gradient computation for backbone parameters."""
+    for param in backbone.parameters():
+        param.requires_grad = requires_grad
+
+
 def run_finetune_eval(
+    task_name: str,
     task_config: EvalDatasetConfig,
+    trainer: Trainer,
     model: nn.Module,
     device: torch.device,
     lr: float,
@@ -194,8 +214,18 @@ def run_finetune_eval(
     train_loader: DataLoader,
     val_loader: DataLoader,
     test_loader: DataLoader | None,
+    seed: int | None = None,
+    best_checkpoint_path: str | None = None,
 ) -> tuple[float, float]:
     """Finetune the model on a downstream task and evaluate."""
+    if seed is not None:
+        logger.info(f"Setting finetune random seed to {seed}")
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
     ft = BackboneWithHead(
         model=model,
         task_type=task_config.task_type,
@@ -210,6 +240,15 @@ def run_finetune_eval(
         sample_batch, label = next(iter(train_loader))
         _, _ = ft(_to_device(sample_batch, device), label.to(device))
 
+    # Freeze the backbone for the first 20% of the epochs
+    freeze_epochs = math.ceil(0.2 * epochs) if epochs > 0 else 0
+    backbone_unfrozen = freeze_epochs == 0
+    if not backbone_unfrozen:
+        _set_backbone_trainable(ft.backbone, False)
+        logger.info(
+            f"Freezing backbone for the first {freeze_epochs} epoch(s) before unfreezing."
+        )
+
     total_backbone, trainable_backbone, total_head, trainable_head = count_params(
         ft.backbone, ft._head
     )
@@ -218,7 +257,16 @@ def run_finetune_eval(
     logger.info(f"Total head parameters: {total_head:,}")
     logger.info(f"Trainable head parameters: {trainable_head:,}")
 
-    opt = torch.optim.AdamW(ft.parameters(), lr=lr)
+    current_lr = lr
+    opt = torch.optim.AdamW(ft.parameters(), lr=current_lr)
+    scheduler = ReduceLROnPlateau(
+        opt,
+        mode="max",
+        factor=0.2,
+        patience=2,
+        min_lr=0.0,
+        cooldown=10,
+    )
     if task_config.task_type == TaskType.CLASSIFICATION:
         loss_fn: nn.Module = (
             nn.MultiLabelSoftMarginLoss()
@@ -228,17 +276,29 @@ def run_finetune_eval(
     else:
         loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
 
-    # Set patience to higher so that we don't missed the best model
-    patience = max(1, int(0.2 * epochs)) if epochs > 0 else 1
-    logger.info(f"Using early stopping patience of {patience} epochs")
-
     best_state = _snapshot_state_dict(ft)
     best_val_metric = float("-inf")
-    epochs_without_improvement = 0
-    should_stop = False
 
     ft.train()
+    wandb_logger = _get_wandb_logger(trainer)
+    num_batches = len(train_loader)
+
     for epoch in range(epochs):
+        # Reset epoch and global step
+        trainer.global_step = epoch * len(train_loader)
+        trainer.epoch = epoch + 1
+
+        if not backbone_unfrozen and epoch >= freeze_epochs:
+            _set_backbone_trainable(ft.backbone, True)
+            backbone_unfrozen = True
+            current_lr = lr / 10.0
+            for group in opt.param_groups:
+                group["lr"] = current_lr
+            logger.info(
+                "Backbone unfrozen; reducing optimizer learning rate to "
+                f"{current_lr:.3e} for remaining epochs."
+            )
+
         for i, (masked, label) in enumerate(train_loader):
             label = label.to(device=device)
             masked = _to_device(masked, device)
@@ -263,18 +323,17 @@ def run_finetune_eval(
                             align_corners=True,
                         )
                 loss = loss_fn(logits, label)
+                if wandb_logger is not None:
+                    wandb_logger.log(
+                        {
+                            f"{task_name}_step": epoch * num_batches + i,
+                            f"{task_name}/train_loss": loss.item(),
+                        }
+                    )
                 logger.info(
                     f"Finetune Epoch [{epoch + 1}/{epochs}] Step [{i + 1}/{len(train_loader)}] Loss: {loss.item():.4f}"
                 )
             loss.backward()
-            adjust_learning_rate(
-                optimizer=opt,
-                epoch=epoch + (i / max(1, len(train_loader))),
-                total_epochs=epochs,
-                warmup_epochs=max(1, int(0.1 * epochs)),
-                max_lr=lr,
-                min_lr=1.0e-6,
-            )
             opt.step()
             opt.zero_grad()
 
@@ -288,28 +347,24 @@ def run_finetune_eval(
                 task_config.num_classes,
                 patch_size,
             )
+        if wandb_logger is not None:
+            wandb_logger.log(
+                {
+                    f"{task_name}_step": (epoch + 1) * num_batches,
+                    f"{task_name}/val_metric": val_metric,
+                }
+            )
         logger.info(
             f"Finetune Epoch [{epoch + 1}/{epochs}] Validation Metric: {val_metric:.4f}"
         )
+        scheduler.step(val_metric)
 
         if val_metric > best_val_metric:
             best_val_metric = val_metric
             best_state = _snapshot_state_dict(ft)
-            epochs_without_improvement = 0
             logger.info(
                 f"New best validation metric {best_val_metric:.4f} at epoch {epoch + 1}"
             )
-        else:
-            epochs_without_improvement += 1
-            if epochs_without_improvement >= patience:
-                logger.info(
-                    "Early stopping triggered after "
-                    f"{epochs_without_improvement} epochs without improvement"
-                )
-                should_stop = True
-
-        if should_stop:
-            break
         ft.train()
 
     if best_val_metric == float("-inf"):
@@ -327,6 +382,12 @@ def run_finetune_eval(
             )
 
     ft.load_state_dict(best_state)
+    if best_checkpoint_path is not None:
+        os.makedirs(os.path.dirname(best_checkpoint_path), exist_ok=True)
+        torch.save(best_state, best_checkpoint_path)
+        logger.info(f"Saved best checkpoint to {best_checkpoint_path}")
+    else:
+        logger.info("No best checkpoint path provided, skipping saving best checkpoint")
 
     if task_config.task_type == TaskType.CLASSIFICATION:
         val_acc = best_val_metric

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_embeddings(
-    data_loader: DataLoader, model: EvalWrapper
+    data_loader: DataLoader, model: EvalWrapper, is_train: bool = True
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Get embeddings from model for the data in data_loader."""
     embeddings = []
@@ -38,7 +38,9 @@ def get_embeddings(
             )
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 batch_embeddings, label = model(
-                    masked_olmoearth_sample=masked_olmoearth_sample, labels=label
+                    masked_olmoearth_sample=masked_olmoearth_sample,
+                    labels=label,
+                    is_train=is_train,
                 )
 
             embeddings.append(batch_embeddings.cpu())
