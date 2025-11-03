@@ -1478,7 +1478,7 @@ class Encoder(FlexiVitBase):
         fast_pass: bool,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         """Remove masked tokens from the tokens and masks."""
-        if fast_pass:
+        if fast_pass and not self.use_flash_attn:
             # This is the inference fast pass
             indices = None
             new_mask = None
