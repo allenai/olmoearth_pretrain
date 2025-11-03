@@ -20,7 +20,6 @@ def mean_iou(
     Returns:
     float: Mean IoU across all classes
     """
-
     device = predictions.device
     labels = labels.to(device)
 
@@ -31,8 +30,7 @@ def mean_iou(
 
     n = num_classes
     confusion = torch.bincount(
-        n * labels_valid + predictions_valid,
-        minlength=n**2
+        n * labels_valid + predictions_valid, minlength=n**2
     ).reshape(n, n)
 
     # Calculate intersection (diagonal) and union
