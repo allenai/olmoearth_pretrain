@@ -8,12 +8,12 @@ from logging import getLogger
 import numpy as np
 import torch
 import torch.nn as nn
-from tqdm import tqdm
 import torch.nn.functional as F
 from einops import rearrange
 from olmo_core.data.utils import get_rng
 from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm import tqdm
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.metrics import mean_iou
@@ -172,29 +172,25 @@ def train_and_eval_probe(
             )
 
     num_times_to_run_eval = math.ceil(epochs / eval_interval)
-    data_loader = None
     val_mious = []
     best_probe_state = None
     best_val_miou = float("-inf")
     best_epoch = 0
 
+    data_loader = DataLoader(
+        TensorDataset(train_embeddings, train_labels),
+        batch_size=batch_size,
+        shuffle=True,
+    )
     # Training loop: only evaluate on validation set
     for i in range(num_times_to_run_eval):
         start_epoch = i * eval_interval
         end_epoch = min(start_epoch + eval_interval, epochs)
 
-        probe, data_loader = train_probe(
+        probe = train_probe(
             task_type=config.task_type,
             probe=probe,
-            data_loader=(
-                DataLoader(
-                    TensorDataset(train_embeddings, train_labels),
-                    batch_size=batch_size,
-                    shuffle=True,
-                )
-                if data_loader is None
-                else data_loader
-            ),
+            data_loader=data_loader,
             lr=lr,
             epochs=end_epoch,
             total_epochs=epochs,
@@ -252,7 +248,9 @@ def train_and_eval_probe(
             logger.info(f"Evaluating test set with best probe (epoch {best_epoch})")
 
         # Compute predictions once (regardless of bootstrap)
-        logger.info(f"Computing predictions for {test_embeddings.shape[0]} test samples...")
+        logger.info(
+            f"Computing predictions for {test_embeddings.shape[0]} test samples..."
+        )
         test_data_loader = DataLoader(
             TensorDataset(test_embeddings, test_labels),
             batch_size=batch_size,
@@ -275,25 +273,32 @@ def train_and_eval_probe(
             n_test_samples = all_preds.shape[0]
             bootstrap_scores = []
 
-            logger.info(f"Running {n_bootstrap} bootstrap iterations on precomputed predictions...")
+            logger.info(
+                f"Running {n_bootstrap} bootstrap iterations on precomputed predictions..."
+            )
 
             for i in tqdm(range(n_bootstrap), desc="Bootstrapping", leave=False):
                 # Resample indices only - no model forward pass!
-                bootstrap_indices = rng.choice(n_test_samples, size=n_test_samples, replace=True)
+                bootstrap_indices = rng.choice(
+                    n_test_samples, size=n_test_samples, replace=True
+                )
 
                 bootstrap_preds = all_preds[bootstrap_indices]
                 bootstrap_labels = all_labels[bootstrap_indices]
 
                 # Compute metric on resampled predictions
                 score = compute_metric(
-                    bootstrap_preds, bootstrap_labels,
+                    bootstrap_preds,
+                    bootstrap_labels,
                     num_classes=config.num_classes,
                     task_type=config.task_type,
                 )
                 bootstrap_scores.append(score)
 
                 if (i + 1) % 100 == 0:
-                    logger.debug(f"Bootstrap iteration {i + 1}/{n_bootstrap}, current mean: {np.mean(bootstrap_scores):.4f}")
+                    logger.debug(
+                        f"Bootstrap iteration {i + 1}/{n_bootstrap}, current mean: {np.mean(bootstrap_scores):.4f}"
+                    )
 
             bootstrap_scores_array = np.array(bootstrap_scores)
             test_miou = float(np.mean(bootstrap_scores_array))
@@ -314,7 +319,8 @@ def train_and_eval_probe(
         else:
             # No bootstrap - just compute metric from predictions
             test_miou = compute_metric(
-                all_preds, all_labels,
+                all_preds,
+                all_labels,
                 num_classes=config.num_classes,
                 task_type=config.task_type,
             )
@@ -397,7 +403,7 @@ def train_probe(
             opt.step()
             opt.zero_grad()
 
-    return probe, data_loader
+    return probe
 
 
 def get_probe_predictions(
@@ -485,9 +491,7 @@ def compute_metric(
         float: Computed metric (accuracy for classification, mIoU for segmentation)
     """
     if task_type == TaskType.SEGMENTATION:
-        metric = mean_iou(
-            preds, labels, num_classes=num_classes, ignore_label=-1
-        )
+        metric = mean_iou(preds, labels, num_classes=num_classes, ignore_label=-1)
     else:
         metric = accuracy_score(labels.numpy(), preds.numpy())
     return metric

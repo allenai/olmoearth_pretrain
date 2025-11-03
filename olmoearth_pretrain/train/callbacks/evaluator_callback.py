@@ -188,18 +188,20 @@ class DownstreamEvaluator:
                 run_knn,
             )
             if self.eval_mode == EvalMode.KNN
-            else partial(
-                # TODO: THis is updated dynamically in the get_embeddings function
-                train_and_eval_probe,
-                batch_size=self.probe_batch_size,
-                epochs=self.epochs,
-                eval_interval=self.linear_probe_eval_interval,
-                probe_type=self.probe_type,
-                lr=self.probe_lr,
-                select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
-            )
-            if self.eval_mode == EvalMode.LINEAR_PROBE
-            else None  # "finetune" handled explictly below in .val()
+            else (
+                partial(
+                    # TODO: THis is updated dynamically in the get_embeddings function
+                    train_and_eval_probe,
+                    batch_size=self.probe_batch_size,
+                    epochs=self.epochs,
+                    eval_interval=self.linear_probe_eval_interval,
+                    probe_type=self.probe_type,
+                    lr=self.probe_lr,
+                    select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
+                )
+                if self.eval_mode == EvalMode.LINEAR_PROBE
+                else None
+            )  # "finetune" handled explictly below in .val()
         )
 
     def _get_data_loader(
