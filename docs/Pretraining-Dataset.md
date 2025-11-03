@@ -17,7 +17,7 @@ The satellite image modalities are:
 
 The auxiliary rasters are:
 
-- The [USDA Cropland Data Layer](https://www.nass.usda.gov/Research_and_Science/Cropland/SARS1a.php) from USDA, public domain.
+- [USDA Cropland Data Layer](https://www.nass.usda.gov/Research_and_Science/Cropland/SARS1a.php) from USDA, public domain.
 - [ERA5 monthly reanalysis data from ECMWF](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-monthly-means), available under [CC-BY](https://spdx.org/licenses/CC-BY-4.0).
 - [OpenStreetMap vector data](https://www.openstreetmap.org/), available under [ODbL](https://www.openstreetmap.org/copyright).
 - [Shuttle Radar Topography Mission (SRTM)](https://www.usgs.gov/centers/eros/science/usgs-eros-archive-digital-elevation-shuttle-radar-topography-mission-srtm-1) Digital Elevation from USGS, public domain.
@@ -53,7 +53,9 @@ The time range for each sample is selected as follows:
 
 - For samples in the continental US, with 75% probability, we look for National
   Agriculture Imagery Program images from 2016-2024 containing the sample's grid cell,
-  and use the 360-day period centered at a random matching image.
+  and use the 360-day period centered at a random matching image. This afforded testing
+  training with public domain aerial images, although we did not use them in the final
+  OlmoEarth-v1 models.
 - For other samples, or with 25% probability for samples in the continental US, we
   uniformly sample the time range between January 2016 and December 2024.
 
@@ -160,7 +162,7 @@ You can use qgis or similar software to quickly visualize all of the data pertai
 one sample:
 
 ```
-qgis */EPSG:32610_150_-2089_10.tif
+qgis */EPSG:32610_150_-2089_*.tif
 ```
 
 ## CSV Files
