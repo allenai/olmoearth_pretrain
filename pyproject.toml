@@ -129,6 +129,16 @@ eval = [
     "xarray>=2025.10.1",
 ]
 
+flash_attn = [
+    "flash-attn>=2.4.0",
+]
+
+[tool.uv.extra-build-dependencies]
+flash-attn = [{ requirement = "torch", match-runtime = true }]
+
+[tool.uv.extra-build-variables]
+flash-attn = { FLASH_ATTENTION_SKIP_CUDA_BUILD = "TRUE" }
+
 [tool.ruff.lint.per-file-ignores]
 "olmoearth_pretrain/evals/datasets/cropharvest_package/*" = ["D"]
 "olmoearth_pretrain/evals/models/copernicusfm/src/*" = ["D", "UP", "E", "F"]
