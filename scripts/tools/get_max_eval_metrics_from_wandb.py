@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import json
 from collections import defaultdict
 
 import numpy as np
@@ -239,7 +240,7 @@ def get_max_metrics_per_partition(
     Returns:
         a dictionary mapping from partition to a dict of metric name to max value.
     """
-    api = wandb.Api()
+    api = wandb.Api(timeout=10000)
 
     # Dictionary to store max metrics for each partition
     partition_metrics = {}
@@ -342,6 +343,40 @@ def save_metrics_to_csv(metrics_dict: dict[str, dict[str, float]], filename: str
     print(f"\nMetrics saved to {filename}")
 
 
+def serialize_max_settings_per_group(
+    json_filename: str, group_max_runs_per_metric: dict[str, dict[str, wandb.Run]]
+) -> None:
+    """Serialize the max settings per group."""
+    output_dict = {}
+    # I want  it to be group name -> metric name -> run settings
+    # Run settings should include whether we are doing mean or max pooling
+    # what lr we are using if it linear probing
+    # whether or not we used pretrained normalizer
+    for group_name, max_runs_per_metric in group_max_runs_per_metric.items():
+        for metric, run in max_runs_per_metric.items():
+            task_name = metric.replace("eval/", "")
+
+            # Ensure nested structure exists
+            output_dict.setdefault(group_name, {}).setdefault(task_name, {})
+
+            run_settings = {}
+            task_config = run.config["trainer"]["callbacks"]["downstream_evaluator"][
+                "tasks"
+            ][task_name]
+            run_settings["pooling_type"] = task_config["pooling_type"]
+            run_settings["probe_lr"] = task_config.get("probe_lr", None)
+            run_settings["norm_stats_from_pretrained"] = task_config[
+                "norm_stats_from_pretrained"
+            ]
+            output_dict[group_name][task_name]["settings"] = run_settings
+            output_dict[group_name][task_name]["run_id"] = run.id
+
+    # Save the output dict to a JSON file
+    with open(json_filename, "w") as f:
+        json.dump(output_dict, f)
+    return output_dict
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Get maximum metrics from W&B runs, grouped by run prefix before '_step'."
@@ -382,6 +417,12 @@ if __name__ == "__main__":
         "--get_test_metrics",
         action="store_true",
         help="Report test metrics based on the configuration of the validation results witht the highest score",
+    )
+    parser.add_argument(
+        "--json_filename",
+        type=str,
+        default=None,
+        help="Output JSON file path (default: {project_name}_eval_metrics.json)",
     )
 
     args = parser.parse_args()
@@ -436,8 +477,11 @@ if __name__ == "__main__":
         group_metrics, group_test_metrics, group_max_runs_per_metric = (
             get_max_metrics_grouped(run_groups, args.get_test_metrics)
         )
-
-        print(group_test_metrics)
+        print(group_max_runs_per_metric)
+        if args.json_filename:
+            serialize_max_settings_per_group(
+                args.json_filename, group_max_runs_per_metric
+            )
         print("\nFinal Results:")
         for group_name, metrics in group_metrics.items():
             print(f"\n{group_name}:")

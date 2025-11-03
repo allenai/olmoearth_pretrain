@@ -20,32 +20,28 @@ def mean_iou(
     Returns:
     float: Mean IoU across all classes
     """
-    # Ensure inputs are on the same device
     device = predictions.device
     labels = labels.to(device)
 
-    # Initialize tensors to store intersection and union for each class
-    intersection = torch.zeros(num_classes, device=device)
-    union = torch.zeros(num_classes, device=device)
-
-    # Create a mask for valid pixels (i.e., not ignore_label)
     valid_mask = labels != ignore_label
 
-    # Iterate through each class
-    for class_id in range(num_classes):
-        # Create binary masks for the current class
-        pred_mask = (predictions == class_id) & valid_mask
-        label_mask = (labels == class_id) & valid_mask
+    predictions_valid = predictions[valid_mask]
+    labels_valid = labels[valid_mask]
 
-        # Calculate intersection and union
-        intersection[class_id] = (pred_mask & label_mask).sum().float()
-        union[class_id] = (pred_mask | label_mask).sum().float()
+    n = num_classes
+    confusion = torch.bincount(
+        n * labels_valid + predictions_valid, minlength=n**2
+    ).reshape(n, n)
+
+    # Calculate intersection (diagonal) and union
+    intersection = confusion.diagonal()
+    union = confusion.sum(dim=1) + confusion.sum(dim=0) - intersection
 
     # Calculate IoU for each class
-    iou = intersection / (union + 1e-8)  # Add small epsilon to avoid division by zero
+    iou = intersection.float() / (union.float() + 1e-8)
 
     # Calculate mean IoU (excluding classes with zero union)
     valid_classes = union > 0
-    mean_iou = iou[valid_classes].mean()
+    mean_iou_value = iou[valid_classes].mean()
 
-    return mean_iou.item()
+    return mean_iou_value.item()

@@ -547,7 +547,6 @@ if __name__ == "__main__":
     build_train_module_config = user_mod.build_train_module_config
     build_dataset_config = user_mod.build_dataset_config
     build_dataloader_config = user_mod.build_dataloader_config
-    build_visualize_config = user_mod.build_visualize_config
     main(
         common_components_builder=build_common_components,
         model_config_builder=build_model_config,
@@ -555,5 +554,4 @@ if __name__ == "__main__":
         dataset_config_builder=build_dataset_config,
         dataloader_config_builder=build_dataloader_config,
         trainer_config_builder=build_trainer_config,
-        visualize_config_builder=build_visualize_config,
     )

@@ -4,6 +4,7 @@ e.g. python -m olmoearth_pretrain.internal.full_eval_sweep --cluster=ai2/saturn-
 """
 
 import argparse
+import json
 import os
 import subprocess  # nosec
 import uuid
@@ -240,7 +241,7 @@ def get_anysat_args() -> str:
     )
     anysat_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=4"
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=2"
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -367,8 +368,14 @@ def _get_sub_command(args: argparse.Namespace) -> str:
         return SubCmd.launch
 
 
-def _get_base_run_name(args: argparse.Namespace, size: str | None = None) -> str:
+def _get_base_run_name(
+    args: argparse.Namespace, size: str | None = None, use_uuid: bool = True
+) -> str:
     """Generate the base run name from checkpoint path or model name."""
+    if use_uuid:
+        uuid_str = "_" + str(uuid.uuid4())[:4]
+    else:
+        uuid_str = ""
     if args.model_name is not None:
         logger.info(f"Overiding checkpoint name with {args.model_name}")
         run_name = args.model_name
@@ -377,17 +384,16 @@ def _get_base_run_name(args: argparse.Namespace, size: str | None = None) -> str
         step_num = os.path.basename(args.checkpoint_path)
         run_name = f"{parent_dir}_{step_num}"
     elif args.model is not None:
-        uuid_str = str(uuid.uuid4())[:4]
         if size is not None:
             size_str = f"_{size}"
         else:
             size_str = ""
-        run_name = args.model + size_str + "_" + uuid_str
+        run_name = args.model + size_str + uuid_str
     else:
         logger.warning(
             "No model name provided or checkpoint path, using random run name"
         )
-        run_name = str(uuid.uuid4())[:4]
+        run_name = uuid_str
     return run_name
 
 
@@ -496,6 +502,9 @@ def _get_pooling_type_str(pooling_type: str) -> str:
     return pooling_type_str
 
 
+LAUNCH_OVERRIDES = "--launch.priority=high --launch.num_gpus=1 --launch.task_name=eval"
+
+
 def _build_default_command(
     args: argparse.Namespace,
     base_run_name: str,
@@ -527,10 +536,11 @@ def _build_default_command(
     logger.info(f"Using module path {module_path}")
     cmd_args += _get_model_size_args(args.model, size)
     cmd_args += _get_load_checkpoints_args(args.model)
+    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch else ""
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
-        f"{sub_command} {run_name} {args.cluster} --launch.priority=high --launch.num_gpus=1 "
-        f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
+        f"{sub_command} {run_name} {args.cluster} {launch_overrides} "
+        f"{checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra} {cmd_args}"
     )
 
 
@@ -577,10 +587,123 @@ def _build_hyperparameter_command(
     cmd_args += _get_load_checkpoints_args(args.model)
     cmd_args += _get_model_size_args(args.model, size)
 
+    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch else ""
+    # if init_seed is set add to base run name
+    if "init_seed" in extra:
+        run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
-        f"{sub_command} {run_name} {args.cluster} --launch.priority=high --launch.num_gpus=1 {cmd_args} "
-        f"--launch.task_name=eval {checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
+        f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
+        f"{checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
+    )
+
+
+def _build_command_from_eval_settings(
+    args: argparse.Namespace,
+    eval_settings_dict: dict,
+    base_run_name: str,
+    sub_command: str,
+    launch_command: str,
+    checkpoint_args: str,
+    project_name: str,
+    extra: str,
+    size: str | None = None,
+) -> str:
+    """Build a command from eval settings with per-task lr, pooling, and normalization."""
+    logger.info("Building command with per-task eval settings from loaded JSON")
+    logger.info(
+        f"Running with module path {args.module_path} on cluster {args.cluster}"
+    )
+
+    # Build per-task command arguments
+    cmd_args_parts = []
+
+    # Track unique settings for the run name
+    pooling_types_used = set()
+    lrs_used = set()
+    norm_modes_used = set()
+
+    for task_name, task_data in eval_settings_dict.items():
+        settings = task_data["settings"]
+
+        # Extract settings for this task
+        pooling_type = settings.get("pooling_type", "mean")
+        probe_lr = settings.get("probe_lr", None)
+        norm_from_pretrained = settings.get("norm_stats_from_pretrained", False)
+
+        # Track for run name
+        pooling_types_used.add(pooling_type)
+        if probe_lr is not None:
+            lrs_used.add(probe_lr)
+        norm_modes_used.add("pre_trained" if norm_from_pretrained else "dataset")
+
+        # Build per-task args
+        task_args = []
+
+        # Add probe_lr if this is a linear probe task
+        if probe_lr is not None:
+            task_args.append(
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.probe_lr={probe_lr}"
+            )
+
+        # Add pooling type
+        task_args.append(
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.pooling_type={pooling_type}"
+        )
+
+        # Add normalization setting
+        task_args.append(
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_stats_from_pretrained={norm_from_pretrained}"
+        )
+
+        cmd_args_parts.extend(task_args)
+
+    # Create a descriptive run name
+    # Use "mixed" if multiple different settings are used
+    pooling_str = (
+        "mixed"
+        if len(pooling_types_used) > 1
+        else _get_pooling_type_str(list(pooling_types_used)[0])
+    )
+    lr_str = (
+        "mixed"
+        if len(lrs_used) > 1
+        else (f"lr{list(lrs_used)[0]}" if lrs_used else "knn")
+    )
+    norm_str = (
+        "mixed"
+        if len(norm_modes_used) > 1
+        else _get_norm_mode_str(list(norm_modes_used)[0])
+    )
+
+    run_name = f"{base_run_name}_{norm_str}_{lr_str}_pt{pooling_str}"
+
+    cmd_args = " " + " ".join(cmd_args_parts)
+
+    # Add model-specific args
+    cmd_args += _get_model_specific_args(args.model)
+
+    # Add model-specific normalization args if needed (this may get overridden by task-specific args)
+    # Use the first norm mode found, or default to dataset
+    first_norm_mode = list(norm_modes_used)[0] if norm_modes_used else "dataset"
+    cmd_args += _get_normalization_args(args.model, first_norm_mode)
+
+    module_path = (
+        args.module_path
+        if args.module_path is not None
+        else _get_module_path(args.model)
+    )
+    cmd_args += _get_load_checkpoints_args(args.model)
+    cmd_args += _get_model_size_args(args.model, size)
+
+    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch else ""
+    # if init_seed is set add to base run name
+    if "init_seed" in extra:
+        run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
+    return (
+        f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
+        f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
+        f"{checkpoint_args} --trainer.callbacks.wandb.project={project_name}{extra}"
     )
 
 
@@ -668,6 +791,48 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 
             for size in model_sizes:
                 base_run_name = _get_base_run_name(args, size)
+
+                # Optionally load imported settings from json file
+                if args.load_eval_settings_from_json:
+                    with open(args.load_eval_settings_from_json) as f:
+                        eval_settings = json.load(f)
+                    # Get all tasks for this group/run
+                    base_run_name_og = _get_base_run_name(args, size, use_uuid=False)
+                    if "step" in base_run_name_og:
+                        base_run_name_og = base_run_name_og.split("_step")[0]
+                    suffixes_to_try = ["", "_base", "_large"]
+                    eval_settings_dict = None
+
+                    for suffix in suffixes_to_try:
+                        try:
+                            lookup_name = base_run_name_og + suffix
+                            eval_settings_dict = eval_settings[lookup_name]
+                            base_run_name = lookup_name  # Update base_run_name to the successful lookup
+                            break
+                        except KeyError:
+                            continue
+
+                    if eval_settings_dict is None:
+                        raise KeyError(
+                            f"Could not find eval settings for {base_run_name} with any of the suffixes: {suffixes_to_try}"
+                        )
+
+                    base_run_name += "_from_json_settings"
+
+                    cmd = _build_command_from_eval_settings(
+                        args,
+                        eval_settings_dict,  # This now contains all tasks with their settings
+                        base_run_name,
+                        sub_command,
+                        launch_command,
+                        checkpoint_args,
+                        project_name,
+                        extra,
+                        size,
+                    )
+                    commands_to_run.append(cmd)
+                    continue
+
                 hp_params = loop_through_params(
                     no_norm=(args.model in dataset_norm_only_models)
                 )
@@ -779,14 +944,22 @@ def main() -> None:
         required=False,
         help="Model size to use",
     )
+    parser.add_argument(
+        "--load_eval_settings_from_json",
+        type=str,
+        required=False,
+        help="Path to the eval settings json file",
+    )
 
     args, extra_cli = parser.parse_known_args()
 
     commands_to_run = build_commands(args, extra_cli)
 
+    logger.info(f"Running {len(commands_to_run)} commands")
     for cmd in commands_to_run:
         logger.info(cmd)
         subprocess.run(cmd, shell=True, check=True)  # nosec
+    logger.info(f"Finished running {len(commands_to_run)} commands")
 
 
 if __name__ == "__main__":
