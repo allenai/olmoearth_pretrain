@@ -494,7 +494,9 @@ class DownstreamEvaluatorCallback(Callback):
 
         return required_modalities_present and has_timeseries
 
-    def _log_eval_results_to_logger_pretrain(self, result: dict[str, Any]) -> None:
+    def _log_eval_results_to_logger_pretrain(
+        self, evaluator: DownstreamEvaluator, result: dict[str, Any]
+    ) -> None:
         """Log the evaluation results."""
         # Extract from dict
         val_result = result["val_score"]
@@ -504,17 +506,19 @@ class DownstreamEvaluatorCallback(Callback):
         # Log bootstrap statistics if available
         if bootstrap_stats:
             logger.info(
-                f"Downstream evaluator {self.evaluation_name} bootstrap stats: "
+                f"Downstream evaluator {evaluator.evaluation_name} bootstrap stats: "
                 f"mean={bootstrap_stats.get('mean', 'N/A'):.4f}, "
                 f"std={bootstrap_stats.get('std', 'N/A'):.4f}, "
                 f"95% CI=[{bootstrap_stats.get('ci_lower', 'N/A'):.4f}, "
                 f"{bootstrap_stats.get('ci_upper', 'N/A'):.4f}]"
             )
 
-        logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
+        logger.info(
+            f"Downstream evaluator {evaluator.evaluation_name} score: {val_result}"
+        )
         if self.run_on_test:
             logger.info(
-                f"Downstream evaluator {self.evaluation_name} test score: {test_result}"
+                f"Downstream evaluator {evaluator.evaluation_name} test score: {test_result}"
             )
 
     def _log_eval_results_to_wandb_pretrain(
@@ -590,7 +594,7 @@ class DownstreamEvaluatorCallback(Callback):
                     )
                     continue
                 result = self._perform_eval(evaluator)
-                self._log_eval_results_to_logger_pretrain(result)
+                self._log_eval_results_to_logger_pretrain(evaluator, result)
                 self._log_eval_results_to_wandb_pretrain(evaluator, result)
 
         if self.cancel_after_first_eval:
