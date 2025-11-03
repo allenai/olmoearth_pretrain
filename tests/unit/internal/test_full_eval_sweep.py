@@ -39,6 +39,7 @@ def base_args() -> argparse.Namespace:
         select_best_val=False,
         model_skip_names=None,
         size=None,
+        load_eval_settings_from_json=False,
     )
 
 
@@ -59,6 +60,7 @@ def minimal_args() -> argparse.Namespace:
         select_best_val=False,
         model_skip_names=None,
         size=None,
+        load_eval_settings_from_json=False,
     )
 
 
