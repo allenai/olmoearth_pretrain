@@ -12,7 +12,6 @@ Non-geobench datasets include:
 - pastis128 (Sentinel-2 L2A, Sentinel-1)
 - breizhcrops (Sentinel-2 L2A)
 - sickle (Sentinel-2 L2A, Sentinel-1, Landsat-8)
-- cropharvest (Sentinel-2 L2A, Sentinel-1, SRTM)
 """
 
 import argparse
@@ -29,7 +28,6 @@ from upath import UPath
 
 from helios.evals.datasets import (
     BREIZHCROPS_DIR,
-    CROPHARVEST_DIR,
     FLOODS_DIR,
     MADOS_DIR,
     PASTIS_DIR,
@@ -40,13 +38,7 @@ from helios.evals.datasets.breizhcrops import LEVEL, BreizhCrops
 from helios.evals.datasets.constants import (
     EVAL_S1_BAND_NAMES,
     EVAL_S2_BAND_NAMES,
-    EVAL_SRTM_BAND_NAMES,
 )
-from helios.evals.datasets.cropharvest import (
-    S2_EVAL_BANDS_BEFORE_IMPUTATION as CROPHARVEST_S2_EVAL_BANDS_BEFORE_IMPUTATION,
-)
-from helios.evals.datasets.cropharvest import _get_eval_datasets
-from helios.evals.datasets.cropharvest_package.datasets import CropHarvest
 from helios.evals.datasets.sickle_dataset import (
     L8_BAND_STATS as SICKLE_L8_BAND_STATS,
 )
@@ -405,94 +397,6 @@ def compute_sickle_stats(
     return stats
 
 
-def compute_cropharvest_stats(
-    cropharvest_dir: UPath, max_samples: int | None = None, num_workers: int = 1
-) -> dict:
-    """Compute min/max stats for CropHarvest dataset."""
-    print("Computing stats for CropHarvest (Sentinel-2 L2A, Sentinel-1, SRTM)...")
-
-    # Download if needed
-    CropHarvest(cropharvest_dir, download=True)
-
-    # Get all evaluation datasets
-    evaluation_datasets = _get_eval_datasets(cropharvest_dir)
-
-    # Initialize min/max trackers for all modalities
-    # CropHarvest has 18 bands total: 9 S2, 2 S1, 1 SRTM, plus some extras
-    all_mins = [float("inf")] * 18
-    all_maxs = [float("-inf")] * 18
-
-    total_samples = 0
-    for dataset in evaluation_datasets:
-        print(f"  Processing {dataset.id}...")
-        try:
-            array, _, _ = dataset.as_array()  # Shape: (N, T, C)
-
-            # Limit samples if requested
-            num_to_process = array.shape[0]
-            if max_samples is not None:
-                remaining = max_samples - total_samples
-                if remaining <= 0:
-                    print("    Skipping (already reached max_samples limit)")
-                    continue
-                num_to_process = min(array.shape[0], remaining)
-                print(f"    Limited to {num_to_process} samples (smoke test mode)")
-
-            # Update min/max across all samples and timesteps
-            for sample_idx in range(num_to_process):
-                for band_idx in range(array.shape[2]):
-                    band_data = array[sample_idx, :, band_idx]
-                    valid_data = band_data[~np.isnan(band_data) & ~np.isinf(band_data)]
-                    if len(valid_data) > 0:
-                        all_mins[band_idx] = min(
-                            all_mins[band_idx], float(valid_data.min())
-                        )
-                        all_maxs[band_idx] = max(
-                            all_maxs[band_idx], float(valid_data.max())
-                        )
-
-            total_samples += array.shape[0]
-        except Exception as e:
-            print(f"    Warning: Failed to process {dataset.id}: {e}")
-            continue
-
-    # Map to actual band names based on CropHarvest structure
-    # First 9 are S2 bands (without some bands like coastal aerosol, cirrus)
-    # Then 2 S1 bands
-    # Then 1 SRTM band
-    stats = {
-        "sentinel1": {
-            band_name: {"min": all_mins[i], "max": all_maxs[i]}
-            for i, band_name in enumerate(EVAL_S1_BAND_NAMES)
-        },
-        "sentinel2_l2a": {
-            band_name: {
-                "min": all_mins[len(EVAL_S1_BAND_NAMES) + i],
-                "max": all_maxs[len(EVAL_S1_BAND_NAMES) + i],
-            }
-            for i, band_name in enumerate(CROPHARVEST_S2_EVAL_BANDS_BEFORE_IMPUTATION)
-        },
-        "srtm": {
-            band_name: {
-                "min": all_mins[
-                    len(EVAL_S1_BAND_NAMES)
-                    + len(CROPHARVEST_S2_EVAL_BANDS_BEFORE_IMPUTATION)
-                    + i
-                ],
-                "max": all_maxs[
-                    len(EVAL_S1_BAND_NAMES)
-                    + len(CROPHARVEST_S2_EVAL_BANDS_BEFORE_IMPUTATION)
-                    + i
-                ],
-            }
-            for i, band_name in enumerate(EVAL_SRTM_BAND_NAMES)
-        },
-    }
-
-    print(f"  Processed {total_samples} samples across all countries")
-    return stats
-
-
 def main():
     """Main function to compute min/max stats for all non-geobench datasets."""
     parser = argparse.ArgumentParser(
@@ -579,15 +483,6 @@ def main():
         )
     except Exception as e:
         print(f"ERROR processing SICKLE: {e}")
-        traceback.print_exc()
-
-    # CropHarvest
-    try:
-        all_stats["cropharvest"] = compute_cropharvest_stats(
-            CROPHARVEST_DIR, args.max_samples, args.num_workers
-        )
-    except Exception as e:
-        print(f"ERROR processing CropHarvest: {e}")
         traceback.print_exc()
 
     project_root = Path(__file__).parent.parent

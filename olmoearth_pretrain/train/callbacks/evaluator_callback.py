@@ -64,7 +64,7 @@ class DownstreamTaskConfig:
     num_workers: int = 8
     pooling_type: str = PoolingType.MEAN
     norm_stats_from_pretrained: bool = True
-    # Only for multimodal tasks, e.g. pastis, sickle, nandi, awf, cropharvest
+    # Only for multimodal tasks, e.g. pastis, sickle, nandi, awf
     input_modalities: list[str] = field(default_factory=list)
     # Only for rslearn datasets, e.g. nandi, awf
     input_layers: list[str] = field(default_factory=list)
@@ -588,12 +588,8 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
         """Verify the input modality configuration for a task."""
         # Check that input_modalities is only set for multimodal tasks
         if (
-            not (
-                (task.dataset in ["pastis", "pastis128", "sickle", "nandi", "awf"])
-                or task.dataset.startswith("cropharvest")
-            )
-            and len(task.input_modalities) > 0
-        ):
+            task.dataset not in ["pastis", "pastis128", "sickle", "nandi", "awf"]
+        ) and len(task.input_modalities) > 0:
             raise ValueError(
                 f"input_modalities is only supported for multimodal tasks, got {task.dataset}"
             )

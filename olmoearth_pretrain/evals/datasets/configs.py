@@ -158,21 +158,6 @@ DATASET_TO_CONFIG = {
         ],
         timeseries=True,
     ),
-    "cropharvest": EvalDatasetConfig(
-        task_type=TaskType.CLASSIFICATION,
-        imputes=[
-            ("02 - Blue", "01 - Coastal aerosol"),
-            ("11 - SWIR", "10 - SWIR - Cirrus"),
-        ],
-        num_classes=2,
-        is_multilabel=False,
-        supported_modalities=[
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.SRTM.name,
-        ],
-        timeseries=True,
-    ),
     "nandi": EvalDatasetConfig(
         task_type=TaskType.CLASSIFICATION,
         imputes=[],
@@ -202,8 +187,7 @@ DATASET_TO_CONFIG = {
 
 def dataset_to_config(dataset: str) -> EvalDatasetConfig:
     """Retrieve the correct config for a given dataset."""
-    key = "cropharvest" if dataset.startswith("cropharvest") else dataset
     try:
-        return DATASET_TO_CONFIG[key]
+        return DATASET_TO_CONFIG[dataset]
     except KeyError:
         raise ValueError(f"Unrecognized dataset: {dataset}")

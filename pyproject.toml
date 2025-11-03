@@ -130,5 +130,4 @@ eval = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"olmoearth_pretrain/evals/datasets/cropharvest_package/*" = ["D"]
 "olmoearth_pretrain/evals/models/copernicusfm/src/*" = ["D", "UP", "E", "F"]

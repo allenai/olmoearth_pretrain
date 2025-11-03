@@ -76,8 +76,10 @@ class TestCreateLinearProbeArg:
 
     def test_different_task_names(self) -> None:
         """Test with different task names."""
-        result: str = create_linear_probe_arg("cropharvest", "pooling_type")
-        expected: str = "--trainer.callbacks.downstream_evaluator.tasks.cropharvest.pooling_type={arg}"
+        result: str = create_linear_probe_arg("nandi", "pooling_type")
+        expected: str = (
+            "--trainer.callbacks.downstream_evaluator.tasks.nandi.pooling_type={arg}"
+        )
         assert result == expected
 
     def test_special_characters_in_names(self) -> None:
