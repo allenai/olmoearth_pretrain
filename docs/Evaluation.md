@@ -28,22 +28,21 @@ This guide explains how we launch evaluations for OlmoEarth checkpoints and base
 
 ## Evaluation Overview
 
-We run evaluations through the same `olmoearth_pretrain/internal/experiment.py` entrypoint used for pretraining. The helper scripts below build the underlying launch commands.
+We run evaluations through the same `olmoearth_pretrain/internal/experiment.py` entrypoint used for pretraining. The helper scripts below build the underlying launch commands:
 
-- `olmoearth_pretrain/internal/full_eval_sweep.py` launches KNN (for classification tasks) and linear probing (for segmentation tasks) against an OlmoEarth checkpoint or a supported baseline model.
-- `olmoearth_pretrain/internal/full_eval_sweep_finetune.py` launches finetuning evaluations, including optional sweeps over pretrained and dataset normalizers.
+- `olmoearth_pretrain/internal/full_eval_sweep.py` runs KNN (classification) and linear probing (segmentation) sweeps for OlmoEarth checkpoints or baseline models, with optional sweeps over learning rate, pretrained/dataset normalizers, and pooling (mean or max).
+- `olmoearth_pretrain/internal/full_eval_sweep_finetune.py` runs fine-tuning sweeps for OlmoEarth checkpoints or baseline models, with optional sweeps over learning rate, and pretrained/dataset normalizers.
 
 Both scripts rely on:
-- [`olmoearth_pretrain/internal/all_evals.py`](../olmoearth_pretrain/internal/all_evals.py) for the task registry.
+- [`olmoearth_pretrain/internal/all_evals.py`](../olmoearth_pretrain/internal/all_evals.py) for the task registry (`EVAL_TASKS` for KNN and learning probing, and `FT_EVAL_TASKS` for fine-tuning).
 - [`olmoearth_pretrain/evals`](../olmoearth_pretrain/evals) for dataset/model wrappers.
 
-Every launch ultimately calls the new evaluation subcommands in `experiment.py`:
+Every launch uses the evaluation subcommands from `experiment.py`:
+- `dry_run_evaluate` prints the config (no execution) for quick checks.
+- `evaluate` runs evaluation job locally.
+- `launch_evaluate` submits evaluation job to Beaker.
 
-- `dry_run_evaluate`: Pretty-prints the config and exits. Triggered automatically by `--dry_run`.
-- `evaluate`: Executes the job locally (`--cluster=local`).
-- `launch_evaluate`: Submits to Beaker for any other cluster name.
-
-The sweep scripts set `TRAIN_SCRIPT_PATH` and choose `torchrun` for local execution, `python3` for Beaker launches.
+The sweep scripts set `TRAIN_SCRIPT_PATH` automatically and choose `torchrun` for local runs and `python3` for Beaker jobs.
 
 ### Prerequisites
 
