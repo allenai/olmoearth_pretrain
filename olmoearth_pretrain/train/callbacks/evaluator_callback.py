@@ -186,7 +186,6 @@ class DownstreamEvaluator:
         self.eval_function = (
             partial(
                 run_knn,
-
             )
             if self.eval_mode == EvalMode.KNN
             else partial(
@@ -544,7 +543,6 @@ class DownstreamEvaluatorCallback(Callback):
                     wandb_callback.wandb.log(
                         {"eval_time/" + evaluator.evaluation_name: eval_time}
                     )
-                    if self.run_on_test:
 
                 # Separate finetune step metric per task
                 if evaluator.eval_mode == EvalMode.FINETUNE:

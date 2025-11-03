@@ -543,11 +543,6 @@ if __name__ == "__main__":
     except AttributeError:
         from olmoearth_pretrain.internal.common import build_common_components
 
-    try:
-        build_visualize_config = user_mod.build_visualize_config
-    except AttributeError:
-        build_visualize_config = None
-
     build_model_config = user_mod.build_model_config
     build_train_module_config = user_mod.build_train_module_config
     build_dataset_config = user_mod.build_dataset_config
@@ -559,5 +554,4 @@ if __name__ == "__main__":
         dataset_config_builder=build_dataset_config,
         dataloader_config_builder=build_dataloader_config,
         trainer_config_builder=build_trainer_config,
-        visualize_config_builder=build_visualize_config,
     )
