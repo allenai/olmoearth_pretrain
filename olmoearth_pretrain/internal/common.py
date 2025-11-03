@@ -199,6 +199,8 @@ def build_launch_config(
             # activate the uv venv
             "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
             'source "$(dirname "$venv_path")/activate"',
+            # explicitly install breizhcrops
+            "uv pip install breizhcrops==0.0.4.1 ",
             # debugging - check torch version
             "uv pip show torch",
             # and then show the arch
