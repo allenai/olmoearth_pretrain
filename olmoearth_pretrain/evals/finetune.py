@@ -216,7 +216,7 @@ def run_finetune_eval(
     test_loader: DataLoader | None,
     seed: int | None = None,
     best_checkpoint_path: str | None = None,
-) -> dict[str, float | dict]:
+) -> dict[str, Any]:
     """Finetune the model on a downstream task and evaluate.
 
     Returns:

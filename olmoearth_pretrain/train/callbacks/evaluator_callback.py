@@ -343,7 +343,7 @@ class DownstreamEvaluator:
         )
         return best_checkpoint_path
 
-    def _val_finetune(self) -> dict[str, float | dict]:
+    def _val_finetune(self) -> dict[str, Any]:
         """Validate the model using finetuning."""
         logger.info(f"Validating {self.dataset} with finetune")
 
