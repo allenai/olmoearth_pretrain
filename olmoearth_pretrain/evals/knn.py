@@ -306,6 +306,7 @@ def _run_knn_for_k(
     k: int,
     device: torch.device,
     skip_idx: bool,
+    chunk_size: int = 2000,
 ) -> torch.Tensor:
     """Run KNN classification with chunked batch processing for efficiency.
 
@@ -317,46 +318,32 @@ def _run_knn_for_k(
         k: Number of nearest neighbors
         device: Device to run on
         skip_idx: Whether to skip the first neighbor
-
+        chunk_size: Chunk size for batch processing
     Returns:
         Predictions of shape (n_test,)
     """
-    # Move to device
     train_embeddings = train_embeddings.to(device)
     test_embeddings = test_embeddings.to(device)
     train_labels = train_labels.to(device)
 
-    # Normalize embeddings once for efficient cosine similarity computation
-    # Use eps=1e-8 to match torch.nn.functional.cosine_similarity default
-    # Formula: similarity = (x1 · x2) / (max(||x1||_2, eps) · max(||x2||_2, eps))
     eps = 1e-8
     train_embeddings_norm = torch.nn.functional.normalize(
         train_embeddings, p=2, dim=1, eps=eps
     )
 
     # Process test embeddings in chunks to avoid memory explosion
-    chunk_size = 2000
     n_test = test_embeddings.shape[0]
     all_predictions = []
 
-    # Determine effective k (accounting for skip_idx)
     effective_k = k if not skip_idx else k + 1
 
     for start_idx in range(0, n_test, chunk_size):
         end_idx = min(start_idx + chunk_size, n_test)
         test_chunk = test_embeddings[start_idx:end_idx]
 
-        # Normalize test chunk with same eps to match cosine_similarity
         test_chunk_norm = torch.nn.functional.normalize(test_chunk, p=2, dim=1, eps=eps)
-
-        # Compute cosine similarity matrix: (chunk_size, n_train)
-        # After normalization: x_norm = x / max(||x||_2, eps)
-        # Dot product of normalized vectors gives: (x1 · x2) / (max(||x1||_2, eps) · max(||x2||_2, eps))
-        # This matches torch.nn.functional.cosine_similarity formula exactly
         similarities = torch.mm(test_chunk_norm, train_embeddings_norm.T)
 
-        # Get top-k neighbors for each test sample
-        # If skip_idx is True, we'll get k+1 and then skip the first
         top_k_similarities, top_k_indices = torch.topk(
             similarities, k=effective_k, dim=1
         )
@@ -366,20 +353,13 @@ def _run_knn_for_k(
             top_k_similarities = top_k_similarities[:, 1:]
             top_k_indices = top_k_indices[:, 1:]
 
-        # Get labels for top-k neighbors: (chunk_size, k)
         top_k_labels = train_labels[top_k_indices]
-
-        # Convert to one-hot encoding: (chunk_size, k, num_classes)
         top_k_onehots = nn.functional.one_hot(top_k_labels, num_classes=num_classes)
 
-        # Compute weights: exp(similarity / 0.07)
-        # top_k_similarities: (chunk_size, k)
         weights = torch.exp(top_k_similarities / 0.07)
 
-        # Weighted sum of one-hot encodings: (chunk_size, num_classes)
         weighted_sum = (weights.unsqueeze(-1) * top_k_onehots).sum(dim=1)
 
-        # Get predictions: (chunk_size,)
         chunk_predictions = torch.argmax(weighted_sum, dim=1)
         all_predictions.append(chunk_predictions)
 
