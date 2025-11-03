@@ -26,7 +26,11 @@ from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
 from olmoearth_pretrain.internal.common import (
     build_common_components as build_common_components_default,
 )
-from olmoearth_pretrain.internal.experiment import CommonComponents, SubCmd
+from olmoearth_pretrain.internal.experiment import (
+    CommonComponents,
+    OlmoEarthVisualizeConfig,
+    SubCmd,
+)
 from olmoearth_pretrain.nn.flexi_vit import (
     PoolingType,
 )
@@ -272,3 +276,12 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         )
     )
     return trainer_config
+
+
+def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig:
+    """Build the visualize config for an experiment."""
+    return OlmoEarthVisualizeConfig(
+        num_samples=None,
+        output_dir=str(f"{common.save_folder}/visualizations"),
+        std_multiplier=2.0,
+    )
