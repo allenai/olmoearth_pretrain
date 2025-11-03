@@ -129,8 +129,15 @@ def train_and_eval_probe(
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
-) -> tuple[float, float] | tuple[float, float, dict]:
-    """Run a linear probe on the OlmoEarth Pretrain model."""
+) -> dict[str, float | dict]:
+    """Run a linear probe on the OlmoEarth Pretrain model.
+
+    Returns:
+        Dictionary with keys:
+            - val_score: Validation score
+            - test_score: Test score (0.0 if no test set)
+            - bootstrap_stats: Bootstrap statistics dict (empty dict if n_bootstrap == 0)
+    """
     logger.info(f"Probe type {probe_type}")
     if train_embeddings.shape[-1] != val_embeddings.shape[-1]:
         raise ValueError("Embedding dims don't match.")
@@ -324,14 +331,17 @@ def train_and_eval_probe(
                 num_classes=config.num_classes,
                 task_type=config.task_type,
             )
+            bootstrap_stats = {}
             logger.info(f"Test MIoU: {test_miou}")
-
-        if n_bootstrap > 0:
-            return val_miou, test_miou, bootstrap_stats
     else:
         test_miou = 0.0
+        bootstrap_stats = {}
 
-    return val_miou, test_miou
+    return {
+        "val_score": val_miou,
+        "test_score": test_miou,
+        "bootstrap_stats": bootstrap_stats,
+    }
 
 
 def train_probe(

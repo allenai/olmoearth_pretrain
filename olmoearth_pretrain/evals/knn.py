@@ -26,7 +26,7 @@ def run_knn(
     skip_idx: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
-) -> tuple[float, float] | tuple[float, float, dict]:
+) -> dict[str, float | dict]:
     """Run KNN on the OlmoEarth Pretrain model.
 
     Args:
@@ -44,9 +44,10 @@ def run_knn(
         bootstrap_seed: Random seed for bootstrap sampling
 
     Returns:
-        If n_bootstrap == 0: (val_score, test_score)
-        If n_bootstrap > 0: (val_score, test_score, bootstrap_stats)
-            where bootstrap_stats contains mean, std, and confidence intervals
+        Dictionary with keys:
+            - val_score: Validation score
+            - test_score: Test score (0.0 if no test set)
+            - bootstrap_stats: Bootstrap statistics dict (empty dict if n_bootstrap == 0)
     """
     if not config.is_multilabel:
         val_predictions = _run_knn_for_k(
@@ -88,14 +89,17 @@ def run_knn(
                     n_bootstrap=n_bootstrap,
                     seed=bootstrap_seed,
                 )
-                return val_score, test_score, bootstrap_stats
+            else:
+                bootstrap_stats = {}
         else:
             test_score = 0.0
+            bootstrap_stats = {}
 
-        if n_bootstrap > 0:
-            # No test set, return empty bootstrap stats
-            return val_score, test_score, {}
-        return val_score, test_score
+        return {
+            "val_score": val_score,
+            "test_score": test_score,
+            "bootstrap_stats": bootstrap_stats,
+        }
     else:
         # multilabel dataset, e.g., BigEarthNet
         # we will run KNN or K-Means once per class to compute predictions
@@ -159,14 +163,17 @@ def run_knn(
                     n_bootstrap=n_bootstrap,
                     seed=bootstrap_seed,
                 )
-                return val_score, test_score, bootstrap_stats
+            else:
+                bootstrap_stats = {}
         else:
             test_score = 0.0
+            bootstrap_stats = {}
 
-        if n_bootstrap > 0:
-            # No test set, return empty bootstrap stats
-            return val_score, test_score, {}
-        return val_score, test_score
+        return {
+            "val_score": val_score,
+            "test_score": test_score,
+            "bootstrap_stats": bootstrap_stats,
+        }
 
 
 def _bootstrap_knn_test(
@@ -204,7 +211,9 @@ def _bootstrap_knn_test(
             - ci_upper: upper bound of 95% confidence interval
     """
     # Optimized bootstrap: compute predictions once, then resample
-    logger.info(f"Computing predictions once for {test_embeddings.shape[0]} test samples...")
+    logger.info(
+        f"Computing predictions once for {test_embeddings.shape[0]} test samples..."
+    )
 
     # Compute predictions ONCE for all test samples
     if not config.is_multilabel:
@@ -239,11 +248,15 @@ def _bootstrap_knn_test(
     n_test_samples = test_embeddings.shape[0]
     bootstrap_scores = []
 
-    logger.info(f"Running {n_bootstrap} bootstrap iterations on precomputed predictions...")
+    logger.info(
+        f"Running {n_bootstrap} bootstrap iterations on precomputed predictions..."
+    )
 
     for i in range(n_bootstrap):
         # Resample indices only - no cosine similarity computation!
-        bootstrap_indices = rng.choice(n_test_samples, size=n_test_samples, replace=True)
+        bootstrap_indices = rng.choice(
+            n_test_samples, size=n_test_samples, replace=True
+        )
 
         bootstrap_preds = all_predictions[bootstrap_indices]
         bootstrap_labels = test_labels[bootstrap_indices]

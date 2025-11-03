@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
+from typing import Any
 
 import numpy as np
 import torch
@@ -273,7 +274,7 @@ class DownstreamEvaluator:
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(data_loader=data_loader, model=model, is_train=is_train)
 
-    def _val_embed_probe(self) -> tuple[float, float]:
+    def _val_embed_probe(self) -> dict[str, float | dict]:
         """Validate the model using embeddings and probe (knn or linear probe)."""
         logger.info(f"Validating {self.dataset} with {self.eval_mode}")
         train_loader = self._get_data_loader("train", self.embedding_batch_size)
@@ -325,30 +326,12 @@ class DownstreamEvaluator:
         }
         result = self.eval_function(**kwargs)  # type: ignore
 
-        # Handle both 2-tuple and 3-tuple returns (with bootstrap stats)
-        if len(result) == 3:
-            val_result, test_result, bootstrap_stats = result
-            # Log bootstrap statistics if available
-            if bootstrap_stats:
-                logger.info(
-                    f"Downstream evaluator {self.evaluation_name} bootstrap stats: "
-                    f"mean={bootstrap_stats.get('mean', 'N/A'):.4f}, "
-                    f"std={bootstrap_stats.get('std', 'N/A'):.4f}, "
-                    f"95% CI=[{bootstrap_stats.get('ci_lower', 'N/A'):.4f}, "
-                    f"{bootstrap_stats.get('ci_upper', 'N/A'):.4f}]"
-                )
-        else:
-            val_result, test_result = result
-            bootstrap_stats = None
-
-        logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
-
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
         torch.cuda.empty_cache()
         gc.collect()
 
-        return val_result, test_result, bootstrap_stats
+        return result
 
     def _get_best_checkpoint_path(self) -> str:
         """Get the best checkpoint path."""
@@ -360,7 +343,7 @@ class DownstreamEvaluator:
         )
         return best_checkpoint_path
 
-    def _val_finetune(self) -> tuple[float, float]:
+    def _val_finetune(self) -> dict[str, float | dict]:
         """Validate the model using finetuning."""
         logger.info(f"Validating {self.dataset} with finetune")
 
@@ -402,10 +385,10 @@ class DownstreamEvaluator:
         best_checkpoint_path = self._get_best_checkpoint_path()
         if os.path.exists(best_checkpoint_path):
             logger.info("Best checkpoint already exists, skipping finetuning")
-            return 0.0, 0.0
+            return {"val_score": 0.0, "test_score": 0.0, "bootstrap_stats": {}}
         else:
             logger.info("Best checkpoint does not exist, running finetuning")
-            val_result, test_result = run_finetune_eval(
+            result = run_finetune_eval(
                 task_name=self.evaluation_name,
                 task_config=self.config,
                 trainer=self.trainer,
@@ -423,27 +406,27 @@ class DownstreamEvaluator:
                 best_checkpoint_path=best_checkpoint_path,
             )
             logger.info(
-                f"Downstream evaluator {self.evaluation_name} val score: {val_result}, test score: {test_result}"
+                f"Downstream evaluator {self.evaluation_name} val score: {result['val_score']}, test score: {result['test_score']}"
             )
             model.load_state_dict(original_state)
 
             torch.cuda.empty_cache()
             gc.collect()
-            return val_result, test_result
+            return result
 
-    def val(self) -> tuple[float, float, dict | None]:
+    def val(self) -> dict[str, Any]:
         """Validate the model on the downstream task.
 
         Returns:
-            val_score: Validation score
-            test_score: Test score
-            bootstrap_stats: Bootstrap statistics (if available, else None)
+            Dictionary with keys:
+                - val_score: Validation score
+                - test_score: Test score
+                - bootstrap_stats: Bootstrap statistics dict (empty dict if not available)
         """
         if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
             return self._val_embed_probe()
         elif self.eval_mode == EvalMode.FINETUNE:
-            val_score, test_score = self._val_finetune()
-            return val_score, test_score, None
+            return self._val_finetune()
         else:
             raise ValueError(f"Unsupported eval_mode: {self.eval_mode}")
 
@@ -511,18 +494,89 @@ class DownstreamEvaluatorCallback(Callback):
 
         return required_modalities_present and has_timeseries
 
+    def _log_eval_results_to_logger_pretrain(self, result: dict[str, Any]) -> None:
+        """Log the evaluation results."""
+        # Extract from dict
+        val_result = result["val_score"]
+        test_result = result["test_score"]
+        bootstrap_stats = result["bootstrap_stats"]
+
+        # Log bootstrap statistics if available
+        if bootstrap_stats:
+            logger.info(
+                f"Downstream evaluator {self.evaluation_name} bootstrap stats: "
+                f"mean={bootstrap_stats.get('mean', 'N/A'):.4f}, "
+                f"std={bootstrap_stats.get('std', 'N/A'):.4f}, "
+                f"95% CI=[{bootstrap_stats.get('ci_lower', 'N/A'):.4f}, "
+                f"{bootstrap_stats.get('ci_upper', 'N/A'):.4f}]"
+            )
+
+        logger.info(f"Downstream evaluator {self.evaluation_name} score: {val_result}")
+        if self.run_on_test:
+            logger.info(
+                f"Downstream evaluator {self.evaluation_name} test score: {test_result}"
+            )
+
+    def _log_eval_results_to_wandb_pretrain(
+        self, evaluator: DownstreamEvaluator, result: dict[str, Any]
+    ) -> None:
+        """Log the evaluation results to wandb."""
+        # self.trainer.record_metric() is not logging to wandb at this point
+        # therefore we log to wandb manually
+        wandb_callback = next(
+            callback
+            for callback in self.trainer._iter_callbacks()
+            if isinstance(callback, OlmoEarthWandBCallback)
+        )
+        val_result = result["val_score"]
+        test_result = result["test_score"]
+        eval_time = result["eval_time"]
+        bootstrap_stats = result["bootstrap_stats"]
+
+        if wandb_callback.enabled:
+            wandb_callback.wandb.log({"eval/" + evaluator.evaluation_name: val_result})
+            wandb_callback.wandb.log(
+                {"eval_time/" + evaluator.evaluation_name: eval_time}
+            )
+
+        # Separate finetune step metric per task
+        if evaluator.eval_mode == EvalMode.FINETUNE:
+            if wandb_callback.enabled:
+                wandb_callback.wandb.define_metric(
+                    f"{evaluator.evaluation_name}/*",
+                    step_metric=f"{evaluator.evaluation_name}_step",
+                )
+                wandb_callback.wandb.log({f"{evaluator.evaluation_name}_step": 0})
+
+        # Only logging valid results to wandb
+        if val_result > 0 and test_result > 0:
+            # Log bootstrap statistics if available
+            if bootstrap_stats:
+                wandb_callback.wandb.log(
+                    {
+                        f"eval/test/{evaluator.evaluation_name}_bootstrap_mean": bootstrap_stats.get(
+                            "mean"
+                        ),
+                        f"eval/test/{evaluator.evaluation_name}_bootstrap_std": bootstrap_stats.get(
+                            "std"
+                        ),
+                        f"eval/test/{evaluator.evaluation_name}_bootstrap_ci_lower": bootstrap_stats.get(
+                            "ci_lower"
+                        ),
+                        f"eval/test/{evaluator.evaluation_name}_bootstrap_ci_upper": bootstrap_stats.get(
+                            "ci_upper"
+                        ),
+                    }
+                )
+            if self.run_on_test:
+                wandb_callback.wandb.log(
+                    {"eval/test/" + evaluator.evaluation_name: test_result}
+                )
+
     def pre_train(self) -> None:
         """Run the evaluators on startup."""
         if self.eval_on_startup:
             logger.info(f"Running {len(self.evaluators)} evaluators on startup.")
-
-            # self.trainer.record_metric() is not logging to wandb at this point
-            # therefore we log to wandb manually
-            wandb_callback = next(
-                callback
-                for callback in self.trainer._iter_callbacks()
-                if isinstance(callback, OlmoEarthWandBCallback)
-            )
 
             for evaluator in self.evaluators:
                 if not self._check_supported_modalities(evaluator):
@@ -535,60 +589,9 @@ class DownstreamEvaluatorCallback(Callback):
                         f"Skipping {evaluator.evaluation_name} because it doesn't match input requirements of the model"
                     )
                     continue
-                val_result, test_result, eval_time, bootstrap_stats = (
-                    self._perform_eval(evaluator)
-                )
-                if wandb_callback.enabled:
-                    wandb_callback.wandb.log(
-                        {"eval/" + evaluator.evaluation_name: val_result}
-                    )
-                    wandb_callback.wandb.log(
-                        {"eval_time/" + evaluator.evaluation_name: eval_time}
-                    )
-
-                # Separate finetune step metric per task
-                if evaluator.eval_mode == EvalMode.FINETUNE:
-                    if wandb_callback.enabled:
-                        wandb_callback.wandb.define_metric(
-                            f"{evaluator.evaluation_name}/*",
-                            step_metric=f"{evaluator.evaluation_name}_step",
-                        )
-                        wandb_callback.wandb.log(
-                            {f"{evaluator.evaluation_name}_step": 0}
-                        )
-
-                val_result, test_result, eval_time = self._perform_eval(evaluator)
-                # Only logging valid results to wandb
-                if val_result > 0 and test_result > 0:
-                    if wandb_callback.enabled:
-                        wandb_callback.wandb.log(
-                            {"eval/" + evaluator.evaluation_name: val_result}
-                        )
-                        wandb_callback.wandb.log(
-                            {"eval_time/" + evaluator.evaluation_name: eval_time}
-                        )
-                    # Log bootstrap statistics if available
-                    if bootstrap_stats:
-                        wandb_callback.wandb.log(
-                            {
-                                f"eval/test/{evaluator.evaluation_name}_bootstrap_mean": bootstrap_stats.get(
-                                    "mean"
-                                ),
-                                f"eval/test/{evaluator.evaluation_name}_bootstrap_std": bootstrap_stats.get(
-                                    "std"
-                                ),
-                                f"eval/test/{evaluator.evaluation_name}_bootstrap_ci_lower": bootstrap_stats.get(
-                                    "ci_lower"
-                                ),
-                                f"eval/test/{evaluator.evaluation_name}_bootstrap_ci_upper": bootstrap_stats.get(
-                                    "ci_upper"
-                                ),
-                            }
-                        )
-                        if self.run_on_test:
-                            wandb_callback.wandb.log(
-                                {"eval/test/" + evaluator.evaluation_name: test_result}
-                            )
+                result = self._perform_eval(evaluator)
+                self._log_eval_results_to_logger_pretrain(result)
+                self._log_eval_results_to_wandb_pretrain(evaluator, result)
 
         if self.cancel_after_first_eval:
             self.trainer.cancel_run(
@@ -611,20 +614,23 @@ class DownstreamEvaluatorCallback(Callback):
                 continue
             self._perform_eval(evaluator)
 
-    def _perform_eval(
-        self, evaluator: DownstreamEvaluator
-    ) -> tuple[float, float, float, dict | None]:
+    def _perform_eval(self, evaluator: DownstreamEvaluator) -> dict[str, float | dict]:
         """Run the evaluator.
 
         Returns:
-            val_result: Validation score
-            test_result: Test score
-            eval_time: Evaluation time in seconds
-            bootstrap_stats: Bootstrap statistics (if available, else None)
+            Dictionary with keys:
+                - val_score: Validation score
+                - test_score: Test score
+                - eval_time: Evaluation time in seconds
+                - bootstrap_stats: Bootstrap statistics dict (empty dict if not available)
         """
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
         start_time = time.monotonic()
-        val_result, test_result, bootstrap_stats = evaluator.val()
+        result = evaluator.val()
+        val_result = result["val_score"]
+        test_result = result["test_score"]
+        bootstrap_stats = result["bootstrap_stats"]
+
         self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
         if self.run_on_test:
             self.trainer.record_metric(
@@ -653,7 +659,8 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(
             f"Finished {evaluator.evaluation_name} evaluations in {eval_time:.1f} seconds."
         )
-        return val_result, test_result, eval_time, bootstrap_stats
+        result["eval_time"] = eval_time
+        return result
 
 
 @dataclass
