@@ -41,6 +41,7 @@ class ModelID(StrEnum):
     OLMOEARTH_V1_NANO = "OlmoEarth-v1-Nano"
     OLMOEARTH_V1_TINY = "OlmoEarth-v1-Tiny"
     OLMOEARTH_V1_BASE = "OlmoEarth-v1-Base"
+    OLMOEARTH_V1_LARGE = "OlmoEarth-v1-Large"
 
     def repo_id(self) -> str:
         """Return the Hugging Face repo ID for this model."""
