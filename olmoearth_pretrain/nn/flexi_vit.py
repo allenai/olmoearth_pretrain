@@ -1547,7 +1547,7 @@ class Encoder(FlexiVitBase):
             )
 
         # Pack x tokens
-        if self.use_flash_attn and not fast_pass:
+        if self.use_flash_attn:
             cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
             og_shape = tokens.shape
             tokens = self.pack_tokens(tokens, new_mask)
@@ -1598,7 +1598,7 @@ class Encoder(FlexiVitBase):
         else:
             token_norm_stats = None
 
-        if self.use_flash_attn and not fast_pass:
+        if self.use_flash_attn:
             tokens = self.unpack_tokens(tokens, new_mask, og_shape)
 
         if exit_ids_seq is not None:
