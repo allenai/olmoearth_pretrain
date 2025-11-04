@@ -362,7 +362,7 @@ def build_commands(
             run_suffix = f"FT_lr{lr}{norm_suffix}"
 
         seed_suffix = (
-            f"_seed{args.finetune_seed}" if args.finetune_seed is not None else ""
+            f"_ps16_seed{args.finetune_seed}" if args.finetune_seed is not None else ""
         )
         run_name = f"{base_run_name}{seed_suffix}_{run_suffix}"
         model_args = _build_model_args(selected_preset, normalizer_value)

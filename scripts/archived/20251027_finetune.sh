@@ -157,6 +157,8 @@ python scripts/tools/get_max_eval_metrics_from_wandb.py --project_name 2025_10_2
 python scripts/tools/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix terramind_seed --finetune --get_test_metrics
 python scripts/tools/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix terramind_large_seed --finetune --get_test_metrics
 
+python scripts/tools/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix phase2.0_base_lr0.0001_wd0.02_step0_seed --finetune --get_test_metrics
+
 # Galileo ps16
 python scripts/tools/get_max_eval_metrics_from_wandb.py --project_name 2025_10_26_olmoearth_finetune --run_prefix galileo_ps16_seed --finetune --get_test_metrics
 # AnySat ps16
