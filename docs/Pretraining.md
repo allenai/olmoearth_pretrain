@@ -105,6 +105,7 @@ python scripts/official/base.py dry_run my_config_test local \
 ```bash
 python scripts/official/large.py launch my_large_model ai2/saturn \
   --trainer.max_duration.value=300
+  --launch.num_gpus=8
 ```
 
 ## Dataset Setup
