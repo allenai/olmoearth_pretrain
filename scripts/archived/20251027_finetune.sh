@@ -179,3 +179,53 @@ python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path
 python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --module_path olmoearth_pretrain/evals/models/terramind/terramind_launch.py --project_name 2025_11_01_test_local_evaluation --model terramind --cluster ai2/ceres --defaults_only --dry_run
 python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/yawenz/OlmoEarth-v1-Nano --project_name 2025_11_01_test_local_evaluation --module_path scripts/official/nano.py --cluster local --defaults_only --dry_run
 python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --module_path olmoearth_pretrain/evals/models/terramind/terramind_launch.py --project_name 2025_11_01_test_local_evaluation --model terramind --cluster local --defaults_only --dry_run
+
+# More testing on the tutorial commands:
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+  --cluster=local \
+  --checkpoint_path=/weka/dfive-default/yawenz/OlmoEarth-v1-Base \
+  --module_path=scripts/official/base.py \
+  --defaults_only \
+  --dry_run
+
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+    --cluster=local \
+    --checkpoint_path=/weka/dfive-default/yawenz/OlmoEarth-v1-Nano \
+    --module_path=scripts/official/nano.py \
+    --project_name=OlmoEarth_evals \
+    --defaults_only
+
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+    --cluster=ai2/ceres \
+    --checkpoint_path=/weka/dfive-default/yawenz/OlmoEarth-v1-Nano \
+    --module_path=scripts/official/nano.py \
+    --project_name=OlmoEarth_evals \
+    --defaults_only
+
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+  --cluster=local \
+  --checkpoint_path=/weka/dfive-default/yawenz/OlmoEarth-v1-Nano \
+  --module_path=scripts/official/nano.py \
+  --project_name=OlmoEarth_evals \
+  --select_best_val
+  --trainer.callbacks.downstream_evaluator.run_on_test=True
+  --trainer.callbacks.downstream_evaluator.tasks_to_run=\[m_eurosat\]
+  --defaults_only
+
+python -m olmoearth_pretrain.internal.full_eval_sweep \
+  --cluster=ai2/ceres \
+  --launch.priority=urgent \
+  --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/nano_lr0.001_wd0.002/step370000 \
+  --module_path=scripts/official/nano.py \
+  --project_name=Baselines_evals \
+  --select_best_val
+  --trainer.callbacks.downstream_evaluator.run_on_test=True
+  --trainer.callbacks.downstream_evaluator.tasks_to_run=\[m_eurosat\]
+  --defaults_only
+
+python -m olmoearth_pretrain.internal.full_eval_sweep_finetune \
+  --cluster=local \
+  --checkpoint_path=/weka/dfive-default/yawenz/OlmoEarth-v1-Nano \
+  --module_path=scripts/official/nano.py \
+  --project_name=olmoearth_evals \
+  --defaults_only \
