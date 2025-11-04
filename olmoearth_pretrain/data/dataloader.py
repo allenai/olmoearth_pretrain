@@ -180,11 +180,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
                     )
         barrier()
 
-    def reshuffle(
-        self, epoch: int | None = None, in_memory: bool = False, **kwargs: Any
-    ) -> None:
+    def reshuffle(self, epoch: int | None = None, in_memory: bool = False) -> None:
         """Reshuffle the data."""
-        del kwargs
         if epoch is None:
             epoch = 1 if self._epoch is None else self._epoch + 1  # type: ignore
         if epoch <= 0:
