@@ -326,34 +326,6 @@ wheels = [
 ]
 
 [[package]]
-<<<<<<< HEAD
-name = "breizhcrops"
-version = "0.0.4.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "geojson" },
-    { name = "geopandas" },
-    { name = "h5py" },
-    { name = "jupyter" },
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "pytest" },
-    { name = "requests" },
-    { name = "scikit-learn" },
-    { name = "seaborn" },
-    { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
-    { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
-    { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform == 'linux'" },
-    { name = "tqdm" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/01/b2/b0041554af8b94818cea46736cc3a10fb8df9e08dd5357a783c0b4761a70/breizhcrops-0.0.4.1-py3-none-any.whl", hash = "sha256:13bb7373bddeb85695c079cdad58c29eee9f1988ce5fc7f54ca3b1a476998415", size = 33068, upload-time = "2022-06-04T14:09:22.913Z" },
-]
-
-[[package]]
-=======
->>>>>>> main
 name = "cached-path"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
