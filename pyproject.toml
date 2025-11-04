@@ -113,7 +113,6 @@ dev = [
 ]
 eval = [
     "albumentations>=1.4.10",
-    "breizhcrops==0.0.4.1",
     "claymodel",
     "geobench",
     "geopandas>=1.1.1",
@@ -128,6 +127,7 @@ eval = [
     "torchmetrics==1.7.1",
     "xarray>=2025.10.1",
 ]
+<<<<<<< HEAD
 
 flash_attn = [
     "flash-attn>=2.4.0",
@@ -142,3 +142,5 @@ flash-attn = { FLASH_ATTENTION_SKIP_CUDA_BUILD = "TRUE" }
 [tool.ruff.lint.per-file-ignores]
 "olmoearth_pretrain/evals/datasets/cropharvest_package/*" = ["D"]
 "olmoearth_pretrain/evals/models/copernicusfm/src/*" = ["D", "UP", "E", "F"]
+=======
+>>>>>>> main

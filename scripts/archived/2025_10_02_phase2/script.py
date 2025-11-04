@@ -79,7 +79,8 @@ def build_common_components(
         Modality.CDL.name,
         Modality.WORLDCEREAL.name,
     ]
-    config.launch.num_gpus = 8
+    # TODO: This is not working for local evaluation
+    # config.launch.num_gpus = 8
     return config
 
 

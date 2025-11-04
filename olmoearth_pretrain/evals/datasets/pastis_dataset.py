@@ -15,8 +15,8 @@ from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.evals.datasets.constants import (
     EVAL_S1_BAND_NAMES,
     EVAL_S2_BAND_NAMES,
-    EVAL_TO_HELIOS_S1_BANDS,
-    EVAL_TO_HELIOS_S2_BANDS,
+    EVAL_TO_OLMOEARTH_S1_BANDS,
+    EVAL_TO_OLMOEARTH_S2_BANDS,
 )
 from olmoearth_pretrain.evals.datasets.normalize import normalize_bands
 from olmoearth_pretrain.evals.datasets.utils import load_min_max_stats
@@ -208,8 +208,8 @@ class PASTISRDataset(Dataset):
                 self.norm_method,
             )
 
-        s2_image = s2_image[:, :, :, EVAL_TO_HELIOS_S2_BANDS]
-        s1_image = s1_image[:, :, :, EVAL_TO_HELIOS_S1_BANDS]
+        s2_image = s2_image[:, :, :, EVAL_TO_OLMOEARTH_S2_BANDS]
+        s1_image = s1_image[:, :, :, EVAL_TO_OLMOEARTH_S1_BANDS]
         if self.norm_stats_from_pretrained:
             s2_image = self.normalizer_computed.normalize(
                 Modality.SENTINEL2_L2A, s2_image

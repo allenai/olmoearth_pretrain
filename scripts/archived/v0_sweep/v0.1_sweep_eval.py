@@ -22,9 +22,6 @@ lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.probe_lr={lr}"
 ]
 
@@ -54,9 +51,6 @@ lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}"
 ]
 
 for lr in LP_LRs:
@@ -85,9 +79,6 @@ lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}"
 ]
 
 for lr in LP_LRs:
@@ -115,9 +106,6 @@ lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}"
 ]
 
 for lr in LP_LRs:
@@ -146,9 +134,6 @@ lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}"
 ]
 
 for lr in LP_LRs:
@@ -174,9 +159,6 @@ lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}"
 ]
 
 for lr in LP_LRs:
@@ -205,9 +187,6 @@ lr_args = [
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}"
 ]
 
 for lr in LP_LRs:

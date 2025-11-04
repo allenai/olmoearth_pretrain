@@ -87,7 +87,6 @@ class Croma(nn.Module):
         Returns:
             list of tensors of shape [B, C, H, W]
         """
-        # Rearrange from "b h w t c -> b (c t) h w" for DinoV2/Panopticon format
         t_dim = data.shape[3]
 
         # Get original dimensions

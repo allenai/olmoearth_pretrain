@@ -21,8 +21,8 @@ from .configs import dataset_to_config
 from .constants import (
     EVAL_L8_BAND_NAMES,
     EVAL_S2_BAND_NAMES,
-    EVAL_TO_HELIOS_L8_BANDS,
-    EVAL_TO_HELIOS_S2_BANDS,
+    EVAL_TO_OLMOEARTH_L8_BANDS,
+    EVAL_TO_OLMOEARTH_S2_BANDS,
 )
 from .normalize import impute_normalization_stats, normalize_bands
 
@@ -31,7 +31,7 @@ torch.multiprocessing.set_sharing_strategy("file_system")
 logger = logging.getLogger(__name__)
 
 
-def _landsathelios2geobench_name(band_name: str) -> str:
+def _landsatolmoearth2geobench_name(band_name: str) -> str:
     """Transform OlmoEarth Pretrain Landsat band name to Geobench Landsat band name."""
     # transforms are documented here:
     # https://github.com/ServiceNow/geo-bench/blob/main/geobench/dataset.py#L350
@@ -54,7 +54,9 @@ def _landsathelios2geobench_name(band_name: str) -> str:
     return transform[band_name]
 
 
-GEOBENCH_L8_BAND_NAMES = [_landsathelios2geobench_name(b) for b in EVAL_L8_BAND_NAMES]
+GEOBENCH_L8_BAND_NAMES = [
+    _landsatolmoearth2geobench_name(b) for b in EVAL_L8_BAND_NAMES
+]
 
 
 class GeobenchDataset(Dataset):
@@ -127,7 +129,7 @@ class GeobenchDataset(Dataset):
         self.original_band_indices_after_imputation: list[int] = []
         if self.is_landsat:
             band_order_in_geobench_names = [
-                _landsathelios2geobench_name(b) for b in Modality.LANDSAT.band_order
+                _landsatolmoearth2geobench_name(b) for b in Modality.LANDSAT.band_order
             ]
             self.original_band_indices_after_imputation = [
                 band_order_in_geobench_names.index(b) for b in original_band_names
@@ -255,7 +257,7 @@ class GeobenchDataset(Dataset):
                 :,
                 :,
                 :,
-                EVAL_TO_HELIOS_L8_BANDS,
+                EVAL_TO_OLMOEARTH_L8_BANDS,
             ]
             # Normalize using the pretrained dataset's normalization stats
             if self.norm_stats_from_pretrained:
@@ -276,7 +278,7 @@ class GeobenchDataset(Dataset):
                         all_bands=GEOBENCH_L8_BAND_NAMES,
                     ),
                     axis=-1,
-                )[:, :, :, EVAL_TO_HELIOS_L8_BANDS]
+                )[:, :, :, EVAL_TO_OLMOEARTH_L8_BANDS]
 
             sample_dict["landsat"] = torch.tensor(landsat).float()
 
@@ -285,7 +287,7 @@ class GeobenchDataset(Dataset):
                 :,
                 :,
                 :,
-                EVAL_TO_HELIOS_S2_BANDS,
+                EVAL_TO_OLMOEARTH_S2_BANDS,
             ]
             # Normalize using the pretrained dataset's normalization stats
             if self.norm_stats_from_pretrained:

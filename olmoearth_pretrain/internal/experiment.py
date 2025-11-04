@@ -29,6 +29,10 @@ from olmoearth_pretrain.data.visualize import visualize_sample
 from olmoearth_pretrain.inference_benchmarking.run_throughput_benchmark import (
     ThroughputBenchmarkRunnerConfig,
 )
+from olmoearth_pretrain.internal.utils import (
+    MockLatentMIMTrainModule,
+    MockOlmoEarthDataLoader,
+)
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModuleConfig,
 )
@@ -127,6 +131,17 @@ HeliosExperimentConfig = _deprecated_class_alias(
 
 
 @dataclass
+class OlmoEarthEvaluateConfig(Config):
+    """Configuration for a OlmoEarth Evaluate experiment."""
+
+    run_name: str
+    model: Config
+    trainer: TrainerConfig
+    launch: OlmoEarthBeakerLaunchConfig | None = None
+    init_seed: int = 12536
+
+
+@dataclass
 class BenchmarkExperimentConfig(Config):
     """Configuration for a throughput benchmarking run."""
 
@@ -191,6 +206,29 @@ def build_config(
     return config
 
 
+def build_evaluate_config(
+    common: CommonComponents,
+    model_config_builder: Callable[[CommonComponents], Config],
+    trainer_config_builder: Callable[[CommonComponents], TrainerConfig],
+    overrides: list[str],
+) -> OlmoEarthEvaluateConfig:
+    """Build a OlmoEarth Evaluate experiment configuration."""
+    common_overrides, overrides = split_common_overrides(overrides)
+    logger.info("Common overrides: %s", common_overrides)
+    common = common.merge(common_overrides)
+    logger.info("Common: %s", common)
+    model_config = model_config_builder(common)
+    trainer_config = trainer_config_builder(common)
+    config = OlmoEarthEvaluateConfig(
+        run_name=common.run_name,
+        model=model_config,
+        trainer=trainer_config,
+        launch=common.launch,
+    )
+    config = config.merge(overrides)
+    return config
+
+
 def build_benchmark_config(
     common: CommonComponents,
     inference_benchmarking_config_builder: Callable[
@@ -241,6 +279,27 @@ def train(config: OlmoEarthExperimentConfig) -> None:
     )
     trainer = config.trainer.build(train_module, data_loader)
 
+    # Record the config to W&B/Comet and each checkpoint dir.
+    config_dict = config.as_config_dict()
+    cast(WandBCallback, trainer.callbacks["wandb"]).config = config_dict
+    cast(ConfigSaverCallback, trainer.callbacks["config_saver"]).config = config_dict
+    trainer.fit()
+
+
+def evaluate(config: OlmoEarthExperimentConfig) -> None:
+    """Evaluate a checkpoint or model on downstream tasks."""
+    # Set RNG states on all devices. Also, done in prepare_training_environment
+    seed_all(config.init_seed)
+
+    # Build components.
+    # TODO: Setup init device arg and allow the model to be inited on device of our choice rather than moved over allowing for meta
+    model = config.model.build()
+    device = get_default_device()
+    model = model.to(device)
+    data_loader = MockOlmoEarthDataLoader()
+    train_module = MockLatentMIMTrainModule()
+    train_module.model = model
+    trainer = config.trainer.build(train_module, data_loader)
     # Record the config to W&B/Comet and each checkpoint dir.
     config_dict = config.as_config_dict()
     cast(WandBCallback, trainer.callbacks["wandb"]).config = config_dict
@@ -313,9 +372,12 @@ class SubCmd(StrEnum):
     launch = "launch"
     train = "train"
     train_single = "train_single"
+    evaluate = "evaluate"
+    launch_evaluate = "launch_evaluate"
     prep = "prep"
     launch_prep = "launch_prep"
     dry_run = "dry_run"
+    dry_run_evaluate = "dry_run_evaluate"
     visualize = "visualize"
     benchmark = "benchmark"
     launch_benchmark = "launch_benchmark"
@@ -325,14 +387,16 @@ class SubCmd(StrEnum):
         if self in (
             SubCmd.launch,
             SubCmd.dry_run,
+            SubCmd.dry_run_evaluate,
             SubCmd.prep,
             SubCmd.launch_prep,
             SubCmd.visualize,
             SubCmd.benchmark,
             SubCmd.launch_benchmark,
+            SubCmd.launch_evaluate,
         ):
             prepare_cli_environment()
-        elif self == SubCmd.train:
+        elif self == SubCmd.train or self == SubCmd.evaluate:
             prepare_training_environment()
         elif self == SubCmd.train_single:
             prepare_training_environment(backend=None)
@@ -353,9 +417,9 @@ class SubCmd(StrEnum):
             #     f"[b blue]Non-embedding parameters:[/]        {config.model.num_non_embedding_params:,d}"
             # )
 
-        if self == SubCmd.launch:
+        if self == SubCmd.launch or self == SubCmd.launch_evaluate:
             launch(config)
-        elif self == SubCmd.dry_run:
+        elif self == SubCmd.dry_run or self == SubCmd.dry_run_evaluate:
             logger.info(config)
         elif self == SubCmd.visualize:
             seed_all(config.init_seed)
@@ -363,6 +427,11 @@ class SubCmd(StrEnum):
         elif self == SubCmd.train:
             try:
                 train(config)
+            finally:
+                teardown_training_environment()
+        elif self == SubCmd.evaluate:
+            try:
+                evaluate(config)
             finally:
                 teardown_training_environment()
         elif self == SubCmd.train_single:
@@ -452,7 +521,22 @@ If running command on a local machine ie from a session, you can use the [b]loca
             inference_benchmarking_config_builder=inference_benchmarking_config_builder,
             overrides=overrides,
         )
+    elif (
+        cmd == SubCmd.evaluate
+        or cmd == SubCmd.launch_evaluate
+        or cmd == SubCmd.dry_run_evaluate
+    ):
+        # Evaluation mode
+        assert model_config_builder is not None
+        assert trainer_config_builder is not None
+        config = build_evaluate_config(
+            common=common,
+            model_config_builder=model_config_builder,
+            trainer_config_builder=trainer_config_builder,
+            overrides=overrides,
+        )
     else:
+        # Training mode
         assert model_config_builder is not None
         assert dataset_config_builder is not None
         assert dataloader_config_builder is not None

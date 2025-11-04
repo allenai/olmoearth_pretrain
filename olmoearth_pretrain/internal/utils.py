@@ -1,5 +1,12 @@
 """utility Functions for hyper parameter sweeps."""
 
+from collections.abc import Iterable
+from typing import Any
+
+import torch
+from olmo_core.data.data_loader import DataLoaderBase
+from olmo_core.train.train_module import EvalBatchSpec, TrainModule
+
 EXIT_CONFIG_TYPES = ["zero", "half", "full", "varied"]
 
 
@@ -184,3 +191,85 @@ MODEL_SIZE_ARGS = {
         "mlp_ratio": 4.0,
     },
 }
+
+
+class MockOlmoEarthDataLoader(DataLoaderBase):
+    """Minimal OlmoEarth dataloader that only satisfies the abstract interface."""
+
+    def __init__(self) -> None:
+        """Initialize the mock loader with trivial single-rank defaults."""
+        super().__init__(
+            work_dir="./",
+            global_batch_size=128,
+            dp_world_size=1,
+            dp_rank=0,
+            fs_local_rank=0,
+        )
+        self._seed = 42
+        self._epoch = 0
+
+    def _iter_batches(self) -> Iterable[Any]:
+        return iter(())
+
+    def state_dict(self) -> dict[str, Any]:
+        """Return the minimal persisted state for the mock loader."""
+        return {"seed": self._seed, "epoch": self._epoch}
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:  # noqa: D401
+        """No-op for the mock dataloader."""
+        self._seed = state_dict.get("seed", self._seed)
+        self._epoch = state_dict.get("epoch", self._epoch)
+
+    def reshuffle(
+        self, epoch: int | None = None, in_memory: bool = False, **_: Any
+    ) -> None:
+        """Record the provided epoch; other parameters are ignored."""
+        if epoch is not None:
+            self._epoch = epoch
+
+    @property
+    def total_batches(self) -> int:
+        """Report zero batches, as the mock loader never yields data."""
+        return 0
+
+    def get_mock_batch(self) -> None:
+        """Return no batch payload; this stub does not fabricate data."""
+        return None
+
+
+class MockLatentMIMTrainModule(TrainModule):
+    """Minimal TrainModule stub for LatentMIM-style configs."""
+
+    def __init__(self) -> None:
+        """Initialize the mock train module."""
+        super().__init__()
+        self.model = torch.nn.Identity()
+
+    @property
+    def eval_batch_spec(self) -> EvalBatchSpec:
+        """Return a trivial eval batch specification."""
+        return EvalBatchSpec(rank_batch_size=1)
+
+    def state_dict(self, *, optim: bool | None = None) -> dict[str, Any]:
+        """Return an empty state dict."""
+        del optim
+        return {}
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        """Ignore any state dict content."""
+        del state_dict
+
+    def train_batch(self, batch: dict[str, Any], dry_run: bool = False) -> None:
+        """No-op training step."""
+        del batch, dry_run
+
+    def eval_batch(self, batch: dict[str, Any], labels: Any | None = None) -> Any:
+        """Return a constant tensor to satisfy interface expectations."""
+        del batch, labels
+        return torch.tensor(0.0)
+
+    def optim_step(self) -> None:
+        """No-op optimizer step."""
+
+    def zero_grads(self) -> None:
+        """No-op gradient reset."""

@@ -8,7 +8,6 @@ from script import (
     build_dataset_config,
     build_train_module_config,
     build_trainer_config,
-    build_visualize_config,
 )
 
 from olmoearth_pretrain.internal.experiment import CommonComponents, main
@@ -63,5 +62,4 @@ if __name__ == "__main__":
         dataset_config_builder=build_dataset_config,
         dataloader_config_builder=build_dataloader_config,
         trainer_config_builder=build_trainer_config,
-        visualize_config_builder=build_visualize_config,
     )

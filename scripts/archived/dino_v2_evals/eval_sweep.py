@@ -22,7 +22,6 @@ lr_args = " ".join(
         "--trainer.callbacks.downstream_evaluator.tasks.m_cashew-plant.probe_lr={lr}",
         "--trainer.callbacks.downstream_evaluator.tasks.mados.probe_lr={lr}",
         "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr}",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr}",
         "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.probe_lr={lr}",
     ]
 )

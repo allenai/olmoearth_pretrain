@@ -28,8 +28,8 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSam
 
 from .normalize import normalize_bands
 
-# rslearn layer name -> (helios modality name, all bands)
-RSLEARN_TO_HELIOS: dict[str, tuple[str, list[str]]] = {
+# rslearn layer name -> (olmoearth modality name, all bands)
+RSLEARN_TO_OLMOEARTH: dict[str, tuple[str, list[str]]] = {
     "sentinel2": ("sentinel2_l2a", DataModality.SENTINEL2_L2A.band_order),
     "sentinel1": ("sentinel1", DataModality.SENTINEL1.band_order),
     "sentinel1_ascending": ("sentinel1", DataModality.SENTINEL1.band_order),
@@ -68,30 +68,30 @@ def build_rslearn_model_dataset(
     if not layers:
         raise ValueError(
             "`layers` must be a non-empty list of rslearn layer names, "
-            f"allowed: {list(RSLEARN_TO_HELIOS.keys())}"
+            f"allowed: {list(RSLEARN_TO_OLMOEARTH.keys())}"
         )
     if split not in ("train", "val", "test"):
         raise ValueError(f"Invalid split {split}, must be one of train/val/test")
 
     # Validate input layers
-    unknown = [m for m in layers if m not in RSLEARN_TO_HELIOS]
+    unknown = [m for m in layers if m not in RSLEARN_TO_OLMOEARTH]
     if unknown:
         raise ValueError(
             f"Unknown rslearn layer(s): {unknown}. "
-            f"Allowed: {list(RSLEARN_TO_HELIOS.keys())}"
+            f"Allowed: {list(RSLEARN_TO_OLMOEARTH.keys())}"
         )
 
     if classes is None:
         raise ValueError("`classes` must be provided and cannot be None.")
 
     # Group rslearn layers by their OlmoEarth Pretrain modality key
-    layers_by_helios: dict[str, list[str]] = defaultdict(list)
-    bands_by_helios: dict[str, list[str]] = {}
+    layers_by_olmoearth: dict[str, list[str]] = defaultdict(list)
+    bands_by_olmoearth: dict[str, list[str]] = {}
 
     for rslearn_layer in layers:
-        helios_key, band_order = RSLEARN_TO_HELIOS[rslearn_layer]
-        layers_by_helios[helios_key].append(rslearn_layer)
-        bands_by_helios[helios_key] = band_order
+        olmoearth_key, band_order = RSLEARN_TO_OLMOEARTH[rslearn_layer]
+        layers_by_olmoearth[olmoearth_key].append(rslearn_layer)
+        bands_by_olmoearth[olmoearth_key] = band_order
 
     transforms = []
     if input_size is not None:
@@ -99,22 +99,22 @@ def build_rslearn_model_dataset(
             RsPad(
                 size=input_size,
                 mode="center",
-                image_selectors=list(layers_by_helios.keys()),
+                image_selectors=list(layers_by_olmoearth.keys()),
             )
         )
 
     inputs: dict[str, RsDataInput] = {}
     # Expand each rslearn layer name to time-indexed variants, keep the first *per base layer*
-    for helios_key, per_key_layers in layers_by_helios.items():
+    for olmoearth_key, per_key_layers in layers_by_olmoearth.items():
         expanded: list[str] = []
         for base in per_key_layers:
             # convention: base, then base.1 ... base.(YEAR_NUM_TIMESTEPS-1)
             expanded.append(base)
             expanded.extend(f"{base}.{i}" for i in range(1, YEAR_NUM_TIMESTEPS))
-        inputs[helios_key] = RsDataInput(
+        inputs[olmoearth_key] = RsDataInput(
             data_type="raster",
             layers=expanded,
-            bands=bands_by_helios[helios_key],
+            bands=bands_by_olmoearth[olmoearth_key],
             passthrough=True,
             load_all_layers=True,
         )
@@ -129,7 +129,9 @@ def build_rslearn_model_dataset(
         transforms=transforms,
         groups=rslearn_dataset_groups,
         skip_targets=skip_targets,
-        tags={"helios_split": split} if split else {},
+        tags={"helios_split": split}
+        if split
+        else {},  # must stay as helios because it is tagged that way in the dataset
     )
 
     return RsModelDataset(
@@ -321,6 +323,6 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         sample_dict["timestamps"] = self.timestamps
 
-        helios_sample = OlmoEarthSample(**sample_dict)
-        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(helios_sample)
+        olmoearth_sample = OlmoEarthSample(**sample_dict)
+        masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(olmoearth_sample)
         return masked_sample, target["class"].long()

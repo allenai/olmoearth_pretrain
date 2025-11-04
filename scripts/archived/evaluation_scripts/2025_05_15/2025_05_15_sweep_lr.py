@@ -40,8 +40,6 @@ BASE_COMMAND = (
     "--trainer.callbacks.downstream_evaluator.tasks.sen1floods11.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis.probe_lr={lr} "
     "--trainer.callbacks.downstream_evaluator.tasks.pastis_r.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle.probe_lr={lr} "
-    "--trainer.callbacks.downstream_evaluator.tasks.sickle_r.probe_lr={lr} "
     "--launch.priority=urgent "
 )
 

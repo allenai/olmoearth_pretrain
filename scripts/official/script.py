@@ -26,7 +26,11 @@ from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
 from olmoearth_pretrain.internal.common import (
     build_common_components as build_common_components_default,
 )
-from olmoearth_pretrain.internal.experiment import CommonComponents, SubCmd
+from olmoearth_pretrain.internal.experiment import (
+    CommonComponents,
+    OlmoEarthVisualizeConfig,
+    SubCmd,
+)
 from olmoearth_pretrain.nn.flexi_vit import (
     PoolingType,
 )
@@ -165,7 +169,15 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             num_workers=0,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(2),
+            eval_interval=Duration.steps(4000),
+        ),
+        "m_so2sat": DownstreamTaskConfig(
+            dataset="m-so2sat",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.steps(20000),
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
@@ -189,54 +201,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
-        ),
-        "m_so2sat": DownstreamTaskConfig(
-            dataset="m-so2sat",
-            embedding_batch_size=128,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(20000),
-        ),
-        "nandi_sentinel2": DownstreamTaskConfig(
-            dataset="nandi",
-            embedding_batch_size=128,
-            num_workers=0,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            input_modalities=[Modality.SENTINEL2_L2A.name],
-            input_layers=["sentinel2"],
-            eval_interval=Duration.steps(20000),
-        ),
-        "awf_sentinel2": DownstreamTaskConfig(
-            dataset="awf",
-            embedding_batch_size=128,
-            num_workers=0,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            input_modalities=[Modality.SENTINEL2_L2A.name],
-            input_layers=["sentinel2"],
-            eval_interval=Duration.steps(20000),
-        ),
-        "awf_sentinel1": DownstreamTaskConfig(
-            dataset="awf",
-            embedding_batch_size=128,
-            num_workers=0,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            input_modalities=[Modality.SENTINEL1.name],
-            input_layers=["sentinel1_ascending"],
-            eval_interval=Duration.steps(20000),
-        ),
-        "awf_landsat": DownstreamTaskConfig(
-            dataset="awf",
-            embedding_batch_size=128,
-            num_workers=0,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            input_modalities=[Modality.LANDSAT.name],
-            input_layers=["landsat"],
-            eval_interval=Duration.steps(20000),
         ),
     }
     trainer_config = (
@@ -272,3 +236,12 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         )
     )
     return trainer_config
+
+
+def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig:
+    """Build the visualize config for an experiment."""
+    return OlmoEarthVisualizeConfig(
+        num_samples=None,
+        output_dir=str(f"{common.save_folder}/visualizations"),
+        std_multiplier=2.0,
+    )

@@ -8,14 +8,12 @@ from torch.utils.data import Dataset
 import olmoearth_pretrain.evals.datasets.paths as paths
 
 from .breizhcrops import BreizhCropsDataset
-from .cropharvest import CropHarvestDataset
 from .floods_dataset import Sen1Floods11Dataset
 from .geobench_dataset import GeobenchDataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
 from .rslearn_dataset import RslearnToOlmoEarthDataset
-from .sickle_dataset import SICKLEDataset
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +41,7 @@ def get_eval_dataset(
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
     if input_modalities:
-        if not (
-            eval_dataset.startswith("cropharvest")
-            or (eval_dataset in ["pastis", "pastis128", "sickle", "nandi", "awf"])
-        ):
+        if eval_dataset not in ["pastis", "pastis128", "nandi", "awf"]:
             raise ValueError(
                 f"input_modalities is only supported for multimodal tasks, got {eval_dataset}"
             )
@@ -108,33 +103,6 @@ def get_eval_dataset(
             split=split,
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
-            norm_method=norm_method,
-        )
-    elif eval_dataset == "sickle":
-        return SICKLEDataset(
-            path_to_splits=paths.SICKLE_DIR,
-            split=split,
-            partition=partition,
-            norm_stats_from_pretrained=norm_stats_from_pretrained,
-            input_modalities=input_modalities,
-            norm_method=norm_method,
-        )
-    elif eval_dataset.startswith("cropharvest"):
-        # e.g. "cropharvest_Togo_12"
-        try:
-            _, country, timesteps = eval_dataset.split("_")
-        except ValueError:
-            raise ValueError(
-                "CropHarvest tasks should have the following naming format: cropharvest_<country>_<timesteps> (e.g. 'cropharvest_Togo_12')"
-            )
-        return CropHarvestDataset(
-            cropharvest_dir=paths.CROPHARVEST_DIR,
-            country=country,
-            split=split,
-            partition=partition,
-            norm_stats_from_pretrained=norm_stats_from_pretrained,
-            timesteps=int(timesteps),
-            input_modalities=input_modalities,
             norm_method=norm_method,
         )
     elif eval_dataset == "nandi":

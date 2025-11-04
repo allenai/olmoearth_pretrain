@@ -19,9 +19,6 @@ lr_args = " ".join(
         "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.probe_lr={lr}",
         "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.probe_lr={lr}",
         "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.probe_lr={lr}",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.probe_lr={lr}",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.probe_lr={lr}",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.probe_lr={lr}",
         "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.probe_lr={lr}",
     ]
 )
@@ -38,9 +35,6 @@ dataset_args = " ".join(
         "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.norm_stats_from_pretrained=False",
         "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.norm_stats_from_pretrained=False",
         "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.norm_stats_from_pretrained=False",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.norm_stats_from_pretrained=False",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.norm_stats_from_pretrained=False",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.norm_stats_from_pretrained=False",
         "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.norm_stats_from_pretrained=False",
     ]
 )
@@ -57,9 +51,6 @@ helios_args = " ".join(
         "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel2.norm_stats_from_pretrained=True",
         "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1.norm_stats_from_pretrained=True",
         "--trainer.callbacks.downstream_evaluator.tasks.pastis_sentinel1_sentinel2.norm_stats_from_pretrained=True",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1.norm_stats_from_pretrained=True",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_landsat.norm_stats_from_pretrained=True",
-        "--trainer.callbacks.downstream_evaluator.tasks.sickle_sentinel1_landsat.norm_stats_from_pretrained=True",
         "--trainer.callbacks.downstream_evaluator.tasks.breizhcrops.norm_stats_from_pretrained=True",
     ]
 )

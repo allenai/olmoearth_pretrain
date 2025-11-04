@@ -5,12 +5,7 @@ from typing import Any
 
 from olmoearth_pretrain.evals.models.anysat.anysat import AnySat, AnySatConfig
 from olmoearth_pretrain.evals.models.clay.clay import Clay, ClayConfig
-from olmoearth_pretrain.evals.models.copernicusfm.copernicusfm import (
-    CopernicusFM,
-    CopernicusFMConfig,
-)
 from olmoearth_pretrain.evals.models.croma.croma import CROMA_SIZES, Croma, CromaConfig
-from olmoearth_pretrain.evals.models.dinov2.dinov2 import DINOv2, DINOv2Config
 from olmoearth_pretrain.evals.models.dinov3.constants import DinoV3Models
 from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
 from olmoearth_pretrain.evals.models.galileo import GalileoConfig, GalileoWrapper
@@ -44,7 +39,6 @@ class BaselineModelName(StrEnum):
     GALILEO = "galileo"
     SATLAS = "satlas"
     CROMA = "croma"
-    COPERNICUSFM = "copernicusfm"
     PRESTO = "presto"
     ANYSAT = "anysat"
     TESSERA = "tessera"
@@ -64,10 +58,7 @@ MODELS_WITH_MULTIPLE_SIZES: dict[BaselineModelName, Any] = {
 
 def get_launch_script_path(model_name: str) -> str:
     """Get the launch script path for a model."""
-    if model_name == "dino_v2":
-        # TODO: Remove as not mantained since dinov3 came out
-        return "olmoearth_pretrain/evals/models/dinov2/dinov2_launch.py"
-    elif model_name == BaselineModelName.DINO_V3:
+    if model_name == BaselineModelName.DINO_V3:
         return "olmoearth_pretrain/evals/models/dinov3/dino_v3_launch.py"
     elif model_name == BaselineModelName.GALILEO:
         return "olmoearth_pretrain/evals/models/galileo/galileo_launch.py"
@@ -81,8 +72,6 @@ def get_launch_script_path(model_name: str) -> str:
         return "olmoearth_pretrain/evals/models/croma/croma_launch.py"
     elif model_name == BaselineModelName.CLAY:
         return "olmoearth_pretrain/evals/models/clay/clay_launch.py"
-    elif model_name == BaselineModelName.COPERNICUSFM:
-        return "olmoearth_pretrain/evals/models/copernicusfm/copernicusfm_launch.py"
     elif model_name == BaselineModelName.PRESTO:
         return "olmoearth_pretrain/evals/models/presto/presto_launch.py"
     elif model_name == BaselineModelName.ANYSAT:
@@ -97,8 +86,6 @@ def get_launch_script_path(model_name: str) -> str:
 
 # TODO: assert that they all store a patch_size variable and supported modalities
 __all__ = [
-    "DINOv2",
-    "DINOv2Config",
     "Panopticon",
     "PanopticonConfig",
     "GalileoWrapper",
@@ -113,8 +100,6 @@ __all__ = [
     "CromaConfig",
     "Clay",
     "ClayConfig",
-    "CopernicusFM",
-    "CopernicusFMConfig",
     "PrestoWrapper",
     "PrestoConfig",
     "AnySat",

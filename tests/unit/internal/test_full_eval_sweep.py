@@ -39,6 +39,7 @@ def base_args() -> argparse.Namespace:
         select_best_val=False,
         model_skip_names=None,
         size=None,
+        load_eval_settings_from_json=False,
     )
 
 
@@ -59,6 +60,7 @@ def minimal_args() -> argparse.Namespace:
         select_best_val=False,
         model_skip_names=None,
         size=None,
+        load_eval_settings_from_json=False,
     )
 
 
@@ -76,8 +78,10 @@ class TestCreateLinearProbeArg:
 
     def test_different_task_names(self) -> None:
         """Test with different task names."""
-        result: str = create_linear_probe_arg("cropharvest", "pooling_type")
-        expected: str = "--trainer.callbacks.downstream_evaluator.tasks.cropharvest.pooling_type={arg}"
+        result: str = create_linear_probe_arg("nandi", "pooling_type")
+        expected: str = (
+            "--trainer.callbacks.downstream_evaluator.tasks.nandi.pooling_type={arg}"
+        )
         assert result == expected
 
     def test_special_characters_in_names(self) -> None:
@@ -475,7 +479,7 @@ class TestIntegration:
                     base_args,
                     [
                         "--extra",
-                        "--trainer.callbacks.downstream_evaluator.tasks_to_run=[m_eurosat,sickle_landsat]",
+                        "--trainer.callbacks.downstream_evaluator.tasks_to_run=[m_eurosat]",
                     ],
                 )
 
@@ -492,6 +496,6 @@ class TestIntegration:
             assert "--extra" in command
             assert "pre_trained" in command or "dataset" in command
             assert (
-                "--trainer.callbacks.downstream_evaluator.tasks_to_run=[m_eurosat,sickle_landsat]"
+                "--trainer.callbacks.downstream_evaluator.tasks_to_run=[m_eurosat]"
                 in command
             )
