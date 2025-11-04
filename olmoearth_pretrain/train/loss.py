@@ -317,6 +317,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
 
         # Accumulate to the total loss
         total_loss = 0
+        num_modality_losses = 0
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
@@ -365,8 +366,9 @@ class ModalityPatchDiscriminationLossNew(Loss):
             if self.modality_weights is not None:
                 loss = loss * self.modality_weights[modality]
             total_loss += loss
+            num_modality_losses += 1
 
-        return self.weight * total_loss
+        return self.weight * total_loss / num_modality_losses
 
 
 @LOSS_REGISTRY.register("patch_discrimination")
