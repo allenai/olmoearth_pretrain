@@ -116,6 +116,9 @@ class OlmoEarthWandBCallback(WandBCallback):
                 dataset = self.trainer.data_loader.dataset
                 logger.info("Gathering locations of entire dataset")
                 latlons = dataset.latlon_distribution
+                import pickle
+                with open('/weka/dfive-default/joer/olmoearth_pretrain/latlon.pkl', 'wb') as file:
+                    pickle.dump(latlons, file)
                 assert latlons is not None
                 # this should just be a general utility function
                 logger.info(f"Uploading dataset distribution to wandb: {latlons.shape}")
