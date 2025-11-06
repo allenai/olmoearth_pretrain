@@ -28,6 +28,14 @@ class RunParams(Config):
     min_batches_per_interval: int = 10
     profiler_enabled: bool = False
     wandb_enabled: bool = True
+    # INT8 quantization parameters
+    int8_enabled: bool = False
+    int8_mode: str = "w8a8"  # "w8a8" (weight+activation) or "w8" (weight-only)
+    int8_smoothquant: bool = False  # Apply SmoothQuant calibration
+    compile_mode: str = (
+        "max-autotune"  # "default", "reduce-overhead", or "max-autotune"
+    )
+    compile_fullgraph: bool = True  # Compile the entire graph (best performance)
 
     @property
     def run_name(self) -> str:
@@ -39,6 +47,9 @@ class RunParams(Config):
                     self.model_size,
                     self.gpu_type,
                     "bf16" if self.bf16 else None,
+                    f"int8_{self.int8_mode}" if self.int8_enabled else None,
+                    "smoothq" if self.int8_smoothquant else None,
+                    self.compile_mode if self.int8_enabled else None,
                     "s1" if self.use_s1 else None,
                     "s2" if self.use_s2 else None,
                     "ls" if self.use_landsat else None,
@@ -72,9 +83,15 @@ class RunParams(Config):
             keys["min_batches_per_interval"]: str(self.min_batches_per_interval),
             keys["name"]: self.run_name,
         }
-        # Add the two new params
+        # Add the existing params
         env_vars["profiler_enabled"] = str(int(self.profiler_enabled))
         env_vars["wandb_enabled"] = str(int(self.wandb_enabled))
+        # Add INT8 quantization params
+        env_vars["int8_enabled"] = str(int(self.int8_enabled))
+        env_vars["int8_mode"] = self.int8_mode
+        env_vars["int8_smoothquant"] = str(int(self.int8_smoothquant))
+        env_vars["compile_mode"] = self.compile_mode
+        env_vars["compile_fullgraph"] = str(int(self.compile_fullgraph))
         return env_vars
 
     @staticmethod
@@ -95,6 +112,13 @@ class RunParams(Config):
         min_batches_per_interval = int(os.getenv(keys["min_batches_per_interval"], 10))
         profiler_enabled = True if os.getenv("profiler_enabled", "0") == "1" else False
         wandb_enabled = True if os.getenv("wandb_enabled", "0") == "1" else False
+        int8_enabled = True if os.getenv("int8_enabled", "0") == "1" else False
+        int8_mode = os.getenv("int8_mode", "w8a8")
+        int8_smoothquant = True if os.getenv("int8_smoothquant", "0") == "1" else False
+        compile_mode = os.getenv("compile_mode", "max-autotune")
+        compile_fullgraph = (
+            True if os.getenv("compile_fullgraph", "1") == "1" else False
+        )
 
         return RunParams(
             model_size=model_size,
@@ -111,6 +135,11 @@ class RunParams(Config):
             min_batches_per_interval=min_batches_per_interval,
             profiler_enabled=profiler_enabled,
             wandb_enabled=wandb_enabled,
+            int8_enabled=int8_enabled,
+            int8_mode=int8_mode,
+            int8_smoothquant=int8_smoothquant,
+            compile_mode=compile_mode,
+            compile_fullgraph=compile_fullgraph,
         )
 
     @staticmethod
@@ -125,6 +154,8 @@ class RunParams(Config):
         bf16 = "_bf16_" in name
         profiler_enabled = "_prof_" in name or "_prof" in name
         wandb_enabled = "_wandb_" in name or "_wandb" in name
+        int8_enabled = "_int8_" in name
+        int8_smoothquant = "_smoothq_" in name or "_smoothq" in name
 
         # Initialize with default values
         image_size = 64
@@ -133,6 +164,23 @@ class RunParams(Config):
         batch_size = 128
         benchmark_interval_s = 180
         min_batches_per_interval = 10
+        int8_mode = "w8a8"
+        compile_mode = "max-autotune"
+        compile_fullgraph = True
+
+        # Parse INT8 mode
+        if int8_enabled:
+            if "_int8_w8a8_" in name:
+                int8_mode = "w8a8"
+            elif "_int8_w8_" in name:
+                int8_mode = "w8"
+
+        # Parse compile mode
+        compile_modes = ["default", "reduce-overhead", "max-autotune"]
+        for mode in compile_modes:
+            if f"_{mode}_" in name or name.endswith(f"_{mode}"):
+                compile_mode = mode
+                break
 
         for item in split_name:
             if item.startswith("is"):
@@ -162,4 +210,9 @@ class RunParams(Config):
             min_batches_per_interval=min_batches_per_interval,
             profiler_enabled=profiler_enabled,
             wandb_enabled=wandb_enabled,
+            int8_enabled=int8_enabled,
+            int8_mode=int8_mode,
+            int8_smoothquant=int8_smoothquant,
+            compile_mode=compile_mode,
+            compile_fullgraph=compile_fullgraph,
         )

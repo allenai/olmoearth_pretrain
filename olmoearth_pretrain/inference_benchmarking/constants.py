@@ -71,6 +71,11 @@ sweep_use_s2 = {"use_s2": [True, False]}
 sweep_use_landsat = {"use_landsat": [True, False]}
 sweep_bf16 = {"bf16": [True, False]}
 sweep_model_size = {"model_size": ["nano", "tiny", "base", "large"]}
+# INT8 quantization sweeps
+sweep_int8_enabled = {"int8_enabled": [True, False]}
+sweep_int8_mode = {"int8_mode": ["w8a8", "w8"]}
+sweep_int8_smoothquant = {"int8_smoothquant": [True, False]}
+sweep_compile_mode = {"compile_mode": ["default", "reduce-overhead", "max-autotune"]}
 
 
 SWEEPS = {
@@ -83,6 +88,10 @@ SWEEPS = {
     "use_landsat": sweep_use_landsat,
     "bf16": sweep_bf16,
     "model_size": sweep_model_size,
+    "int8_enabled": sweep_int8_enabled,
+    "int8_mode": sweep_int8_mode,
+    "int8_smoothquant": sweep_int8_smoothquant,
+    "compile_mode": sweep_compile_mode,
     "all": sweep_batch_sizes
     | sweep_image_sizes
     | sweep_patch_sizes
@@ -91,5 +100,9 @@ SWEEPS = {
     | sweep_use_s2
     | sweep_use_landsat
     | sweep_bf16
-    | sweep_model_size,
+    | sweep_model_size
+    | sweep_int8_enabled
+    | sweep_int8_mode
+    | sweep_int8_smoothquant
+    | sweep_compile_mode,
 }

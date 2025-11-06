@@ -20,6 +20,11 @@ from olmo_core.train.trainer import PathOrStr
 from olmoearth_pretrain.data.constants import BASE_GSD, Modality
 from olmoearth_pretrain.inference_benchmarking import constants
 from olmoearth_pretrain.inference_benchmarking.data_models import RunParams
+from olmoearth_pretrain.inference_benchmarking.quant_a100 import (
+    FlashSDPA,
+    apply_int8_quant,
+    compile_for_a100,
+)
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
 from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
@@ -69,7 +74,7 @@ class MinimalTrainer:
 class OlmoEarth(torch.nn.Module):
     """Thin wrapper around OlmoEarth Pretrain checkpoint that loads just the encoder."""
 
-    def __init__(self, model_config: Config) -> None:
+    def __init__(self, model_config: Config, apply_compile: bool = True) -> None:
         """Loads the checkpoint, keeps only the encoder."""
         super().__init__()
 
@@ -81,8 +86,9 @@ class OlmoEarth(torch.nn.Module):
 
         self.model: Encoder = model
         self.model.eval()
-        # probably want to add a flag for this
-        self.model.apply_compile()
+        # Legacy compile - disabled when using INT8/custom compile
+        if apply_compile:
+            self.model.apply_compile()
 
     def forward(
         self,
@@ -201,7 +207,34 @@ class ThroughputBenchmarkRunner:
             encoder_config=encoder_config,
             decoder_config=decoder_config,
         )
-        model = OlmoEarth(model_config=model_config)
+        # Disable legacy compile if using INT8/custom compile
+        apply_legacy_compile = not run_params.int8_enabled
+        model = OlmoEarth(model_config=model_config, apply_compile=apply_legacy_compile)
+
+        # Apply INT8 quantization if enabled
+        if run_params.int8_enabled:
+            logger.info(
+                f"Applying INT8 quantization (mode={run_params.int8_mode}, "
+                f"smoothquant={run_params.int8_smoothquant})"
+            )
+            model = apply_int8_quant(
+                model,
+                mode=run_params.int8_mode,
+                smoothquant=run_params.int8_smoothquant,
+                inductor_preset=True,
+            )
+            # Apply torch.compile with specified mode
+            logger.info(
+                f"Compiling model (mode={run_params.compile_mode}, "
+                f"fullgraph={run_params.compile_fullgraph})"
+            )
+            model = compile_for_a100(
+                model,
+                mode=run_params.compile_mode,
+                fullgraph=run_params.compile_fullgraph,
+                allow_tf32=True,
+            )
+
         return model
 
     def build_sweep_run_params(self) -> list[RunParams]:
@@ -365,22 +398,36 @@ class ThroughputBenchmarkRunner:
         # log that the data is prepared
         logger.info("Data prepared, starting warmup")
         torch.cuda.set_sync_debug_mode("warn")
+
+        # Helper function for forward pass with optional FlashSDPA and autocast
+        def run_forward():
+            """Run forward pass with appropriate context managers."""
+            # Build context managers
+            contexts = [torch.inference_mode()]
+
+            # Add FlashSDPA if using INT8
+            if run_params.int8_enabled:
+                contexts.append(FlashSDPA())
+
+            # Add autocast if using BF16
+            if run_params.bf16:
+                contexts.append(
+                    torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16)
+                )
+
+            # Nest all context managers and run forward
+            from contextlib import ExitStack
+
+            with ExitStack() as stack:
+                for ctx in contexts:
+                    stack.enter_context(ctx)
+                return model.forward(masked_sample, patch_size=run_params.patch_size)
+
         # Run 5 forward passes as warmup
         oom_occurred = False
         for _ in range(5):
             try:
-                with torch.inference_mode():
-                    if run_params.bf16:
-                        with torch.amp.autocast(
-                            device_type=device.type, dtype=torch.bfloat16
-                        ):
-                            results = model.forward(
-                                masked_sample, patch_size=run_params.patch_size
-                            )
-                    else:
-                        results = model.forward(
-                            masked_sample, patch_size=run_params.patch_size
-                        )
+                results = run_forward()
             except torch.cuda.OutOfMemoryError as e:
                 logger.error(f"CUDA OOM during warmup: {e}")
                 oom_occurred = True
@@ -411,19 +458,8 @@ class ThroughputBenchmarkRunner:
         ) < run_params.min_batches_per_interval:
             batch_start = time.monotonic()
 
-            with torch.inference_mode():
-                if run_params.bf16:
-                    with torch.amp.autocast(
-                        device_type=device.type, dtype=torch.bfloat16
-                    ):
-                        results = model.forward(
-                            masked_sample,
-                            patch_size=run_params.patch_size,
-                        )
-                else:
-                    results = model.forward(
-                        masked_sample, patch_size=run_params.patch_size
-                    )
+            results = run_forward()
+
             # seperately time batches outside the larger loop
             time_taken_per_batch.append(time.monotonic() - batch_start)
 
