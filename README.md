@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/OlmoEarth-logo.png" alt="OlmoEarth Logo" style="width: 600px; margin-left:'auto' margin-right:'auto' display:'block'"/>
+  <img src="https://raw.githubusercontent.com/allenai/olmoearth_pretrain/main/assets/OlmoEarth-logo.png" alt="OlmoEarth Logo" style="width: 600px; margin-left:'auto' margin-right:'auto' display:'block'"/>
   <br>
   <br>
 </div>
@@ -38,7 +38,7 @@ OlmoEarth is built using [OLMo-core](https://github.com/allenai/OLMo-core.git). 
 
 ## Model Summary
 
-<img src="assets/model.png" alt="Model Architecture Diagram" style="width: 800px; margin-left:'auto' margin-right:'auto' display:'block'"/>
+<img src="https://raw.githubusercontent.com/allenai/olmoearth_pretrain/main/assets/model.png" alt="Model Architecture Diagram" style="width: 800px; margin-left:'auto' margin-right:'auto' display:'block'"/>
 
 The OlmoEarth models are trained on three satellite modalities (Sentinel 2, Sentinel 1 and Landsat) and six derived maps (OpenStreetMap, WorldCover, USDA Cropland Data Layer, SRTM DEM, WRI Canopy Height Map, and WorldCereal).
 | Model Size | Weights | Encoder Params | Decoder Params |
@@ -67,7 +67,7 @@ Our pretraining dataset contains 285,288 samples from around the world of 2.56km
 
 The distribution of the samples is available below:
 
-<img src="assets/datamap.png" alt="Training sample distribution" style="width: 500px; margin-left:'auto' margin-right:'auto' display:'block'"/>
+<img src="https://raw.githubusercontent.com/allenai/olmoearth_pretrain/main/assets/datamap.png" alt="Training sample distribution" style="width: 500px; margin-left:'auto' margin-right:'auto' display:'block'"/>
 
 The dataset can be downloaded [here](https://huggingface.co/datasets/allenai/olmoearth_pretrain_dataset).
 
