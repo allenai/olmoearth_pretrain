@@ -65,7 +65,7 @@ sweep_image_sizes = {
     "image_size": [1, 2, 4, 8, 16, 32, 64, 128],
 }
 sweep_patch_sizes = {"patch_size": [1, 2, 4, 8]}
-sweep_num_timesteps = {"num_timesteps": [1, 2, 4, 6, 8, 12]}
+sweep_num_timesteps = {"num_timesteps": [1, 6, 12]}
 sweep_use_s1 = {"use_s1": [True, False]}
 sweep_use_s2 = {"use_s2": [True, False]}
 sweep_use_landsat = {"use_landsat": [True, False]}
