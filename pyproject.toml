@@ -1,5 +1,5 @@
 [project]
-name = "olmoearth_pretrain"
+name = "olmoearth-pretrain"
 version = "0.0.1"
 description = "A library for developing earth system foundation models"
 authors = [
