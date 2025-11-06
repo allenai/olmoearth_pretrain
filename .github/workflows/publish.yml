@@ -11,19 +11,12 @@ concurrency:
 jobs:
   build-dist:
     name: Build distribution
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          version: "0.9.5"
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
 
       - name: Verify version matches tag
         run: |
@@ -35,11 +28,7 @@ jobs:
           fi
           echo "Version check passed: $TAG_VERSION"
 
-      - name: Install build dependencies
-        run: uv pip install --system build
-
-      - name: Build package
-        run: python -m build
+      - run: uv build
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -58,7 +47,7 @@ jobs:
       id-token: write
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: dist
           path: dist/
