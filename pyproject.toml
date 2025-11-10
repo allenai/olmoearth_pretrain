@@ -28,6 +28,17 @@ dependencies = [
     "wandb>=0.19.0",
 ]
 
+optional-dependencies.torch-cpu = [
+  "torch>=2.7,<2.10",
+  "torchvision>=0.22.1,<1",
+]
+optional-dependencies.torch-cu128 = [
+  "pytorch-triton",
+  "torch>=2.7,<2.10",
+  "torchvision>=0.22.1,<1",
+  "flash-attn>=2.4.0",
+]
+
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
@@ -56,13 +67,26 @@ addopts = [
     "--import-mode=importlib",
 ]
 
+[tool.uv]
+conflicts = [
+  [
+    { extra = "torch-cpu" },
+    { extra = "torch-cu128" },
+  ],
+]
+
 [tool.uv.sources]
 claymodel = { git = "https://github.com/Clay-foundation/model.git" }
 geobench = { git = "https://github.com/ServiceNow/geo-bench.git" }
 torch = [
-  { index = "pytorch-cpu", marker = "sys_platform != 'linux'" },
-  { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
+  { index = "pytorch-cpu", extra="torch-cpu"},
+  { index = "pytorch-cu128", extra="torch-cu128"},
 ]
+torchvision = [
+  { index = "pytorch-cpu", extra = "torch-cpu" },
+  { index = "pytorch-cu128", extra = "torch-cu128" },
+]
+pytorch-triton = [ { index = "pytorch-cu128", extra = "torch-cu128" } ]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -126,10 +150,6 @@ eval = [
     "timm==1.0.20",
     "torchmetrics==1.7.1",
     "xarray>=2025.10.1",
-]
-
-flash_attn = [
-    "flash-attn>=2.4.0",
 ]
 
 [tool.uv.extra-build-dependencies]
