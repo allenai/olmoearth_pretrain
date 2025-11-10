@@ -17,25 +17,26 @@ dependencies = [
     "gcsfs>=2025.9.0",
     "hdf5plugin>=6.0.0",
     "matplotlib>=3.10.7",
+    "markupsafe<=3.0.0",
     "numpy>=1.26.4",
     "pandas>=2.2",
     "psutil>=7.1.1",
     "rasterio>=1.4.3",
     "shapely>=2",
     "torch>=2.7,<2.10",
-    "torchvision>=0.22.1",
+    "torchvision>=0.22.1,<0.24.0",
     "universal-pathlib>=0.2.5",
     "wandb>=0.19.0",
 ]
 
 optional-dependencies.torch-cpu = [
   "torch>=2.7,<2.10",
-  "torchvision>=0.22.1,<1",
+  "torchvision>=0.22.1,<0.24.0",
 ]
 optional-dependencies.torch-cu128 = [
   "pytorch-triton",
   "torch>=2.7,<2.10",
-  "torchvision>=0.22.1,<1",
+  "torchvision>=0.22.1,<0.24.0",
   "flash-attn>=2.4.0",
 ]
 
@@ -68,9 +69,6 @@ addopts = [
 ]
 
 [tool.uv]
-required-environments = [
-    "sys_platform == 'linux' and platform_machine == 'x86_64'",
-]
 conflicts = [
   [
     { extra = "torch-cpu" },
