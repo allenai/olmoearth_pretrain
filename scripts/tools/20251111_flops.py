@@ -166,6 +166,8 @@ if __name__ == "__main__":
         ),
         Terramind("base"),
         Terramind("large"),
+        # for the models below, the paths will
+        # need to point to where the model weights are.
         Satlas("."),
         PrithviV2(".", PrithviV2Models.VIT_300),
         PrithviV2(".", PrithviV2Models.VIT_600),
