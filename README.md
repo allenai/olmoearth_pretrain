@@ -27,7 +27,8 @@ To install dependencies with uv, run:
 ```bash
 git clone git@github.com:allenai/olmoearth_pretrain.git
 cd olmoearth_pretrain
-uv sync --locked --all-groups --python 3.12
+uv sync --locked --extra torch-cu128 --all-groups --python 3.12
+# or uv sync --locked --extra torch-cpu --all-groups --python 3.12
 # only necessary for development
 uv tool install pre-commit --with pre-commit-uv --force-reinstall
 ```
