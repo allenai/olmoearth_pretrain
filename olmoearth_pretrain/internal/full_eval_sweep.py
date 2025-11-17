@@ -621,6 +621,8 @@ def _build_command_from_eval_settings(
     norm_modes_used = set()
 
     for task_name, task_data in eval_settings_dict.items():
+        if task_name not in EVAL_TASKS:
+            continue
         settings = task_data["settings"]
 
         # Extract settings for this task
