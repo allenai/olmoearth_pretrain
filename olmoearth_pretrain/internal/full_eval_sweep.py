@@ -612,6 +612,9 @@ def _build_command_from_eval_settings(
     norm_modes_used = set()
 
     for task_name, task_data in eval_settings_dict.items():
+        if task_name not in EVAL_TASKS:
+            logger.warning(f"Task {task_name} not found in EVAL_TASKS, skipping")
+            continue
         settings = task_data["settings"]
 
         # Extract settings for this task
@@ -644,6 +647,7 @@ def _build_command_from_eval_settings(
             f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_stats_from_pretrained={norm_from_pretrained}"
         )
 
+        logger.info(f"Adding task args for {task_name}: {task_args}")
         cmd_args_parts.extend(task_args)
 
     # Create a descriptive run name
@@ -670,11 +674,6 @@ def _build_command_from_eval_settings(
 
     # Add model-specific args
     cmd_args += _get_model_specific_args(args.model)
-
-    # Add model-specific normalization args if needed (this may get overridden by task-specific args)
-    # Use the first norm mode found, or default to dataset
-    first_norm_mode = list(norm_modes_used)[0] if norm_modes_used else "dataset"
-    cmd_args += _get_normalization_args(args.model, first_norm_mode)
 
     module_path = (
         args.module_path
