@@ -218,6 +218,18 @@ def get_clay_args(pretrained_normalizer: bool = True) -> str:
     return clay_args
 
 
+def get_copernicusfm_args() -> str:
+    """Get the copernicusfm arguments."""
+    copernicusfm_args = dataset_args
+    copernicusfm_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return copernicusfm_args
+
+
 def get_anysat_args() -> str:
     """Get the anysat arguments."""
     anysat_args = dataset_args
@@ -229,7 +241,7 @@ def get_anysat_args() -> str:
     )
     anysat_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=2"
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_batch_size=4"
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -349,12 +361,11 @@ def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
 def _get_sub_command(args: argparse.Namespace) -> str:
     """Determine the sub command based on args and cluster."""
     if args.dry_run:
-        return SubCmd.dry_run_evaluate
-    # If cluster is local, we run eval locally, if not, we launch evaluation on beaker
-    if args.cluster == "local":
-        return SubCmd.evaluate
+        return SubCmd.dry_run
+    elif args.cluster == "local":
+        return SubCmd.train
     else:
-        return SubCmd.launch_evaluate
+        return SubCmd.launch
 
 
 def _get_base_run_name(
@@ -402,6 +413,7 @@ def _get_model_specific_args(model: BaselineModelName | None) -> str:
         BaselineModelName.GALILEO: get_galileo_args,
         BaselineModelName.SATLAS: get_satlas_args,
         BaselineModelName.CROMA: get_croma_args,
+        BaselineModelName.COPERNICUSFM: get_copernicusfm_args,
         BaselineModelName.PRESTO: get_presto_args,
         BaselineModelName.ANYSAT: get_anysat_args,
         BaselineModelName.TESSERA: get_tessera_args,
@@ -524,7 +536,7 @@ def _build_default_command(
     logger.info(f"Using module path {module_path}")
     cmd_args += _get_model_size_args(args.model, size)
     cmd_args += _get_load_checkpoints_args(args.model)
-    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
+    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch else ""
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} "
@@ -575,10 +587,7 @@ def _build_hyperparameter_command(
     cmd_args += _get_load_checkpoints_args(args.model)
     cmd_args += _get_model_size_args(args.model, size)
 
-    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
-    # if init_seed is set add to base run name
-    if "init_seed" in extra:
-        run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
+    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch else ""
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
@@ -612,9 +621,6 @@ def _build_command_from_eval_settings(
     norm_modes_used = set()
 
     for task_name, task_data in eval_settings_dict.items():
-        if task_name not in EVAL_TASKS:
-            logger.warning(f"Task {task_name} not found in EVAL_TASKS, skipping")
-            continue
         settings = task_data["settings"]
 
         # Extract settings for this task
@@ -647,7 +653,6 @@ def _build_command_from_eval_settings(
             f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_stats_from_pretrained={norm_from_pretrained}"
         )
 
-        logger.info(f"Adding task args for {task_name}: {task_args}")
         cmd_args_parts.extend(task_args)
 
     # Create a descriptive run name
@@ -683,10 +688,7 @@ def _build_command_from_eval_settings(
     cmd_args += _get_load_checkpoints_args(args.model)
     cmd_args += _get_model_size_args(args.model, size)
 
-    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
-    # if init_seed is set add to base run name
-    if "init_seed" in extra:
-        run_name += f"_seed{extra.split('init_seed=')[1].split(' ')[0]}"
+    launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch else ""
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
         f"{sub_command} {run_name} {args.cluster} {launch_overrides} {cmd_args} "
@@ -707,7 +709,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     extra = " " + " ".join(extra_cli) if extra_cli else ""
 
     sub_command = _get_sub_command(args)
-    launch_command = "python3" if not sub_command == SubCmd.evaluate else "torchrun"
+    launch_command = "python3" if not sub_command == SubCmd.train else "torchrun"
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
 
     commands_to_run = []
@@ -757,10 +759,11 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             models = [args.model]
         for model in models:
             args.model = model
-            # Models that only use dataset normalization or need dataset normalization to scale to 0 - 1 then always use pretrained
+            # Models that only use dataset normalizaiton or need dataset normalization to scale to 0 - 1 then always use pretrained
             dataset_norm_only_models = {
                 BaselineModelName.DINO_V3,
                 BaselineModelName.PANOPTICON,
+                BaselineModelName.COPERNICUSFM,
                 BaselineModelName.TESSERA,
             }
             if args.size is not None:
