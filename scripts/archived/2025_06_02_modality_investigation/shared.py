@@ -363,17 +363,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     logger.warning("WANDB Distribution Uploads are disabled for Debugging")
     EVAL_TASKS = {
-        "sickle_sentinel1": DownstreamTaskConfig(
-            dataset="sickle",
-            embedding_batch_size=32,
-            probe_batch_size=16,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.01,
-            eval_interval=Duration.epochs(5),
-            input_modalities=["sentinel1"],
-        ),
         "pastis_sentinel1": DownstreamTaskConfig(
             dataset="pastis",
             embedding_batch_size=32,
@@ -385,28 +374,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.epochs(5),
             input_modalities=["sentinel1"],
             epochs=50,
-        ),
-        "sickle_landsat": DownstreamTaskConfig(
-            dataset="sickle",
-            embedding_batch_size=32,
-            probe_batch_size=32,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.01,
-            eval_interval=Duration.epochs(5),
-            input_modalities=[Modality.LANDSAT.name],
-        ),
-        "sickle_landsat_sentinel1": DownstreamTaskConfig(
-            dataset="sickle",
-            embedding_batch_size=32,
-            probe_batch_size=8,
-            num_workers=8,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.002,
-            eval_interval=Duration.epochs(5),
-            input_modalities=[Modality.LANDSAT.name, "sentinel1"],
         ),
         "sen1floods11": DownstreamTaskConfig(
             dataset="sen1floods11",

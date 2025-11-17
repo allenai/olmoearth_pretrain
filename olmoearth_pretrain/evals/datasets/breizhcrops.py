@@ -1,12 +1,11 @@
 """Breizhcrops eval dataset."""
 
+from logging import getLogger
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
-from breizhcrops import BreizhCrops
-from breizhcrops.datasets.breizhcrops import SELECTED_BANDS
 from einops import repeat
 from torch.utils.data import ConcatDataset, Dataset
 
@@ -16,24 +15,22 @@ from olmoearth_pretrain.train.masking import (
     OlmoEarthSample,
 )
 
-from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_HELIOS_S2_BANDS
+from .constants import EVAL_S2_BAND_NAMES, EVAL_TO_OLMOEARTH_S2_BANDS
 from .normalize import normalize_bands
 from .utils import load_min_max_stats
 
 LEVEL = "L1C"
 
+logger = getLogger(__name__)
 
-def _helios2bc_name(band_name: str) -> str:
+
+def _olmoearth2bc_name(band_name: str) -> str:
     """Transform OlmoEarth Pretrain S2 band name to Breizhcrops S2 band name."""
     band_number = band_name.split(" ")[0]
     if band_number.startswith("0"):
         band_number = band_number[1:]
     return f"B{band_number}"
 
-
-INPUT_TO_OUTPUT_BAND_MAPPING = [
-    SELECTED_BANDS[LEVEL].index(_helios2bc_name(b)) for b in EVAL_S2_BAND_NAMES
-]
 
 BAND_STATS = {
     "01 - Coastal aerosol": {"mean": 3254.1433, "std": 2148.5647},
@@ -83,6 +80,22 @@ class BreizhCropsDataset(Dataset):
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             monthly_average: Whether to compute a monthly average of the timesteps
         """
+        try:
+            from breizhcrops import BreizhCrops
+            from breizhcrops.datasets.breizhcrops import SELECTED_BANDS
+        except ImportError:
+            raise RuntimeError(
+                "breizhcrops package must be explicitly installed "
+                "(`uv pip install breizhcrops==0.0.4.1`) for the "
+                "Breizhcrops eval to run."
+            )
+
+        self.bc_selected_bands = SELECTED_BANDS
+
+        self.input_to_output_band_mapping = [
+            SELECTED_BANDS[LEVEL].index(_olmoearth2bc_name(b))
+            for b in EVAL_S2_BAND_NAMES
+        ]
         kwargs = {
             "root": path_to_splits,
             "preload_ram": False,
@@ -161,7 +174,7 @@ class BreizhCropsDataset(Dataset):
         x, y_true, _ = self.ds[idx]
         if self.monthly_average:
             x = self._average_over_month(x)  # T, C
-        months = torch.from_numpy(x[:, SELECTED_BANDS[LEVEL].index("doa")])
+        months = torch.from_numpy(x[:, self.bc_selected_bands[LEVEL].index("doa")])
         days = torch.ones_like(months)
         # from the Breizhcrops paper: The dataset is composed of Sentinel-2 image time series
         # extracted from January 1, 2017 to December 31, 2017
@@ -177,8 +190,8 @@ class BreizhCropsDataset(Dataset):
             :,
             :,
             :,
-            INPUT_TO_OUTPUT_BAND_MAPPING,
-        ][:, :, :, EVAL_TO_HELIOS_S2_BANDS]
+            self.input_to_output_band_mapping,
+        ][:, :, :, EVAL_TO_OLMOEARTH_S2_BANDS]
         if self.norm_stats_from_pretrained:
             image = self.normalizer_computed.normalize(Modality.SENTINEL2_L2A, image)
 
@@ -189,17 +202,21 @@ class BreizhCropsDataset(Dataset):
         )
         return masked_sample, y_true.long()
 
-    @staticmethod
-    def _average_over_month(x: np.ndarray) -> np.ndarray:
+    def _average_over_month(self, x: np.ndarray) -> np.ndarray:
         # doa == date of acquisition
-        x[:, SELECTED_BANDS[LEVEL].index("doa")] = np.array(
+        x[:, self.bc_selected_bands[LEVEL].index("doa")] = np.array(
             [
                 t.month - 1
-                for t in pd.to_datetime(x[:, SELECTED_BANDS[LEVEL].index("doa")])
+                for t in pd.to_datetime(
+                    x[:, self.bc_selected_bands[LEVEL].index("doa")]
+                )
             ]
         )
         per_month = np.split(
-            x, np.unique(x[:, SELECTED_BANDS[LEVEL].index("doa")], return_index=True)[1]
+            x,
+            np.unique(
+                x[:, self.bc_selected_bands[LEVEL].index("doa")], return_index=True
+            )[1],
         )[1:]
         return np.array([per_month[idx].mean(axis=0) for idx in range(len(per_month))])
 

@@ -134,18 +134,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             probe_lr=0.1,
             epochs=50,
         ),
-        "sickle_landsat": DownstreamTaskConfig(
-            dataset="sickle",
-            embedding_batch_size=32,
-            probe_batch_size=16,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=False,
-            probe_lr=0.01,
-            eval_interval=Duration.epochs(10),
-            input_modalities=[Modality.LANDSAT.name],
-            epochs=50,
-        ),
         "m_sa_crop_type": DownstreamTaskConfig(
             dataset="m-sa-crop-type",
             embedding_batch_size=32,

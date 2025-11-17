@@ -1,0 +1,127 @@
+OlmoEarth Artifact License
+
+By exercising the rights granted to you under this OlmoEarth Artifact License
+("Agreement"), you accept and agree to its terms and conditions and enter into this
+Agreement with The Allen Institute for Artificial Intelligence ("Ai2"). All references
+to "you" herein means both an individual and legal entity that an individual is acting
+on behalf of.
+
+Subject to your compliance with this Agreement, Ai2 grants you permission, free of
+charge, to use the machine learning artifacts, materials, and documentation provided by
+Ai2 under this Agreement as follows (collectively, "Artifacts"):
+
+- Model weights, including architecture and parameters ("Model");
+- Associated dataset or collection of data in connection with the Model ("Dataset"); and/or
+- Associated software to process and run the Dataset and Model, including code in
+  source or binary form for training, inference, and evaluation ("Code").
+
+1. Use Rights
+
+Subject to the terms in Section 2 and 3 below, you may:
+
+(a) Use, reproduce, modify, display and distribute the Artifacts, in whole or in part;
+(b) Create any other machine learning models, datasets, and derivative works that are
+    derived from or based on the Artifacts, including by (i) transfer of patterns of
+    the weights, parameters, operations, or outputs of the Model, (ii) generating
+    outputs of the Model to produce synthetic data, and (iii) using Code to prepare any
+    work of authorship (collectively, "Derivatives"); and
+(c) Publish and share Derivatives.
+
+2. Use Restrictions
+
+You will not (and will not encourage, permit, or facilitate any others to) use any
+portion of the Artifacts or Derivatives for the following purposes:
+
+(a) Any military and defense-related applications and use cases, including without
+    limitation, for weapons development, military operations, intelligence gathering,
+    or human surveillance and policing activities.
+(b) Any extractive activities, operations and use cases involving the removal of raw
+    materials from the earth, including without limitation, to plan or facilitate the
+    extraction of oil, natural gas and minerals through activities such as drilling,
+    mining, and deforestation.
+
+3. Distribution
+
+In any distribution of the Artifacts or Derivatives:
+
+(a) You will cite Ai2 as the source of the Artifacts in any distribution of Artifacts
+    or Derivatives.
+(b) If you distribute any portion of the Artifacts, you will either link to or provide
+    a copy of this Agreement to all third party recipients.
+(c) If you distribute any Derivatives, you may add your own intellectual property
+    notices and apply other licenses and terms of use, provided that you include and
+    require the use restrictions in Section 2 in all downstream distribution unless Ai2
+    provides written approval otherwise.
+
+4. Termination
+
+This Agreement will automatically terminate with immediate effect and without notice to
+you in the following circumstances:
+
+(a) Your breach of the use restrictions in Section 2 and any other terms and conditions
+    herein; or
+(b) If you file, maintain, or voluntarily participate in a lawsuit against any person
+    or entity asserting that the Artifacts or any portion thereof directly or
+    indirectly infringe any patent, except where a lawsuit is filed in response to a
+    corresponding lawsuit first brought against you.
+
+For the avoidance of doubt, Ai2 may also offer the Artifacts under separate terms and
+conditions or stop distributing the Artifacts at any time; however, doing so will not
+terminate this Agreement. You may continue to use the Artifacts under this Agreement
+unless it is terminated in accordance with the circumstances expressly stated herein.
+
+5. Rights Not Covered
+
+This Agreement does not cover any patents or trademarks associated with the Artifacts,
+including with respect to any individual items of information and materials that are
+included or incorporated within a Dataset ("Contents"). Such Contents may be factual
+data or independent works such as text, images, audio, and audio visual material.
+Contents may be subject to other rights, including copyright, patent, data protection,
+privacy, or personality rights, and this Agreement does not cover such rights. The use
+rights in Section 1 expressly exclude any and all other rights that may apply to the
+Contents of a Dataset.
+
+6. Disclaimer and Limitation of Liability
+
+(a) THE ARTIFACTS ARE PROVIDED "AS IS", "AS AVAILABLE", AND "WITH ALL FAULTS", WITHOUT
+    ANY EXPRESS OR IMPLIED WARRANTY OF ANY KIND, INCLUDING WITHOUT LIMITATION, IMPLIED
+    WARRANTIES OF MERCHANTABILITY, TITLE, NON-INFRINGEMENT, FITNESS FOR A PARTICULAR
+    PURPOSE, ABSENCE OF LATENT OR OTHER DEFECTS, ACCURACY, OR THE PRESENCE OR ABSENCE
+    OF ERRORS, WHETHER OR NOT KNOWN OR DISCOVERABLE. AI2 MAKES NO REPRESENTATIONS OR
+    WARRANTIES AS TO THE RELIABILITY, COMPLETENESS, QUALITY, PERFORMANCE,
+    FUNCTIONALITY, OR UTILITY OF ANY ARTIFACTS. ANY USE OF THE ARTIFACTS IS AT YOUR
+    SOLE RISK AND DISCRETION. YOU ARE SOLELY RESPONSIBLE FOR (1) CLEARING ANY THIRD
+    PARTY RIGHTS THAT MAY APPLY TO OR BE EMBODIED IN ANY ARTIFACTS, INCLUDING ANY
+    CONTENTS IN A DATASET; (2) OBTAINING ANY NECESSARY RIGHTS, LICENSES, CONSENTS, OR
+    PERMISSIONS REQUIRED FOR YOUR USE OF THE ARTIFACTS; AND (3) PERFORMING ANY DUE
+    DILIGENCE ON THE ARTIFACTS TO VERIFY SUITABILITY FOR YOUR INTENDED USE.
+
+(b) TO THE MAXIMUM EXTENT PERMITTED UNDER APPLICABLE LAWS, IN NO EVENT WILL AI2 BE
+    LIABLE FOR ANY CLAIM, DAMAGES, LOSSES, OR OTHER LIABILITY OF ANY KIND WHATSOEVER,
+    WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM OR IN CONNECTION
+    WITH THE ARTIFACTS OR YOUR USE THEREOF.
+
+(c) The disclaimers and limitations of liability set forth above will be interpreted in
+    a manner that, to the greatest extent possible, constitute an absolute disclaimer
+    and waiver of all liability.
+
+7. Other Agreements
+
+If you have entered into a separate written agreement with Ai2 regarding your use of
+the specific Artifacts that are subject to this Agreement ("Other Agreement"), the
+terms of such Other Agreement will supplement the terms herein. To the extent of any
+conflict between the terms of the Other Agreement and this Agreement, the Other
+Agreement will take precedence.
+
+8. Miscellaneous
+
+If any term or provision of this Agreement is deemed invalid or unenforceable, it will
+automatically be reformed to the minimum extent necessary to make it enforceable. To
+the extent it cannot be reformed, it will be severed from this Agreement, and the
+remaining terms and conditions will remain in full force and effect. Any delay or
+failure by Ai2 to take any action or enforce any breach of this Agreement will not be
+deemed as a waiver or consent by Ai2. No term or provision of this Agreement will be
+waived by Ai2 unless expressly agreed in writing. Nothing in this Agreement constitutes
+as a limitation of any privileges, immunities, and rights that apply to you or Ai2
+under applicable laws, including from the legal processes of any jurisdiction or
+authority.

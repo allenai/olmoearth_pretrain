@@ -259,26 +259,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         #     eval_interval=Duration.epochs(20),
         #     input_modalities=["sentinel1", "sentinel2"],
         # ),
-        # "sickle": DownstreamTaskConfig(
-        #     dataset="sickle",
-        #     batch_size=8,
-        #     num_workers=2,
-        #     pooling_type=PoolingType.MEAN,
-        #     norm_stats_from_pretrained=True,
-        #     probe_lr=0.1,
-        #     eval_interval=Duration.epochs(20),
-        #     input_modalities=[Modality.LANDSAT.name],
-        # ),
-        # "sickle-r": DownstreamTaskConfig(
-        #     dataset="sickle",
-        #     batch_size=8,
-        #     num_workers=2,
-        #     pooling_type=PoolingType.MEAN,
-        #     norm_stats_from_pretrained=True,
-        #     probe_lr=0.1,
-        #     eval_interval=Duration.epochs(20),
-        #     input_modalities=[Modality.LANDSAT.name, "sentinel1", "sentinel2"],
-        # ),
     }
     trainer_config = (
         TrainerConfig(

@@ -1,122 +1,89 @@
-# OlmoEarth Pretrain
+<div align="center">
+  <img src="https://raw.githubusercontent.com/allenai/olmoearth_pretrain/main/assets/OlmoEarth-logo.png" alt="OlmoEarth Logo" style="width: 600px; margin-left:'auto' margin-right:'auto' display:'block'"/>
+  <br>
+  <br>
+</div>
+<p align="center">
+  <a href="https://github.com/allenai/olmoearth_pretrain/blob/main/LICENSE">
+    <img alt="GitHub License" src="https://img.shields.io/badge/license-OlmoEarth-green">
+  </a>
+  <a href="https://huggingface.co/collections/allenai/olmoearth">
+    <img alt="Model Checkpoints" src="https://img.shields.io/badge/%F0%9F%A4%97%20HF-Models-yellow">
+  </a>
+  <a href="https://allenai.org/papers/olmoearth">
+    <img alt="Paper PDF" src="https://img.shields.io/badge/OlmoEarth-pdf-blue">
+  </a>
+</p>
 
-Allen Institute for AI's OlmoEarth Pretrain project
+The OlmoEarth models are a flexible, multi-modal, spatio-temporal family of foundation models for Earth Observations.
 
-Earth system foundation model: data, training, and evaluation
+The OlmoEarth models exist as part of the [OlmoEarth platform](https://olmoearth.allenai.org/). The OlmoEarth Platform is an end-to-end solution for scalable planetary intelligence, providing everything needed to go from raw data through R&D, to fine-tuning and production deployment.
 
-launching training runs on beaker
-## General Setup
+## Installation
 
-**Requirements:** Python 3.11 or higher (Python 3.12 recommended)
+We recommend Python 3.12, and recommend using [uv](https://docs.astral.sh/uv/getting-started/installation/).
+To install dependencies with uv, run:
 
-1. Install uv: `curl -LsSf https://astral.sh/uv/install.sh | sh` (other ways to do it are documented [here](https://docs.astral.sh/uv/getting-started/installation/))
-2. Navigate to root directory of this repo and run `uv sync --locked --all-groups --python 3.12`
-3. Install the pre-commit tool `uv tool install pre-commit --with pre-commit-uv --force-reinstall`
-4. uv installs everything into a venv, so to keep using `python` commands you can activate uv's venv: `source .venv/bin/activate`. Otherwise, swap to `uv run python`.
-
-
-## OlmoEarth Pretrain Dataset
-
-The dataset for training is stored in h5 datasets. A training dataset can be created from tiles via `python3 -m olmoearth_pretrain.internal.run_h5_conversion` script.
-
-
-We have 2 versions of each dataset 1 with 256 x 256 tiles and 1 with 4x as many 128 by 128 tiles. The 128 by 128 tiles may be faster for data loading due to GB/s bottlenecks on weka.
-
-OUT OF DATE!
-- **Presto Dataset**: ~120k samples with Landsat, OpenStreetMap raster, Sentinel-1, Sentinel-2 L2A, SRTM, and WorldCover modalities sampled via locations used in Galileo paper
-  - 256 Path: `/weka/dfive-default/helios/dataset/presto/rerun_1_h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/117473/`
-  - 128 Path: `/weka/dfive-default/helios/dataset/presto/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/469892`
-
-- **OSM Sampling Dataset**: ~285k samples with Landsat, OpenStreetMap raster, Sentinel-1, Sentinel-2 L2A, SRTM, and WorldCover modalities sampled across OpenStreetmap classes
-  - 256 Path: `/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/285288/`
-  - 128 Path: `/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_128_x_4_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1141152`
-- **OSM Big Dataset**: ~324k samples with Landsat, OpenStreetMap raster, Sentinel-1, Sentinel-2 L2A, SRTM, and WorldCover modalities  sampled across a wider set of opens treetmap classes
-  - 256 Path: `/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/324482/`
-  - 128 Path: `/weka/dfive-default/helios/dataset/osmbig/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1297928`
-- **Presto Neighbor Dataset**: ~877k samples with Landsat, OpenStreetMap raster, Sentinel-1, Sentinel-2 L2A, SRTM, and WorldCover modalities presto + the neighboring tiles
-  - 256 Path: `/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/876937/`
-  - 128 Path: `/weka/dfive-default/helios/dataset/presto_neighbor/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/3507748`
-- **WorldCover Sampling Dataset**: ~1.6M samples with Landsat, OpenStreetMap raster, Sentinel-1, Sentinel-2 L2A, SRTM, and WorldCover modalities. WorldCover class based sampling and some additional random sampling over the rest of the world.
-  - 256 Path: `/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/1592645/`
-  - 128 Path: `/weka/dfive-default/helios/dataset/worldcover_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover/6370580/`
-
-
-## Running Eval Suite
-
-[`olmoearth_pretrain/internal/full_eval_sweep.py`](olmoearth_pretrain/internal/full_eval_sweep.py) runs comprehensive evaluation sweeps across multiple downstream tasks for any OlmoEarth Pretrain checkpoint. It automatically sweeps over learning rates, pooling types, and normalization strategies.
-
-### 1. How to run eval for a given checkpoint
-
-Basic command to run evaluation sweep for a checkpoint:
-
-```
-python3 olmoearth_pretrain/internal/full_eval_sweep.py \
-  --cluster=ai2/saturn-cirrascale \
-  --checkpoint_path=/path/to/your/checkpoint/step450000 \
-  --module_path=scripts/your_training_script.py \
-```
-
-For just default hyperparameters (faster, single run):
 ```bash
-python3 olmoearth_pretrain/internal/full_eval_sweep.py \
-  --cluster=ai2/saturn-cirrascale \
-  --checkpoint_path=/path/to/your/checkpoint/step450000 \
-  --module_path=scripts/your_training_script.py \
-  --defaults_only
+git clone git@github.com:allenai/olmoearth_pretrain.git
+cd olmoearth_pretrain
+uv sync --locked --all-groups --python 3.12
+# only necessary for development
+uv tool install pre-commit --with pre-commit-uv --force-reinstall
 ```
 
-### 2. Example of how to add additional overrides
+uv installs everything into a venv, so to keep using python commands you can activate uv's venv: `source .venv/bin/activate`. Otherwise, swap to `uv run python`.
 
-Pass additional training arguments after the main arguments:
-```bash
-python3 olmoearth_pretrain/internal/full_eval_sweep.py \
-  --cluster=ai2/saturn-cirrascale \
-  --checkpoint_path=/path/to/checkpoint \
-  --module_path=scripts/your_script.py \
-  --model.decoder_config.depth=1 \
-  --trainer.callbacks.downstream_evaluator.tasks_to_run=\[mados,pastis_sentinel2,breizhcrops,sen1floods11,pastis_sentinel1_sentinel2\]  \
-```
+OlmoEarth is built using [OLMo-core](https://github.com/allenai/OLMo-core.git). OLMo-core's published [Docker images](https://github.com/orgs/allenai/packages?repo_name=OLMo-core) contain all core and optional dependencies.
 
-### 3. How to run panopticon
+## Model Summary
 
-Use the `--panopticon` flag for Panopticon model evaluation:
-```bash
-python3 olmoearth_pretrain/internal/full_eval_sweep.py \
-  --cluster=ai2/saturn-cirrascale \
-  --panopticon \
-  --model_name=panopticon
-```
+<img src="https://raw.githubusercontent.com/allenai/olmoearth_pretrain/main/assets/model.png" alt="Model Architecture Diagram" style="width: 800px; margin-left:'auto' margin-right:'auto' display:'block'"/>
 
-### 4. How to run different dino models
+The OlmoEarth models are trained on three satellite modalities (Sentinel 2, Sentinel 1 and Landsat) and six derived maps (OpenStreetMap, WorldCover, USDA Cropland Data Layer, SRTM DEM, WRI Canopy Height Map, and WorldCereal).
+| Model Size | Weights | Encoder Params | Decoder Params |
+| --- | --- | --- | --- |
+| Nano | [link](https://huggingface.co/allenai/OlmoEarth-v1-Nano) | 1.4M | 800K |
+| Tiny | [link](https://huggingface.co/allenai/OlmoEarth-v1-Tiny) | 6.2M | 1.9M |
+| Base | [link](https://huggingface.co/allenai/OlmoEarth-v1-Base) | 89M | 30M |
+| Large | [link](https://huggingface.co/allenai/OlmoEarth-v1-Large) | 308M | 53M |
 
-For DINO v3 evaluation:
-```bash
-python3 olmoearth_pretrain/internal/full_eval_sweep.py \
-  --cluster=ai2/saturn-cirrascale \
-  --dino_v3 \
-  --model_name=dino_v3_large_sat \
-  --model.model_name=DinoV3Models.LARGE_SATELLITE  \
-```
+## Using OlmoEarth
 
-### 5. How to run galileo
+[InferenceQuickstart](docs/Inference-Quickstart.md) shows how to initialize the
+OlmoEarth model and apply it on a satellite image.
 
-Use the `--galileo` flag for Galileo model evaluation:
-```bash
-python3 olmoearth_pretrain/internal/full_eval_sweep.py \
-  --cluster=ai2/saturn-cirrascale \
-  --galileo \
-  --model_name=galileo_vit_base
-  --model.patch_size=4
-```
+We also have several more in-depth tutorials for computing OlmoEarth embeddings and fine-tuning OlmoEarth on downstream tasks:
 
-**Key Notes:**
-- The script automatically determines appropriate normalization strategies for each model type (see [`olmoearth_pretrain/evals/datasets/normalize.py`](olmoearth_pretrain/evals/datasets/normalize.py))
-  - OlmoEarth Pretrain: Use pretrained normalizer or NORM_METHOD.NORM_NO_CLIP with dataset stats
-  - Galileo: Use galileo pretrained normalizer or  NORM_METHOD.NORM_NO_CLIP with dataset stats
-  - Panopticon: Uses NORM_METHOD.STANDARDIZE with the dataset statistics
-  - DinoV3: Uses NORM_METHOD.NORM_YES_CLIP_MIN_MAX_INT to get to 0-1 and then applies either the web or sat normalization values
-- Supports both full hyperparameter sweeps and default-only runs
-- Use `--dry_run` to preview commands without execution
-- For local testing, use `--cluster=local`
+- [Fine-tuning OlmoEarth for Segmentation](https://github.com/allenai/olmoearth_projects/blob/main/docs/tutorials/FinetuneOlmoEarthSegmentation.md)
+- [Computing Embeddings using OlmoEarth](https://github.com/allenai/rslearn/blob/master/docs/examples/OlmoEarthEmbeddings.md)
+- [Fine-tuning OlmoEarth in rslearn](https://github.com/allenai/rslearn/blob/master/docs/examples/FinetuneOlmoEarth.md)
 
-See `olmoearth_pretrain/internal/full_eval_sweep.py` for complete argument list and implementation details.
+Additionally, [`olmoearth_projects`](https://github.com/allenai/olmoearth_projects) has several examples of active OlmoEarth deployments.
+
+## Data Summary
+
+Our pretraining dataset contains 285,288 samples from around the world of 2.56km×2.56km regions, although many samples contain only a subset of the timesteps and modalities.
+
+The distribution of the samples is available below:
+
+<img src="https://raw.githubusercontent.com/allenai/olmoearth_pretrain/main/assets/datamap.png" alt="Training sample distribution" style="width: 500px; margin-left:'auto' margin-right:'auto' display:'block'"/>
+
+The dataset can be downloaded [here](https://huggingface.co/datasets/allenai/olmoearth_pretrain_dataset).
+
+Detailed instructions on how to make your own pretraining dataset are available in [the dataset README](docs/Dataset-Creation.md).
+
+## Training scripts
+
+Detailed instructions on how to pretrain your own OlmoEarth model are available in [Pretraining.md](docs/Pretraining.md).
+
+## Evaluations
+
+Detailed instructions on how to replicate our evaluations is available here:
+
+- [Evaluations on Research Benchmarks](docs/Evaluation.md)
+- [Evaluations on Partner Tasks](https://github.com/allenai/rslearn_projects/blob/master/rslp/olmoearth_evals/README.md)
+
+## License
+
+This code is licensed under the [OlmoEarth Artifact License](LICENSE).

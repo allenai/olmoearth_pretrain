@@ -216,8 +216,15 @@ def run_finetune_eval(
     test_loader: DataLoader | None,
     seed: int | None = None,
     best_checkpoint_path: str | None = None,
-) -> tuple[float, float]:
-    """Finetune the model on a downstream task and evaluate."""
+) -> dict[str, Any]:
+    """Finetune the model on a downstream task and evaluate.
+
+    Returns:
+        Dictionary with keys:
+            - val_score: Validation score
+            - test_score: Test score (0.0 if no test loader)
+            - bootstrap_stats: Empty dict (bootstrap not supported for finetune)
+    """
     if seed is not None:
         logger.info(f"Setting finetune random seed to {seed}")
         random.seed(seed)
@@ -390,18 +397,22 @@ def run_finetune_eval(
         logger.info("No best checkpoint path provided, skipping saving best checkpoint")
 
     if task_config.task_type == TaskType.CLASSIFICATION:
-        val_acc = best_val_metric
-        test_acc = (
+        val_score = best_val_metric
+        test_score = (
             _eval_cls(ft, test_loader, device, task_config.is_multilabel)
             if test_loader is not None
             else 0.0
         )
-        return val_acc, test_acc
     else:
-        val_miou = best_val_metric
-        test_miou = (
+        val_score = best_val_metric
+        test_score = (
             _eval_seg(ft, test_loader, device, task_config.num_classes, patch_size)
             if test_loader is not None
             else 0.0
         )
-        return val_miou, test_miou
+
+    return {
+        "val_score": val_score,
+        "test_score": test_score,
+        "bootstrap_stats": {},
+    }

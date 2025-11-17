@@ -30,7 +30,7 @@ def test_probe_cls() -> None:
 
     # just testing it runs - since the data is random,
     # performance should be about random (accuracy = 0.5)
-    _ = train_and_eval_probe(
+    result = train_and_eval_probe(
         config=config,
         train_embeddings=train_embeddings,
         train_labels=train_labels,
@@ -42,6 +42,9 @@ def test_probe_cls() -> None:
         batch_size=batch_size,
         lr=0.1,
     )
+    assert "val_score" in result
+    assert "test_score" in result
+    assert "bootstrap_stats" in result
 
 
 def test_probe_seg() -> None:
@@ -80,7 +83,7 @@ def test_probe_seg() -> None:
 
     # just testing it runs - since the data is random,
     # performance should be about random (accuracy = 0.5)
-    _ = train_and_eval_probe(
+    result = train_and_eval_probe(
         config=config,
         train_embeddings=train_embeddings,
         train_labels=train_labels,
@@ -92,3 +95,6 @@ def test_probe_seg() -> None:
         batch_size=batch_size,
         lr=0.1,
     )
+    assert "val_score" in result
+    assert "test_score" in result
+    assert "bootstrap_stats" in result

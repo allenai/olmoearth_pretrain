@@ -101,7 +101,7 @@ class Panopticon(nn.Module):
         self, modality: str, batch_size: int, device: torch.device
     ) -> torch.Tensor:
         """Create channel IDs for the panopticon model."""
-        # Bands are in the EVAL_TO_HELIOS_S2_BANDS order so we need to use that to pull the information from the yaml files
+        # Bands are in the EVAL_TO_OLMOEARTH_S2_BANDS order so we need to use that to pull the information from the yaml files
         if modality == "sentinel2_l2a":
             modality_yaml_name = "sentinel2"
         elif modality == "landsat":

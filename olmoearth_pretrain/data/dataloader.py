@@ -180,11 +180,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
                     )
         barrier()
 
-    def reshuffle(
-        self, epoch: int | None = None, in_memory: bool = False, **kwargs: Any
-    ) -> None:
+    def reshuffle(self, epoch: int | None = None, in_memory: bool = False) -> None:
         """Reshuffle the data."""
-        del kwargs
         if epoch is None:
             epoch = 1 if self._epoch is None else self._epoch + 1  # type: ignore
         if epoch <= 0:
@@ -277,8 +274,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 "this could mean the data has changed"
             )
         elif state_dict["dataset_fingerprint"] != self.dataset.fingerprint:
-            raise RuntimeError(
-                "Restoring state from a different dataset is not supported! (fingerprint doesn't match)"
+            logger.warning(
+                "Restoring state from a different dataset! If this is not expected, please check the dataset fingerprint(fingerprint doesn't match)"
+                f"old fingerprint: {state_dict['dataset_fingerprint']}, new fingerprint: {self.dataset.fingerprint}"
             )
 
         if state_dict["seed"] != self.seed:
