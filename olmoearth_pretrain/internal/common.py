@@ -166,7 +166,7 @@ def build_launch_config(
         workspace=workspace,
         clusters=clusters,
         weka_buckets=weka_buckets,
-        beaker_image=f"petew/{OLMoCoreBeakerImage.stable_cu128}",  # we can all use the same image for now trying petes to see if it works or we need a copy in our workspace
+        beaker_image=f"petew/{OLMoCoreBeakerImage.stable_cu128}",
         num_nodes=1,
         num_gpus=1,
         shared_memory="256GiB",
@@ -195,7 +195,7 @@ def build_launch_config(
             "pip install uv",
             # so that we can use uv tools
             'export PATH="/root/.local/bin:$PATH" ',
-            "uv sync --locked --all-groups",
+            "uv sync --group pre-train-internal --extra torch-cu128",
             # activate the uv venv
             "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
             'source "$(dirname "$venv_path")/activate"',
