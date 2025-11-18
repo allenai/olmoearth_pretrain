@@ -40,7 +40,7 @@ class Satlas(nn.Module):
     """Class containing the Satlas model that can ingest MaskedOlmoEarthSample objects."""
 
     patch_size: int = 8
-    image_resolution: int = 512
+    min_image_resolution: int = 32
     supported_modalities: list[str] = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
@@ -137,7 +137,9 @@ class Satlas(nn.Module):
             data_i = data_i[:, HELIOS_TO_SATLAS[modality], :, :]
 
             new_height = (
-                self.patch_size if original_height == 1 else self.image_resolution
+                self.min_image_resolution
+                if original_height < self.min_image_resolution
+                else original_height
             )
 
             data_i = F.interpolate(
