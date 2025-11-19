@@ -2,7 +2,6 @@
 
 import subprocess  # noqa: S404 # nosec
 import sys
-from pathlib import Path
 
 from base import BASE_PREDICTOR_CONFIG, SHAPE_SWEEP_OPTIONS
 
@@ -64,7 +63,7 @@ def run_sweep(
         shapes: Optional explicit list of shape names to run (overrides filter_pattern)
         extra_overrides: Additional override arguments to pass to all runs
     """
-    script_path = Path(__file__).parent / base_script
+    script_path = "scripts/2025_11_19_inference_shapes/" / base_script
 
     if shapes is None:
         shapes = list(SHAPE_SWEEP_OPTIONS.keys())
@@ -78,10 +77,9 @@ def run_sweep(
         print("\nExtra overrides (applied to all runs):")
         for override in extra_overrides:
             print(f"  {override}")
-    print()
 
     for shape_name in shapes:
-        run_name = f"inference_shapes_{shape_name}"
+        run_name = f"1inference_shapes_{shape_name}"
 
         print(f"\n{'=' * 60}")
         print(f"Running: {shape_name}")
