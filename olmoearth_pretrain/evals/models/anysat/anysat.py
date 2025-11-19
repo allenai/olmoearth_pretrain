@@ -134,7 +134,8 @@ class AnySat(nn.Module):
         doy = cum_days_for_month + day + leap_day
         return doy
 
-    def _calculate_patch_size(self, h: int) -> int:
+    @staticmethod
+    def _calculate_patch_size(h: int) -> int:
         """Calculate the patch size in pixels based on the height of the input data.
 
         Args:
@@ -145,7 +146,7 @@ class AnySat(nn.Module):
         """
         # Avoid having more than 32x32 patches per tile as suggested by the authors
         h_adjusted = h // 32
-        patch_size_exp = (h_adjusted - 1).bit_length()
+        patch_size_exp = (h_adjusted).bit_length()
         patch_size = 2**patch_size_exp
         return patch_size
 
@@ -221,7 +222,6 @@ class AnySat(nn.Module):
                 hs.append(val.shape[-1])
         if len(set(hs)) != 1:
             raise RuntimeError("Expected all inputs to have the same dimension")
-
         # If patch size is specified, use it, otherwise, caculate the maximum patch size
         # based on the height of the input data
         patch_size_meters = (
