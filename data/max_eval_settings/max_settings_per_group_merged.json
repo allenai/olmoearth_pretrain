@@ -1,0 +1,3762 @@
+{
+  "anysat": {
+    "awf_landsat": {
+      "run_id": "psuvl0kj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel1": {
+      "run_id": "psuvl0kj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "psuvl0kj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "fw7pxyel",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "2rmicvft",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "2rmicvft",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "2rmicvft",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "2rmicvft",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "2rmicvft",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "2rmicvft",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "7io43br9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "psuvl0kj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "vyofuv12",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "7io43br9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "psuvl0kj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "vyofuv12",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_so2sat": {
+      "run_id": "5i9epj5y",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "2rmicvft",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.001
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "psuvl0kj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "aoya71u3",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "psuvl0kj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "vyofuv12",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "psuvl0kj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "copozev1",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "vyofuv12",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "2rmicvft",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.001
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "2rmicvft",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.001
+      }
+    },
+    "sen1floods11": {
+      "run_id": "psuvl0kj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    }
+  },
+  "clay_large": {
+    "awf_landsat": {
+      "run_id": "4c5zkr99",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel1": {
+      "run_id": "a59ut8l4",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "3paqw723",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "a59ut8l4",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "a59ut8l4",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "a59ut8l4",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "u1dx18md",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "a59ut8l4",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "3paqw723",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "u1dx18md",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "4c5zkr99",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "a59ut8l4",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "9cudtefn",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "a59ut8l4",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "4c5zkr99",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "ue81m4rr",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_so2sat": {
+      "run_id": "lttepc5a",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "ue81m4rr",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "a59ut8l4",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "a59ut8l4",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "lttepc5a",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "6eyh8baz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "ue81m4rr",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "ue81m4rr",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "6eyh8baz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "ilgzid5j",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.01
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "ue81m4rr",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "sen1floods11": {
+      "run_id": "9cudtefn",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    }
+  },
+  "copernicusfm": {
+    "awf_sentinel1": {
+      "run_id": "gpqehi27",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "exuq5255",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "khlux496",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "y2h24obq",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "r1oukovk",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "khlux496",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "y2h24obq",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "8rw4ox7s",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "y2h24obq",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "exuq5255",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "exuq5255",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "itadk09x",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    },
+    "m_eurosat": {
+      "run_id": "yct93x9c",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "3156xr18",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.001
+      }
+    },
+    "m_so2sat": {
+      "run_id": "exuq5255",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "y2h24obq",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.0005
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "gpqehi27",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "yct93x9c",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "2rcrv6aj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "ezlgf7jw",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "2rcrv6aj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "1e9uygpb",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "h2e7c1tx",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "yct93x9c",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    },
+    "sen1floods11": {
+      "run_id": "5ai432ms",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.005
+      }
+    }
+  },
+  "croma_base": {
+    "awf_sentinel1": {
+      "run_id": "fizbcgou",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "nvwm2ikw",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "3x77pcy0",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "hdcsstlo",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "mzgtxrp8",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "mzgtxrp8",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "2u8eydm1",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "a1wwd3r9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "a1wwd3r9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "nvwm2ikw",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "nvwm2ikw",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "c2aeu8uu",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "m_eurosat": {
+      "run_id": "9cvqqyo1",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "q71wcuzf",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    },
+    "m_so2sat": {
+      "run_id": "aybiore9",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "tc32o3lg",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.001
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "fizbcgou",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "9cvqqyo1",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "6a267gxp",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.01
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "ooejeqwa",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "jv31afjf",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "lasp0e2a",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "n52rfyrs",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "xoz4pf7h",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "sen1floods11": {
+      "run_id": "r634unn1",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    }
+  },
+  "croma_large": {
+    "awf_sentinel1": {
+      "run_id": "vhz0d1lu",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "of4ars6d",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "6809xyry",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "b4ykxgv2",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "6809xyry",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "l0rvgad9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "s5slvger",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "b4ykxgv2",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "35agms4r",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "of4ars6d",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "36rmxla3",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "582tv1q3",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "m_eurosat": {
+      "run_id": "of4ars6d",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "chrkbytp",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    },
+    "m_so2sat": {
+      "run_id": "qontomeo",
+      "settings": {
+        "norm_stats_from_pretrained": true,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "lfqewafy",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.001
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "b9l1q6q8",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "of4ars6d",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "sj00zbzp",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.01
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "582tv1q3",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "ba4v5bbl",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "k412m5ri",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "gltip90q",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "ba4v5bbl",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "sen1floods11": {
+      "run_id": "chrkbytp",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    }
+  },
+  "dino_v3_dinov3_vit7b16": {
+    "awf_landsat": {
+      "run_id": "xb0s6hl3",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "xb0s6hl3",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "xb0s6hl3",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "6oxq8i5h",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "0ldrg35i",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "0ldrg35i",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "0ldrg35i",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "maej0cv8",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "xb0s6hl3",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "xb0s6hl3",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "qnkp609j",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    },
+    "m_so2sat": {
+      "run_id": "0ldrg35i",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "6oxq8i5h",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.001
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "xb0s6hl3",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "0ldrg35i",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "maej0cv8",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "28u404nj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    }
+  },
+  "dino_v3_dinov3_vit7b16_sat": {
+    "awf_landsat": {
+      "run_id": "96onu5ps",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "96onu5ps",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "96onu5ps",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "im396quc",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "im396quc",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "96onu5ps",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "96onu5ps",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "toq8f5m7",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "ihyww51x",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "96onu5ps",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "b1fo407a",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.001
+      }
+    },
+    "m_so2sat": {
+      "run_id": "96onu5ps",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "dnrjgxyt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "96onu5ps",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "b1fo407a",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "toq8f5m7",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "dnrjgxyt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    }
+  },
+  "dino_v3_dinov3_vitb16": {
+    "awf_landsat": {
+      "run_id": "tes7141w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "tes7141w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "ksxfwx2i",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "qmvimxem",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "51s4hxq0",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "tes7141w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "tes7141w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "1c30amyh",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "6urmwq4k",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "6urmwq4k",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "hxyked6h",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.001
+      }
+    },
+    "m_so2sat": {
+      "run_id": "tes7141w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "otosq414",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.001
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "tes7141w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "tes7141w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "1c30amyh",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "qpvxd0t4",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    }
+  },
+  "dino_v3_dinov3_vith16plus": {
+    "awf_landsat": {
+      "run_id": "hp6hxrja",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "hp6hxrja",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "bd8nz6pg",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "qvfv2fun",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "bd8nz6pg",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "lmizcfky",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "mbca7408",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "8b9z5hc2",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "lmizcfky",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "mbca7408",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "23rrjfsn",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_so2sat": {
+      "run_id": "mbca7408",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "v4lwkml9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "hp6hxrja",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "hp6hxrja",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "23rrjfsn",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "23rrjfsn",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    }
+  },
+  "dino_v3_dinov3_vitl16": {
+    "awf_landsat": {
+      "run_id": "i0zua1wt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "i0zua1wt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "37hj483b",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "297cy5eo",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "297cy5eo",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "i0zua1wt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "i0zua1wt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "zok4lr9s",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "i0zua1wt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "w95j45vy",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "5syka3pn",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.001
+      }
+    },
+    "m_so2sat": {
+      "run_id": "i0zua1wt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "2yy6cdq9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "i0zua1wt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "i0zua1wt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "zok4lr9s",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "2yy6cdq9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    }
+  },
+  "dino_v3_dinov3_vitl16_sat": {
+    "awf_landsat": {
+      "run_id": "z350p5u2",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "bjwdqcvh",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "m9esoiwn",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "lq3ehqm9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "lq3ehqm9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "bjwdqcvh",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "bjwdqcvh",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "lhk96t9n",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "bjwdqcvh",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "z350p5u2",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "4q6y3s2v",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.01
+      }
+    },
+    "m_so2sat": {
+      "run_id": "bjwdqcvh",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "75stwzwz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "k0giinol",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "bjwdqcvh",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "ybipay3y",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "75stwzwz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    }
+  },
+  "galileo_base": {
+    "awf_sentinel1": {
+      "run_id": "7lk0wlew",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "3n1jqptf",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "7lk0wlew",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "7lk0wlew",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "7lk0wlew",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "7lk0wlew",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "7lk0wlew",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "7lk0wlew",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "7lk0wlew",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "3n1jqptf",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "hf451dk9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "127wcuti",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "7lk0wlew",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "foup6f3m",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_so2sat": {
+      "run_id": "7lk0wlew",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "449qnwll",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "hf451dk9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "ikwyjzmo",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "q7eavgla",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.01
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "q7eavgla",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.01
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "q7eavgla",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.01
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "3dstorc1",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.005
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "foup6f3m",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "foup6f3m",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "sen1floods11": {
+      "run_id": "vfhncfmu",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    }
+  },
+  "galileo_nano": {
+    "awf_sentinel1": {
+      "run_id": "0drb1xnz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "0drb1xnz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "0drb1xnz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "xy37fpkg",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "y5ay5ase",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "0drb1xnz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "xy37fpkg",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "8g9j24ql",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "0drb1xnz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "xy37fpkg",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "y5ay5ase",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "8b9gk6uc",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "m_eurosat": {
+      "run_id": "0drb1xnz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "8b9gk6uc",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "m_so2sat": {
+      "run_id": "0drb1xnz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "v7ai2f34",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "xy37fpkg",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "xy37fpkg",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "mdu7ynr2",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "mdu7ynr2",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "mdu7ynr2",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "mdu7ynr2",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "qtn2ecee",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "qtn2ecee",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "sen1floods11": {
+      "run_id": "si55qvf8",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    }
+  },
+  "galileo_tiny": {
+    "awf_sentinel1": {
+      "run_id": "o94u6mgd",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "o94u6mgd",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "o523o7hw",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "o523o7hw",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "o523o7hw",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "zt9gu9rt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "zt9gu9rt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "o523o7hw",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "o94u6mgd",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "o94u6mgd",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "zt9gu9rt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "s7dn4gtp",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "o523o7hw",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "1n7fbtaq",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    },
+    "m_so2sat": {
+      "run_id": "zt9gu9rt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "s7dn4gtp",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "zt9gu9rt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "o94u6mgd",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "mb0s9jqa",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "rietic7k",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "8lidp0vm",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "rietic7k",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "8lidp0vm",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "8lidp0vm",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "sen1floods11": {
+      "run_id": "8lidp0vm",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    }
+  },
+  "panopticon": {
+    "awf_landsat": {
+      "run_id": "1redlte9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel1": {
+      "run_id": "qfo0vy6z",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "11lua7zu",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "g41m70hx",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "g41m70hx",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "g41m70hx",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "g41m70hx",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "g41m70hx",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "57zfxrsf",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "57zfxrsf",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "11lua7zu",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "11lua7zu",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "2xtsz0hc",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "11lua7zu",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "11lua7zu",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "vvrfn9zd",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.001
+      }
+    },
+    "m_so2sat": {
+      "run_id": "11lua7zu",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "wtam50ry",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.0005
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "11lua7zu",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "11lua7zu",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "11lua7zu",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "2hrkfb6m",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.005
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "eo509t16",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "eo509t16",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "lo3qqvk7",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "eo509t16",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "7rq0bnhm",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    },
+    "sen1floods11": {
+      "run_id": "wtam50ry",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.0005
+      }
+    }
+  },
+  "presto": {
+    "awf_sentinel1": {
+      "run_id": "oszriv2v",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "oszriv2v",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "weanyjsn",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "weanyjsn",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "weanyjsn",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "weanyjsn",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "14nsvxun",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "14nsvxun",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "14nsvxun",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "9z7ayp2q",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "oszriv2v",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "p5723jri",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "n2vxohpc",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "p5723jri",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "p5723jri",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "47axyxli",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.01
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "n2vxohpc",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    }
+  },
+  "prithvi_v2_Prithvi-EO-2.0-300M": {
+    "awf_sentinel2": {
+      "run_id": "2t1cdtct",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "o0awborf",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "2t1cdtct",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "w70wb9tt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "2t1cdtct",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "osm04fy9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "gjtd2uxf",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "w70wb9tt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "3i279bdi",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "m_so2sat": {
+      "run_id": "w70wb9tt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "zrvli3kw",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "o0awborf",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "mmimxvkc",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "mmimxvkc",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    }
+  },
+  "prithvi_v2_Prithvi-EO-2.0-600M": {
+    "breizhcrops": {
+      "run_id": "rzxi5nut",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "rzxi5nut",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "7v7vi2b5",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "l9xnz897",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "l9xnz897",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "g0dbeauo",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "ix45n2vs",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "acsuw7ds",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    },
+    "m_so2sat": {
+      "run_id": "rzxi5nut",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "acsuw7ds",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "vy8tm7yx",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    }
+  },
+  "prithvi_v2_VIT_300": {
+    "awf_landsat": {
+      "run_id": "dfiyemz3",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "tu7e8t99",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "tu7e8t99",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    }
+  },
+  "prithvi_v2_VIT_600": {
+    "awf_landsat": {
+      "run_id": "7ouufeed",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "46b408c0",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "46b408c0",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "7ouufeed",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "7ouufeed",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "atlt0ztt",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    }
+  },
+  "satlas_base": {
+    "awf_landsat": {
+      "run_id": "71hnbhyo",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel1": {
+      "run_id": "z42pxe11",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "wf1lpjlz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "eanxi4i2",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "z6mygvf0",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "vhal4hm7",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "nbvlqiop",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "eanxi4i2",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "wf1lpjlz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "71hnbhyo",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "apip2rl8",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "71hnbhyo",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_forestnet": {
+      "run_id": "papd7b6h",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "q4n8yy3x",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.01
+      }
+    },
+    "m_so2sat": {
+      "run_id": "71hnbhyo",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "zuw27gbr",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.01
+      }
+    },
+    "nandi_landsat": {
+      "run_id": "wf1lpjlz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "wf1lpjlz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "71hnbhyo",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "8k16y84w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "gpgtteb6",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "8k16y84w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "8k16y84w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "sen1floods11": {
+      "run_id": "tco2m9c7",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    }
+  },
+  "terramind_base": {
+    "awf_sentinel1": {
+      "run_id": "c86wzfga",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "9ho9wtpj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "l29suc3f",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "hudcdjao",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "hudcdjao",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "wqwaghua",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "hudcdjao",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "qqfh68ef",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "l29suc3f",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "d00lovfg",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "d00lovfg",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "s0fg464e",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "m_eurosat": {
+      "run_id": "d00lovfg",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "sgtvhew6",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.005
+      }
+    },
+    "m_so2sat": {
+      "run_id": "3oo5jtff",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "wqwaghua",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.005
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "c86wzfga",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "bda3f3w1",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "7e88tv8l",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "qopr295u",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "bda3f3w1",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "7e88tv8l",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "7e88tv8l",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "sen1floods11": {
+      "run_id": "hudcdjao",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.01
+      }
+    }
+  },
+  "terramind_large": {
+    "awf_sentinel1": {
+      "run_id": "tikhmhvz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "awf_sentinel2": {
+      "run_id": "jj4kzcuz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "breizhcrops": {
+      "run_id": "jj4kzcuz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6": {
+      "run_id": "jj4kzcuz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1": {
+      "run_id": "whsonz4w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "2fsucxvf",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel1": {
+      "run_id": "e44lcbl4",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2": {
+      "run_id": "tikhmhvz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "tikhmhvz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "m_bigearthnet": {
+      "run_id": "whsonz4w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_brick_kiln": {
+      "run_id": "whsonz4w",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "m_cashew_plant": {
+      "run_id": "effj35p8",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "m_eurosat": {
+      "run_id": "jj4kzcuz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "m_sa_crop_type": {
+      "run_id": "1jlwqaw9",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.001
+      }
+    },
+    "m_so2sat": {
+      "run_id": "jj4kzcuz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "mados": {
+      "run_id": "xsrx5ssx",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.01
+      }
+    },
+    "nandi_sentinel1": {
+      "run_id": "2fsucxvf",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": null
+      }
+    },
+    "nandi_sentinel2": {
+      "run_id": "tikhmhvz",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": null
+      }
+    },
+    "pastis128_sentinel1": {
+      "run_id": "7w1bqy1t",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "rfsozof6",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis128_sentinel2": {
+      "run_id": "effj35p8",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    },
+    "pastis_sentinel1": {
+      "run_id": "tb4vmkwq",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "max",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "rfsozof6",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "pastis_sentinel2": {
+      "run_id": "rfsozof6",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    },
+    "sen1floods11": {
+      "run_id": "x0bqh43h",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.05
+      }
+    }
+  },
+  "tessera": {
+    "cropharvest_Peoples_Republic_of_China_6_sentinel1_sentinel2": {
+      "run_id": "xgzlkzyj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "cropharvest_Togo_12_sentinel2_sentinel1": {
+      "run_id": "xgzlkzyj",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "pastis128_sentinel1_sentinel2": {
+      "run_id": "mcxld32i",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.1
+      }
+    },
+    "pastis_sentinel1_sentinel2": {
+      "run_id": "nji2907u",
+      "settings": {
+        "norm_stats_from_pretrained": false,
+        "pooling_type": "mean",
+        "probe_lr": 0.5
+      }
+    }
+  }
+}
