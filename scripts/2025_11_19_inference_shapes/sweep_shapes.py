@@ -63,7 +63,7 @@ def run_sweep(
         shapes: Optional explicit list of shape names to run (overrides filter_pattern)
         extra_overrides: Additional override arguments to pass to all runs
     """
-    script_path = "scripts/2025_11_19_inference_shapes/" / base_script
+    script_path = "scripts/2025_11_19_inference_shapes/" + base_script
 
     if shapes is None:
         shapes = list(SHAPE_SWEEP_OPTIONS.keys())
