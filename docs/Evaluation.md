@@ -209,6 +209,11 @@ python -m olmoearth_pretrain.internal.full_eval_sweep \
   --defaults_only
 ```
 
+### Example: Beaker run all models with best settings on val and test
+
+```bash
+python3 olmoearth_pretrain/internal/full_eval_sweep.py --model=all --select_best_val --trainer.callbacks.downstream_evaluator.run_on_test=True --cluster=ai2/titan  --all_sizes --load_eval_settings_from_json=data/max_eval_settings/max_settings_per_group_merged.json
+ ```
 ---
 
 ## Finetune Sweep
