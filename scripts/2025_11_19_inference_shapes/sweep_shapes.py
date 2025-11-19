@@ -35,7 +35,7 @@ def generate_shape_overrides(shape_name: str) -> list[str]:
     # Predictor overrides (fixed to BASE_PREDICTOR_CONFIG)
     overrides.extend(
         [
-            f"--model.decoder_config.encoder_embedding_size={BASE_PREDICTOR_CONFIG['encoder_embedding_size']}",
+            f"--model.decoder_config.encoder_embedding_size={shape_config['encoder_embedding_size']}",  # Need to use the encoder_embedding_size from the shape config here to align wiht the encoder being used
             f"--model.decoder_config.decoder_embedding_size={BASE_PREDICTOR_CONFIG['decoder_embedding_size']}",
             f"--model.decoder_config.depth={BASE_PREDICTOR_CONFIG['decoder_depth']}",
             f"--model.decoder_config.num_heads={BASE_PREDICTOR_CONFIG['decoder_num_heads']}",

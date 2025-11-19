@@ -36,31 +36,6 @@ BASE_PREDICTOR_CONFIG = {
 # Shape sweep options for encoder configurations
 # Predictor is fixed to BASE_PREDICTOR_CONFIG for all sweeps
 SHAPE_SWEEP_OPTIONS = {
-    # 0.25-0.4 band
-    "C1_mid_depth_narrow_MLPlean": {
-        "encoder_depth": 12,
-        "encoder_embedding_size": 384,
-        "encoder_num_heads": 6,
-        "mlp_ratio": 2.0,
-    },
-    "C2_deep_narrow": {
-        "encoder_depth": 18,
-        "encoder_embedding_size": 256,
-        "encoder_num_heads": 4,
-        "mlp_ratio": 3.0,
-    },
-    "C3_shallow_wide": {
-        "encoder_depth": 6,
-        "encoder_embedding_size": 640,
-        "encoder_num_heads": 10,
-        "mlp_ratio": 3.0,
-    },
-    "C4_mid_depth_highMLP": {
-        "encoder_depth": 10,
-        "encoder_embedding_size": 320,
-        "encoder_num_heads": 5,
-        "mlp_ratio": 4.0,
-    },
     # 0.5-0.6 band
     "A1_mid_depth_compressed": {
         "encoder_depth": 10,
@@ -110,6 +85,37 @@ SHAPE_SWEEP_OPTIONS = {
         "encoder_embedding_size": 768,
         "encoder_num_heads": 12,
         "mlp_ratio": 2.0,
+    },
+    "B5_same_depth_MLPsuperlean": {
+        "encoder_depth": 12,
+        "encoder_embedding_size": 768,
+        "encoder_num_heads": 12,
+        "mlp_ratio": 1.0,
+    },
+    # 0.25-0.4 band
+    "C1_mid_depth_narrow_MLPlean": {
+        "encoder_depth": 12,
+        "encoder_embedding_size": 384,
+        "encoder_num_heads": 6,
+        "mlp_ratio": 2.0,
+    },
+    "C2_deep_narrow": {
+        "encoder_depth": 18,
+        "encoder_embedding_size": 256,
+        "encoder_num_heads": 4,
+        "mlp_ratio": 3.0,
+    },
+    "C3_shallow_wide": {
+        "encoder_depth": 6,
+        "encoder_embedding_size": 640,
+        "encoder_num_heads": 10,
+        "mlp_ratio": 3.0,
+    },
+    "C4_mid_depth_highMLP": {
+        "encoder_depth": 10,
+        "encoder_embedding_size": 320,
+        "encoder_num_heads": 5,
+        "mlp_ratio": 4.0,
     },
 }
 
