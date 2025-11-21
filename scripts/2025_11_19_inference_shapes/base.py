@@ -26,7 +26,7 @@ MIN_PATCH_SIZE = 1
 
 # Fixed predictor config based on ViT base
 BASE_PREDICTOR_CONFIG = {
-    "decoder_depth": 12,
+    "decoder_depth": 4,
     "encoder_embedding_size": 768,  # For decoder's encoder_embedding_size
     "decoder_embedding_size": 768,
     "decoder_num_heads": 12,
