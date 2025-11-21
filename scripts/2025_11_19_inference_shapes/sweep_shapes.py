@@ -79,7 +79,7 @@ def run_sweep(
             print(f"  {override}")
 
     for shape_name in shapes:
-        run_name = f"1inference_shapes_{shape_name}"
+        run_name = f"1dec4inference_shapes_{shape_name}"
 
         print(f"\n{'=' * 60}")
         print(f"Running: {shape_name}")
