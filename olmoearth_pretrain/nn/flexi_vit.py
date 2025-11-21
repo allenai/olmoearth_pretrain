@@ -2173,3 +2173,325 @@ class PredictorConfig(Config):
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Predictor kwargs: {kwargs}")
         return Predictor(**kwargs)
+
+
+class EncoderWithPerModalityProjection(Encoder):
+    """Encoder with per-modality transformations after attention, before final norm."""
+
+    def __init__(
+        self,
+        embedding_size: int,
+        max_patch_size: int,
+        min_patch_size: int,
+        num_heads: int,
+        mlp_ratio: float,
+        depth: int,
+        drop_path: float,
+        supported_modalities: list[ModalitySpec],
+        max_sequence_length: int,
+        num_register_tokens: int = 0,
+        learnable_channel_embeddings: bool = True,
+        random_channel_embeddings: bool = False,
+        num_projection_layers: int = 1,
+        aggregate_then_project: bool = True,
+        use_flash_attn: bool = False,
+        frozen_patch_embeddings: bool = False,
+        qk_norm: bool = False,
+        log_token_norm_stats: bool = False,
+    ):
+        """Initialize the encoder with per-modality transformations.
+
+        Args are the same as Encoder, but adds per-modality linear transformations
+        after attention but before the final normalization.
+        """
+        super().__init__(
+            embedding_size=embedding_size,
+            max_patch_size=max_patch_size,
+            min_patch_size=min_patch_size,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            depth=depth,
+            drop_path=drop_path,
+            supported_modalities=supported_modalities,
+            max_sequence_length=max_sequence_length,
+            num_register_tokens=num_register_tokens,
+            learnable_channel_embeddings=learnable_channel_embeddings,
+            random_channel_embeddings=random_channel_embeddings,
+            num_projection_layers=num_projection_layers,
+            aggregate_then_project=aggregate_then_project,
+            use_flash_attn=use_flash_attn,
+            frozen_patch_embeddings=frozen_patch_embeddings,
+            qk_norm=qk_norm,
+            log_token_norm_stats=log_token_norm_stats,
+        )
+        # Add per-modality transformations (applied after attention, before norm)
+        self.per_modality_transforms = nn.ModuleDict()
+        for modality_name in self.supported_modality_names:
+            self.per_modality_transforms[modality_name] = nn.Linear(
+                embedding_size, embedding_size, bias=True
+            )
+
+    def apply_attn(
+        self,
+        x: dict[str, Tensor],
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int,
+        token_exit_cfg: dict[str, int] | None = None,
+        fast_pass: bool = False,
+    ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
+        """Apply attention with per-modality transformations before final norm.
+
+        This override adds per-modality linear transformations after the attention
+        blocks but before the final normalization, allowing modality-specific
+        feature refinement.
+        """
+        tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
+            self.split_tokens_masks_and_dims(x)
+        )
+        exit_ids_seq = self.create_exit_seqs(
+            tokens_only_dict, original_masks_dict, token_exit_cfg
+        )
+        exited_tokens, _ = self.collapse_and_combine_hwtc(x)
+
+        tokens_dict = self.composite_encodings.forward(
+            tokens_only_dict,
+            timestamps,
+            patch_size,
+            input_res,
+        )
+        tokens_dict.update(original_masks_dict)
+        tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+
+        tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
+            self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
+        )
+
+        if exit_ids_seq is not None:
+            exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
+                exit_ids_seq, bool_mask
+            )
+            exited_tokens, _, _, _, _ = self.remove_masked_tokens(
+                exited_tokens, bool_mask
+            )
+
+        # Pack x tokens
+        if self.use_flash_attn:
+            cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
+            og_shape = tokens.shape
+            tokens = self.pack_tokens(tokens, new_mask)
+        else:
+            cu_seqlens = None
+
+        attn_mask = self._maybe_get_attn_mask(
+            new_mask,
+            fast_pass=fast_pass,
+        )
+
+        if self.has_register_tokens:
+            tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
+
+        # Apply attention blocks
+        for i_blk, blk in enumerate(self.blocks):
+            if (exit_ids_seq is not None) and (i_blk > 0):
+                assert exited_tokens is not None
+                exited_tokens = torch.where(
+                    condition=(exit_ids_seq == i_blk),
+                    input=tokens,
+                    other=exited_tokens,
+                )
+            tokens = blk(
+                x=tokens,
+                cu_seqlens=cu_seqlens,
+                max_seqlen=max_seqlen,
+                attn_mask=attn_mask,
+            )
+
+        if self.has_register_tokens:
+            tokens, register_tokens = self.pop_register_tokens(tokens)
+            token_norm_stats = (
+                self.get_token_norm_stats(tokens, register_tokens)
+                if self.log_token_norm_stats
+                else None
+            )
+        else:
+            token_norm_stats = None
+
+        if self.use_flash_attn:
+            tokens = self.unpack_tokens(tokens, new_mask, og_shape)
+
+        if exit_ids_seq is not None:
+            assert exited_tokens is not None
+            tokens = torch.where(
+                condition=(exit_ids_seq == (i_blk + 1)),
+                input=tokens,
+                other=exited_tokens,
+            )
+
+        # MODIFIED: Add removed tokens back FIRST to get full sequence
+        tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
+
+        # Split to per-modality format
+        tokens_per_modality_dict = self.split_and_expand_per_modality(
+            tokens, modalities_to_dims_dict
+        )
+
+        # Apply per-modality transformations
+        for modality, modality_tokens in tokens_per_modality_dict.items():
+            if modality in self.per_modality_transforms:
+                tokens_per_modality_dict[modality] = self.per_modality_transforms[
+                    modality
+                ](modality_tokens)
+
+        # Recombine tokens after per-modality transformation
+        tokens_per_modality_dict.update(original_masks_dict)
+        tokens, _ = self.collapse_and_combine_hwtc(tokens_per_modality_dict)
+
+        # Apply normalization to the full combined tokens
+        tokens = self.norm(tokens)
+
+        # Split back to per-modality format
+        tokens_per_modality_dict = self.split_and_expand_per_modality(
+            tokens, modalities_to_dims_dict
+        )
+        tokens_per_modality_dict.update(original_masks_dict)
+        return tokens_per_modality_dict, token_norm_stats
+
+
+@dataclass
+class EncoderWithPerModalityProjectionConfig(EncoderConfig):
+    """Configuration for EncoderWithPerModalityProjection."""
+
+    def build(self) -> "EncoderWithPerModalityProjection":
+        """Build the encoder with per-modality projections."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"EncoderWithPerModalityProjection kwargs: {kwargs}")
+        return EncoderWithPerModalityProjection(**kwargs)
+
+
+class PredictorWithPerModalityOutput(PredictorBase):
+    """Predictor with per-modality output heads instead of shared output projection."""
+
+    def __init__(
+        self,
+        supported_modalities: list[ModalitySpec],
+        encoder_embedding_size: int = 128,
+        decoder_embedding_size: int = 128,
+        depth: int = 2,
+        mlp_ratio: float = 2.0,
+        num_heads: int = 8,
+        max_sequence_length: int = 24,
+        drop_path: float = 0.0,
+        learnable_channel_embeddings: bool = True,
+        random_channel_embeddings: bool = False,
+        output_embedding_size: int | None = None,
+        use_flash_attn: bool = False,
+        qk_norm: bool = False,
+    ):
+        """Initialize the predictor with per-modality output heads.
+
+        Args are the same as PredictorBase, but creates per-modality output heads.
+        """
+        super().__init__(
+            supported_modalities=supported_modalities,
+            encoder_embedding_size=encoder_embedding_size,
+            decoder_embedding_size=decoder_embedding_size,
+            depth=depth,
+            mlp_ratio=mlp_ratio,
+            num_heads=num_heads,
+            max_sequence_length=max_sequence_length,
+            drop_path=drop_path,
+            learnable_channel_embeddings=learnable_channel_embeddings,
+            random_channel_embeddings=random_channel_embeddings,
+            output_embedding_size=output_embedding_size,
+            use_flash_attn=use_flash_attn,
+            qk_norm=qk_norm,
+        )
+        # Replace the shared output projection with per-modality output heads
+        delattr(self, "to_output_embed")
+        self.per_modality_output_heads = nn.ModuleDict()
+        for modality_name in self.supported_modality_names:
+            self.per_modality_output_heads[modality_name] = nn.Linear(
+                decoder_embedding_size, self.output_embedding_size, bias=True
+            )
+
+    def forward(
+        self,
+        x: TokensAndMasks,
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+    ) -> TokensAndMasks:
+        """Generate predictions with per-modality output heads.
+
+        Args:
+            x: TokensAndMasks containing the encoded tokens to make predictions from
+            timestamps: Timestamps of the tokens
+            patch_size: Patch size of the tokens
+            input_res: Input resolution of the tokens
+
+        Returns:
+            TokensAndMasks containing the predicted tokens and their masks
+        """
+        decoder_emedded_dict = x.as_dict(return_none=False)
+        # Apply Input Norms and encoder to decoder embeds to each modality
+        available_modalities = x.modalities
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            x_modality = getattr(x, modality)
+            x_modality = self.input_norm(x_modality)
+            x_modality = self.encoder_to_decoder_embed(x_modality)
+            masked_modality_name = x.get_masked_modality_name(modality)
+            decoder_emedded_dict[modality] = x_modality
+            decoder_emedded_dict[masked_modality_name] = getattr(
+                x, masked_modality_name
+            )
+
+        tokens_only_dict = self.add_masks(decoder_emedded_dict)
+        decoder_emedded_dict.update(tokens_only_dict)
+        tokens_and_masks = self.apply_attn(
+            decoder_emedded_dict, timestamps, patch_size, input_res
+        )
+        # Apply per-modality output heads instead of shared projection
+        output_dict = {}
+        available_modalities = return_modalities_from_dict(tokens_and_masks)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                modality
+            )
+            modality_mask = tokens_and_masks[masked_modality_name]
+            per_modality_output_tokens = []
+            modality_data = tokens_and_masks[modality]
+
+            band_sets = Modality.get(modality).band_sets
+            # Use modality-specific output head
+            modality_output_head = self.per_modality_output_heads[modality]
+            for idx in range(len(band_sets)):
+                per_channel_modality_data = modality_data[..., idx, :]
+                output_data = modality_output_head(self.norm(per_channel_modality_data))
+                per_modality_output_tokens.append(output_data)
+            output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
+            output_dict[masked_modality_name] = modality_mask
+        return TokensAndMasks(**output_dict)
+
+
+@dataclass
+class PredictorWithPerModalityOutputConfig(PredictorConfig):
+    """Configuration for PredictorWithPerModalityOutput."""
+
+    def build(self) -> "PredictorWithPerModalityOutput":
+        """Build the predictor with per-modality output heads."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"PredictorWithPerModalityOutput kwargs: {kwargs}")
+        return PredictorWithPerModalityOutput(**kwargs)
