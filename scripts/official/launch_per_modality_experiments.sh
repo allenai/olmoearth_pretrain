@@ -7,7 +7,7 @@
 
 set -e  # Exit on error
 
-CLUSTERS="\[ai2/jupiter,ai2/ceres\]"
+CLUSTERS='[ai2/jupiter,ai2/ceres]'
 NUM_GPUS=8
 
 echo "=================================="
@@ -21,7 +21,7 @@ echo ""
 echo "Launching experiment 1/3: Encoder-only per-modality projection..."
 python3 scripts/official/base_encoder_per_mod_proj.py launch base_encoder_per_mod_proj ai2/jupiter \
   --launch.num_gpus=${NUM_GPUS} \
-  --launch.clusters=${CLUSTERS}
+  --launch.clusters="${CLUSTERS}"
 echo "✓ Encoder-only experiment launched"
 echo ""
 
@@ -29,7 +29,7 @@ echo ""
 echo "Launching experiment 2/3: Decoder-only per-modality output heads..."
 python3 scripts/official/base_decoder_per_mod_proj.py launch base_decoder_per_mod_proj ai2/jupiter \
   --launch.num_gpus=${NUM_GPUS} \
-  --launch.clusters=${CLUSTERS}
+  --launch.clusters="${CLUSTERS}"
 echo "✓ Decoder-only experiment launched"
 echo ""
 
@@ -37,7 +37,7 @@ echo ""
 echo "Launching experiment 3/3: Both encoder and decoder with per-modality..."
 python3 scripts/official/base_both_per_mod_proj.py launch base_both_per_mod_proj ai2/jupiter \
   --launch.num_gpus=${NUM_GPUS} \
-  --launch.clusters=${CLUSTERS}
+  --launch.clusters="${CLUSTERS}"
 echo "✓ Both encoder+decoder experiment launched"
 echo ""
 
