@@ -1,4 +1,4 @@
-# Barebones script for generating embeddings
+"""Barebones script for generating embeddings."""
 from datetime import datetime as dt
 from google.cloud import storage
 from pathlib import Path
@@ -8,7 +8,6 @@ import numpy as np
 import os
 import pandas as pd
 import rasterio as rio
-import subprocess
 import time
 import torch
 
@@ -45,57 +44,63 @@ computed = Normalizer(Strategy.COMPUTED)
 predefined = Normalizer(Strategy.PREDEFINED)
 
 class OlmoEarthGEEDataset(Dataset):
-  def __init__(self, tif_path, timestamps):
-      profile, input_dict = self._read_geotiff(tif_path, timestamps)
-      self.profile = profile
-      self.tensors = {
-        "timestamps": torch.from_numpy(input_dict["timestamps"]),
-        "sentinel2":  torch.from_numpy(computed.normalize(Modality.SENTINEL2_L2A, input_dict["sentinel2"])).float(),
-        "sentinel1":  torch.from_numpy(computed.normalize(Modality.SENTINEL1, input_dict["sentinel1"])).float(),
-        "landsat":    torch.from_numpy(computed.normalize(Modality.LANDSAT, input_dict["landsat"])).float(),
-        "latlon":     torch.from_numpy(predefined.normalize(Modality.LATLON, input_dict["latlon"])).float(),
-      }
-      for k in self.tensors.keys():
-        self.tensors[k].share_memory_()
+    """Dataset for iterating through Google Earth Engine based geotiff file"""
+    
+    def __init__(self, tif_path, timestamps):
+        """Initializes dataset from a Google Earth Engine based geotiff file"""
+        profile, input_dict = self._read_geotiff(tif_path, timestamps)
+        self.profile = profile
+        self.tensors = {
+          "timestamps": torch.from_numpy(input_dict["timestamps"]),
+          "sentinel2":  torch.from_numpy(computed.normalize(Modality.SENTINEL2_L2A, input_dict["sentinel2"])).float(),
+          "sentinel1":  torch.from_numpy(computed.normalize(Modality.SENTINEL1, input_dict["sentinel1"])).float(),
+          "landsat":    torch.from_numpy(computed.normalize(Modality.LANDSAT, input_dict["landsat"])).float(),
+          "latlon":     torch.from_numpy(predefined.normalize(Modality.LATLON, input_dict["latlon"])).float(),
+        }
+        for k in self.tensors.keys():
+          self.tensors[k].share_memory_()
 
-  @staticmethod
-  def _read_geotiff(tif_path, timestamps):
-    with rio.open(tif_path) as src:
-      profile = src.profile
-      bands = src.descriptions
-      height, width = src.height, src.width
-      tile = src.read()
+    @staticmethod
+    def _read_geotiff(tif_path, timestamps):
+        with rio.open(tif_path) as src:
+          profile = src.profile
+          bands = src.descriptions
+          height, width = src.height, src.width
+          tile = src.read()
 
-    height = tile.shape[1]
-    width = tile.shape[2]
-    num_pixels = height * width
-    input_data = tile.reshape(len(bands), num_pixels)
+        height = tile.shape[1]
+        width = tile.shape[2]
+        num_pixels = height * width
+        input_data = tile.reshape(len(bands), num_pixels)
 
-    input_dict = {
-      "timestamps": np.array([timestamps] * num_pixels),
-      "latlon":     input_data[[bands.index("latitude"), bands.index("longitude")]].transpose(1, 0),
-      "landsat":    np.zeros((num_pixels, 1, 1, len(timestamps), len(BANDS["landsat"]))),
-      "sentinel1":  np.zeros((num_pixels, 1, 1, len(timestamps), len(BANDS["sentinel1"]))),
-      "sentinel2":  np.zeros((num_pixels, 1, 1, len(timestamps), len(BANDS["sentinel2"]))),
-    }
+        input_dict = {
+          "timestamps": np.array([timestamps] * num_pixels),
+          "latlon":     input_data[[bands.index("latitude"), bands.index("longitude")]].transpose(1, 0),
+          "landsat":    np.zeros((num_pixels, 1, 1, len(timestamps), len(BANDS["landsat"]))),
+          "sentinel1":  np.zeros((num_pixels, 1, 1, len(timestamps), len(BANDS["sentinel1"]))),
+          "sentinel2":  np.zeros((num_pixels, 1, 1, len(timestamps), len(BANDS["sentinel2"]))),
+        }
 
-    for i, key in enumerate(bands):
-      if key == "latitude" or key == "longitude":
-        continue
-      modality, timestep_str, band = key.split("_")
-      band_index = BANDS[modality].index(band)
-      input_dict[modality][:, 0, 0, int(timestep_str), band_index] = input_data[i]
-    return profile, input_dict
+        for i, key in enumerate(bands):
+          if key == "latitude" or key == "longitude":
+            continue
+          modality, timestep_str, band = key.split("_")
+          band_index = BANDS[modality].index(band)
+          input_dict[modality][:, 0, 0, int(timestep_str), band_index] = input_data[i]
+        return profile, input_dict
 
-  def __len__(self):
-    return self.profile["width"] * self.profile["height"]
+    def __len__(self):
+        """Returns amount of pixels in geotiff file"""
+        return self.profile["width"] * self.profile["height"]
 
-  def __getitem__(self, idx):
-      sample = {k: v[idx] for k, v in self.tensors.items()}
-      return sample
+    def __getitem__(self, idx):
+        """Returns single pixel of data"""
+        sample = {k: v[idx] for k, v in self.tensors.items()}
+        return sample
 
     
 def run_inference_on_tile(tile, timestamps):
+    """Runs inference on all pixels in a tile"""
     print(tile)
     print(f"\n\tDownloading input data ...\t", end="")
     start = time.perf_counter()
@@ -171,6 +176,9 @@ def run_inference_on_tile(tile, timestamps):
     Path("in.tif").unlink()
     Path("out.tif").unlink()
 
+def to_date_obj(d): 
+    "Converts date string to date object"
+    return dt.strptime(d, "%Y-%m-%d").date()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -180,7 +188,6 @@ if __name__ == "__main__":
 
     # Derive timestamps
     START_DATE, END_DATE = args.run.split("_")[-2:]
-    to_date_obj = lambda d: dt.strptime(d, "%Y-%m-%d").date()
     timestamps_pd = pd.date_range(to_date_obj(START_DATE), to_date_obj(END_DATE), freq="MS")[:-1]
     timestamps = [[t.year, t.month - 1, t.day] for t in timestamps_pd]
 
