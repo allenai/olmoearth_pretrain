@@ -27,23 +27,22 @@ import torch.nn as nn
 from torch.amp import autocast
 from torch.cuda.amp import GradScaler
 from upath import UPath
-
-# Add repo to path
-sys.path.insert(0, '/home/rob/repo/olmoearth_pretrain')
-
-try:
-    import wandb
-    HAS_WANDB = True
-except ImportError:
-    HAS_WANDB = False
-
-# W&B API Key
-WANDB_API_KEY = "66fcb37f79df7842234038c8a6eb11eef487ce56"
+import wandb
 
 from olmoearth_pretrain.data.dataset import OlmoEarthDataset, GetItemArgs
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.model_loader import ModelID, load_model_from_id
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
+
+# Add repo to path
+sys.path.insert(0, '/home/rob/repo/olmoearth_pretrain')
+
+
+
+
+# Get W&B API Key from environment variable
+WANDB_API_KEY = os.environ.get('WANDB_API_KEY')
+
 
 # Configuration
 @dataclass
@@ -95,8 +94,7 @@ class TrainingConfig:
     
     # Head architecture
     hidden_multiplier: float = 1.0  # Multiplier for hidden layer size (768 * hidden_multiplier)
-
-
+    debug_logging: bool = False  # Enable verbose logging for debugging
 class ReflectanceReconstructionHead(nn.Module):
     """Learnable head for spatial image reconstruction from OlmoEarth tokens.
     
@@ -167,19 +165,25 @@ class ReflectanceReconstructionTrainer:
         Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
         
         # Initialize W&B
-        self.wandb_enabled = config.use_wandb and HAS_WANDB
+        self.wandb_enabled = config.use_wandb
         if self.wandb_enabled:
             try:
-                wandb.login(key=WANDB_API_KEY, relogin=True)
-                self.logger.info(f"W&B login successful")
-                run = wandb.init(
-                    project=config.wandb_project,
-                    entity=config.wandb_entity,
-                    config=config.__dict__,
-                    save_code=True,
-                )
-                self.logger.info(f"✅ W&B initialized successfully: {wandb.run.name}")
-                self.logger.info(f"   Dashboard URL: {wandb.run.url}")
+                if WANDB_API_KEY:
+                    wandb.login(key=WANDB_API_KEY, relogin=False)
+                    self.logger.info(f"W&B login successful")
+                else:
+                    self.logger.warning("W&B API key not available, skipping W&B initialization")
+                    self.wandb_enabled = False
+                
+                if self.wandb_enabled:
+                    run = wandb.init(
+                        project=config.wandb_project,
+                        entity=config.wandb_entity,
+                        config=config.__dict__,
+                        save_code=True,
+                    )
+                    self.logger.info(f"✅ W&B initialized successfully: {wandb.run.name}")
+                    self.logger.info(f"   Dashboard URL: {wandb.run.url}")
             except Exception as e:
                 self.logger.error(f"❌ W&B initialization failed: {e}")
                 import traceback
@@ -187,8 +191,8 @@ class ReflectanceReconstructionTrainer:
                 self.logger.warning("Continuing training without W&B logging")
                 self.wandb_enabled = False
         else:
-            self.logger.info(f"W&B disabled (use_wandb={config.use_wandb}, HAS_WANDB={HAS_WANDB})")
-        
+            self.logger.info(f"W&B disabled (use_wandb={config.use_wandb})")
+                
         # Load models
         self._load_models()
         
@@ -204,7 +208,6 @@ class ReflectanceReconstructionTrainer:
         self.logger.info("Loading base OlmoEarth model...")
         self.base_model = load_model_from_id(self.config.model_id)
         self.base_model = self.base_model.to(self.device)
-        
         if self.config.freeze_encoder:
             for param in self.base_model.parameters():
                 param.requires_grad = False
@@ -272,10 +275,11 @@ class ReflectanceReconstructionTrainer:
         )
         
         # Prepare dataset - scans S3 once to discover samples and cache metadata
-        self.logger.info("Preparing dataset...")
+        self.logger.info("Preparing dataset (discovering samples from S3, this may take a few minutes)...")
+        start_time = time.time()
         self.dataset.prepare()
-        
-        self.logger.info(f"Dataset prepared with {len(self.dataset)} samples")
+        elapsed = time.time() - start_time
+        self.logger.info(f"✓ Dataset prepared with {len(self.dataset)} samples in {elapsed:.1f}s")
     
     def _get_sample_with_masking(self, sample_idx: int) -> Optional[Tuple]:
         """Get a sample with random S2 timesteps masked for reconstruction.
@@ -295,6 +299,13 @@ class ReflectanceReconstructionTrainer:
         s2_data = sample.sentinel2_l2a  # (H, W, T, C_s2) - numpy array
         num_timesteps = s2_data.shape[2]  # T dimension
         
+        # Debug: Check raw S2 data (only if debug_logging enabled)
+        if self.config.debug_logging:
+            self.logger.info(f"  Raw S2 shape: {s2_data.shape}, dtype: {s2_data.dtype}")
+            for t in range(num_timesteps):
+                t_data = s2_data[:, :, t, :]
+                self.logger.info(f"    Timestep {t}: min={np.min(t_data):.6f}, max={np.max(t_data):.6f}, std={np.std(t_data):.6f}, mean={np.mean(t_data):.6f}")
+        
         if num_timesteps < 2:
             return None
         
@@ -311,18 +322,20 @@ class ReflectanceReconstructionTrainer:
             if np.std(timestep_data) > 1e-6 and np.max(timestep_data) > 0:
                 valid_timesteps.append(t)
         
-        # If we don't have enough valid timesteps, just use available ones
-        if len(valid_timesteps) < num_to_mask:
-            self.logger.warning(f"  Not enough valid timesteps. Available: {len(valid_timesteps)}, requested: {num_to_mask}")
-            masked_indices = np.random.choice(num_timesteps, size=min(num_to_mask, num_timesteps), replace=False)
-        else:
-            masked_indices = np.random.choice(valid_timesteps, size=num_to_mask, replace=False)
+        # If we don't have enough valid timesteps, skip this sample
+        if len(valid_timesteps) < 2:
+            self.logger.warning(f"  Skipping sample - not enough valid timesteps. Available: {len(valid_timesteps)}")
+            return None
+        
+        # Mask up to min(12, num_valid_timesteps-1) timesteps to keep at least 1 unmasked for context
+        num_to_mask = min(np.random.randint(1, min(13, num_timesteps)), len(valid_timesteps) - 1)
+        masked_indices = np.random.choice(valid_timesteps, size=num_to_mask, replace=False)
         
         # Extract GT for masked timesteps
-        s2_gt_list = [s2_data[:, :, t, :] for t in masked_indices]  # List of (H, W, C_s2)
+        s2_gt_list = [s2_data[:, :, t, :].copy() for t in masked_indices]  # List of (H, W, C_s2)
         
-        # DEBUG: Log GT extraction
-        if len(s2_gt_list) > 0:
+        # Debug: Log GT extraction (only if debug_logging enabled)
+        if self.config.debug_logging and len(s2_gt_list) > 0:
             first_gt = s2_gt_list[0]
             self.logger.info(f"  GT EXTRACTION DEBUG - shape: {first_gt.shape}, min: {np.min(first_gt):.6f}, max: {np.max(first_gt):.6f}, mean: {np.mean(first_gt):.6f}, std: {np.std(first_gt):.6f}, masked_indices: {masked_indices}")
         
@@ -408,6 +421,8 @@ class ReflectanceReconstructionTrainer:
         
         self.optimizer.zero_grad()
         accumulated_loss = 0.0
+        batch_losses = []  # Track per-batch losses for progress
+        batch_correlations = []  # Track per-batch correlations
         
         for batch_idx, sample_idx in enumerate(sample_indices):
             # Stop early if we've processed enough for this epoch
@@ -426,7 +441,7 @@ class ReflectanceReconstructionTrainer:
             masked_sample, s2_gt_list, masked_indices, load_time, num_to_mask, num_timesteps = sample_data
             
             # Log sample info (sparse logging - only every Nth sample)
-            if batch_idx % 5 == 0:
+            if batch_idx % 10 == 0:
                 self.logger.info(f"  Sample {batch_idx+1}: load={load_time:.2f}s, masked={num_to_mask}/{num_timesteps} timesteps")
             
             # Forward through frozen base model
@@ -504,9 +519,21 @@ class ReflectanceReconstructionTrainer:
                         self.logger.info(f"      H (token resolution): {H}, W: {W}")
                         self.logger.info(f"      kernel_size: ({kernel_size_h}, {kernel_size_w})")
                     
-                    gt_s2_perm = gt_s2_raw.permute(2, 0, 1).unsqueeze(1)  # (C_s2, 1, H_full, W_full)
-                    gt_pooled = torch.nn.functional.avg_pool2d(gt_s2_perm, kernel_size=(kernel_size_h, kernel_size_w))  # (C_s2, 1, H, W)
-                    gt_pooled = gt_pooled.squeeze(1).permute(1, 2, 0)  # (H, W, C_s2)
+                    # Pool each band separately
+                    # Shape: (H_full, W_full, 12) -> pool spatial dims for each band
+                    gt_pooled_list = []
+                    for band_idx in range(12):
+                        band_data = gt_s2_raw[:, :, band_idx]  # (H_full, W_full)
+                        band_data_unsqueezed = band_data.unsqueeze(0).unsqueeze(0)  # (1, 1, H_full, W_full)
+                        band_pooled = torch.nn.functional.avg_pool2d(band_data_unsqueezed, kernel_size=(kernel_size_h, kernel_size_w))
+                        gt_pooled_list.append(band_pooled.squeeze(0).squeeze(0))  # (H, W)
+                    
+                    gt_pooled = torch.stack(gt_pooled_list, dim=-1)  # (H, W, 12)
+                    
+                    # DEBUG pooling result
+                    if gt_idx == 0 and batch_idx < 1:
+                        self.logger.info(f"      GT pooled shape: {gt_pooled.shape}")
+                        self.logger.info(f"      GT pooled band 0 - min: {gt_pooled[:, :, 0].min():.2f}, max: {gt_pooled[:, :, 0].max():.2f}, mean: {gt_pooled[:, :, 0].mean():.2f}")
                     
                     # IMPORTANT: Keep all 12 spectral bands with their spatial structure
                     gt_masked_t = gt_pooled  # (H, W, 12) - all bands preserved
@@ -612,10 +639,17 @@ class ReflectanceReconstructionTrainer:
                 alpha = 0.3  # 30% MSE, 70% spatial correlation - prioritize learning spatial patterns
                 loss = alpha * mse_loss_scaled + (1.0 - alpha) * spatial_corr_loss * 100.0
                 
+                # Track loss and correlation for this batch
+                batch_losses.append(loss.item() * self.config.gradient_accumulation_steps)  # Un-scale for logging
+                if mean_corr is not None:
+                    batch_correlations.append(mean_corr)
+                
                 # DEBUG: Log loss components for first few samples
                 if batch_idx < 3:
-                    self.logger.info(f"  LOSS DEBUG: MSE={mse_loss_scaled:.6f}, SpatialCorr={spatial_corr_loss:.6f}, Combined={loss:.6f}")
-                    self.logger.info(f"  LOSS COMPONENTS: MSE contribution={alpha*mse_loss_scaled:.6f}, Corr contribution={(1.0-alpha)*spatial_corr_loss*10.0:.6f}")
+                    self.logger.info(f"  LOSS DEBUG (batch {batch_idx}): MSE={mse_loss_scaled:.6f}, SpatialCorr={spatial_corr_loss:.6f}, Combined={loss*self.config.gradient_accumulation_steps:.6f}")
+                    self.logger.info(f"  LOSS COMPONENTS: MSE contribution={alpha*mse_loss_scaled:.6f}, Corr contribution={(1.0-alpha)*spatial_corr_loss*100.0:.6f}")
+                    self.logger.info(f"  CORRELATIONS (first 3 bands): {[f'{c:.4f}' for c in correlations_all[:3]]}")
+                    self.logger.info(f"  Mean correlation this batch: {mean_corr:.4f}")
                     # Log gradient magnitudes
                     total_grad_norm = 0.0
                     for p in self.head.parameters():
@@ -673,6 +707,12 @@ class ReflectanceReconstructionTrainer:
                 accumulated_loss = 0.0
                 
                 self.global_step += 1
+                
+                # Log progress every N accumulation steps
+                if self.global_step % 10 == 0:
+                    recent_loss = np.mean(batch_losses[-10:]) if batch_losses else 0.0
+                    recent_corr = np.mean(batch_correlations[-10:]) if batch_correlations else 0.0
+                    self.logger.info(f"  Step {self.global_step}: Loss={recent_loss:.6f}, AvgCorr={recent_corr:.4f}")
             
             sample_time = time.time() - sample_start
         
@@ -697,10 +737,15 @@ class ReflectanceReconstructionTrainer:
             metrics['train/corr_std'] = np.std(all_corrs)
         
         self.logger.info(f"\n{'='*70}")
-        self.logger.info(f"✅ EPOCH {self.current_epoch + 1} COMPLETE: Avg Loss = {metrics['avg_loss']:.2f}")
-        self.logger.info(f"   Processed: {processed}, Skipped: {skipped}, LR: {metrics['learning_rate']:.2e}")
+        self.logger.info(f"✅ EPOCH {self.current_epoch + 1} COMPLETE:")
+        self.logger.info(f"   Avg Loss: {metrics['avg_loss']:.6f}")
+        self.logger.info(f"   Processed: {processed}, Skipped: {skipped}")
+        self.logger.info(f"   Learning Rate: {metrics['learning_rate']:.2e}")
         if 'train/corr_mean' in metrics:
-            self.logger.info(f"   Mean Correlation: {metrics['train/corr_mean']:.4f}")
+            self.logger.info(f"   Mean Correlation: {metrics['train/corr_mean']:.4f} (±{metrics['train/corr_std']:.4f})")
+            # Show per-band correlations
+            band_corrs_str = ", ".join([f"B{i:02d}:{metrics.get(f'train/corr_band_{i:02d}', 0.0):.3f}" for i in range(0, 12, 2)])
+            self.logger.info(f"   Per-Band Correlations (even bands): {band_corrs_str}")
         self.logger.info(f"{'='*70}\n")
         
         return metrics
@@ -1069,7 +1114,7 @@ def main():
         gradient_accumulation_steps=1,
         learning_rate=1e-4,
         max_grad_norm=100.0,
-        max_total_samples=1000,  # Use ALL available samples (~18,000)
+        max_total_samples=1000,  # Use all available samples
         warmup_steps=100,
         use_wandb=True,
         hidden_multiplier=0.8,  # Adjust to control parameters: 0.5 (~370K), 0.25 (~150K), 1.0 (~600K), 2.0 (~2.4M)
@@ -1081,3 +1126,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
