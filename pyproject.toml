@@ -23,20 +23,20 @@ dependencies = [
     "psutil>=7.1.1",
     "rasterio>=1.4.3",
     "shapely>=2",
-    "torch>=2.7,<2.10",
-    "torchvision>=0.22.1,<0.24.0",
+    "torch>=2.7,<2.8",
+    "torchvision>=0.22.1",
     "universal-pathlib>=0.2.5",
     "wandb>=0.19.0",
 ]
 
 optional-dependencies.torch-cpu = [
-  "torch>=2.7,<2.10",
-  "torchvision>=0.22.1,<0.24.0",
+  "torch>=2.7,<2.8",
+  "torchvision>=0.22.1",
 ]
 optional-dependencies.torch-cu128 = [
   "pytorch-triton",
-  "torch>=2.7,<2.10",
-  "torchvision>=0.22.1,<0.24.0",
+  "torch>=2.7,<2.8",
+  "torchvision>=0.22.1",
   "flash-attn>=2.4.0",
 ]
 
@@ -123,7 +123,7 @@ dataset-creation = [
     "rasterio>=1.4.3",
     "rioxarray>=0.19.0",
     "rslearn==0.0.11",
-    "torch>=2.7,<2.10",
+    "torch>=2.7,<2.8",
     "universal-pathlib>=0.2.5",
     "wandb>=0.19.0",
 ]
