@@ -19,8 +19,8 @@ Now we can use the `olmoearth_pretrain` library to initialize the model in pytor
 Below, we initialize the OlmoEarth-v1-Base model.
 
 ```python
-from olmoearth_pretrain.model_loader import ModelID, load_model
-model = load_model(ModelID.OLMOEARTH_V1_BASE)
+from olmoearth_pretrain.model_loader import ModelID, load_model_from_id
+model = load_model_from_id(ModelID.OLMOEARTH_V1_BASE)
 ```
 
 ## Obtain Satellite Imagery
