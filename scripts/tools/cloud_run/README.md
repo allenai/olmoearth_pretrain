@@ -1,7 +1,7 @@
 
 # OlmoEarth Embeddings using Google Cloud Run
 
-Deploying OlmoEarth to Google Cloud Run allows generating embeddings using Google's GPUs on data exported from Google Earth Engine. 
+Deploying OlmoEarth to Google Cloud Run allows generating embeddings using Google's GPUs on data exported from Google Earth Engine.
 This is an alternative to generating embeddings using the `generate_embeddings.ipynb` notebook.
 
 ### Folder Contents
@@ -42,11 +42,3 @@ Check the GPU checkbox to enable inference on an L4 GPU. Finally, click the butt
 
 ## Inference
 The Cloud Run job container arguments can be updated to run additional jobs with remaining tif files.
-
-
-
-
-
-
-
-
