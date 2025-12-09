@@ -80,6 +80,7 @@ if __name__ == "__main__":
     random.shuffle(h5s_to_process)
     for h5_file in tqdm(h5s_to_process[:NUM_FILES_TO_PROCESS]):
         if h5_file.name in done_files:
+            print(f"Skipping already processed {h5_file.name}.")
             continue
         elif h5_file.name == "normalizing_dict.h5":
             continue
