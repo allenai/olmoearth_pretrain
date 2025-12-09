@@ -582,7 +582,7 @@ class OlmoEarthDataset(Dataset):
         dataset_percentage: float = 1.0,
         seed: int = 0,
         apply_cutmix: bool = False,
-        filter_idx_file: UPath | None = None,
+        filter_idx_file: str | None = None,
     ):
         """Initialize the dataset.
 
@@ -1066,7 +1066,7 @@ class OlmoEarthDatasetConfig(Config):
     dataset_percentage: float = 1.0
     seed: int = 0
     apply_cutmix: bool = False
-    filter_idx_file: UPath | None = None
+    filter_idx_file: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
