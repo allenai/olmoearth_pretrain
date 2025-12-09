@@ -147,7 +147,7 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     return OlmoEarthDatasetConfig(
         h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
         training_modalities=common.training_modalities,
-        # filter_idx_file="/weka/dfive-default/gabrielt/helios/filtered_wc_1_s2_33_22841.npy",
+        filter_idx_file="/weka/dfive-default/gabrielt/helios/filtered_wc_1_s2_33_22841.npy",
     )
 
 
