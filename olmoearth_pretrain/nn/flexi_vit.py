@@ -2372,7 +2372,7 @@ class EncoderWithPerModalityProjectionConfig(EncoderConfig):
         return EncoderWithPerModalityProjection(**kwargs)
 
 
-class PredictorWithPerModalityOutput(PredictorBase):
+class PredictorWithPerModalityOutput(Predictor):
     """Predictor with per-modality output heads instead of shared output projection."""
 
     def __init__(
