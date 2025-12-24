@@ -1,20 +1,14 @@
-"""Integration tests for standalone model loading without olmo-core.
+"""Tests for model loading with inference-only dependencies (no olmo-core).
 
 These tests verify that models can be loaded from config.json files
 without requiring olmo-core as a dependency.
 
-To run these tests in CI without olmo-core:
-    1. Create a fresh venv without the [training] extra:
-       uv venv --python 3.11 .venv-inference
-       source .venv-inference/bin/activate
-       uv pip install -e .  # NOT -e .[training]
+This test directory is separate from tests/ because the main conftest.py
+imports modules that depend on olmo-core. These tests run in CI with
+only base dependencies installed.
 
-    2. Run just these tests:
-       pytest tests/integration/test_inference_model_loading.py -v
-
-The tests use pytest.mark.inference_deps_only to allow filtering:
-    pytest -m inference_deps_only  # run only these tests
-    pytest -m "not inference_deps_only"  # skip these tests
+To run locally without olmo-core:
+    uv run --group dev pytest -v tests_inference/
 """
 
 import pytest
@@ -26,9 +20,6 @@ from olmoearth_pretrain.config import (
     _StandaloneConfig,
 )
 from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
-
-# Mark all tests in this module
-pytestmark = pytest.mark.inference_deps_only
 
 
 class TestConfigExport:

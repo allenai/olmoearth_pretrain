@@ -55,4 +55,4 @@ jobs:
     - name: Run inference-only tests
       run: |
         # Run with only base deps + dev group (no training = no olmo-core)
-        uv run --group dev pytest -v -m inference_deps_only tests/
+        uv run --group dev pytest -v tests_inference/
