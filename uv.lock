@@ -2629,6 +2629,7 @@ dependencies = [
     { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
     { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform == 'linux'" },
+    { name = "universal-pathlib" },
 ]
 
 [package.dev-dependencies]
@@ -2726,6 +2727,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26.4" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.7,<2.8", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torch", marker = "sys_platform == 'linux'", specifier = ">=2.7,<2.8", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "universal-pathlib", specifier = ">=0.2.5" },
 ]
 
 [package.metadata.requires-dev]

@@ -10,6 +10,7 @@ on:
 
 jobs:
   test:
+    name: Test (full dependencies)
     runs-on: ubuntu-latest
 
     steps:
@@ -23,7 +24,6 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@v6
       with:
-        # Install a specific version of uv.
         version: "0.9.5"
 
     - name: Install dependencies
@@ -31,12 +31,16 @@ jobs:
         # Install all groups (includes training with olmo-core, eval, dev, etc.)
         uv sync --locked --all-groups
 
-    - name: Run tests
+    - name: Run unit/integration tests
       run: |
         uv run pytest -n auto tests/
 
+    - name: Run model loader tests (with olmo-core)
+      run: |
+        uv run pytest -v tests_inference/
+
   test-inference-only:
-    name: Test inference only dependencies
+    name: Test (inference-only dependencies)
     runs-on: ubuntu-latest
 
     steps:
@@ -52,7 +56,7 @@ jobs:
       with:
         version: "0.9.5"
 
-    - name: Run inference-only tests
+    - name: Run model loader tests (without olmo-core)
       run: |
-        # Run with only base deps + dev group (no training = no olmo-core)
+        # Run with base deps + dev group (no training = no olmo-core)
         uv run --group dev pytest -v tests_inference/
