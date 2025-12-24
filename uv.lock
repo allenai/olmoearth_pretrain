@@ -2623,25 +2623,12 @@ name = "olmoearth-pretrain"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
-    { name = "albumentations" },
-    { name = "cartopy" },
-    { name = "class-registry" },
     { name = "einops" },
-    { name = "gcsfs" },
-    { name = "hdf5plugin" },
     { name = "huggingface-hub" },
-    { name = "matplotlib" },
     { name = "numpy" },
-    { name = "pandas" },
-    { name = "psutil" },
-    { name = "rasterio" },
-    { name = "shapely" },
     { name = "torch", version = "2.7.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.7.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin' and sys_platform != 'linux'" },
     { name = "torch", version = "2.7.1+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "sys_platform == 'linux'" },
-    { name = "torchvision" },
-    { name = "universal-pathlib" },
-    { name = "wandb" },
 ]
 
 [package.dev-dependencies]
@@ -2686,18 +2673,30 @@ dev = [
 eval = [
     { name = "ai2-olmo-core" },
     { name = "albumentations" },
+    { name = "cartopy" },
+    { name = "class-registry" },
     { name = "claymodel" },
+    { name = "gcsfs" },
     { name = "geobench" },
     { name = "geopandas" },
+    { name = "hdf5plugin" },
+    { name = "matplotlib" },
+    { name = "pandas" },
+    { name = "psutil" },
     { name = "pytorch-lightning" },
     { name = "pyyaml" },
+    { name = "rasterio" },
     { name = "rioxarray" },
     { name = "rslearn" },
     { name = "satlaspretrain-models" },
     { name = "scikit-learn" },
+    { name = "shapely" },
     { name = "terratorch" },
     { name = "timm" },
     { name = "torchmetrics" },
+    { name = "torchvision" },
+    { name = "universal-pathlib" },
+    { name = "wandb" },
     { name = "xarray" },
 ]
 flash-attn = [
@@ -2705,28 +2704,28 @@ flash-attn = [
 ]
 training = [
     { name = "ai2-olmo-core" },
+    { name = "albumentations" },
+    { name = "cartopy" },
+    { name = "class-registry" },
+    { name = "gcsfs" },
+    { name = "hdf5plugin" },
+    { name = "matplotlib" },
+    { name = "pandas" },
+    { name = "psutil" },
+    { name = "rasterio" },
+    { name = "shapely" },
+    { name = "torchvision" },
+    { name = "universal-pathlib" },
+    { name = "wandb" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "albumentations", specifier = ">=1.4.10" },
-    { name = "cartopy", specifier = ">=0.25.0" },
-    { name = "class-registry", specifier = ">=2.1.2" },
     { name = "einops", specifier = ">=0.7.0" },
-    { name = "gcsfs", specifier = ">=2025.9.0" },
-    { name = "hdf5plugin", specifier = ">=6.0.0" },
     { name = "huggingface-hub" },
-    { name = "matplotlib", specifier = ">=3.10.7" },
     { name = "numpy", specifier = ">=1.26.4" },
-    { name = "pandas", specifier = ">=2.2" },
-    { name = "psutil", specifier = ">=7.1.1" },
-    { name = "rasterio", specifier = ">=1.4.3" },
-    { name = "shapely", specifier = ">=2" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.7,<2.8", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torch", marker = "sys_platform == 'linux'", specifier = ">=2.7,<2.8", index = "https://download.pytorch.org/whl/cu128" },
-    { name = "torchvision", specifier = ">=0.22.1" },
-    { name = "universal-pathlib", specifier = ">=0.2.5" },
-    { name = "wandb", specifier = ">=0.19.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -2770,22 +2769,49 @@ dev = [
 eval = [
     { name = "ai2-olmo-core", specifier = "==2.3.0" },
     { name = "albumentations", specifier = ">=1.4.10" },
+    { name = "cartopy", specifier = ">=0.25.0" },
+    { name = "class-registry", specifier = ">=2.1.2" },
     { name = "claymodel", git = "https://github.com/Clay-foundation/model.git" },
+    { name = "gcsfs", specifier = ">=2025.9.0" },
     { name = "geobench", git = "https://github.com/ServiceNow/geo-bench.git" },
     { name = "geopandas", specifier = ">=1.1.1" },
+    { name = "hdf5plugin", specifier = ">=6.0.0" },
+    { name = "matplotlib", specifier = ">=3.10.7" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "psutil", specifier = ">=7.1.1" },
     { name = "pytorch-lightning", specifier = "==2.5.5" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "rasterio", specifier = ">=1.4.3" },
     { name = "rioxarray", specifier = ">=0.19.0" },
     { name = "rslearn", specifier = "==0.0.11" },
     { name = "satlaspretrain-models", specifier = ">=0.3.1" },
     { name = "scikit-learn", specifier = ">=1.7.2" },
+    { name = "shapely", specifier = ">=2" },
     { name = "terratorch", specifier = "==1.1" },
     { name = "timm", specifier = "==1.0.20" },
     { name = "torchmetrics", specifier = "==1.7.1" },
+    { name = "torchvision", specifier = ">=0.22.1" },
+    { name = "universal-pathlib", specifier = ">=0.2.5" },
+    { name = "wandb", specifier = ">=0.19.0" },
     { name = "xarray", specifier = ">=2025.10.1" },
 ]
 flash-attn = [{ name = "flash-attn", specifier = ">=2.4.0" }]
-training = [{ name = "ai2-olmo-core", specifier = "==2.3.0" }]
+training = [
+    { name = "ai2-olmo-core", specifier = "==2.3.0" },
+    { name = "albumentations", specifier = ">=1.4.10" },
+    { name = "cartopy", specifier = ">=0.25.0" },
+    { name = "class-registry", specifier = ">=2.1.2" },
+    { name = "gcsfs", specifier = ">=2025.9.0" },
+    { name = "hdf5plugin", specifier = ">=6.0.0" },
+    { name = "matplotlib", specifier = ">=3.10.7" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "psutil", specifier = ">=7.1.1" },
+    { name = "rasterio", specifier = ">=1.4.3" },
+    { name = "shapely", specifier = ">=2" },
+    { name = "torchvision", specifier = ">=0.22.1" },
+    { name = "universal-pathlib", specifier = ">=0.2.5" },
+    { name = "wandb", specifier = ">=0.19.0" },
+]
 
 [[package]]
 name = "omegaconf"
