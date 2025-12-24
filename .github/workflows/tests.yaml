@@ -36,7 +36,7 @@ jobs:
         uv run pytest -n auto tests/
 
   test-inference-only:
-    name: Test inference-only dependencies
+    name: Test inference only dependencies
     runs-on: ubuntu-latest
 
     steps:
