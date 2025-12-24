@@ -1,16 +1,17 @@
 """Tests for model loading that run with both minimal and full dependencies.
 
-These tests verify that models can be loaded from config.json files.
-They run in CI twice:
-1. With minimal deps (no olmo-core) → tests _StandaloneConfig path
+This directory (tests_minimal_deps/) contains tests that are run twice in CI:
+1. With minimal deps only (no olmo-core) → tests _StandaloneConfig path
 2. With full deps (with olmo-core) → tests olmo-core Config path
+
+This verifies model loading works regardless of whether olmo-core is installed.
 
 To run locally:
     # Minimal deps (no olmo-core)
-    uv run --group dev pytest -v tests_inference/
+    uv run --group dev pytest -v tests_minimal_deps/
 
     # Full deps (with olmo-core)
-    uv run pytest -v tests_inference/
+    uv run pytest -v tests_minimal_deps/
 """
 
 import json

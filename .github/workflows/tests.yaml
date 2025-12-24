@@ -37,7 +37,7 @@ jobs:
 
     - name: Run model loader tests (with olmo-core)
       run: |
-        uv run pytest -v tests_inference/
+        uv run pytest -v tests_minimal_deps/
 
   test-inference-only:
     name: Test (inference-only dependencies)
@@ -59,4 +59,4 @@ jobs:
     - name: Run model loader tests (without olmo-core)
       run: |
         # Run with base deps + dev group (no training = no olmo-core)
-        uv run --group dev pytest -v tests_inference/
+        uv run --group dev pytest -v tests_minimal_deps/
