@@ -2644,11 +2644,6 @@ dependencies = [
     { name = "wandb" },
 ]
 
-[package.optional-dependencies]
-training = [
-    { name = "ai2-olmo-core" },
-]
-
 [package.dev-dependencies]
 beaker = [
     { name = "beaker-py" },
@@ -2689,6 +2684,7 @@ dev = [
     { name = "ruff" },
 ]
 eval = [
+    { name = "ai2-olmo-core" },
     { name = "albumentations" },
     { name = "claymodel" },
     { name = "geobench" },
@@ -2707,10 +2703,12 @@ eval = [
 flash-attn = [
     { name = "flash-attn" },
 ]
+training = [
+    { name = "ai2-olmo-core" },
+]
 
 [package.metadata]
 requires-dist = [
-    { name = "ai2-olmo-core", marker = "extra == 'training'", specifier = "==2.3.0" },
     { name = "albumentations", specifier = ">=1.4.10" },
     { name = "cartopy", specifier = ">=0.25.0" },
     { name = "class-registry", specifier = ">=2.1.2" },
@@ -2730,7 +2728,6 @@ requires-dist = [
     { name = "universal-pathlib", specifier = ">=0.2.5" },
     { name = "wandb", specifier = ">=0.19.0" },
 ]
-provides-extras = ["training"]
 
 [package.metadata.requires-dev]
 beaker = [
@@ -2771,6 +2768,7 @@ dev = [
     { name = "ruff", specifier = ">=0.14.1" },
 ]
 eval = [
+    { name = "ai2-olmo-core", specifier = "==2.3.0" },
     { name = "albumentations", specifier = ">=1.4.10" },
     { name = "claymodel", git = "https://github.com/Clay-foundation/model.git" },
     { name = "geobench", git = "https://github.com/ServiceNow/geo-bench.git" },
@@ -2787,6 +2785,7 @@ eval = [
     { name = "xarray", specifier = ">=2025.10.1" },
 ]
 flash-attn = [{ name = "flash-attn", specifier = ">=2.4.0" }]
+training = [{ name = "ai2-olmo-core", specifier = "==2.3.0" }]
 
 [[package]]
 name = "omegaconf"

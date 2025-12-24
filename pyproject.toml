@@ -30,10 +30,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Training requires olmo-core for experiment tracking, distributed training, etc.
-training = [
-    "ai2-olmo-core==2.3.0",
-]
+# Keep empty for now - use dependency-groups instead
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -85,6 +82,10 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [dependency-groups]
+training = [
+    # olmo-core for experiment tracking, distributed training, etc.
+    "ai2-olmo-core==2.3.0",
+]
 beaker = [
     "beaker-py==1.34.1",
     "docker>=5.0,<8.0",
@@ -122,6 +123,7 @@ dev = [
     "ruff>=0.14.1",
 ]
 eval = [
+    { include-group = "training" },
     "albumentations>=1.4.10",
     "claymodel",
     "geobench",

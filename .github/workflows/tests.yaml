@@ -28,8 +28,46 @@ jobs:
 
     - name: Install dependencies
       run: |
+        # Install all groups (includes training with olmo-core, eval, dev, etc.)
         uv sync --locked --all-groups
 
     - name: Run tests
       run: |
         uv run pytest -n auto tests/
+
+  test-inference-only:
+    name: Test inference-only dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version-file: "pyproject.toml"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+      with:
+        version: "0.9.5"
+
+    - name: Install inference-only dependencies (no olmo-core)
+      run: |
+        # Install only base deps (no extras like [training]), plus pytest for running tests
+        uv pip install -e . pytest
+
+    - name: Verify olmo-core is NOT installed
+      run: |
+        python -c "
+        try:
+            import olmo_core
+            print('ERROR: olmo-core should NOT be installed')
+            exit(1)
+        except ImportError:
+            print('OK: olmo-core is not installed (as expected)')
+        "
+
+    - name: Run inference-only tests
+      run: |
+        pytest -v -m inference_deps_only tests/
