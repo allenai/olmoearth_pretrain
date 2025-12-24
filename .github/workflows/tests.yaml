@@ -52,22 +52,7 @@ jobs:
       with:
         version: "0.9.5"
 
-    - name: Install inference-only dependencies (no olmo-core)
-      run: |
-        # Install only base deps (no extras like [training]), plus pytest for running tests
-        uv pip install -e . pytest
-
-    - name: Verify olmo-core is NOT installed
-      run: |
-        python -c "
-        try:
-            import olmo_core
-            print('ERROR: olmo-core should NOT be installed')
-            exit(1)
-        except ImportError:
-            print('OK: olmo-core is not installed (as expected)')
-        "
-
     - name: Run inference-only tests
       run: |
-        pytest -v -m inference_deps_only tests/
+        # Run with only base deps + dev group (no training = no olmo-core)
+        uv run --only-group dev pytest -v -m inference_deps_only tests/

@@ -9,7 +9,6 @@ readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.11, <3.14" # For torch  2.7.1 compatibility
 dependencies = [
-    # Core inference dependencies - olmo-core NOT required for loading/running models this can be culled further likely
     "albumentations>=1.4.10",
     "cartopy>=0.25.0",
     "class-registry>=2.1.2",
@@ -29,8 +28,6 @@ dependencies = [
     "wandb>=0.19.0",
 ]
 
-[project.optional-dependencies]
-# Keep empty for now - use dependency-groups instead
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -83,7 +80,6 @@ explicit = true
 
 [dependency-groups]
 training = [
-    # olmo-core for experiment tracking, distributed training, etc.
     "ai2-olmo-core==2.3.0",
 ]
 beaker = [
