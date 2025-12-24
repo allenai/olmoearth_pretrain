@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from olmo_core.config import Config
 from torch.utils.data import ConcatDataset, Dataset
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
+from olmoearth_pretrain.config import Config
 
 from .dataset import GetItemArgs
 

@@ -4,8 +4,7 @@ import os
 import re
 from dataclasses import dataclass
 
-from olmo_core.config import Config
-
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.inference_benchmarking import constants
 
 

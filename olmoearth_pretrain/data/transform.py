@@ -9,9 +9,9 @@ import torch
 import torchvision.transforms.v2.functional as F
 from class_registry import ClassRegistry
 from einops import rearrange
-from olmo_core.config import Config
 from torch.distributions import Beta
 
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.types import ArrayTensor

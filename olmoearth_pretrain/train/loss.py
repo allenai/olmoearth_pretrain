@@ -10,9 +10,9 @@ import torch
 import torch.nn.functional as F
 from class_registry import ClassRegistry
 from einops import rearrange, repeat
-from olmo_core.config import Config
 from torch import Tensor
 
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.flexi_vit import PoolingType, TokensAndMasks
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue

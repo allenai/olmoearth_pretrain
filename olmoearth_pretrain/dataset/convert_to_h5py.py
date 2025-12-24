@@ -12,10 +12,10 @@ import hdf5plugin
 import numpy as np
 import pandas as pd
 from einops import rearrange
-from olmo_core.config import Config
 from tqdm import tqdm
 from upath import UPath
 
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
     IMAGE_TILE_SIZE,
     SENTINEL1_NODATA,

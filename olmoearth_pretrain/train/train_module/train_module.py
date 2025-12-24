@@ -10,7 +10,7 @@ from typing import Any, cast
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
-from olmo_core.config import Config, DType
+from olmo_core.config import DType
 from olmo_core.distributed.parallel import (
     DataParallelConfig,
     DataParallelType,
@@ -33,6 +33,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.train.loss import LossConfig

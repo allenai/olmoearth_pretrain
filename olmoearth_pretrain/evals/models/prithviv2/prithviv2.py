@@ -10,9 +10,9 @@ import torch.nn.functional as F
 import yaml
 from einops import rearrange
 from huggingface_hub import hf_hub_download
-from olmo_core.config import Config
 from upath import UPath
 
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.models.prithviv2.prithvi_mae import PrithviMAE
 from olmoearth_pretrain.nn.flexi_vit import PoolingType

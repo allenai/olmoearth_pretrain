@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-from olmo_core.config import Config
 from torch.distributed import DeviceMesh
 from torch.distributed.fsdp import (
     MixedPrecisionPolicy,
@@ -14,9 +13,10 @@ from torch.distributed.fsdp import (
     register_fsdp_forward_method,
 )
 
+from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
