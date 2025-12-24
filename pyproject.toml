@@ -62,6 +62,9 @@ testpaths = [
 addopts = [
     "--import-mode=importlib",
 ]
+markers = [
+    "inference_deps_only: tests that run with only inference dependencies (no olmo-core)",
+]
 
 [tool.uv.sources]
 claymodel = { git = "https://github.com/Clay-foundation/model.git" }
