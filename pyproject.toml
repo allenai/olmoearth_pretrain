@@ -131,6 +131,12 @@ eval = [
 flash_attn = [
     "flash-attn>=2.4.0",
 ]
+# Internal tool for ingesting Studio datasets into OlmoEarth evals
+# See olmoearth_pretrain/evals/studio_ingest/README.md
+ingest = [
+    { include-group = "dataset-creation" },
+    "tqdm>=4.66.0",  # Progress bars for copy operations
+]
 
 [tool.uv.extra-build-dependencies]
 flash-attn = [{ requirement = "torch", match-runtime = true }]
