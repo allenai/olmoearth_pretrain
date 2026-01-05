@@ -52,11 +52,6 @@ from olmoearth_pretrain.evals.studio_ingest.ingest import IngestConfig, ingest_d
 from olmoearth_pretrain.evals.studio_ingest.registry import Registry
 from olmoearth_pretrain.evals.studio_ingest.validate import validate_dataset
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 logger = logging.getLogger(__name__)
 
 
@@ -79,34 +74,17 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     # Build config from args
     config = IngestConfig(
         name=args.name,
-        display_name=args.display_name,
         source_path=args.source,
-        task_type=args.task_type,
-        modalities=args.modalities,
-        target_property=args.property_name,
-        classes=args.classes,
-        temporal_range=tuple(args.temporal_range) if args.temporal_range else ("", ""),
-        patch_size=args.patch_size,
-        compute_norm_stats=not args.skip_norm_stats,
-        sample_fraction=args.sample_fraction,
-        max_samples=args.max_samples,
-        studio_task_id=args.studio_task_id,
-        notes=args.notes,
-        overwrite=args.overwrite,
-        skip_validation=args.skip_validation,
     )
 
-    try:
-        entry = ingest_dataset(config)
-        print(f"\n✓ Successfully ingested dataset: {entry.name}")
-        print(f"  Location: {entry.weka_path}")
-        print(f"  Splits: {entry.splits}")
-        return 0
-    except Exception as e:
-        logger.error(f"Ingestion failed: {e}")
-        return 1
+    entry = ingest_dataset(config)
+    print(f"\n✓ Successfully ingested dataset: {entry.name}")
+    print(f"  Location: {entry.weka_path}")
+    print(f"  Splits: {entry.splits}")
+    return 0
 
 
+# TODO: Use a better way of setting up the args that is easier to maintain
 def add_ingest_args(parser: argparse.ArgumentParser) -> None:
     """Add arguments for the ingest command."""
     # Required arguments
@@ -115,96 +93,11 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
         required=True,
         help="Unique identifier for the dataset (e.g., 'lfmc')",
     )
-    parser.add_argument(
-        "--display-name",
-        required=True,
-        help="Human-readable name (e.g., 'Live Fuel Moisture Content')",
-    )
+
     parser.add_argument(
         "--source",
         required=True,
         help="Path to source rslearn dataset (e.g., 'gs://bucket/dataset')",
-    )
-    parser.add_argument(
-        "--task-type",
-        required=True,
-        choices=["classification", "regression", "segmentation"],
-        help="Type of task",
-    )
-    parser.add_argument(
-        "--modalities",
-        required=True,
-        nargs="+",
-        help="List of modality names (e.g., 'sentinel2_l2a sentinel1')",
-    )
-    parser.add_argument(
-        "--property-name",
-        required=True,
-        help="Name of the property containing labels (e.g., 'category')",
-    )
-
-    # Optional - Task specific
-    parser.add_argument(
-        "--classes",
-        nargs="+",
-        help="List of class names (for classification tasks)",
-    )
-
-    # Optional - Temporal
-    parser.add_argument(
-        "--temporal-range",
-        nargs=2,
-        metavar=("START", "END"),
-        help="Temporal range as ISO dates (e.g., '2022-09-01 2023-09-01')",
-    )
-
-    # Optional - Patch config
-    parser.add_argument(
-        "--patch-size",
-        type=int,
-        default=64,
-        help="Patch size in pixels (default: 64)",
-    )
-
-    # Optional - Normalization
-    parser.add_argument(
-        "--skip-norm-stats",
-        action="store_true",
-        help="Skip normalization stats computation",
-    )
-    parser.add_argument(
-        "--sample-fraction",
-        type=float,
-        default=0.1,
-        help="Fraction of data to sample for stats (default: 0.1)",
-    )
-    parser.add_argument(
-        "--max-samples",
-        type=int,
-        default=10000,
-        help="Maximum samples for stats computation (default: 10000)",
-    )
-
-    # Optional - Metadata
-    parser.add_argument(
-        "--studio-task-id",
-        help="Optional Studio task ID for provenance",
-    )
-    parser.add_argument(
-        "--notes",
-        help="Optional notes about the dataset",
-    )
-
-    # Optional - Behavior
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Overwrite existing dataset if it exists",
-    )
-    parser.add_argument(
-        "--skip-validation",
-        action="store_true",
-        help="Skip validation (not recommended)",
     )
 
 

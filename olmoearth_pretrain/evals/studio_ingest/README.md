@@ -32,6 +32,9 @@ Requires the `ingest` dependency group:
 uv sync --group ingest
 ```
 
+## Steps I have done so far
+1. Found the appropriate path for the tolbi dataset in some gcs bucket (there needs to be a canonical locaiton studio can write datasets to if needed)
+2. I want to run `uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.cli ingest  --name tolbi_crops --source gs://rslearn-eai/datasets/tolbi ` and infer all the neccessary information for the task
 ## Quick Start
 
 ```bash

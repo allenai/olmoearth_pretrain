@@ -135,33 +135,8 @@ class IngestConfig:
 
     # Required
     name: str
-    display_name: str
     source_path: str
-    task_type: str
-    modalities: list[str]
-    target_property: str
-
-    # Optional - Task specific
-    classes: list[str] | None = None
-
-    # Optional - Temporal
-    temporal_range: tuple[str, str] = ("", "")
-
-    # Optional - Patch config
-    patch_size: int = 64
-
-    # Optional - Normalization
-    compute_norm_stats: bool = True
-    sample_fraction: float = 0.1
-    max_samples: int = 10000
-
-    # Optional - Metadata
-    studio_task_id: str | None = None
-    notes: str | None = None
-
-    # Optional - Behavior
-    overwrite: bool = False
-    skip_validation: bool = False
+    # We want to be able to infer all the relevant information and metadata and if not we should serialize and write it in studio to make this possible.
 
 
 # =============================================================================
@@ -390,6 +365,23 @@ def step_register(
     logger.info(f"Dataset '{entry.name}' registered successfully")
 
 
+def extract_metadata(config: IngestConfig) -> dict:
+    """Extract the metadata relevant to build the task configuration."""
+    # What information will need to run the task?
+    # What modalities are supported? - config.json
+    # is it time series? - config.json
+    # is it multilabel? - config.json
+    # Any imputes or missing data - config.json
+    # label target property - config.json
+
+    # Derived elsewhere
+    # How many classes are there? - I think this is only possible by reading and summarizing all the labels in the dataset
+    # hw if it is segmentation?
+    # what is the task type? - I think we would probably need some sort of finetuning config associated with this task
+    # what data belongs to which split? (in the individual metadata.json files)
+    raise ValueError("Not implemented")
+
+
 # =============================================================================
 # Main Ingestion Function
 # =============================================================================
@@ -427,25 +419,29 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     """
     logger.info(f"Starting ingestion of dataset: {config.name}")
     logger.info(f"Source: {config.source_path}")
-    logger.info(f"Task type: {config.task_type}")
-    logger.info(f"Modalities: {config.modalities}")
 
-    # Run all steps
-    step_validate(config)
-    dest_path = step_create_destination(config)
+    # # First we need to extract the metadata relevant to build the task configuration
+    # # Then we want to validate we have everything we will need
+    # # Then we want to copy the data to the appropriate location
+    # # confirrm data is there and compute stats
+    # # Then register dataset into the index and create the entries
+    # # Run all steps
+    metadata = extract_metadata(config)
+    # step_validate(config)
+    # dest_path = step_create_destination(config)
 
-    try:
-        splits = step_copy_data(config, dest_path)
-        step_compute_stats(config, dest_path)
-        entry = step_create_metadata(config, dest_path, splits)
-        step_register(entry, overwrite=config.overwrite)
-    except Exception:
-        # TODO: Add cleanup on failure
-        logger.error(
-            f"Ingestion failed. Partial data may exist at {dest_path}. "
-            "Please clean up manually."
-        )
-        raise
+    # try:
+    #     splits = step_copy_data(config, dest_path)
+    #     step_compute_stats(config, dest_path)
+    #     entry = step_create_metadata(config, dest_path, splits)
+    #     step_register(entry, overwrite=config.overwrite)
+    # except Exception:
+    #     # TODO: Add cleanup on failure
+    #     logger.error(
+    #         f"Ingestion failed. Partial data may exist at {dest_path}. "
+    #         "Please clean up manually."
+    #     )
+    #     raise
 
-    logger.info(f"Successfully ingested dataset: {config.name}")
+    # logger.info(f"Successfully ingested dataset: {config.name}")
     return entry
