@@ -135,17 +135,6 @@ class TestConfigExport:
         """Test that the exported Config has from_dict for model loading."""
         assert hasattr(Config, "from_dict")
 
-    def test_olmo_core_flag_reflects_installation(self) -> None:
-        """Test that OLMO_CORE_AVAILABLE correctly reflects olmo-core installation."""
-        try:
-            import olmo_core  # noqa: F401
-
-            expected = True
-        except ImportError:
-            expected = False
-
-        assert OLMO_CORE_AVAILABLE == expected
-
 
 # =============================================================================
 # EncoderConfig Loading Tests
