@@ -47,20 +47,26 @@ from __future__ import annotations
 import getpass
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
 
+import numpy as np
+from rslearn.config import DatasetConfig
+from rslearn.dataset.dataset import Dataset as RslearnDataset
+from rslearn.utils.raster_format import GeotiffRasterFormat
+from tqdm import tqdm
 from upath import UPath
 
 # TODO: Integrate band_stats.py into the ingestion workflow
 # from olmoearth_pretrain.evals.studio_ingest.band_stats import compute_band_stats
 from olmoearth_pretrain.evals.studio_ingest.registry import REGISTRY_PATH, Registry
-from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
+from olmoearth_pretrain.evals.studio_ingest.schema import (
+    DEFAULT_TARGET_PROPERTY,
+    RSLEARN_TO_OLMOEARTH,
+    EvalDatasetEntry,
+)
 from olmoearth_pretrain.evals.studio_ingest.validate import validate_dataset
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -365,21 +371,103 @@ def step_register(
     logger.info(f"Dataset '{entry.name}' registered successfully")
 
 
-def extract_metadata(config: IngestConfig) -> dict:
-    """Extract the metadata relevant to build the task configuration."""
-    # What information will need to run the task?
-    # What modalities are supported? - config.json
-    # is it time series? - config.json
-    # is it multilabel? - config.json
-    # Any imputes or missing data - config.json
-    # label target property - config.json
+# =============================================================================
+# Label Scanning Utilities
+# =============================================================================
 
-    # Derived elsewhere
-    # How many classes are there? - I think this is only possible by reading and summarizing all the labels in the dataset
-    # hw if it is segmentation?
-    # what is the task type? - I think we would probably need some sort of finetuning config associated with this task
-    # what data belongs to which split? (in the individual metadata.json files)
-    raise ValueError("Not implemented")
+GEOTIFF_RASTER_FORMAT = GeotiffRasterFormat()
+
+
+def get_label_layer_info(dataset_config: DatasetConfig) -> tuple[str, list[str]] | None:
+    """Find the label layer in the dataset config.
+
+    The label layer is identified by having no data_source (meaning it's derived/local).
+
+    Args:
+        dataset_config: The rslearn DatasetConfig
+
+    Returns:
+        Tuple of (layer_name, bands) if found, None otherwise
+    """
+    for layer_name, layer_config in dataset_config.layers.items():
+        if layer_config.data_source is not None:
+            # This is a modality layer with an external data source
+            continue
+        # Found a layer without data_source - this should be the label layer
+        if layer_config.band_sets:
+            bands = layer_config.band_sets[0].bands
+            return (layer_name, bands)
+    return None
+
+
+def get_unique_label_values(
+    source_path: str,
+    dataset_config: DatasetConfig,
+    max_windows: int | None = None,
+) -> tuple[set[int], int]:
+    """Scan the rslearn dataset to get unique label values.
+
+    Iterates through all windows in the dataset, reads the label raster
+    from each, and collects all unique integer values.
+
+    Args:
+        source_path: Path to the rslearn dataset
+        dataset_config: The parsed DatasetConfig
+        max_windows: Optional limit on number of windows to scan (for debugging)
+
+    Returns:
+        Tuple of (set of unique label values, number of classes)
+
+    Raises:
+        ValueError: If no label layer is found in the dataset
+    """
+    # Find the label layer
+    label_info = get_label_layer_info(dataset_config)
+    if label_info is None:
+        raise ValueError(
+            "No label layer found in dataset. Label layer should have no data_source."
+        )
+    label_layer_name, label_bands = label_info
+    logger.info(f"Found label layer: {label_layer_name} with bands: {label_bands}")
+
+    # Load the rslearn dataset
+    rslearn_dataset = RslearnDataset(UPath(source_path))
+
+    # Get all windows
+    windows = rslearn_dataset.load_windows(workers=8, show_progress=True)
+    if max_windows is not None:
+        windows = windows[:max_windows]
+
+    logger.info(f"Scanning {len(windows)} windows for unique label values...")
+
+    def scan_window_labels(window):
+        """Scan a single window for unique label values."""
+        try:
+            raster_dir = window.get_raster_dir(label_layer_name, label_bands)
+            if not raster_dir.exists():
+                return set()
+            label_raster = GEOTIFF_RASTER_FORMAT.decode_raster(
+                raster_dir, window.projection, window.bounds
+            )
+            return set(np.unique(label_raster).astype(int).tolist())
+        except Exception as e:
+            logger.warning(f"Error reading label for window {window.name}: {e}")
+            return set()
+
+    unique_values: set[int] = set()
+    num_workers = min(32, len(windows))  # cap at 32 threads
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(scan_window_labels, w): w for w in windows}
+        for future in tqdm(
+            as_completed(futures), total=len(futures), desc="Scanning labels"
+        ):
+            unique_values.update(future.result())
+
+    # Filter out common NODATA values if needed (typically -1 or 255 for uint8)
+    # For now, we return all values and let the caller handle NODATA filtering
+    num_classes = len(unique_values)
+
+    return unique_values, num_classes
 
 
 # =============================================================================
@@ -420,13 +508,97 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     logger.info(f"Starting ingestion of dataset: {config.name}")
     logger.info(f"Source: {config.source_path}")
 
-    # # First we need to extract the metadata relevant to build the task configuration
-    # # Then we want to validate we have everything we will need
-    # # Then we want to copy the data to the appropriate location
-    # # confirrm data is there and compute stats
-    # # Then register dataset into the index and create the entries
-    # # Run all steps
-    metadata = extract_metadata(config)
+    # What information will need to run the task?
+    # What modalities are supported? - config.json
+    # is it time series? - config.json
+    # is it multilabel? - config.json
+    # Any imputes or missing data - config.json
+    # label target property - config.json
+
+    # Derived elsewhere
+    # How many classes are there? - I think this is only possible by reading and summarizing all the labels in the dataset
+    # hw if it is segmentation?
+    # what is the task type? - I think we would probably need some sort of finetuning config associated with this task
+    # what data belongs to which split? (in the individual metadata.json files)
+
+    config_upath = UPath(config.source_path) / "config.json"
+    with config_upath.open() as f:
+        dataset_dict = json.load(f)
+        # TODO: Potentiually validate witht the rsleanr class
+    dataset_config = DatasetConfig.model_validate(dataset_dict)
+    # Get the modalities
+    modalities = []
+    num_timesteps_modalities = []
+    for layer_name, layer_config in dataset_config.layers.items():
+        if layer_config.data_source is None:
+            # This means it is some other layer like a label layer and not one of the modalities we are interested in
+            continue
+        # Get the modality
+        print(layer_name)
+        print(layer_config)
+        olmoearth_modality = RSLEARN_TO_OLMOEARTH[layer_name]
+        modalities.append(olmoearth_modality)
+        # get the temporal range
+        query_config = layer_config.data_source.query_config
+        # For now we raise an error if min_matches and max_matches are not the same
+        if query_config.min_matches != query_config.max_matches:
+            raise ValueError(
+                f"Min matches and max matches are not the same for layer {layer_name}"
+            )
+        num_timesteps_modalities.append(query_config.min_matches)
+    print(modalities)
+    # assert all the num_timesteps_modalities are the same
+    if len(set(num_timesteps_modalities)) != 1:
+        raise ValueError("Num timesteps are not the same for all modalities")
+    num_timesteps = num_timesteps_modalities[0]
+
+    # get the target property
+    # I am pretty sure this is just the band name of the label layer
+    target_property = DEFAULT_TARGET_PROPERTY
+    # for layer_name, layer_config in dataset_config.layers.items():
+    #     if layer_config.data_source is not None:
+    #         # This means it is a modality layer
+    #         continue
+    #     # Assuming that no data source means it is a label layer, this could be potentially wrong
+    #     band_sets = layer_config.band_sets
+    #     if len(band_sets) != 1:
+    #         raise ValueError(f"Expected only one band set for label layer {layer_name}, multiple label bandsets are not supported yet")
+    #     band_set = band_sets[0]
+    #     # May need to revise target properyty var name later
+    #     label_layer_name = band_set.bands[0]
+    #     # the target property is used in the metadata.json inside each windows but is not easily available
+    #     # check the metadata.json of the first window to see if the target property is the default one
+    #     # TODO: Support a target property specified by the config.json
+
+    #     # Assume that there is only one label layer
+    #     break
+    # get the label values and the number of classes by scanning the data
+    label_values, num_classes = get_unique_label_values(
+        config.source_path, dataset_config
+    )
+    logger.info(f"Found {num_classes} unique label values: {sorted(label_values)}")
+
+    # get the NODATA values
+
+    # get the multilabel
+    # get the imputes
+    # get the missing data
+    # get the splits
+    # get the cv folds
+    # get the norm stats
+    # get the pretrain norm
+    # get the created at
+    # get the created by
+    # get the studio task id
+    # get the notes
+    # Optional it would be nice to have the class names but that may not be easy to get as of right now
+
+    raise ValueError("Not implemented")
+    entry = EvalDatasetEntry(
+        name=config.name,
+        source_path=config.source_path,
+    )
+
     # step_validate(config)
     # dest_path = step_create_destination(config)
 

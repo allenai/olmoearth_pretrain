@@ -36,9 +36,21 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from olmoearth_pretrain.data.constants import Modality
+
+DEFAULT_TARGET_PROPERTY = "category"
 # =============================================================================
 # Normalization Statistics
 # =============================================================================
+
+# rslearn layer name -> (olmoearth modality name, all bands)
+RSLEARN_TO_OLMOEARTH: dict[str, tuple[str, Modality]] = {
+    "sentinel2": Modality.SENTINEL2_L2A,
+    "sentinel1": Modality.SENTINEL1,
+    "sentinel1_ascending": Modality.SENTINEL1,
+    "sentinel1_descending": Modality.SENTINEL1,
+    "landsat": Modality.LANDSAT,
+}
 
 
 @dataclass
@@ -252,7 +264,11 @@ class EvalDatasetEntry:
     # Data configuration
     modalities: list[str] = field(default_factory=list)
     temporal_range: tuple[str, str] = ("", "")
-    patch_size: int = 64
+    window_size: int = 64
+    multilabel: bool = False
+    classes: list[str] | None = None  # num classes can be derived from this
+    label_target_property: str | None = None
+    band_order: list[str] = field(default_factory=list)
 
     # Paths
     source_path: str = ""
