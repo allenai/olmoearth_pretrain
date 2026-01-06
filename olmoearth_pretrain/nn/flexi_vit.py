@@ -2443,6 +2443,20 @@ class PredictorWithPerModalityOutput(Predictor):
                 decoder_embedding_size, self.output_embedding_size, bias=True
             )
 
+    #     for modality_name in self.supported_modality_names:
+    #         modality_spec = Modality.get(modality_name)
+    #         for bandset_idx in range(modality_spec.num_band_sets):
+    #             str_key = self._output_head_key(modality_name, bandset_idx)
+    #             self.per_modality_bandset_output_heads[str_key] = nn.Linear(
+    #                 decoder_embedding_size, self.output_embedding_size, bias=True
+    #             )
+
+    # def _output_head_key(self, modality_name: str, bandset_idx: int) -> str:
+    #     return f"{modality_name}__{bandset_idx}"
+    def _output_head_key(self, modality_name: str, bandset_idx: int) -> str:
+        return f"{modality_name}__{bandset_idx}"
+
+
     def forward(
         self,
         x: TokensAndMasks,
@@ -2507,42 +2521,14 @@ class PredictorWithPerModalityOutput(Predictor):
             per_modality_output_tokens = []
             modality_data = tokens_and_masks[modality]
 
-            band_sets = Modality.get(modality).band_sets
             # Use modality-specific output head
             modality_output_head = self.per_modality_output_heads[modality]
-            for idx in range(len(band_sets)):
+            for idx in range(Modality.get(modality).num_band_sets):
                 per_channel_modality_data = modality_data[..., idx, :]
                 output_data = modality_output_head(self.norm(per_channel_modality_data))
                 per_modality_output_tokens.append(output_data)
             output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
             output_dict[masked_modality_name] = modality_mask
-
-        # FSDP fix: Pass dummy data through non-processed modality heads.
-        # FSDP requires all ranks to call all modules in the same order.
-        # Without this, ranks that don't have certain modalities will skip those
-        # heads, causing NCCL collective operations to hang.
-        # FSDP fix: Always pass dummy data through all modality heads for gradient & collective correctness.
-        all_supported_modalities = sorted(list(self.supported_modality_names))
-        if all_supported_modalities and reference_tensor is not None:
-            dummy_input = torch.zeros(
-                1,
-                reference_tensor.shape[-1],
-                device=reference_tensor.device,
-                dtype=reference_tensor.dtype,
-                requires_grad=True,
-            )
-            dummy_sum = None
-            for modality in all_supported_modalities:
-                modality_output_head = self.per_modality_output_heads[modality]
-                dummy_out = modality_output_head(self.norm(dummy_input))
-                if dummy_sum is None:
-                    dummy_sum = dummy_out.sum() * 1.0e-20
-                else:
-                    dummy_sum = dummy_sum + dummy_out.sum() * 1.0e-20
-
-            if dummy_sum is not None and modalities_to_process:
-                first_modality = list(modalities_to_process)[0]
-                output_dict[first_modality] = output_dict[first_modality] + dummy_sum
 
         return TokensAndMasks(**output_dict)
 

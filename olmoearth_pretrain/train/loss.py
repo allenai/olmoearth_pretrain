@@ -322,6 +322,8 @@ class ModalityPatchDiscriminationLossNew(Loss):
         ):
             # Samples may have different number of tokens
             # TODO: Skip unqueeze and the for loop when mask_other_samples is True
+            # compute a small dummy loss over all input tokens for all modalities by summing all the preds
+            dummy_loss = all_preds.sum() * 1.0e-20
             pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
             target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
             bs, nt, _ = pred.shape
@@ -366,7 +368,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
                 loss = loss * self.modality_weights[modality]
             total_loss += loss
 
-        return self.weight * total_loss
+        return self.weight * total_loss + dummy_loss
 
 
 @LOSS_REGISTRY.register("patch_discrimination")
