@@ -36,6 +36,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from rslearn.train.tasks.segmentation import SegmentationTask as RsSegmentationTask
+from rslearn.train.tasks.classification import ClassificationTask as RsClassificationTask
+from olmoearth_pretrain.evals.datasets.configs import TaskType
 from olmoearth_pretrain.data.constants import Modality
 
 DEFAULT_TARGET_PROPERTY = "category"
@@ -52,7 +55,15 @@ RSLEARN_TO_OLMOEARTH: dict[str, tuple[str, Modality]] = {
     "landsat": Modality.LANDSAT,
 }
 
+TASK_TYPE_MAP = {
+    "tolbi_crops": TaskType.SEGMENTATION
+}
 
+# THis may not be needed if we load stuff from rslearn correctly
+TASK_TYPE_TO_RSLEARN_TASK_CLASS = {
+    TaskType.SEGMENTATION: RsSegmentationTask,
+    TaskType.CLASSIFICATION: RsClassificationTask,
+}
 @dataclass
 class BandStats:
     """Per-band normalization statistics.

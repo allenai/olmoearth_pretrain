@@ -26,10 +26,17 @@ Todo:
 
 import argparse
 import json
-
+from collections import defaultdict
 import torch
 from einops import rearrange
 from rslearn.dataset.dataset import Dataset as RslearnDataset
+from rslearn.train.dataset import DataInput as RsDataInput
+from rslearn.train.dataset import ModelDataset as RsModelDataset
+from rslearn.train.dataset import SplitConfig as RsSplitConfig
+from rslearn.train.tasks.classification import (
+    ClassificationTask as RsClassificationTask,
+)
+from rslearn.train.transforms.pad import Pad as RsPad
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from upath import UPath
@@ -39,10 +46,116 @@ from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS
 from olmoearth_pretrain.data.constants import Modality as DataModality
 from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
-    RSLEARN_TO_HELIOS,
-    build_rslearn_model_dataset,
+    RSLEARN_TO_OLMOEARTH,
 )
+from olmoearth_pretrain.evals.studio_ingest.schema import TaskType
 
+
+def build_rslearn_model_dataset_for_band_stats(
+    rslearn_dataset: RslearnDataset,
+    layers: list[str],
+    classes: list[str],
+    task_type: TaskType,
+    rslearn_dataset_groups: list[str] | None = None,
+    input_size: int | None = None,
+    split: str = "train",
+    property_name: str = "category",
+    skip_targets: bool = True,
+) -> RsModelDataset:
+    """Build an rslearn ModelDataset.
+
+    Args:
+        rslearn_dataset: The source RslearnDataset.
+        rslearn_dataset_groups: Optional list of dataset group names to include.
+        layers: List of rslearn layer names to use as model inputs.
+            Example: "sentinel2". Only provide the base name, do not include
+            layer names such as "sentinel2.1" or "sentinel2.n".
+        input_size: Optional input patch size (pixels) to crop/resize samples to.
+        split: Dataset split to use (e.g., "train", "val", "test").
+        property_name: The property in the dataset to use as the target label.
+        classes: List of class names. If None, inferred from dataset.
+        skip_targets: Whether or not to skip the target, if True, property_name and classes can be placeholder.
+
+    Returns:
+        RsModelDataset: A dataset object ready for training or evaluation.
+    """
+    if not layers:
+        raise ValueError(
+            "`layers` must be a non-empty list of rslearn layer names, "
+            f"allowed: {list(RSLEARN_TO_OLMOEARTH.keys())}"
+        )
+    if split not in ("train", "val", "test"):
+        raise ValueError(f"Invalid split {split}, must be one of train/val/test")
+
+    # Validate input layers
+    unknown = [m for m in layers if m not in RSLEARN_TO_OLMOEARTH]
+    if unknown:
+        raise ValueError(
+            f"Unknown rslearn layer(s): {unknown}. "
+            f"Allowed: {list(RSLEARN_TO_OLMOEARTH.keys())}"
+        )
+
+    if classes is None:
+        raise ValueError("`classes` must be provided and cannot be None.")
+
+    # Group rslearn layers by their OlmoEarth Pretrain modality key
+    layers_by_olmoearth: dict[str, list[str]] = defaultdict(list)
+    bands_by_olmoearth: dict[str, list[str]] = {}
+
+    for rslearn_layer in layers:
+        olmoearth_key, band_order = RSLEARN_TO_OLMOEARTH[rslearn_layer]
+        layers_by_olmoearth[olmoearth_key].append(rslearn_layer)
+        bands_by_olmoearth[olmoearth_key] = band_order
+
+    transforms = []
+    if input_size is not None:
+        raise NotImplementedError("Input size is not supported for band stats")
+        # transforms.append(
+        #     RsPad(
+        #         size=input_size,
+        #         mode="center",
+        #         image_selectors=list(layers_by_olmoearth.keys()),
+        #     )
+        # )
+
+    inputs: dict[str, RsDataInput] = {}
+    # Expand each rslearn layer name to time-indexed variants, keep the first *per base layer*
+    for olmoearth_key, per_key_layers in layers_by_olmoearth.items():
+        expanded: list[str] = []
+        for base in per_key_layers:
+            # convention: base, then base.1 ... base.(YEAR_NUM_TIMESTEPS-1)
+            expanded.append(base)
+            expanded.extend(f"{base}.{i}" for i in range(1, YEAR_NUM_TIMESTEPS))
+        inputs[olmoearth_key] = RsDataInput(
+            data_type="raster",
+            layers=expanded,
+            bands=bands_by_olmoearth[olmoearth_key],
+            passthrough=True,
+            load_all_layers=True,
+        )
+
+
+    split_config = RsSplitConfig(
+        transforms=transforms,
+        groups=rslearn_dataset_groups,
+        skip_targets=skip_targets,
+        # TODO: Either we need a canonical tag or a way to get the split from the dataset
+        # tags={"helios_split": split}
+        # if split
+        # else {},  # must stay as helios because it is tagged that way in the dataset
+    )
+
+    return RsModelDataset(
+        dataset=rslearn_dataset,
+        split_config=split_config,
+        inputs=inputs,
+        # TODO: add task type later if we also want to support segmentation task and a way to map between the two
+        task=RsClassificationTask(
+            property_name=property_name,
+            classes=classes,
+        ),
+        workers=32,
+    )
 
 def get_bands_by_modality(input_layers: list[str]) -> dict[str, list[str]]:
     """Collect Helios band order for each requested modality.
@@ -58,11 +171,11 @@ def get_bands_by_modality(input_layers: list[str]) -> dict[str, list[str]]:
     """
     bands_by_modality = {}
     for layer in input_layers:
-        if layer not in RSLEARN_TO_HELIOS:
+        if layer not in RSLEARN_TO_OLMOEARTH:
             raise ValueError(
-                f"Unknown input layer '{layer}'. Allowed: {list(RSLEARN_TO_HELIOS)}"
+                f"Unknown input layer '{layer}'. Allowed: {list(RSLEARN_TO_OLMOEARTH)}"
             )
-        modality, band_order = RSLEARN_TO_HELIOS[layer]
+        modality, band_order = RSLEARN_TO_OLMOEARTH[layer]
         bands_by_modality[modality] = band_order
     return bands_by_modality
 
@@ -178,48 +291,19 @@ def compute_band_stats(model_ds, bands_by_modality: dict[str, list[str]]) -> dic
     return out
 
 
-def main():
-    """CLI entry point for computing band stats."""
-    p = argparse.ArgumentParser(
-        description="Compute per-band normalization stats from rslearn dataset"
-    )
-    p.add_argument("--ds_path", required=True, help="Path to rslearn dataset")
-    p.add_argument(
-        "--ds_group",
-        action="append",
-        help="Dataset group(s) to include (can specify multiple)",
-    )
-    p.add_argument(
-        "--input_layers",
-        nargs="+",
-        required=True,
-        help="Input layers (e.g., sentinel2 sentinel1)",
-    )
-    p.add_argument(
-        "--input_size", type=int, default=4, help="Input patch size (default: 4)"
-    )
-    p.add_argument("--output_json", required=True, help="Output JSON path")
-    args = p.parse_args()
-
-    base_ds = RslearnDataset(UPath(args.ds_path))
-    model_ds = build_rslearn_model_dataset(
+def compute_band_stats_from_rslearn_dataset(dataset_path: str, modalities: list[str], property_name: str, classes: list[str]) -> dict:
+    base_ds = RslearnDataset(UPath(dataset_path))
+    model_ds = build_rslearn_model_dataset_for_band_stats(
         rslearn_dataset=base_ds,
-        layers=args.input_layers,
-        rslearn_dataset_groups=args.ds_group,
-        input_size=args.input_size,
-        split="train",
-        property_name="placeholder",
-        classes=["cls0"],
+        layers=modalities,
+        # rslearn_dataset_groups=args.ds_group, # what dataset group let this be none for now
+        split="train", # THis should be a constant imported from rslearn
+        property_name=property_name,
+        classes=classes,
         skip_targets=True,
     )
 
-    bands_by_modality = get_bands_by_modality(args.input_layers)
+    bands_by_modality = get_bands_by_modality(modalities)
     stats = compute_band_stats(model_ds, bands_by_modality)
 
-    with UPath(args.output_json).open("w") as f:
-        json.dump(stats, f, indent=2)
-    print(f"Saved stats -> {args.output_json}")
-
-
-if __name__ == "__main__":
-    main()
+    return stats

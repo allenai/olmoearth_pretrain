@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import yaml
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -65,8 +66,10 @@ from olmoearth_pretrain.evals.studio_ingest.schema import (
     DEFAULT_TARGET_PROPERTY,
     RSLEARN_TO_OLMOEARTH,
     EvalDatasetEntry,
+    TASK_TYPE_MAP,
 )
 from olmoearth_pretrain.evals.studio_ingest.validate import validate_dataset
+from olmoearth_pretrain.evals.studio_ingest.band_stats import compute_band_stats_from_rslearn_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -139,237 +142,10 @@ class IngestConfig:
         skip_validation: Whether to skip validation (not recommended)
     """
 
-    # Required
+    # Required # THis can be simplified and likely will in the end need to just deal with unified config but for now this should have all the info
     name: str
     source_path: str
-    # We want to be able to infer all the relevant information and metadata and if not we should serialize and write it in studio to make this possible.
-
-
-# =============================================================================
-# Ingestion Steps
-# =============================================================================
-
-
-def step_validate(config: IngestConfig) -> None:
-    """Step 1: Validate the source dataset.
-
-    Args:
-        config: Ingestion configuration
-
-    Raises:
-        ValueError: If validation fails
-    """
-    if config.skip_validation:
-        logger.warning("Skipping validation as requested")
-        return
-
-    logger.info(f"Validating source dataset: {config.source_path}")
-
-    result = validate_dataset(
-        source_path=config.source_path,
-        modalities=config.modalities,
-        task_type=config.task_type,
-        target_property=config.target_property,
-    )
-
-    if not result.is_valid:
-        raise ValueError(f"Dataset validation failed:\n{result}")
-
-    logger.info("Validation passed")
-
-    # Log any warnings
-    for warning in result.warnings:
-        logger.warning(warning)
-
-
-def step_create_destination(config: IngestConfig) -> UPath:
-    """Step 2: Create the destination directory on Weka.
-
-    Args:
-        config: Ingestion configuration
-
-    Returns:
-        Path to the destination directory
-
-    Raises:
-        FileExistsError: If destination exists and overwrite=False
-    """
-    base_path = get_eval_datasets_base_path()
-    dest_path = UPath(base_path) / config.name
-
-    if dest_path.exists():
-        if config.overwrite:
-            logger.warning(f"Destination exists, will overwrite: {dest_path}")
-            # TODO: Should we delete the existing directory?
-            # For safety, we don't delete automatically
-        else:
-            raise FileExistsError(
-                f"Destination already exists: {dest_path}. Use --overwrite to replace."
-            )
-    else:
-        logger.info(f"Creating destination directory: {dest_path}")
-        dest_path.mkdir(parents=True, exist_ok=True)
-
-    return dest_path
-
-
-def step_copy_data(
-    config: IngestConfig,
-    dest_path: UPath,
-) -> dict[str, int]:
-    """Step 3: Copy data from source to destination.
-
-    This copies the rslearn dataset structure to Weka.
-
-    Args:
-        config: Ingestion configuration
-        dest_path: Destination path on Weka
-
-    Returns:
-        Dict mapping split name -> sample count
-
-    Todo:
-        - Add progress bar
-        - Add resumable copying
-        - Handle large datasets efficiently
-        - Preserve rslearn structure properly
-    """
-    source_path = UPath(config.source_path)
-    logger.info(f"Copying data from {source_path} to {dest_path}")
-
-    # TODO: Implement actual copying
-    # This is a placeholder - actual implementation depends on:
-    # 1. rslearn dataset structure
-    # 2. How splits are organized
-    # 3. Whether we copy everything or filter
-
-    # Placeholder: count splits
-    splits = {}
-
-    # TODO: Use rslearn to determine splits and copy
-    # For now, just list expected splits
-    for split in ["train", "val", "test"]:
-        split_source = source_path / split
-        split_dest = dest_path / split
-
-        if split_source.exists():
-            logger.info(f"Copying split: {split}")
-            # TODO: Implement actual copy
-            # shutil.copytree won't work across cloud storage
-            # Need to use cloud-specific copy or streaming
-
-            # Placeholder count
-            splits[split] = 0  # TODO: Count actual samples
-        else:
-            logger.warning(f"Split '{split}' not found at {split_source}")
-
-    return splits
-
-
-def step_compute_stats(
-    config: IngestConfig,
-    dest_path: UPath,
-) -> None:
-    """Step 4: Compute normalization statistics.
-
-    Uses the existing band_stats module which was moved from
-    scripts/tools/compute_rslearn_dataset_band_stats.py.
-
-    Args:
-        config: Ingestion configuration
-        dest_path: Destination path on Weka (where data was copied)
-
-    Todo:
-        - Integrate band_stats.compute_band_stats() here
-        - Need to build the model_ds from the copied data
-        - Save output to dest_path / "norm_stats.json"
-    """
-    if not config.compute_norm_stats:
-        logger.info("Skipping normalization stats computation")
-        return
-
-    logger.info("Computing normalization statistics")
-
-    # TODO: Integrate band_stats.py here
-    # For now, this is a placeholder - stats should be computed manually:
-    #
-    # uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.band_stats \
-    #     --ds_path {dest_path} \
-    #     --input_layers {config.modalities} \
-    #     --output_json {dest_path}/norm_stats.json
-    #
-    logger.warning(
-        "Band stats computation not yet integrated. "
-        "Run band_stats.py manually after ingestion."
-    )
-
-
-def step_create_metadata(
-    config: IngestConfig,
-    dest_path: UPath,
-    splits: dict[str, int],
-) -> EvalDatasetEntry:
-    """Step 5: Create metadata.json in the dataset directory.
-
-    Args:
-        config: Ingestion configuration
-        dest_path: Destination path on Weka
-        splits: Split counts from copy step
-
-    Returns:
-        The EvalDatasetEntry that was created
-    """
-    logger.info("Creating metadata")
-
-    entry = EvalDatasetEntry(
-        name=config.name,
-        display_name=config.display_name,
-        task_type=config.task_type,
-        target_property=config.target_property,
-        classes=config.classes,
-        modalities=config.modalities,
-        temporal_range=config.temporal_range,
-        patch_size=config.patch_size,
-        source_path=config.source_path,
-        weka_path=str(dest_path),
-        splits=splits,
-        supports_cv=False,  # TODO: Support CV
-        cv_folds=None,
-        norm_stats_path="norm_stats.json",
-        use_pretrain_norm=not config.compute_norm_stats,
-        created_at=datetime.now().isoformat(),
-        created_by=getpass.getuser(),
-        studio_task_id=config.studio_task_id,
-        notes=config.notes,
-    )
-
-    # Save to metadata.json
-    metadata_path = dest_path / "metadata.json"
-    with metadata_path.open("w") as f:
-        json.dump(entry.to_dict(), f, indent=2)
-
-    logger.info(f"Saved metadata to {metadata_path}")
-    return entry
-
-
-def step_register(
-    entry: EvalDatasetEntry,
-    overwrite: bool = False,
-) -> None:
-    """Step 6: Register the dataset in the central registry.
-
-    Args:
-        entry: The dataset entry to register
-        overwrite: Whether to overwrite existing entry
-    """
-    logger.info("Registering dataset in central registry")
-
-    registry = Registry.load(REGISTRY_PATH)
-    registry.add(entry, overwrite=overwrite)
-    registry.save(REGISTRY_PATH)
-
-    logger.info(f"Dataset '{entry.name}' registered successfully")
-
+    olmoearth_run_config_path: str
 
 # =============================================================================
 # Label Scanning Utilities
@@ -526,8 +302,20 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         dataset_dict = json.load(f)
         # TODO: Potentiually validate witht the rsleanr class
     dataset_config = DatasetConfig.model_validate(dataset_dict)
+
+    # Load the olmoearth configs starting with the model config
+    # I can either parse the config as needed or fully create the whole thing and then parse it
+    # probably best to just parse the config as needed
+    # AND THEN I CAN VALIDATE CERTAIN INFORMATION IS PRESENT AGAINST THAT
+
+    model_config_path = UPath(config.olmoearth_run_config_path) / "model.yaml"
+    with model_config_path.open() as f:
+        model_config = yaml.safe_load(f) # TODO: Validate the model config
+    print(model_config)
+    raise ValueError("Not implemented")
     # Get the modalities
     modalities = []
+    modality_layer_names = []
     num_timesteps_modalities = []
     for layer_name, layer_config in dataset_config.layers.items():
         if layer_config.data_source is None:
@@ -538,6 +326,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         print(layer_config)
         olmoearth_modality = RSLEARN_TO_OLMOEARTH[layer_name]
         modalities.append(olmoearth_modality)
+        modality_layer_names.append(layer_name)
         # get the temporal range
         query_config = layer_config.data_source.query_config
         # For now we raise an error if min_matches and max_matches are not the same
@@ -573,32 +362,61 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     #     # Assume that there is only one label layer
     #     break
     # get the label values and the number of classes by scanning the data
-    label_values, num_classes = get_unique_label_values(
-        config.source_path, dataset_config
-    )
+    import hashlib
+    import os
+    import pickle
+
+    def _labels_cache_path(source_path):
+        src_hash = hashlib.sha256(str(source_path).encode()).hexdigest()[:16]
+        cache_dir = "/tmp/olmoearth_label_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, f"{src_hash}_labels.pkl")
+
+    cache_path = _labels_cache_path(config.source_path)
+    if os.path.exists(cache_path):
+        with open(cache_path, "rb") as f:
+            label_values, num_classes = pickle.load(f)
+    else:
+        label_values, num_classes = get_unique_label_values(
+            config.source_path, dataset_config
+        )
+        with open(cache_path, "wb") as f:
+            pickle.dump((label_values, num_classes), f)
     logger.info(f"Found {num_classes} unique label values: {sorted(label_values)}")
+    print(label_values)
+    print(num_classes)
 
-    # get the NODATA values
+    # get the NODATA value -> This would be in the olmoearth_run.yaml config
+    nodata_value = 0
+    zero_is_invalid = 0 == nodata_value
+    # Task type - this will need to be gotten from the finetuning config for now use a constant for now
+    task_type = TASK_TYPE_MAP[config.name]
 
-    # get the multilabel
-    # get the imputes
-    # get the missing data
-    # get the splits
-    # get the cv folds
-    # get the norm stats
-    # get the pretrain norm
+    # get the multilabel -> assume false for now
+    is_multilabel = False
+    # get the imputes -> assume no imputes for now
+    imputes = []
+
+    # get the norm stats -> These need to be calculated
+    norm_stats = compute_band_stats_from_rslearn_dataset(config.source_path, modality_layer_names, target_property, label_values)
+    print(norm_stats)
+
     # get the created at
-    # get the created by
-    # get the studio task id
-    # get the notes
-    # Optional it would be nice to have the class names but that may not be easy to get as of right now
+    created_at = datetime.now().isoformat()
+    # TODO: get the studio task id
+    # TODO: class names but that may not be easy to get as of right now
 
+    # entry = EvalDatasetEntry(
+    #     name=config.name,
+    #     source_path=config.source_path,
+    #     task_type=task_type,
+    #     target_property=target_property,
+    #     classes=label_values,
+    #     num_classes=num_classes,
+    #     modalities=modalities,
+    #     weka_path=config.dest_path,
+    # )
     raise ValueError("Not implemented")
-    entry = EvalDatasetEntry(
-        name=config.name,
-        source_path=config.source_path,
-    )
-
     # step_validate(config)
     # dest_path = step_create_destination(config)
 
