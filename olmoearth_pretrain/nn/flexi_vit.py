@@ -2521,12 +2521,9 @@ class PredictorWithPerModalityOutput(Predictor):
         # FSDP requires all ranks to call all modules in the same order.
         # Without this, ranks that don't have certain modalities will skip those
         # heads, causing NCCL collective operations to hang.
-        modalities_not_processed = set(self.supported_modality_names) - set(
-            modalities_to_process
-        )
-        modalities_not_processed = sorted(list(modalities_not_processed))
-        if modalities_not_processed and reference_tensor is not None:
-            # Create minimal dummy tensor [1, hidden_dim]
+        # FSDP fix: Always pass dummy data through all modality heads for gradient & collective correctness.
+        all_supported_modalities = sorted(list(self.supported_modality_names))
+        if all_supported_modalities and reference_tensor is not None:
             dummy_input = torch.zeros(
                 1,
                 reference_tensor.shape[-1],
@@ -2535,18 +2532,14 @@ class PredictorWithPerModalityOutput(Predictor):
                 requires_grad=True,
             )
             dummy_sum = None
-            for modality in modalities_not_processed:
+            for modality in all_supported_modalities:
                 modality_output_head = self.per_modality_output_heads[modality]
-                # Forward pass through norm + head (output discarded but ensures sync)
                 dummy_out = modality_output_head(self.norm(dummy_input))
-                # Accumulate for gradient flow (scaled to zero so no actual contribution)
                 if dummy_sum is None:
                     dummy_sum = dummy_out.sum() * 1.0e-20
                 else:
                     dummy_sum = dummy_sum + dummy_out.sum() * 1.0e-20
 
-            # Add zero-scaled dummy sum to a real output to ensure backward pass
-            # also goes through these heads (required for FSDP gradient sync)
             if dummy_sum is not None and modalities_to_process:
                 first_modality = list(modalities_to_process)[0]
                 output_dict[first_modality] = output_dict[first_modality] + dummy_sum

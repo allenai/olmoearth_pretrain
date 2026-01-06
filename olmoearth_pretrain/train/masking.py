@@ -1003,9 +1003,9 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         masked_batch_dict = masked_batch.as_dict(return_none=False)
         num_encoded: None | torch.Tensor = None
         num_decoded: None | torch.Tensor = None
-        if torch.distributed.get_rank() == 0:
-            print(f"encoded_decoded_bandsets: {encoded_decoded_bandsets[:3]} rank {torch.distributed.get_rank()} \n\n")
-            print(f"present_modalities_bandsets: {present_modalities_bandsets[:3]} rank {torch.distributed.get_rank()} \n\n")
+        # if torch.distributed.get_rank() == 0:
+        #     print(f"encoded_decoded_bandsets: {encoded_decoded_bandsets[:3]} rank {torch.distributed.get_rank()} \n\n")
+        #     print(f"present_modalities_bandsets: {present_modalities_bandsets[:3]} rank {torch.distributed.get_rank()} \n\n")
         for modality in masked_batch.modalities:
             if modality == "timestamps":
                 continue
@@ -1027,7 +1027,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     for modality_bandset in present_modalities_bandsets[sample_idx]
                 ]
                 if modality not in available_modalities:
-                    logger.info(
+                    logger.debug(
                         f"Modality {modality} not present for sample {sample_idx}"
                     )
                     continue
