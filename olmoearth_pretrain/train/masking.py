@@ -181,6 +181,28 @@ class MaskedOlmoEarthSample(NamedTuple):
         """
         return cls(**dict)
 
+    #TODO: Condense helper functions down into a common container class
+    def get_encoded_and_decoded_bandsets(self) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+        """
+        For each modality and each bandset, check if the bandset is fully encoded (all mask==ONLINE_ENCODER)
+        or fully decoded (all mask==DECODER). Return a list of tuples of (modality, bandset_idx) that are encoded
+        and another list of those that are decoded.
+        """
+        encoded = []
+        decoded = []
+        for modality in self.modalities:
+            mask_attr = self.get_masked_modality_name(modality)
+            masked_attr = getattr(self, mask_attr)
+            if masked_attr is None:
+                continue
+            for bandset_idx in range(Modality.get(modality).num_band_sets):
+                mask_bandset = masked_attr[..., bandset_idx]
+                if (mask_bandset == MaskValue.ONLINE_ENCODER.value).any():
+                    encoded.append((modality, bandset_idx))
+                if (mask_bandset == MaskValue.DECODER.value).any():
+                    decoded.append((modality, bandset_idx))
+        return encoded, decoded
+
 
 class MaskingStrategy:
     """Abstract base class for masking strategies.
@@ -981,6 +1003,9 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         masked_batch_dict = masked_batch.as_dict(return_none=False)
         num_encoded: None | torch.Tensor = None
         num_decoded: None | torch.Tensor = None
+        if torch.distributed.get_rank() == 0:
+            print(f"encoded_decoded_bandsets: {encoded_decoded_bandsets[:3]} rank {torch.distributed.get_rank()} \n\n")
+            print(f"present_modalities_bandsets: {present_modalities_bandsets[:3]} rank {torch.distributed.get_rank()} \n\n")
         for modality in masked_batch.modalities:
             if modality == "timestamps":
                 continue
@@ -1002,7 +1027,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                     for modality_bandset in present_modalities_bandsets[sample_idx]
                 ]
                 if modality not in available_modalities:
-                    logger.debug(
+                    logger.info(
                         f"Modality {modality} not present for sample {sample_idx}"
                     )
                     continue
@@ -1085,6 +1110,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         no_encoded_indices = torch.argwhere(num_encoded == 0)
         no_decoded_indices = torch.argwhere(num_decoded == 0)
         for i in no_encoded_indices:
+            print(f"no encoded indices: {no_encoded_indices} rank {torch.distributed.get_rank()}")
             for key, val in masked_batch_dict.items():
                 if key.endswith("mask"):
                     modality_mask = val[i]
@@ -1098,6 +1124,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                         modality_mask, modality_spec, patch_size
                     )
         for i in no_decoded_indices:
+            print(f"no decoded indices: {no_decoded_indices} rank {torch.distributed.get_rank()}")
             for key, val in masked_batch_dict.items():
                 if key.endswith("mask"):
                     modality_mask = val[i]
@@ -1111,6 +1138,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                         modality_mask, modality_spec, patch_size
                     )
         masked_batch = MaskedOlmoEarthSample(**masked_batch_dict)
+        encoded, decoded = masked_batch.get_encoded_and_decoded_bandsets()
+        if torch.distributed.get_rank() == 0:
+            print(f"encoded after masking: {encoded} rank {torch.distributed.get_rank()} \n\n")
+            print(f"decoded after masking: {decoded} rank {torch.distributed.get_rank()} \n\n")
 
         return masked_batch
 

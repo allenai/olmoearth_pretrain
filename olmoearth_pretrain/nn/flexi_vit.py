@@ -281,6 +281,31 @@ class TokensAndMasks(NamedTuple):
         else:
             return self.pool_spatially(pooling_type)
 
+    def get_encoded_and_decoded_bandsets(self) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+        """
+        For each modality and each bandset, check if the bandset is fully encoded (all mask==ONLINE_ENCODER)
+        or fully decoded (all mask==DECODER). Return a list of tuples of (modality, bandset_idx) that are encoded
+        and another list of those that are decoded.
+        """
+        encoded = []
+        decoded = []
+        for modality in self.modalities:
+            mask_attr = self.get_masked_modality_name(modality)
+            masked_attr = getattr(self, mask_attr)
+            if masked_attr is None:
+                continue
+            for bandset_idx in range(Modality.get(modality).num_band_sets):
+                mask_bandset = masked_attr[..., bandset_idx]
+                # # print the  unique values of the mask_bandset
+                # print(f"unique values of mask_bandset: {torch.unique(mask_bandset)} for modality: {modality} and bandset_idx: {bandset_idx} rank {torch.distributed.get_rank()}")
+                # # get the shape of the mask_bandset
+                # print(f"shape of mask_bandset: {mask_bandset.shape} for modality: {modality} and bandset_idx: {bandset_idx} rank {torch.distributed.get_rank()}")
+                if (mask_bandset == MaskValue.ONLINE_ENCODER.value).any():
+                    encoded.append((modality, bandset_idx))
+                if (mask_bandset == MaskValue.DECODER.value).any():
+                    decoded.append((modality, bandset_idx))
+        return encoded, decoded
+
 
 class ProjectAndAggregate(nn.Module):
     """Module that applies a linear projection to tokens and masks."""
@@ -2470,6 +2495,10 @@ class PredictorWithPerModalityOutput(Predictor):
             reference_tensor = tokens_and_masks[modality]
             break
 
+        encoded, decoded = x.get_encoded_and_decoded_bandsets()
+        if torch.distributed.get_rank() == 0:
+            print(f"encoded bandsets: {encoded} rank {torch.distributed.get_rank()}")
+            print(f"decoded bandsets: {decoded} rank {torch.distributed.get_rank()}")
         for modality in modalities_to_process:
             masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
                 modality
@@ -2495,6 +2524,7 @@ class PredictorWithPerModalityOutput(Predictor):
         modalities_not_processed = set(self.supported_modality_names) - set(
             modalities_to_process
         )
+        modalities_not_processed = sorted(list(modalities_not_processed))
         if modalities_not_processed and reference_tensor is not None:
             # Create minimal dummy tensor [1, hidden_dim]
             dummy_input = torch.zeros(
@@ -2502,6 +2532,7 @@ class PredictorWithPerModalityOutput(Predictor):
                 reference_tensor.shape[-1],
                 device=reference_tensor.device,
                 dtype=reference_tensor.dtype,
+                requires_grad=True,
             )
             dummy_sum = None
             for modality in modalities_not_processed:
@@ -2510,9 +2541,9 @@ class PredictorWithPerModalityOutput(Predictor):
                 dummy_out = modality_output_head(self.norm(dummy_input))
                 # Accumulate for gradient flow (scaled to zero so no actual contribution)
                 if dummy_sum is None:
-                    dummy_sum = dummy_out.sum() * 0.0
+                    dummy_sum = dummy_out.sum() * 1.0e-20
                 else:
-                    dummy_sum = dummy_sum + dummy_out.sum() * 0.0
+                    dummy_sum = dummy_sum + dummy_out.sum() * 1.0e-20
 
             # Add zero-scaled dummy sum to a real output to ensure backward pass
             # also goes through these heads (required for FSDP gradient sync)
