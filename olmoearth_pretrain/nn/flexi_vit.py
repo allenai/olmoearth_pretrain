@@ -2463,6 +2463,13 @@ class PredictorWithPerModalityOutput(Predictor):
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
+
+        # Get reference tensor for device/dtype (needed for dummy data)
+        reference_tensor = None
+        for modality in modalities_to_process:
+            reference_tensor = tokens_and_masks[modality]
+            break
+
         for modality in modalities_to_process:
             masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
                 modality
@@ -2480,6 +2487,39 @@ class PredictorWithPerModalityOutput(Predictor):
                 per_modality_output_tokens.append(output_data)
             output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
             output_dict[masked_modality_name] = modality_mask
+
+        # FSDP fix: Pass dummy data through non-processed modality heads.
+        # FSDP requires all ranks to call all modules in the same order.
+        # Without this, ranks that don't have certain modalities will skip those
+        # heads, causing NCCL collective operations to hang.
+        modalities_not_processed = set(self.supported_modality_names) - set(
+            modalities_to_process
+        )
+        if modalities_not_processed and reference_tensor is not None:
+            # Create minimal dummy tensor [1, hidden_dim]
+            dummy_input = torch.zeros(
+                1,
+                reference_tensor.shape[-1],
+                device=reference_tensor.device,
+                dtype=reference_tensor.dtype,
+            )
+            dummy_sum = None
+            for modality in modalities_not_processed:
+                modality_output_head = self.per_modality_output_heads[modality]
+                # Forward pass through norm + head (output discarded but ensures sync)
+                dummy_out = modality_output_head(self.norm(dummy_input))
+                # Accumulate for gradient flow (scaled to zero so no actual contribution)
+                if dummy_sum is None:
+                    dummy_sum = dummy_out.sum() * 0.0
+                else:
+                    dummy_sum = dummy_sum + dummy_out.sum() * 0.0
+
+            # Add zero-scaled dummy sum to a real output to ensure backward pass
+            # also goes through these heads (required for FSDP gradient sync)
+            if dummy_sum is not None and modalities_to_process:
+                first_modality = list(modalities_to_process)[0]
+                output_dict[first_modality] = output_dict[first_modality] + dummy_sum
+
         return TokensAndMasks(**output_dict)
 
 
