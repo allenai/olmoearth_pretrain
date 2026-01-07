@@ -112,7 +112,7 @@ class MaskedOlmoEarthSample(NamedTuple):
             if val is None:
                 continue
             if key.endswith("mask"):
-                is_missing = val == MaskValue.MISSING
+                is_missing = val == MaskValue.MISSING.value
                 return_dict[key] = torch.where(
                     is_missing, MaskValue.MISSING.value, MaskValue.ONLINE_ENCODER.value
                 )
