@@ -1,4 +1,4 @@
-"""Type aliases for OlmoEarth Pretrain."""
+"""Common types for OlmoEarth Pretrain."""
 
 from typing import TypeAlias
 

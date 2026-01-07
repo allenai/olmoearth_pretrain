@@ -16,6 +16,7 @@ import hdf5plugin  # noqa: F401
 import numpy as np
 import pandas as pd
 import torch
+from olmo_core.config import Config
 from olmo_core.data.utils import get_rng
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
@@ -28,7 +29,6 @@ from olmoearth_pretrain._compat import (
 from olmoearth_pretrain._compat import (
     deprecated_function_alias as _deprecated_function_alias,
 )
-from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
