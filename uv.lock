@@ -2620,7 +2620,7 @@ wheels = [
 
 [[package]]
 name = "olmoearth-pretrain"
-version = "0.0.1"
+version = "0.0.2"
 source = { editable = "." }
 dependencies = [
     { name = "einops" },
