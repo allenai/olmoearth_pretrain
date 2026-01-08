@@ -1,5 +1,8 @@
 """Trying to prototype fitting everything into olmo core."""
 
+from helios.data.dataloader import HeliosDataLoaderConfig
+from helios.internal.common import build_common_components
+from helios.internal.experiment import CommonComponents, main
 from shared import (
     build_dataloader_config,
     build_dataset_config,
@@ -8,10 +11,6 @@ from shared import (
     build_trainer_config,
     build_visualize_config,
 )
-
-from helios.data.dataloader import HeliosDataLoaderConfig
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, main
 
 
 def my_build_dataloader_config(common: CommonComponents) -> HeliosDataLoaderConfig:

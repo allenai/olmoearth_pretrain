@@ -3,24 +3,6 @@
 import logging
 from collections.abc import Callable
 
-from olmo_core.config import Config, DType
-from olmo_core.distributed.parallel.data_parallel import (
-    DataParallelConfig,
-    DataParallelType,
-)
-from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import CosWithWarmup
-from olmo_core.train.callbacks import (
-    BeakerCallback,
-    CheckpointerCallback,
-    ConfigSaverCallback,
-    GarbageCollectorCallback,
-    GPUMemoryMonitorCallback,
-)
-from olmo_core.train.checkpoint import CheckpointerConfig
-from olmo_core.train.common import Duration, LoadStrategy
-from olmo_core.train.config import TrainerConfig
-
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
@@ -50,6 +32,23 @@ from helios.train.train_module.contrastive_latentmim import (
 from helios.train.train_module.galileo import GalileoTrainModuleConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 from helios.train.train_module.train_module import HeliosTrainModuleConfig
+from olmo_core.config import Config, DType
+from olmo_core.distributed.parallel.data_parallel import (
+    DataParallelConfig,
+    DataParallelType,
+)
+from olmo_core.optim import AdamWConfig
+from olmo_core.optim.scheduler import CosWithWarmup
+from olmo_core.train.callbacks import (
+    BeakerCallback,
+    CheckpointerCallback,
+    ConfigSaverCallback,
+    GarbageCollectorCallback,
+    GPUMemoryMonitorCallback,
+)
+from olmo_core.train.checkpoint import CheckpointerConfig
+from olmo_core.train.common import Duration, LoadStrategy
+from olmo_core.train.config import TrainerConfig
 
 logger = logging.getLogger(__name__)
 

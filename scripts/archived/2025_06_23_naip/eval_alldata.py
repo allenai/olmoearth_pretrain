@@ -1,19 +1,18 @@
 """Evaluation for models trained on all data."""
 
 from eval import build_trainer_config
+from helios.data.concat import HeliosConcatDatasetConfig
+from helios.data.dataset import HeliosDatasetConfig
+from helios.internal.experiment import (
+    CommonComponents,
+    main,
+)
 from train import (
     build_dataloader_config,
     build_model_config,
     build_train_module_config,
     build_visualize_config,
     my_build_common_components,
-)
-
-from helios.data.concat import HeliosConcatDatasetConfig
-from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.experiment import (
-    CommonComponents,
-    main,
 )
 
 

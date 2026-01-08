@@ -2,6 +2,19 @@
 
 import logging
 
+from helios.data.concat import HeliosConcatDatasetConfig
+from helios.data.dataset import HeliosDatasetConfig
+from helios.internal.common import build_common_components
+from helios.internal.experiment import CommonComponents, main
+from helios.nn.flexihelios import (
+    PoolingType,
+)
+from helios.train.callbacks import (
+    DownstreamEvaluatorCallbackConfig,
+    HeliosSpeedMonitorCallback,
+    HeliosWandBCallback,
+)
+from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from olmo_core.config import DType
 from olmo_core.train.callbacks import (
     BeakerCallback,
@@ -20,20 +33,6 @@ from shared import (
     build_train_module_config_builder,
     build_visualize_config,
 )
-
-from helios.data.concat import HeliosConcatDatasetConfig
-from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, main
-from helios.nn.flexihelios import (
-    PoolingType,
-)
-from helios.train.callbacks import (
-    DownstreamEvaluatorCallbackConfig,
-    HeliosSpeedMonitorCallback,
-    HeliosWandBCallback,
-)
-from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 
 logger = logging.getLogger(__name__)
 
