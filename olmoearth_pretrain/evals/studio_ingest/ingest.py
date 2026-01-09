@@ -44,32 +44,29 @@ Todo:
 
 from __future__ import annotations
 
-import getpass
 import json
-import yaml
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 
 import numpy as np
+import yaml
 from rslearn.config import DatasetConfig
 from rslearn.dataset.dataset import Dataset as RslearnDataset
 from rslearn.utils.raster_format import GeotiffRasterFormat
 from tqdm import tqdm
 from upath import UPath
 
-# TODO: Integrate band_stats.py into the ingestion workflow
-# from olmoearth_pretrain.evals.studio_ingest.band_stats import compute_band_stats
-from olmoearth_pretrain.evals.studio_ingest.registry import REGISTRY_PATH, Registry
+from olmoearth_pretrain.evals.studio_ingest.band_stats import (
+    compute_band_stats_from_rslearn_dataset,
+)
 from olmoearth_pretrain.evals.studio_ingest.schema import (
     DEFAULT_TARGET_PROPERTY,
     RSLEARN_TO_OLMOEARTH,
     EvalDatasetEntry,
-    TASK_TYPE_MAP,
+    instantiate_from_config,
 )
-from olmoearth_pretrain.evals.studio_ingest.validate import validate_dataset
-from olmoearth_pretrain.evals.studio_ingest.band_stats import compute_band_stats_from_rslearn_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +143,7 @@ class IngestConfig:
     name: str
     source_path: str
     olmoearth_run_config_path: str
+
 
 # =============================================================================
 # Label Scanning Utilities
@@ -310,9 +308,9 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
     model_config_path = UPath(config.olmoearth_run_config_path) / "model.yaml"
     with model_config_path.open() as f:
-        model_config = yaml.safe_load(f) # TODO: Validate the model config
+        model_config = yaml.safe_load(f)
+    # TODO: Validate the model config
     print(model_config)
-    raise ValueError("Not implemented")
     # Get the modalities
     modalities = []
     modality_layer_names = []
@@ -389,16 +387,60 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     # get the NODATA value -> This would be in the olmoearth_run.yaml config
     nodata_value = 0
     zero_is_invalid = 0 == nodata_value
-    # Task type - this will need to be gotten from the finetuning config for now use a constant for now
-    task_type = TASK_TYPE_MAP[config.name]
+
+    # Extract and instantiate the rslearn task from model config
+    # model.yaml structure: data.init_args.task.init_args.tasks.{task_name}
+    task_wrapper_config = model_config["data"]["init_args"]["task"]
+    tasks_dict = task_wrapper_config["init_args"]["tasks"]
+    # For now, grab the first (and typically only) task
+    if len(tasks_dict) != 1:
+        raise NotImplementedError(
+            "Multiple tasks not supported in this workflow; found: "
+            + ", ".join(tasks_dict)
+        )
+    task_name, task_config = next(iter(tasks_dict.items()))
+    logger.info(
+        f"Instantiating task '{task_name}' from model config: {task_config['class_path']}"
+    )
+    rslearn_task = instantiate_from_config(task_config)
 
     # get the multilabel -> assume false for now
     is_multilabel = False
     # get the imputes -> assume no imputes for now
     imputes = []
 
-    # get the norm stats -> These need to be calculated
-    norm_stats = compute_band_stats_from_rslearn_dataset(config.source_path, modality_layer_names, target_property, label_values)
+    # norm stats: cache so we don't recompute every time for the same data + task
+    import pickle
+
+    def _norm_stats_cache_path(source_path, modalities, task_config):
+        src_hash = hashlib.sha256(
+            (
+                str(source_path)
+                + str(sorted(modalities))
+                + str(task_config["class_path"])
+                + str(task_config.get("init_args", {}))
+            ).encode()
+        ).hexdigest()[:16]
+        cache_dir = "/tmp/olmoearth_norm_stats_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, f"{src_hash}_norm_stats.pkl")
+
+    norm_stats_cache_path = _norm_stats_cache_path(
+        config.source_path, modality_layer_names, task_config
+    )
+    if os.path.exists(norm_stats_cache_path):
+        with open(norm_stats_cache_path, "rb") as f:
+            norm_stats = pickle.load(f)
+        logger.info(f"Loaded cached norm stats from {norm_stats_cache_path}")
+    else:
+        norm_stats = compute_band_stats_from_rslearn_dataset(
+            dataset_path=config.source_path,
+            modalities=modality_layer_names,
+            task=rslearn_task,
+        )
+        with open(norm_stats_cache_path, "wb") as f:
+            pickle.dump(norm_stats, f)
+        logger.info(f"Computed and cached norm stats at {norm_stats_cache_path}")
     print(norm_stats)
 
     # get the created at

@@ -32,16 +32,67 @@ Todo:
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from rslearn.train.tasks.classification import (
+    ClassificationTask as RsClassificationTask,
+)
 from rslearn.train.tasks.segmentation import SegmentationTask as RsSegmentationTask
-from rslearn.train.tasks.classification import ClassificationTask as RsClassificationTask
-from olmoearth_pretrain.evals.datasets.configs import TaskType
+
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.datasets.configs import TaskType
 
 DEFAULT_TARGET_PROPERTY = "category"
+
+
+# =============================================================================
+# Config Instantiation
+# =============================================================================
+
+
+def instantiate_from_config(config: dict) -> Any:
+    """Instantiate a class from a class_path + init_args config dict.
+
+    This handles the standard rslearn/LightningCLI config format:
+        {
+            "class_path": "module.path.ClassName",
+            "init_args": {"arg1": value1, ...}
+        }
+
+    Args:
+        config: Dict with "class_path" and optional "init_args"
+
+    Returns:
+        Instantiated object
+
+    Example:
+        config = {
+            "class_path": "rslearn.train.tasks.segmentation.SegmentationTask",
+            "init_args": {"num_classes": 7, "zero_is_invalid": True}
+        }
+        task = instantiate_from_config(config)
+        # Returns SegmentationTask(num_classes=7, zero_is_invalid=True)
+    """
+    class_path = config["class_path"]
+    init_args = config.get("init_args", {})
+
+    # Handle nested configs in init_args (recursive instantiation)
+    resolved_args = {}
+    for key, value in init_args.items():
+        if isinstance(value, dict) and "class_path" in value:
+            resolved_args[key] = instantiate_from_config(value)
+        else:
+            resolved_args[key] = value
+
+    module_path, class_name = class_path.rsplit(".", 1)
+    module = importlib.import_module(module_path)
+    cls = getattr(module, class_name)
+    return cls(**resolved_args)
+
+
 # =============================================================================
 # Normalization Statistics
 # =============================================================================
@@ -55,15 +106,15 @@ RSLEARN_TO_OLMOEARTH: dict[str, tuple[str, Modality]] = {
     "landsat": Modality.LANDSAT,
 }
 
-TASK_TYPE_MAP = {
-    "tolbi_crops": TaskType.SEGMENTATION
-}
+TASK_TYPE_MAP = {"tolbi_crops": TaskType.SEGMENTATION}
 
 # THis may not be needed if we load stuff from rslearn correctly
 TASK_TYPE_TO_RSLEARN_TASK_CLASS = {
     TaskType.SEGMENTATION: RsSegmentationTask,
     TaskType.CLASSIFICATION: RsClassificationTask,
 }
+
+
 @dataclass
 class BandStats:
     """Per-band normalization statistics.

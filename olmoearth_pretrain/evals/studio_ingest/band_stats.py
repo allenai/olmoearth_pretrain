@@ -24,19 +24,16 @@ Todo:
 - [ ] Integrate with ingestion workflow
 """
 
-import argparse
-import json
+import os
 from collections import defaultdict
+
 import torch
 from einops import rearrange
 from rslearn.dataset.dataset import Dataset as RslearnDataset
 from rslearn.train.dataset import DataInput as RsDataInput
 from rslearn.train.dataset import ModelDataset as RsModelDataset
 from rslearn.train.dataset import SplitConfig as RsSplitConfig
-from rslearn.train.tasks.classification import (
-    ClassificationTask as RsClassificationTask,
-)
-from rslearn.train.transforms.pad import Pad as RsPad
+from rslearn.train.tasks.task import Task as RsTask
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from upath import UPath
@@ -48,33 +45,33 @@ from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
     RSLEARN_TO_OLMOEARTH,
 )
-from olmoearth_pretrain.evals.studio_ingest.schema import TaskType
+
+NUM_WORKERS = (os.cpu_count() or 1) - 1
 
 
 def build_rslearn_model_dataset_for_band_stats(
     rslearn_dataset: RslearnDataset,
     layers: list[str],
-    classes: list[str],
-    task_type: TaskType,
+    task: RsTask,
     rslearn_dataset_groups: list[str] | None = None,
     input_size: int | None = None,
     split: str = "train",
-    property_name: str = "category",
     skip_targets: bool = True,
 ) -> RsModelDataset:
-    """Build an rslearn ModelDataset.
+    """Build an rslearn ModelDataset for computing band statistics.
 
     Args:
         rslearn_dataset: The source RslearnDataset.
-        rslearn_dataset_groups: Optional list of dataset group names to include.
         layers: List of rslearn layer names to use as model inputs.
             Example: "sentinel2". Only provide the base name, do not include
             layer names such as "sentinel2.1" or "sentinel2.n".
+        task: The rslearn Task instance (e.g., SegmentationTask, ClassificationTask).
+            Instantiated directly from model config.
+        rslearn_dataset_groups: Optional list of dataset group names to include.
         input_size: Optional input patch size (pixels) to crop/resize samples to.
         split: Dataset split to use (e.g., "train", "val", "test").
-        property_name: The property in the dataset to use as the target label.
-        classes: List of class names. If None, inferred from dataset.
-        skip_targets: Whether or not to skip the target, if True, property_name and classes can be placeholder.
+        skip_targets: Whether or not to skip the target, if True the task is only
+            used to satisfy the RsModelDataset interface.
 
     Returns:
         RsModelDataset: A dataset object ready for training or evaluation.
@@ -94,9 +91,6 @@ def build_rslearn_model_dataset_for_band_stats(
             f"Unknown rslearn layer(s): {unknown}. "
             f"Allowed: {list(RSLEARN_TO_OLMOEARTH.keys())}"
         )
-
-    if classes is None:
-        raise ValueError("`classes` must be provided and cannot be None.")
 
     # Group rslearn layers by their OlmoEarth Pretrain modality key
     layers_by_olmoearth: dict[str, list[str]] = defaultdict(list)
@@ -132,8 +126,8 @@ def build_rslearn_model_dataset_for_band_stats(
             bands=bands_by_olmoearth[olmoearth_key],
             passthrough=True,
             load_all_layers=True,
+            required=False,
         )
-
 
     split_config = RsSplitConfig(
         transforms=transforms,
@@ -149,13 +143,10 @@ def build_rslearn_model_dataset_for_band_stats(
         dataset=rslearn_dataset,
         split_config=split_config,
         inputs=inputs,
-        # TODO: add task type later if we also want to support segmentation task and a way to map between the two
-        task=RsClassificationTask(
-            property_name=property_name,
-            classes=classes,
-        ),
-        workers=32,
+        task=task,
+        workers=NUM_WORKERS,
     )
+
 
 def get_bands_by_modality(input_layers: list[str]) -> dict[str, list[str]]:
     """Collect Helios band order for each requested modality.
@@ -226,7 +217,7 @@ def compute_band_stats(model_ds, bands_by_modality: dict[str, list[str]]) -> dic
         model_ds,
         batch_size=128,
         shuffle=False,
-        num_workers=32,
+        num_workers=NUM_WORKERS,
         collate_fn=collate_inputs_only,
     )
 
@@ -291,15 +282,27 @@ def compute_band_stats(model_ds, bands_by_modality: dict[str, list[str]]) -> dic
     return out
 
 
-def compute_band_stats_from_rslearn_dataset(dataset_path: str, modalities: list[str], property_name: str, classes: list[str]) -> dict:
+def compute_band_stats_from_rslearn_dataset(
+    dataset_path: str,
+    modalities: list[str],
+    task: RsTask,
+) -> dict:
+    """Compute band statistics from an rslearn dataset.
+
+    Args:
+        dataset_path: Path to the rslearn dataset.
+        modalities: List of rslearn layer names (e.g., ["sentinel2", "sentinel1"]).
+        task: The rslearn Task instance, instantiated from model config.
+
+    Returns:
+        Nested dict of band statistics per modality.
+    """
     base_ds = RslearnDataset(UPath(dataset_path))
     model_ds = build_rslearn_model_dataset_for_band_stats(
         rslearn_dataset=base_ds,
         layers=modalities,
-        # rslearn_dataset_groups=args.ds_group, # what dataset group let this be none for now
-        split="train", # THis should be a constant imported from rslearn
-        property_name=property_name,
-        classes=classes,
+        task=task,
+        split="train",
         skip_targets=True,
     )
 
