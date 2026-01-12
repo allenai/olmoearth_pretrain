@@ -720,6 +720,105 @@ class TestEncoder:
             f"Expected output latlon_mask shape {latlon_mask.shape}, got {output.latlon_mask.shape}"
         )
 
+    def test_output_embedding_size(
+        self,
+        supported_modalities: list[ModalitySpec],
+        modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+    ) -> None:
+        """Test encoder with output_embedding_size different from embedding_size.
+
+        This verifies that:
+        1. Tokens are projected to output_embedding_size after attention
+        2. project_and_aggregate output has the correct output_embedding_size
+        """
+        embedding_size = 32
+        output_embedding_size = 16  # Smaller than embedding_size
+
+        encoder = Encoder(
+            embedding_size=embedding_size,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=4.0,
+            depth=2,
+            drop_path=0.1,
+            supported_modalities=supported_modalities,
+            max_sequence_length=12,
+            output_embedding_size=output_embedding_size,
+        )
+
+        # Verify projection layer was created
+        assert encoder.token_output_projection is not None
+        assert encoder.token_output_projection.in_features == embedding_size
+        assert encoder.token_output_projection.out_features == output_embedding_size
+        assert encoder.output_embedding_size == output_embedding_size
+
+        sentinel2_l2a_num_band_sets, sentinel2_l2a_num_bands = (
+            modality_band_set_len_and_total_bands["sentinel2_l2a"]
+        )
+        latlon_num_band_sets, latlon_num_bands = modality_band_set_len_and_total_bands[
+            "latlon"
+        ]
+        B, H, W, T, C = 1, 8, 8, 4, sentinel2_l2a_num_bands
+        sentinel2_l2a = torch.randn(B, H, W, T, C)
+        sentinel2_l2a_mask = torch.zeros(B, H, W, T, C, dtype=torch.long)
+        latlon = torch.randn(B, latlon_num_bands)
+        latlon_mask = torch.zeros(B, latlon_num_bands, dtype=torch.float32)
+        days = torch.randint(0, 25, (B, T, 1), dtype=torch.long)
+        months = torch.randint(0, 12, (B, T, 1), dtype=torch.long)
+        years = torch.randint(2018, 2020, (B, T, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)
+
+        masked_sample_dict = {
+            "sentinel2_l2a": sentinel2_l2a,
+            "sentinel2_l2a_mask": sentinel2_l2a_mask,
+            "latlon": latlon,
+            "latlon_mask": latlon_mask,
+            "timestamps": timestamps,
+        }
+        x = MaskedOlmoEarthSample(**masked_sample_dict)
+
+        patch_size = 4
+        input_res = 1
+
+        output_dict = encoder.forward(x, patch_size, input_res, token_exit_cfg=None)
+        output, project_aggregated, _ = unpack_encoder_output(output_dict)
+
+        # Verify token shapes use output_embedding_size (not embedding_size)
+        expected_H = H // patch_size
+        expected_W = W // patch_size
+        expected_token_shape = (
+            B,
+            expected_H,
+            expected_W,
+            T,
+            sentinel2_l2a_num_band_sets,
+            output_embedding_size,  # Should be output_embedding_size, not embedding_size
+        )
+        assert output.sentinel2_l2a is not None
+        assert output.sentinel2_l2a.shape == expected_token_shape, (
+            f"Expected sentinel2_l2a shape {expected_token_shape}, "
+            f"got {output.sentinel2_l2a.shape}"
+        )
+
+        assert output.latlon is not None
+        expected_latlon_shape = (B, latlon_num_band_sets, output_embedding_size)
+        assert output.latlon.shape == expected_latlon_shape, (
+            f"Expected latlon shape {expected_latlon_shape}, got {output.latlon.shape}"
+        )
+
+        # Verify project_and_aggregate output has output_embedding_size
+        assert project_aggregated is not None
+        assert project_aggregated.shape == (B, output_embedding_size), (
+            f"Expected project_aggregated shape {(B, output_embedding_size)}, "
+            f"got {project_aggregated.shape}"
+        )
+
+        # Verify gradients flow through the projection
+        output.sentinel2_l2a.sum().backward()
+        assert encoder.token_output_projection.weight.grad is not None
+        assert encoder.token_output_projection.bias.grad is not None
+
 
 class TestPredictor:
     """Integration tests for the Predictor class."""
