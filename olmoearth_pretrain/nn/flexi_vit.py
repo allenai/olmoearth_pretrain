@@ -522,7 +522,8 @@ class MultiModalPatchEmbeddings(nn.Module):
         input_data: MaskedOlmoEarthSample,
         patch_size: int,
         fast_pass: bool = False,
-    ) -> dict[str, Tensor]:
+        return_as_tokensandmasks: bool = False,
+    ) -> dict[str, Tensor] | dict[str, TokensAndMasks]:
         """Return flexibly patchified embeddings for each modality of the input data.
 
         Given a [B, H, W, (T), C] inputs, returns a [B, H, W, (T), b_s, D] output.
@@ -546,7 +547,10 @@ class MultiModalPatchEmbeddings(nn.Module):
             output_dict[modality] = modality_tokens
             modality_mask_name = input_data.get_masked_modality_name(modality)
             output_dict[modality_mask_name] = modality_masks
-        return output_dict
+        if not return_as_tokensandmasks:
+            return output_dict
+        else:
+            return {"tokens_and_masks": TokensAndMasks(**output_dict)}
 
 
 class Reconstructor(nn.Module):

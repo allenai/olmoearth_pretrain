@@ -312,6 +312,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     output_dict = self.model.target_encoder.forward(
                         batch.unmask(),
                         patch_size=patch_size,
+                        return_as_tokensandmasks=True,
                     )
                 else:
                     raise ValueError(
