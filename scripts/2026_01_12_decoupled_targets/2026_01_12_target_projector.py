@@ -39,7 +39,6 @@ from olmoearth_pretrain.nn.flexi_vit import (
 from olmoearth_pretrain.nn.flexihelios import (
     EncoderConfig,
     PredictorConfig,
-    TargetProjectorConfig,
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.train.callbacks import (
@@ -87,15 +86,15 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_sequence_length=12,
         output_embedding_size=output_embedding_size,
     )
-    target_projector_config = TargetProjectorConfig(
-        supported_modality_names=common.training_modalities,
-        max_patch_size=MAX_PATCH_SIZE,
-        embedding_size=output_embedding_size,
-    )
+    # target_projector_config = TargetProjectorConfig(
+    #     supported_modality_names=common.training_modalities,
+    #     max_patch_size=MAX_PATCH_SIZE,
+    #     embedding_size=output_embedding_size,
+    # )
     model_config = LatentMIMConfig(
         encoder_config=encoder_config,
         decoder_config=decoder_config,
-        target_projector_config=target_projector_config,
+        # target_projector_config=target_projector_config,
     )
     return model_config
 
