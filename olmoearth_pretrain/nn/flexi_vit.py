@@ -485,14 +485,14 @@ class MultiModalPatchEmbeddings(nn.Module):
             # In the fast pass we want to the sync that comes with checking for online encoder
             if fast_pass or (token_mask == MaskValue.ONLINE_ENCODER.value).any():
                 buffer_name = self._get_buffer_name(modality, idx)
-                print(modality_data.dtype)
+                print(modality, modality_data.dtype)
                 patchified_data = torch.index_select(
                     modality_data, -1, getattr(self, buffer_name)
                 )
                 embedding_module = self.per_modality_embeddings[modality][
                     self._get_embedding_module_name(modality, idx)
                 ]
-                print(modality_data.dtype)
+                print(modality, modality_data.dtype)
                 patchified_data = embedding_module(
                     patchified_data, **modality_specific_kwargs
                 )
