@@ -1197,6 +1197,7 @@ class Encoder(FlexiVitBase):
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
+        output_embedding_size: int | None = None,
     ):
         """Initialize the encoder.
 
@@ -1222,6 +1223,8 @@ class Encoder(FlexiVitBase):
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
+            output_embedding_size: Size of output embeddings after attention. If None, defaults
+                to embedding_size (no projection applied).
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1246,13 +1249,27 @@ class Encoder(FlexiVitBase):
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
+        # Output embedding size defaults to embedding_size if not specified
+        self.output_embedding_size = (
+            output_embedding_size
+            if output_embedding_size is not None
+            else embedding_size
+        )
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
         )
+        # Token output projection: projects tokens from embedding_size to output_embedding_size
+        # Applied after attention + norm, before project_and_aggregate
+        if self.output_embedding_size != self.embedding_size:
+            self.token_output_projection = nn.Linear(
+                self.embedding_size, self.output_embedding_size, bias=True
+            )
+        else:
+            self.token_output_projection = None
         self.project_and_aggregate = ProjectAndAggregate(
-            embedding_size=self.embedding_size,
+            embedding_size=self.output_embedding_size,
             num_layers=num_projection_layers,
             aggregate_then_project=aggregate_then_project,
         )
@@ -1619,6 +1636,9 @@ class Encoder(FlexiVitBase):
         # we apply the norm before we add the removed tokens,
         # so that the norm is only computed against "real" tokens
         tokens = self.norm(tokens)
+        # Apply token output projection if output_embedding_size != embedding_size
+        if self.token_output_projection is not None:
+            tokens = self.token_output_projection(tokens)
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
         tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
@@ -2110,6 +2130,8 @@ class EncoderConfig(Config):
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
     log_token_norm_stats: bool = False
+    # Output embedding size after attention. If None, defaults to embedding_size.
+    output_embedding_size: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
