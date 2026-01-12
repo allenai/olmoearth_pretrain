@@ -345,6 +345,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
                     continue
                 pred_sample = pred[:, start:end, :]
                 target_sample = target[:, start:end, :]
+                print(target_sample.shape, pred_sample.shape)
                 score_sample = (
                     torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
                 )
