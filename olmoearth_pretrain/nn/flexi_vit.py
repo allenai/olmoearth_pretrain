@@ -2206,8 +2206,5 @@ class TargetProjectorConfig(Config):
         """Build the target encoder."""
         self.validate()
         kwargs = self.as_dict(exclude_none=True, recurse=False)
-        # supported_modality_names is replaced by supported_modalities
-        kwargs.pop("supported_modality_names")
-        kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"MultiModalPatchEmbeddings kwargs: {kwargs}")
         return MultiModalPatchEmbeddings(**kwargs)
