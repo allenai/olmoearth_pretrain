@@ -15,7 +15,11 @@ from olmo_core.train.common import ReduceType
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.data.transform import TransformConfig
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.flexi_vit import (
+    Encoder,
+    MultiModalPatchEmbeddings,
+    TokensAndMasks,
+)
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
@@ -298,11 +302,21 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
-                output_dict = self.model.target_encoder.forward(
-                    batch.unmask(),
-                    patch_size=patch_size,
-                    token_exit_cfg=token_exit_cfg,
-                )
+                if isinstance(self.model.target_encoder, Encoder):
+                    output_dict = self.model.target_encoder.forward(
+                        batch.unmask(),
+                        patch_size=patch_size,
+                        token_exit_cfg=token_exit_cfg,
+                    )
+                elif isinstance(self.model.target_encoder, MultiModalPatchEmbeddings):
+                    output_dict = self.model.target_encoder.forward(
+                        batch.unmask(),
+                        patch_size=patch_size,
+                    )
+                else:
+                    raise ValueError(
+                        f"Unexpected model.target encoder {type(self.model.target_encoder)}"
+                    )
                 target_output, _, _ = unpack_encoder_output(output_dict)
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
