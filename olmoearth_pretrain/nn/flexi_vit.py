@@ -515,6 +515,10 @@ class MultiModalPatchEmbeddings(nn.Module):
         """Apply torch.compile to the model."""
         self.compile(dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
 
+    def apply_fsdp(self, fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        fully_shard(self, **fsdp_kwargs)
+
     def forward(
         self,
         input_data: MaskedOlmoEarthSample,
