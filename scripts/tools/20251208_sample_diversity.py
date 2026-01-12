@@ -61,6 +61,27 @@ def compute_histogram_entropy(modality_name: str, modality: np.ndarray) -> float
     return np.mean(entropies)
 
 
+def sample_points(df: pd.DataFrame, method: str, k: int) -> np.ndarray:
+    """Different methods of sampling training points, based on the entropies.
+
+    We have two methods currently:
+    1. "max": sample the k points with the most combined entropy
+    2. "weighted": sample k points according to their (weighted) entropy.
+    """
+    MAX_WC_ENTROPY = entropy(np.ones(12))
+    MAX_S2_ENTROPY = entropy(np.ones(100))
+
+    def scaled_average_entropy(worldcover_entropy: float, s2_entropy: float) -> float:
+        # scale according to the maximum entropy and combine
+        return (
+            (worldcover_entropy / MAX_WC_ENTROPY) + (s2_entropy / MAX_S2_ENTROPY)
+        ) / 2
+
+    df["combined"] = df.apply(
+        lambda x: scaled_average_entropy(x.worldcover, x.sentinel2_l2a), axis=1
+    )
+
+
 if __name__ == "__main__":
     NUM_FILES_TO_PROCESS = 2000000
     path_to_h5s = UPath(
