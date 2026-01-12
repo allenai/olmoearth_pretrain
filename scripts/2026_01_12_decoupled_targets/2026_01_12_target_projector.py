@@ -63,7 +63,7 @@ MIN_PATCH_SIZE = 1
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
     # we overwrite some of the variables here.
-    output_embedding_size = 64
+    output_embedding_size = 128
 
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
