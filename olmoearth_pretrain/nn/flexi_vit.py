@@ -2177,3 +2177,37 @@ class PredictorConfig(Config):
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Predictor kwargs: {kwargs}")
         return Predictor(**kwargs)
+
+
+@dataclass
+class TargetProjectorConfig(Config):
+    """Configuration for the Target Projector."""
+
+    supported_modality_names: list[str]
+
+    max_patch_size: int = 8
+    embedding_size: int = 16
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        if len(self.supported_modalities) == 0:
+            raise ValueError("At least one modality must be added!")
+        else:
+            for modality in self.supported_modalities:
+                if modality not in Modality.values():
+                    raise ValueError(f"Modality {modality} is not supported")
+
+    @property
+    def supported_modalities(self) -> list[ModalitySpec]:
+        """Get the supported modalities."""
+        return get_modality_specs_from_names(self.supported_modality_names)
+
+    def build(self) -> "MultiModalPatchEmbeddings":
+        """Build the target encoder."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        # supported_modality_names is replaced by supported_modalities
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"MultiModalPatchEmbeddings kwargs: {kwargs}")
+        return MultiModalPatchEmbeddings(**kwargs)

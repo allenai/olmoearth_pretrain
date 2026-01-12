@@ -32,6 +32,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         encoder: nn.Module,
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
+        target_projector: torch.nn.Module | None = None,
     ):
         """Initialize the Latent MIM Style.
 
@@ -39,12 +40,16 @@ class LatentMIM(nn.Module, DistributedMixins):
             encoder: The encoder to use.
             decoder: The decoder to use.
             reconstructor: Optional reconstructor for auto-encoding.
+            target_projector: Optional target constructor. If None, the encoder is used.
         """
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.reconstructor = reconstructor
-        self.target_encoder = deepcopy(self.encoder)
+        if target_projector is None:
+            self.target_encoder = deepcopy(self.encoder)
+        else:
+            self.target_encoder = target_projector
         for p in self.target_encoder.parameters():
             p.requires_grad = False
 
@@ -127,6 +132,7 @@ class LatentMIMConfig(Config):
 
     encoder_config: Config
     decoder_config: Config
+    target_projector_config: Config | None = None
     reconstructor_config: Config | None = None
 
     def validate(self) -> None:
@@ -148,6 +154,14 @@ class LatentMIMConfig(Config):
             != self.decoder_config.encoder_embedding_size
         ):
             raise ValueError("Encoder embedding size must be consistent!")
+        if self.target_projector_config is not None:
+            decoder_output_size = (
+                self.decoder_config.output_embedding_size
+                if self.decoder_config.output_embedding_size is not None
+                else self.decoder_config.encoder_embedding_size
+            )
+            if self.target_projector_config.embedding_size != decoder_output_size:
+                raise ValueError("Output embedding sizes must be consistent!")
 
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
@@ -159,8 +173,14 @@ class LatentMIMConfig(Config):
             if self.reconstructor_config is not None
             else None
         )
+        target_projector = (
+            self.target_projector_config.build()
+            if self.target_projector_config is not None
+            else None
+        )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
+            target_projector=target_projector,
         )
