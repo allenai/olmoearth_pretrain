@@ -143,11 +143,17 @@ class LatentMIMConfig(Config):
             raise ValueError(
                 "Encoder and decoder must have the same max sequence length"
             )
-        if (
-            self.encoder_config.embedding_size
-            != self.decoder_config.encoder_embedding_size
-        ):
-            raise ValueError("Encoder embedding size must be consistent!")
+        # Use output_embedding_size if set, otherwise fall back to embedding_size
+        encoder_output_size = (
+            self.encoder_config.output_embedding_size
+            if self.encoder_config.output_embedding_size is not None
+            else self.encoder_config.embedding_size
+        )
+        if encoder_output_size != self.decoder_config.encoder_embedding_size:
+            raise ValueError(
+                f"Encoder output size ({encoder_output_size}) must match decoder's "
+                f"encoder_embedding_size ({self.decoder_config.encoder_embedding_size})!"
+            )
 
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
