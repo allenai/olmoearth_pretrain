@@ -536,7 +536,7 @@ def _build_default_command(
     # Add quantization args if enabled
     if getattr(args, "quantize_embeddings", False):
         cmd_args += quantize_args
-        run_name += "_quantized"
+        run_name += "_qt"
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     return (
@@ -592,7 +592,7 @@ def _build_hyperparameter_command(
     # Add quantization args if enabled
     if getattr(args, "quantize_embeddings", False):
         cmd_args += quantize_args
-        run_name += "_quantized"
+        run_name += "_qt"
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -698,7 +698,7 @@ def _build_command_from_eval_settings(
         for task_data in eval_settings_dict.values()
     )
     if quantize_enabled:
-        run_name += "_quantized"
+        run_name += "_qt"
 
     cmd_args = " " + " ".join(cmd_args_parts)
 
@@ -730,7 +730,7 @@ def _build_command_from_eval_settings(
     # Add quantization args if enabled
     if getattr(args, "quantize_embeddings", False):
         cmd_args += quantize_args
-        run_name += "_quantized"
+        run_name += "_qt"
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
