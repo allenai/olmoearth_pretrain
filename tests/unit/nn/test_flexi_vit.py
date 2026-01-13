@@ -796,5 +796,88 @@ class TestProjectionAndAggregation:
                 # for now, lets just check it all runs properly
                 _ = layer(t_and_m)
 
+    def test_output_embedding_size(self) -> None:
+        """Test output_embedding_size changes output dimension."""
+        b, h, w, t, d = 2, 4, 4, 3, 128
+        out_d = 64
+        sentinel_2 = torch.ones((b, h, w, t, d))
+        sentinel_2_mask = torch.zeros((b, h, w, t)).long()
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
+        )
+
+        for num_layers in [1, 2, 3]:
+            for agg_first in [True, False]:
+                layer = ProjectAndAggregate(
+                    embedding_size=d,
+                    num_layers=num_layers,
+                    aggregate_then_project=agg_first,
+                    output_embedding_size=out_d,
+                )
+                out = layer(t_and_m)
+                assert out.shape == (b, out_d), (
+                    f"Expected (b, {out_d}), got {out.shape}"
+                )
+
+        # Also test with raw tensor input
+        x_tensor = torch.ones((b, h * w * t, d))
+        layer = ProjectAndAggregate(
+            embedding_size=d,
+            num_layers=2,
+            aggregate_then_project=True,
+            output_embedding_size=out_d,
+        )
+        out = layer(x_tensor)
+        assert out.shape == (b, out_d)
+
+    def test_only_project(self) -> None:
+        """Test only_project returns tokens without aggregation."""
+        b, h, w, t, d = 2, 4, 4, 3, 128
+        sentinel_2 = torch.ones((b, h, w, t, d))
+        sentinel_2_mask = torch.zeros((b, h, w, t)).long()
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
+        )
+
+        layer = ProjectAndAggregate(embedding_size=d, num_layers=2, only_project=True)
+        out = layer(t_and_m)
+        # Should return TokensAndMasks, not aggregated tensor
+        assert isinstance(out, TokensAndMasks)
+        assert out.sentinel2_l2a is not None
+        assert out.sentinel2_l2a.shape == (b, h, w, t, d)
+
+        # Test with raw tensor - should preserve token structure
+        x_tensor = torch.ones((b, h * w * t, d))
+        out_tensor = layer(x_tensor)
+        assert isinstance(out_tensor, torch.Tensor)
+        assert out_tensor.shape == (b, h * w * t, d)
+
+    def test_only_project_with_output_embedding_size(self) -> None:
+        """Test only_project combined with output_embedding_size."""
+        b, h, w, t, d = 2, 4, 4, 3, 128
+        out_d = 64
+        sentinel_2 = torch.ones((b, h, w, t, d))
+        sentinel_2_mask = torch.zeros((b, h, w, t)).long()
+        t_and_m = TokensAndMasks(
+            sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
+        )
+
+        layer = ProjectAndAggregate(
+            embedding_size=d,
+            num_layers=2,
+            only_project=True,
+            output_embedding_size=out_d,
+        )
+        out = layer(t_and_m)
+        assert isinstance(out, TokensAndMasks)
+        assert out.sentinel2_l2a is not None
+        # Output tokens should have projected dimension
+        assert out.sentinel2_l2a.shape == (b, h, w, t, out_d)
+
+        # Test with raw tensor
+        x_tensor = torch.ones((b, h * w * t, d))
+        out_tensor = layer(x_tensor)
+        assert out_tensor.shape == (b, h * w * t, out_d)
+
 
 # TODO: write a unit test for the FlexiPatchEmbeddings

@@ -294,6 +294,8 @@ class ProjectAndAggregate(nn.Module):
         embedding_size: int,
         num_layers: int,
         aggregate_then_project: bool = True,
+        output_embedding_size: int | None = None,
+        only_project: bool = False,
     ):
         """Initialize the linear module.
 
@@ -302,12 +304,27 @@ class ProjectAndAggregate(nn.Module):
             a ReLU activation will be applied between layers
         aggregate_then_project: If True, then we will average the tokens before applying
             the projection. If False, we will apply the projection first.
+        output_embedding_size: If provided, the final layer will output this size instead
+            of embedding_size.
+        only_project: If True, only project the tokens without aggregation.
         """
         super().__init__()
-        projections = [nn.Linear(embedding_size, embedding_size)]
-        for _ in range(1, num_layers):
+        self.only_project = only_project
+        out_size = (
+            output_embedding_size
+            if output_embedding_size is not None
+            else embedding_size
+        )
+        # Build projection layers: all intermediate layers use embedding_size, final uses out_size
+        if num_layers == 1:
+            projections = [nn.Linear(embedding_size, out_size)]
+        else:
+            projections = [nn.Linear(embedding_size, embedding_size)]
+            for _ in range(1, num_layers - 1):
+                projections.append(nn.ReLU())
+                projections.append(nn.Linear(embedding_size, embedding_size))
             projections.append(nn.ReLU())
-            projections.append(nn.Linear(embedding_size, embedding_size))
+            projections.append(nn.Linear(embedding_size, out_size))
         self.projection = nn.Sequential(*projections)
         self.aggregate_then_project = aggregate_then_project
 
@@ -351,16 +368,40 @@ class ProjectAndAggregate(nn.Module):
             raise ValueError(f"Invalid input type: {type(x)}")
         return projected_pooled
 
-    def forward(self, x: TokensAndMasks | torch.Tensor) -> torch.Tensor:
+    def apply_project_only(
+        self, x: TokensAndMasks | torch.Tensor
+    ) -> TokensAndMasks | torch.Tensor:
+        """Apply projection without aggregation, preserving token structure."""
+        if isinstance(x, TokensAndMasks):
+            decoder_emedded_dict = x._asdict()
+            for modality in x.modalities:
+                x_modality = getattr(x, modality)
+                x_modality = self.projection(x_modality)
+                masked_modality_name = x.get_masked_modality_name(modality)
+                decoder_emedded_dict[modality] = x_modality
+                decoder_emedded_dict[masked_modality_name] = getattr(
+                    x, masked_modality_name
+                )
+            return TokensAndMasks(**decoder_emedded_dict)
+        elif isinstance(x, torch.Tensor):
+            return self.projection(x)
+        else:
+            raise ValueError(f"Invalid input type: {type(x)}")
+
+    def forward(
+        self, x: TokensAndMasks | torch.Tensor
+    ) -> torch.Tensor | TokensAndMasks:
         """Apply a (non)linear projection to an input TokensAndMasks.
 
         This can be applied either before or after pooling the tokens.
+        If only_project is True, returns projected tokens without aggregation.
         """
-        return (
-            self.apply_aggregate_then_project(x)
-            if self.aggregate_then_project
-            else self.apply_project_then_aggregate(x)
-        )
+        if self.only_project:
+            return self.apply_project_only(x)
+        elif self.aggregate_then_project:
+            return self.apply_aggregate_then_project(x)
+        else:
+            return self.apply_project_then_aggregate(x)
 
 
 class MultiModalPatchEmbeddings(nn.Module):
