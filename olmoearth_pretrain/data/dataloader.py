@@ -11,7 +11,6 @@ from typing import Any
 import numpy as np
 import torch
 import torch.distributed as dist
-from olmo_core.config import Config
 from olmo_core.data.data_loader import DataLoaderBase
 from olmo_core.data.utils import get_rng, memmap_to_write
 from olmo_core.distributed.utils import (
@@ -25,6 +24,7 @@ from torch.utils.data import default_collate
 from upath import UPath
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDataset
 from olmoearth_pretrain.data.constants import IMAGE_TILE_SIZE, Modality
 from olmoearth_pretrain.data.dataset import (

@@ -12,6 +12,7 @@ from einops import rearrange
 from torch import Tensor
 
 from olmoearth_pretrain.data.constants import BASE_GSD, Modality
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.attention import Mlp
 from olmoearth_pretrain.nn.flexi_vit import (
@@ -24,7 +25,6 @@ from olmoearth_pretrain.nn.flexi_vit import (
     return_modalities_from_dict,
 )
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 

@@ -8,12 +8,17 @@ from typing import Any, NamedTuple
 
 import torch
 from einops import rearrange, reduce, repeat
-from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard
 
-from olmoearth_pretrain.data.constants import BASE_GSD, Modality, ModalitySpec
-from olmoearth_pretrain.dataset.utils import get_modality_specs_from_names
+from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data.constants import (
+    BASE_GSD,
+    Modality,
+    ModalitySpec,
+    get_modality_specs_from_names,
+)
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
@@ -25,7 +30,6 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchReconstruction,
 )
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 

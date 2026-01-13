@@ -34,7 +34,15 @@ uv tool install pre-commit --with pre-commit-uv --force-reinstall
 
 uv installs everything into a venv, so to keep using python commands you can activate uv's venv: `source .venv/bin/activate`. Otherwise, swap to `uv run python`.
 
+### Inference-Only Installation
+
+For inference and model loading without training dependencies:
+```bash
+uv sync --locked
+```
+
 OlmoEarth is built using [OLMo-core](https://github.com/allenai/OLMo-core.git). OLMo-core's published [Docker images](https://github.com/orgs/allenai/packages?repo_name=OLMo-core) contain all core and optional dependencies.
+
 
 ## Model Summary
 
@@ -83,6 +91,23 @@ Detailed instructions on how to replicate our evaluations is available here:
 
 - [Evaluations on Research Benchmarks](docs/Evaluation.md)
 - [Evaluations on Partner Tasks](https://github.com/allenai/rslearn_projects/blob/master/rslp/olmoearth_evals/README.md)
+
+## Running Tests
+
+Tests can be run with different dependency configurations using `uv run`:
+
+```bash
+# Full test suite (all dependencies - flash attn including olmo-core)
+uv run --all-groups --no-group flash-attn pytest tests/
+
+# Model loading tests with full deps (with olmo-core)
+uv run --all-groups --no-group flash-attn pytest tests_minimal_deps/
+
+# Model loading tests with minimal deps only (no olmo-core)
+uv run --group dev pytest tests_minimal_deps/
+```
+
+The `tests_minimal_deps/` directory contains tests that verify model loading works both with and without `olmo-core` installed. These run twice in CI to ensure compatibility.
 
 ## License
 
