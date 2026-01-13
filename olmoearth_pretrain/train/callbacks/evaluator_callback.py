@@ -90,9 +90,6 @@ class DownstreamTaskConfig:
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
-    quantize_embeddings: bool = (
-        False  # Quantize embeddings to int8 for storage efficiency
-    )
 
 
 class DownstreamEvaluator:
@@ -149,7 +146,6 @@ class DownstreamEvaluator:
         self.select_final_test_miou_based_on_epoch_of_max_val_miou = (
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
-        self.quantize_embeddings = task.quantize_embeddings
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -246,12 +242,8 @@ class DownstreamEvaluator:
 
     def _get_embeddings(
         self, data_loader: DataLoader, is_train: bool
-    ) -> tuple[torch.Tensor, torch.Tensor, float | None]:
-        """Get the embeddings for the given data loader.
-
-        Returns:
-            Tuple of (embeddings, labels, scale) where scale is None if not quantized.
-        """
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Get the embeddings for the given data loader."""
         print(
             f"Getting embeddings for {self.dataset} with norm method {self.norm_method}"
         )
@@ -280,12 +272,7 @@ class DownstreamEvaluator:
             "use_pooled_tokens": self.use_pooled_tokens,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
-        return get_embeddings(
-            data_loader=data_loader,
-            model=model,
-            is_train=is_train,
-            quantize=self.quantize_embeddings,
-        )
+        return get_embeddings(data_loader=data_loader, model=model, is_train=is_train)
 
     def _val_embed_probe(self) -> dict[str, float | dict]:
         """Validate the model using embeddings and probe (knn or linear probe)."""
@@ -296,73 +283,21 @@ class DownstreamEvaluator:
 
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
-        train_embeddings, train_labels, train_scale = self._get_embeddings(
+        train_embeddings, train_labels = self._get_embeddings(
             train_loader, is_train=True
         )
         logger.info(f"Getting val embeddings for {self.dataset}...")
-        val_embeddings, val_labels, val_scale = self._get_embeddings(
-            val_loader, is_train=False
-        )
+        val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
         if self.run_on_test:
             logger.info(f"Getting test embeddings for {self.dataset}...")
-            test_embeddings, test_labels, test_scale = self._get_embeddings(
+            test_embeddings, test_labels = self._get_embeddings(
                 test_loader, is_train=False
             )
         else:
-            test_embeddings, test_labels, test_scale = None, None, None
+            test_embeddings, test_labels = None, None
         logger.info(
             f"Time to get embeddings for {self.dataset}: {time.time() - start_time:.2f}s"
         )
-
-        # Dequantize embeddings if they were quantized (needed for KNN computation)
-        # Uses power-based dequantization scheme (square to reverse square root)
-        if self.quantize_embeddings:
-            # Constants for power-based dequantization (must match quantization constants)
-            POWER = 2.0
-            SCALE = 127.5
-
-            def dequantize(embeddings_int8: torch.Tensor) -> torch.Tensor:
-                """Dequantize int8 embeddings using power-based scheme.
-
-                This reverses the quantization:
-                1. Convert int8 to float and divide by SCALE
-                2. Apply square (pow(POWER)) while preserving sign
-                This matches: rescaled = img.double().divide(SCALE)
-                              return rescaled.abs().pow(POWER).multiply(rescaled.signum())
-                """
-                # Convert to float and divide by scale
-                rescaled = embeddings_int8.float() / SCALE
-                # Apply square (pow(POWER)) while preserving sign
-                return rescaled.abs().pow(POWER) * rescaled.sign()
-
-            logger.info("Dequantizing embeddings before KNN evaluation")
-            if train_scale is not None:
-                logger.info(
-                    f"Train embeddings before dequantization: dtype={train_embeddings.dtype}, "
-                    f"shape={train_embeddings.shape}, range=[{train_embeddings.min().item()}, {train_embeddings.max().item()}]"
-                )
-                train_embeddings = dequantize(train_embeddings)
-                logger.info(
-                    f"Train embeddings after dequantization: range=[{train_embeddings.min().item():.6f}, {train_embeddings.max().item():.6f}]"
-                )
-            if val_scale is not None:
-                logger.info(
-                    f"Val embeddings before dequantization: dtype={val_embeddings.dtype}, "
-                    f"shape={val_embeddings.shape}, range=[{val_embeddings.min().item()}, {val_embeddings.max().item()}]"
-                )
-                val_embeddings = dequantize(val_embeddings)
-                logger.info(
-                    f"Val embeddings after dequantization: range=[{val_embeddings.min().item():.6f}, {val_embeddings.max().item():.6f}]"
-                )
-            if test_embeddings is not None and test_scale is not None:
-                logger.info(
-                    f"Test embeddings before dequantization: dtype={test_embeddings.dtype}, "
-                    f"shape={test_embeddings.shape}, range=[{test_embeddings.min().item()}, {test_embeddings.max().item()}]"
-                )
-                test_embeddings = dequantize(test_embeddings)
-                logger.info(
-                    f"Test embeddings after dequantization: range=[{test_embeddings.min().item():.6f}, {test_embeddings.max().item():.6f}]"
-                )
 
         logger.info(
             f"train embeddings shape for {self.dataset}: {train_embeddings.shape}"
