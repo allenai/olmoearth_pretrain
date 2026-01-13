@@ -90,6 +90,9 @@ class DownstreamTaskConfig:
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
+    quantize_embeddings: bool = (
+        False  # Quantize embeddings to int8 for storage efficiency
+    )
 
 
 class DownstreamEvaluator:
@@ -146,6 +149,7 @@ class DownstreamEvaluator:
         self.select_final_test_miou_based_on_epoch_of_max_val_miou = (
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
+        self.quantize_embeddings = task.quantize_embeddings
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -242,8 +246,12 @@ class DownstreamEvaluator:
 
     def _get_embeddings(
         self, data_loader: DataLoader, is_train: bool
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Get the embeddings for the given data loader."""
+    ) -> tuple[torch.Tensor, torch.Tensor, float | None]:
+        """Get the embeddings for the given data loader.
+
+        Returns:
+            Tuple of (embeddings, labels, scale) where scale is None if not quantized.
+        """
         print(
             f"Getting embeddings for {self.dataset} with norm method {self.norm_method}"
         )
@@ -272,7 +280,12 @@ class DownstreamEvaluator:
             "use_pooled_tokens": self.use_pooled_tokens,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
-        return get_embeddings(data_loader=data_loader, model=model, is_train=is_train)
+        return get_embeddings(
+            data_loader=data_loader,
+            model=model,
+            is_train=is_train,
+            quantize=self.quantize_embeddings,
+        )
 
     def _val_embed_probe(self) -> dict[str, float | dict]:
         """Validate the model using embeddings and probe (knn or linear probe)."""
@@ -283,21 +296,55 @@ class DownstreamEvaluator:
 
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
-        train_embeddings, train_labels = self._get_embeddings(
+        train_embeddings, train_labels, train_scale = self._get_embeddings(
             train_loader, is_train=True
         )
         logger.info(f"Getting val embeddings for {self.dataset}...")
-        val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
+        val_embeddings, val_labels, val_scale = self._get_embeddings(
+            val_loader, is_train=False
+        )
         if self.run_on_test:
             logger.info(f"Getting test embeddings for {self.dataset}...")
-            test_embeddings, test_labels = self._get_embeddings(
+            test_embeddings, test_labels, test_scale = self._get_embeddings(
                 test_loader, is_train=False
             )
         else:
-            test_embeddings, test_labels = None, None
+            test_embeddings, test_labels, test_scale = None, None, None
         logger.info(
             f"Time to get embeddings for {self.dataset}: {time.time() - start_time:.2f}s"
         )
+
+        # Run KNN evaluation directly on quantized int8 embeddings
+        # Convert int8 to float32 for PyTorch operations, but preserve quantized integer values
+        # This tests KNN performance on the quantized int8 data (not dequantized)
+        if self.quantize_embeddings:
+            logger.info(
+                "Running KNN evaluation on quantized int8 embeddings (converting to float32 for computation)"
+            )
+            if train_scale is not None:
+                logger.info(
+                    f"Train embeddings: dtype={train_embeddings.dtype}, shape={train_embeddings.shape}, "
+                    f"range=[{train_embeddings.min().item()}, {train_embeddings.max().item()}]"
+                )
+                train_embeddings = (
+                    train_embeddings.float()
+                )  # Convert to float but keep quantized values
+            if val_scale is not None:
+                logger.info(
+                    f"Val embeddings: dtype={val_embeddings.dtype}, shape={val_embeddings.shape}, "
+                    f"range=[{val_embeddings.min().item()}, {val_embeddings.max().item()}]"
+                )
+                val_embeddings = (
+                    val_embeddings.float()
+                )  # Convert to float but keep quantized values
+            if test_embeddings is not None and test_scale is not None:
+                logger.info(
+                    f"Test embeddings: dtype={test_embeddings.dtype}, shape={test_embeddings.shape}, "
+                    f"range=[{test_embeddings.min().item()}, {test_embeddings.max().item()}]"
+                )
+                test_embeddings = (
+                    test_embeddings.float()
+                )  # Convert to float but keep quantized values
 
         logger.info(
             f"train embeddings shape for {self.dataset}: {train_embeddings.shape}"
