@@ -16,6 +16,22 @@ from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 # Worldcover has 12 classes (0-11)
 NUM_WORLDCOVER_CLASSES = 12
 
+# Worldcover category names
+WORLDCOVER_CATEGORY_NAMES = {
+    0: "missing",
+    1: "tree_cover",
+    2: "shrubland",
+    3: "grassland",
+    4: "cropland",
+    5: "built_up",
+    6: "bare_sparse_vegetable",
+    7: "snow_and_ice",
+    8: "permanent_water_bodies",
+    9: "herbaceous_wetland",
+    10: "moss_and_lichen",
+    11: "mangroves",
+}
+
 
 def process_worldcover(wc: np.ndarray) -> np.ndarray:
     """Process WC data."""
@@ -104,8 +120,9 @@ def sample_by_dominant_category(
             # If we don't have enough files, take all of them
             sampled = files
         sampled_files.extend(sampled)
+        category_name = WORLDCOVER_CATEGORY_NAMES.get(category, f"unknown_{category}")
         print(
-            f"Category {category}: sampled {len(sampled)} files (out of {len(files)} available)"
+            f"Category {category} ({category_name}): sampled {len(sampled)} files (out of {len(files)} available)"
         )
 
     return sampled_files
@@ -191,17 +208,43 @@ if __name__ == "__main__":
                 stats = {
                     "filename": h5_file.name,
                     "dominant_category": dominant_category,
+                    "dominant_category_name": WORLDCOVER_CATEGORY_NAMES.get(
+                        dominant_category, f"unknown_{dominant_category}"
+                    ),
                 }
                 # Add percentage for each category
                 for cat in range(NUM_WORLDCOVER_CLASSES):
-                    stats[f"category_{cat}_percent"] = percentages.get(cat, 0.0)
+                    cat_name = WORLDCOVER_CATEGORY_NAMES.get(cat, f"unknown_{cat}")
+                    stats[f"{cat_name}_percent"] = percentages.get(cat, 0.0)
                 category_stats.append(stats)
         except Exception as e:
             print(f"Error processing {h5_file.name}: {e}")
 
     print("\nFound files with dominant categories:")
+    total_files = sum(len(files) for files in files_by_category.values())
     for category in sorted(files_by_category.keys()):
-        print(f"  Category {category}: {len(files_by_category[category])} files")
+        category_name = WORLDCOVER_CATEGORY_NAMES.get(category, f"unknown_{category}")
+        count = len(files_by_category[category])
+        percentage = (count / total_files * 100.0) if total_files > 0 else 0.0
+        print(
+            f"  Category {category} ({category_name}): {count} files ({percentage:.2f}%)"
+        )
+
+    # Compute average percentage of each category across all files
+    if category_stats:
+        print("\nAverage percentage of each category across all files:")
+        avg_percentages = {}
+        for cat in range(NUM_WORLDCOVER_CLASSES):
+            cat_name = WORLDCOVER_CATEGORY_NAMES.get(cat, f"unknown_{cat}")
+            cat_key = f"{cat_name}_percent"
+            if cat_key in category_stats[0]:
+                avg_percentages[cat] = np.mean(
+                    [stats[cat_key] for stats in category_stats]
+                )
+
+        for cat in sorted(avg_percentages.keys()):
+            cat_name = WORLDCOVER_CATEGORY_NAMES.get(cat, f"unknown_{cat}")
+            print(f"  Category {cat} ({cat_name}): {avg_percentages[cat]:.2f}%")
 
     # Step 2: Sample equal numbers per category
     print(f"\nStep 2: Sampling {args.samples_per_category} files per category...")
@@ -224,8 +267,9 @@ if __name__ == "__main__":
     # Save category statistics
     if category_stats:
         stats_path = UPath(args.stats_csv)
-        fieldnames = ["filename", "dominant_category"] + [
-            f"category_{cat}_percent" for cat in range(NUM_WORLDCOVER_CLASSES)
+        fieldnames = ["filename", "dominant_category", "dominant_category_name"] + [
+            f"{WORLDCOVER_CATEGORY_NAMES.get(cat, f'unknown_{cat}')}_percent"
+            for cat in range(NUM_WORLDCOVER_CLASSES)
         ]
         with open(stats_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
