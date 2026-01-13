@@ -1238,6 +1238,7 @@ class Encoder(FlexiVitBase):
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
+        output_embedding_size: int | None = None,
     ):
         """Initialize the encoder.
 
@@ -1263,6 +1264,7 @@ class Encoder(FlexiVitBase):
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
+            output_embedding_size: If set, project tokens to this size after attention
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1292,12 +1294,25 @@ class Encoder(FlexiVitBase):
             self.max_patch_size,
             self.embedding_size,
         )
+        self.output_embedding_size = output_embedding_size
+        # If output_embedding_size is set, project tokens to that size after attention
+        self.embedding_projector: ProjectAndAggregate | None = None
+        if output_embedding_size is not None:
+            self.embedding_projector = ProjectAndAggregate(
+                embedding_size=self.embedding_size,
+                num_layers=1,
+                output_embedding_size=output_embedding_size,
+                only_project=True,
+            )
+            final_embedding_size = output_embedding_size
+        else:
+            final_embedding_size = self.embedding_size
         self.project_and_aggregate = ProjectAndAggregate(
-            embedding_size=self.embedding_size,
+            embedding_size=final_embedding_size,
             num_layers=num_projection_layers,
             aggregate_then_project=aggregate_then_project,
         )
-        self.norm = nn.LayerNorm(self.embedding_size)
+        self.norm = nn.LayerNorm(final_embedding_size)
         self.apply(self._init_weights)
 
         if frozen_patch_embeddings:
@@ -1711,6 +1726,11 @@ class Encoder(FlexiVitBase):
         else:
             token_norm_stats = {}
         output = TokensAndMasks(**patchified_tokens_and_masks)
+
+        # Project to output_embedding_size if configured
+        if self.embedding_projector is not None:
+            output = self.embedding_projector(output)
+
         output_dict: dict[str, Any] = {
             "tokens_and_masks": output,
         }
@@ -2151,6 +2171,7 @@ class EncoderConfig(Config):
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
     log_token_norm_stats: bool = False
+    output_embedding_size: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
