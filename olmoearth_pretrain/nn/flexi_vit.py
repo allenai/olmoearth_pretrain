@@ -1312,7 +1312,7 @@ class Encoder(FlexiVitBase):
             num_layers=num_projection_layers,
             aggregate_then_project=aggregate_then_project,
         )
-        self.norm = nn.LayerNorm(final_embedding_size)
+        self.norm = nn.LayerNorm(self.embedding_size)
         self.apply(self._init_weights)
 
         if frozen_patch_embeddings:
