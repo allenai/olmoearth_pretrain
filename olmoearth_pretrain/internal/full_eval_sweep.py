@@ -54,6 +54,14 @@ pooling_args = " ".join(
     ]
 )
 
+quantize_args = " ".join(
+    [" "]
+    + [
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.quantize_embeddings=True"
+        for task_name in EVAL_TASKS.keys()
+    ]
+)
+
 dataset_args = " ".join(
     [" "]
     + [
@@ -524,6 +532,12 @@ def _build_default_command(
     logger.info(f"Using module path {module_path}")
     cmd_args += _get_model_size_args(args.model, size)
     cmd_args += _get_load_checkpoints_args(args.model)
+
+    # Add quantization args if enabled
+    if getattr(args, "quantize_embeddings", False):
+        cmd_args += quantize_args
+        run_name += "_quantized"
+
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
@@ -575,6 +589,11 @@ def _build_hyperparameter_command(
     cmd_args += _get_load_checkpoints_args(args.model)
     cmd_args += _get_model_size_args(args.model, size)
 
+    # Add quantization args if enabled
+    if getattr(args, "quantize_embeddings", False):
+        cmd_args += quantize_args
+        run_name += "_quantized"
+
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
     if "init_seed" in extra:
@@ -618,6 +637,7 @@ def _build_command_from_eval_settings(
         pooling_type = settings.get("pooling_type", "mean")
         probe_lr = settings.get("probe_lr", None)
         norm_from_pretrained = settings.get("norm_stats_from_pretrained", False)
+        quantize_embeddings = settings.get("quantize_embeddings", False)
 
         # Track for run name
         pooling_types_used.add(pooling_type)
@@ -644,6 +664,12 @@ def _build_command_from_eval_settings(
             f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_stats_from_pretrained={norm_from_pretrained}"
         )
 
+        # Add quantization setting if specified in JSON
+        if quantize_embeddings:
+            task_args.append(
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.quantize_embeddings=True"
+            )
+
         cmd_args_parts.extend(task_args)
 
     # Create a descriptive run name
@@ -666,7 +692,24 @@ def _build_command_from_eval_settings(
 
     run_name = f"{base_run_name}_{norm_str}_{lr_str}_pt{pooling_str}"
 
+    # Check if quantization is enabled (either from args or from JSON settings)
+    quantize_enabled = getattr(args, "quantize_embeddings", False) or any(
+        task_data.get("settings", {}).get("quantize_embeddings", False)
+        for task_data in eval_settings_dict.values()
+    )
+    if quantize_enabled:
+        run_name += "_quantized"
+
     cmd_args = " " + " ".join(cmd_args_parts)
+
+    # Add quantization args for all tasks if enabled via command line (not already in JSON)
+    if getattr(args, "quantize_embeddings", False):
+        # Only add if not already specified per-task in JSON
+        for task_name in EVAL_TASKS.keys():
+            if task_name not in eval_settings_dict or not eval_settings_dict[
+                task_name
+            ].get("settings", {}).get("quantize_embeddings", False):
+                cmd_args += f" --trainer.callbacks.downstream_evaluator.tasks.{task_name}.quantize_embeddings=True"
 
     # Add model-specific args
     cmd_args += _get_model_specific_args(args.model)
@@ -683,6 +726,11 @@ def _build_command_from_eval_settings(
     )
     cmd_args += _get_load_checkpoints_args(args.model)
     cmd_args += _get_model_size_args(args.model, size)
+
+    # Add quantization args if enabled
+    if getattr(args, "quantize_embeddings", False):
+        cmd_args += quantize_args
+        run_name += "_quantized"
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -936,6 +984,11 @@ def main() -> None:
         type=str,
         required=False,
         help="Path to the eval settings json file",
+    )
+    parser.add_argument(
+        "--quantize_embeddings",
+        action="store_true",
+        help="If set, quantize embeddings to int8 for all tasks",
     )
 
     args, extra_cli = parser.parse_known_args()
