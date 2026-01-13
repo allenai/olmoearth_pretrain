@@ -22,12 +22,6 @@ from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
 
-# all bandset indices should be tuples of (modality, bandset_idx) so we can create a power set of these combinations from it
-ALL_BANDSET_IDXS: list[tuple[str, int]] = []
-for modality in Modality.values():
-    for bandset_idx in range(modality.num_band_sets):
-        ALL_BANDSET_IDXS.append((modality.name, bandset_idx))
-
 
 class MaskingStrategy:
     """Abstract base class for masking strategies.

@@ -210,6 +210,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     self.transform.apply(microbatch).to_device(self.device),
                     patch_size=patch_size,
                 )
+                print(masked_batch_a.sentinel2_l2a.shape)
+                print(masked_batch_a.sentinel2_l2a_mask.shape)
                 masked_batch_b = self.masking_strategy.apply_mask(
                     self.transform.apply(microbatch).to_device(self.device),
                     patch_size=patch_size,
@@ -221,6 +223,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
                     self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 )
+                h
                 loss = (loss_a + loss_b) / 2
 
                 # Scale loss by number of microbatches

@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, NamedTuple
-
+import itertools
 import torch
 from einops import rearrange, reduce, repeat
 from torch import Tensor, nn
@@ -371,6 +371,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         supported_modality_names: list[str],
         max_patch_size: int,
         embedding_size: int,
+        run_on_modalities: bool = False
     ):
         """Initialize the patch embeddings.
 
@@ -384,24 +385,34 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
         self.supported_modality_names = supported_modality_names
+        self.run_on_modalities = run_on_modalities
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
         for modality in self.supported_modality_names:
             self.per_modality_embeddings[modality] = (
-                self._get_patch_embedding_module_for_modality(modality)
+                self._get_patch_embedding_module_for_modality(modality, run_on_modalities)
             )
 
         # For every patch embedding module we want to create a unique
         for modality in self.supported_modality_names:
-            for idx, bandset_indices in enumerate(
-                Modality.get(modality).bandsets_as_indices()
-            ):
-                buffer_name = self._get_buffer_name(modality, idx)
-                banset_indices_tensor = torch.tensor(bandset_indices, dtype=torch.long)
+            if run_on_modalities:
+                indices = list(itertools.chain.from_iterable(Modality.get(modality).bandsets_as_indices()))
+                buffer_name = self._get_buffer_name(modality, 0)
+                banset_indices_tensor = torch.tensor(indices, dtype=torch.long)
                 self.register_buffer(
                     buffer_name, banset_indices_tensor, persistent=False
                 )
+            else:
+                # otherwise, we run on the bandsets as usual
+                for idx, bandset_indices in enumerate(
+                    Modality.get(modality).bandsets_as_indices()
+                ):
+                    buffer_name = self._get_buffer_name(modality, idx)
+                    banset_indices_tensor = torch.tensor(bandset_indices, dtype=torch.long)
+                    self.register_buffer(
+                        buffer_name, banset_indices_tensor, persistent=False
+                    )
 
         # Create a dictionary of per modality index tensors to do  index select with registered buffer
 
@@ -418,7 +429,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         """
         return f"{modality}__{idx}"
 
-    def _get_patch_embedding_module_for_modality(self, modality: str) -> nn.Module:
+    def _get_patch_embedding_module_for_modality(self, modality: str, run_on_modalities: bool = False) -> nn.Module:
         """Get the patch embedding module for a modality."""
         modality_spec = Modality.get(modality)
         # Based on the modality name we choose the way to embed the data
@@ -427,17 +438,37 @@ class MultiModalPatchEmbeddings(nn.Module):
         # Static modality
         if not modality_spec.is_spatial:
             # static in space
-            return nn.ModuleDict(
+            if run_on_modalities:
+                return nn.ModuleDict(
+                    {
+                        self._get_embedding_module_name(modality, 0): nn.Linear(
+                            modality_spec.num_bands, self.embedding_size
+                        )
+                    }
+                )
+            else:
+                return nn.ModuleDict(
+                    {
+                        self._get_embedding_module_name(modality, idx): nn.Linear(
+                            len(channel_set_idxs), self.embedding_size
+                        )
+                        for idx, channel_set_idxs in enumerate(
+                            modality_spec.bandsets_as_indices()
+                        )
+                    }
+                )
+        else:
+            if run_on_modalities:
+                return nn.ModuleDict(
                 {
-                    self._get_embedding_module_name(modality, idx): nn.Linear(
-                        len(channel_set_idxs), self.embedding_size
-                    )
-                    for idx, channel_set_idxs in enumerate(
-                        modality_spec.bandsets_as_indices()
+                    self._get_embedding_module_name(modality, 0): FlexiPatchEmbed(
+                        in_chans=len(modality_spec.num_bands),
+                        embedding_size=self.embedding_size,
+                        patch_size_at_16=self.max_patch_size,
+                        modality_spec=modality_spec,
                     )
                 }
             )
-        else:
             return nn.ModuleDict(
                 {
                     self._get_embedding_module_name(modality, idx): FlexiPatchEmbed(
@@ -468,7 +499,8 @@ class MultiModalPatchEmbeddings(nn.Module):
         modality_spec = Modality.get(modality)
 
         modality_tokens, modality_masks = [], []
-        for idx in range(modality_spec.num_band_sets):
+        indices = modality_spec.num_band_sets if not self.run_on_modalities else 1
+        for idx in range(indices):
             modality_specific_kwargs = {}
             if not modality_spec.is_spatial:
                 # static in time
