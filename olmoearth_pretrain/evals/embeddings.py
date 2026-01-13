@@ -77,13 +77,24 @@ def get_embeddings(
 
         # Quantize: apply square root (pow(1/POWER)) while preserving sign
         # Then scale and clamp to int8 range
+        # This matches the AlphaEarth quantization scheme exactly:
+        # sat = img.abs().pow(1/POWER).multiply(img.signum())
+        # return sat.multiply(SCALE).clamp(MIN_VALUE, MAX_VALUE).int8()
+        original_min = embeddings_tensor.min().item()
+        original_max = embeddings_tensor.max().item()
         sat = embeddings_tensor.abs().pow(1 / POWER) * embeddings_tensor.sign()
         embeddings_tensor = (
             (sat * SCALE).clamp(MIN_VALUE, MAX_VALUE).round().to(torch.int8)
         )
         scale = SCALE  # Store scale for dequantization
+        quantized_min = embeddings_tensor.min().item()
+        quantized_max = embeddings_tensor.max().item()
         logger.info(
             f"Quantized embeddings to int8 using power-based scheme (POWER={POWER}, SCALE={SCALE})"
+        )
+        logger.info(
+            f"Original embedding range: [{original_min:.6f}, {original_max:.6f}], "
+            f"Quantized range: [{quantized_min}, {quantized_max}]"
         )
 
     return embeddings_tensor, labels, scale
