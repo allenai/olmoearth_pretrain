@@ -145,6 +145,12 @@ if __name__ == "__main__":
         default=42,
         help="Random seed for reproducibility (default: 42)",
     )
+    parser.add_argument(
+        "--max_files",
+        type=int,
+        default=5000,
+        help="Maximum number of files to process (default: 5000)",
+    )
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -154,11 +160,18 @@ if __name__ == "__main__":
     h5s_to_process = list(path_to_h5s.glob("*.h5"))
     print(f"Found {len(h5s_to_process)} h5 files")
 
+    # Limit to first max_files
+    if len(h5s_to_process) > args.max_files:
+        h5s_to_process = h5s_to_process[: args.max_files]
+        print(f"Limiting to first {args.max_files} files")
+
     # Step 1: Process all files and compute category percentages
     files_by_category: dict[int, list[UPath]] = defaultdict(list)
     category_stats = []
 
-    print("\nStep 1: Computing category percentages for all files...")
+    print(
+        f"\nStep 1: Computing category percentages for {len(h5s_to_process)} files..."
+    )
     for h5_file in tqdm(h5s_to_process):
         if h5_file.name == "normalizing_dict.h5":
             continue
