@@ -314,37 +314,55 @@ class DownstreamEvaluator:
             f"Time to get embeddings for {self.dataset}: {time.time() - start_time:.2f}s"
         )
 
-        # Run KNN evaluation directly on quantized int8 embeddings
-        # Convert int8 to float32 for PyTorch operations, but preserve quantized integer values
-        # This tests KNN performance on the quantized int8 data (not dequantized)
+        # Dequantize embeddings if they were quantized (needed for KNN computation)
+        # Uses power-based dequantization scheme (square to reverse square root)
         if self.quantize_embeddings:
-            logger.info(
-                "Running KNN evaluation on quantized int8 embeddings (converting to float32 for computation)"
-            )
+            # Constants for power-based dequantization (must match quantization constants)
+            POWER = 2.0
+            SCALE = 127.5
+
+            def dequantize(embeddings_int8: torch.Tensor) -> torch.Tensor:
+                """Dequantize int8 embeddings using power-based scheme.
+
+                This reverses the quantization:
+                1. Convert int8 to float and divide by SCALE
+                2. Apply square (pow(POWER)) while preserving sign
+                This matches: rescaled = img.double().divide(SCALE)
+                              return rescaled.abs().pow(POWER).multiply(rescaled.signum())
+                """
+                # Convert to float and divide by scale
+                rescaled = embeddings_int8.float() / SCALE
+                # Apply square (pow(POWER)) while preserving sign
+                return rescaled.abs().pow(POWER) * rescaled.sign()
+
+            logger.info("Dequantizing embeddings before KNN evaluation")
             if train_scale is not None:
                 logger.info(
-                    f"Train embeddings: dtype={train_embeddings.dtype}, shape={train_embeddings.shape}, "
-                    f"range=[{train_embeddings.min().item()}, {train_embeddings.max().item()}]"
+                    f"Train embeddings before dequantization: dtype={train_embeddings.dtype}, "
+                    f"shape={train_embeddings.shape}, range=[{train_embeddings.min().item()}, {train_embeddings.max().item()}]"
                 )
-                train_embeddings = (
-                    train_embeddings.float()
-                )  # Convert to float but keep quantized values
+                train_embeddings = dequantize(train_embeddings)
+                logger.info(
+                    f"Train embeddings after dequantization: range=[{train_embeddings.min().item():.6f}, {train_embeddings.max().item():.6f}]"
+                )
             if val_scale is not None:
                 logger.info(
-                    f"Val embeddings: dtype={val_embeddings.dtype}, shape={val_embeddings.shape}, "
-                    f"range=[{val_embeddings.min().item()}, {val_embeddings.max().item()}]"
+                    f"Val embeddings before dequantization: dtype={val_embeddings.dtype}, "
+                    f"shape={val_embeddings.shape}, range=[{val_embeddings.min().item()}, {val_embeddings.max().item()}]"
                 )
-                val_embeddings = (
-                    val_embeddings.float()
-                )  # Convert to float but keep quantized values
+                val_embeddings = dequantize(val_embeddings)
+                logger.info(
+                    f"Val embeddings after dequantization: range=[{val_embeddings.min().item():.6f}, {val_embeddings.max().item():.6f}]"
+                )
             if test_embeddings is not None and test_scale is not None:
                 logger.info(
-                    f"Test embeddings: dtype={test_embeddings.dtype}, shape={test_embeddings.shape}, "
-                    f"range=[{test_embeddings.min().item()}, {test_embeddings.max().item()}]"
+                    f"Test embeddings before dequantization: dtype={test_embeddings.dtype}, "
+                    f"shape={test_embeddings.shape}, range=[{test_embeddings.min().item()}, {test_embeddings.max().item()}]"
                 )
-                test_embeddings = (
-                    test_embeddings.float()
-                )  # Convert to float but keep quantized values
+                test_embeddings = dequantize(test_embeddings)
+                logger.info(
+                    f"Test embeddings after dequantization: range=[{test_embeddings.min().item():.6f}, {test_embeddings.max().item():.6f}]"
+                )
 
         logger.info(
             f"train embeddings shape for {self.dataset}: {train_embeddings.shape}"
