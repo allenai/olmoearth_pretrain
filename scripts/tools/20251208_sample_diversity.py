@@ -61,7 +61,7 @@ def compute_histogram_entropy(modality_name: str, modality: np.ndarray) -> float
     return np.mean(entropies)
 
 
-def sample_points(df: pd.DataFrame, method: str, k: int) -> np.ndarray:
+def sample_points(df: pd.DataFrame) -> np.ndarray:
     """Different methods of sampling training points, based on the entropies.
 
     We have two methods currently:
@@ -69,6 +69,8 @@ def sample_points(df: pd.DataFrame, method: str, k: int) -> np.ndarray:
     2. "weighted": sample k points according to their (weighted) entropy.
 
     This is how the filter_idx_file was created, which we then pass to the dataset.
+    We compute the combined scaled average entropy and take the K points with the
+    highest scaled average entropy.
     """
     MAX_WC_ENTROPY = entropy(np.ones(12))
     MAX_S2_ENTROPY = entropy(np.ones(100))
