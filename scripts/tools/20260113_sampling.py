@@ -142,31 +142,31 @@ if __name__ == "__main__":
         "--samples_per_category",
         type=int,
         default=1000,
-        help="Number of samples to take per dominant category (default: 1000)",
+        help="Number of samples to take per dominant category",
     )
     parser.add_argument(
-        "--output_csv",
+        "--output_npy",
         type=str,
-        default="sampling_by_category.csv",
-        help="Output CSV file path (default: sampling_by_category.csv)",
+        default="sampling_by_category.npy",
+        help="Output NPY file path",
     )
     parser.add_argument(
         "--stats_csv",
         type=str,
         default="category_stats.csv",
-        help="Output CSV file for category statistics (default: category_stats.csv)",
+        help="Output CSV file for category statistics",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=42,
-        help="Random seed for reproducibility (default: 42)",
+        help="Random seed for reproducibility",
     )
     parser.add_argument(
         "--max_files",
         type=int,
         default=5000,
-        help="Maximum number of files to process (default: 5000)",
+        help="Maximum number of files to process",
     )
     args = parser.parse_args()
 
@@ -254,16 +254,19 @@ if __name__ == "__main__":
 
     print(f"\nTotal sampled files: {len(sampled_files)}")
 
-    # Save sampled files
-    output_path = UPath(args.output_csv)
-    with open(output_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["filename"])
-        writer.writeheader()
-        for file_path in sampled_files:
-            writer.writerow({"filename": file_path.name})
+    # Extract indices from filenames (sample_x.h5 -> x)
+    indices = []
+    for file_path in sampled_files:
+        # Extract index from filename like "sample_123.h5" -> 123
+        filename = file_path.stem  # "sample_123"
+        idx = int(filename.split("_")[1])
+        indices.append(idx)
 
-    print(f"Saved sampled files to {output_path}")
+    indices_array = np.array(indices, dtype=np.int64)
+    output_path = UPath(args.output_npy)
+    np.save(output_path, indices_array)
 
+    print(f"Saved {len(indices_array)} indices to {output_path}")
     # Save category statistics
     if category_stats:
         stats_path = UPath(args.stats_csv)
