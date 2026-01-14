@@ -744,6 +744,7 @@ class CompositeEncodings(nn.Module):
         max_sequence_length: int,
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
+        tokenization_config: TokenizationConfig | None = None,
     ):
         """Initialize the composite encodings.
 
@@ -754,6 +755,7 @@ class CompositeEncodings(nn.Module):
             max_sequence_length: Maximum sequence length
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
+            tokenization_config: Optional config for custom band groupings
         """
         super().__init__()
         self.embedding_size = embedding_size
@@ -761,6 +763,7 @@ class CompositeEncodings(nn.Module):
         self.supported_modality_names = [
             modality.name for modality in supported_modalities
         ]
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         self.embedding_size = embedding_size
         self.max_sequence_length = (
             max_sequence_length  # This max sequence length is a time dim thing
@@ -784,7 +787,8 @@ class CompositeEncodings(nn.Module):
         if not learnable_channel_embeddings and not random_channel_embeddings:
             self.per_modality_channel_embeddings = nn.ParameterDict()
             for modality in self.supported_modalities:
-                shape = (len(modality.band_sets), self.embedding_dim_per_embedding_type)
+                num_bandsets = self.tokenization_config.get_num_bandsets(modality.name)
+                shape = (num_bandsets, self.embedding_dim_per_embedding_type)
                 channel_embeddings = nn.Parameter(
                     torch.zeros(shape), requires_grad=False
                 )
@@ -798,7 +802,8 @@ class CompositeEncodings(nn.Module):
 
             self.per_modality_channel_embeddings = nn.ParameterDict()
             for modality in self.supported_modalities:
-                shape = (len(modality.band_sets), self.embedding_dim_per_embedding_type)
+                num_bandsets = self.tokenization_config.get_num_bandsets(modality.name)
+                shape = (num_bandsets, self.embedding_dim_per_embedding_type)
                 if random_channel_embeddings:
                     channel_embeddings = nn.Parameter(torch.rand(shape), **args)
                 else:
@@ -981,6 +986,7 @@ class FlexiVitBase(nn.Module):
         random_channel_embeddings: bool = False,
         use_flash_attn: bool = False,
         qk_norm: bool = False,
+        tokenization_config: TokenizationConfig | None = None,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -991,6 +997,7 @@ class FlexiVitBase(nn.Module):
         logger.info(f"modalities being used by model: {self.supported_modality_names}")
 
         self.max_sequence_length = max_sequence_length
+        self._base_tokenization_config = tokenization_config or TokenizationConfig()
 
         self.use_flash_attn = use_flash_attn
         self.learnable_channel_embeddings = learnable_channel_embeddings
@@ -1018,6 +1025,7 @@ class FlexiVitBase(nn.Module):
             max_sequence_length,
             learnable_channel_embeddings,
             random_channel_embeddings,
+            tokenization_config=self._base_tokenization_config,
         )
         self.apply(self._init_weights)
 
@@ -1234,6 +1242,7 @@ class Encoder(FlexiVitBase):
             log_token_norm_stats: Whether to log the token norm stats
             tokenization_config: Optional config for custom band groupings
         """
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
             embedding_size=embedding_size,
             depth=depth,
@@ -1246,11 +1255,11 @@ class Encoder(FlexiVitBase):
             use_flash_attn=use_flash_attn,
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
+            tokenization_config=self.tokenization_config,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
         self.log_token_norm_stats = log_token_norm_stats
-        self.tokenization_config = tokenization_config or TokenizationConfig()
         if self.has_register_tokens:
             self.register_tokens = nn.Parameter(
                 torch.zeros(num_register_tokens, embedding_size)
@@ -1754,6 +1763,7 @@ class PredictorBase(FlexiVitBase):
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
         """
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
             embedding_size=decoder_embedding_size,
             depth=depth,
@@ -1766,11 +1776,11 @@ class PredictorBase(FlexiVitBase):
             supported_modalities=supported_modalities,
             use_flash_attn=use_flash_attn,
             qk_norm=qk_norm,
+            tokenization_config=self.tokenization_config,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.encoder_embedding_size = encoder_embedding_size
-        self.tokenization_config = tokenization_config or TokenizationConfig()
         self.encoder_to_decoder_embed = nn.Linear(
             encoder_embedding_size, decoder_embedding_size, bias=True
         )

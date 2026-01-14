@@ -62,6 +62,7 @@ class STBase(nn.Module):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         last_layer_cross_attn: bool = False,
+        tokenization_config: TokenizationConfig | None = None,
     ) -> None:
         """Initialize the STBase class."""
         super().__init__()
@@ -75,6 +76,7 @@ class STBase(nn.Module):
         self.windowed_attention_size = windowed_attention_size
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
+        self._base_tokenization_config = tokenization_config or TokenizationConfig()
 
         self.blocks = nn.ModuleList(
             [
@@ -98,6 +100,7 @@ class STBase(nn.Module):
             max_sequence_length,
             learnable_channel_embeddings,
             random_channel_embeddings,
+            tokenization_config=self._base_tokenization_config,
         )
         self.apply(self._init_weights)
 
@@ -774,6 +777,7 @@ class STEncoder(STBase):
                 that patch.
             tokenization_config: Optional config for custom band groupings
         """
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
             embedding_size=embedding_size,
             depth=depth,
@@ -786,6 +790,7 @@ class STEncoder(STBase):
             windowed_attention_size=windowed_attention_size,
             random_channel_embeddings=random_channel_embeddings,
             last_layer_cross_attn=fuse_layers is not None and fuse_using_cross_attn,
+            tokenization_config=self.tokenization_config,
         )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
@@ -793,7 +798,6 @@ class STEncoder(STBase):
         self.fuse_layers = fuse_layers
         self.layer_attention_modes = layer_attention_modes
         self.fuse_using_cross_attn = fuse_using_cross_attn
-        self.tokenization_config = tokenization_config or TokenizationConfig()
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -1186,6 +1190,7 @@ class STPredictor(STBase):
             layer_attention_modes: directly specify the attention mode to use at each layer.
             tokenization_config: Optional config for custom band groupings
         """
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
             embedding_size=decoder_embedding_size,
             depth=depth,
@@ -1197,13 +1202,13 @@ class STPredictor(STBase):
             random_channel_embeddings=random_channel_embeddings,
             supported_modalities=supported_modalities,
             windowed_attention_size=windowed_attention_size,
+            tokenization_config=self.tokenization_config,
         )
         # TODO: Rename this weird misname
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.encoder_embedding_size = encoder_embedding_size
         self.layer_attention_modes = layer_attention_modes
-        self.tokenization_config = tokenization_config or TokenizationConfig()
         self.encoder_to_decoder_embed = nn.Linear(
             encoder_embedding_size, decoder_embedding_size, bias=True
         )
