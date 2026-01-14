@@ -174,51 +174,71 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
 
     path_to_h5s = UPath(args.h5_path)
-    h5s_to_process = list(path_to_h5s.glob("*.h5"))
-    print(f"Found {len(h5s_to_process)} h5 files")
+    stats_path = UPath(args.stats_csv)
 
-    # Limit to first max_files
-    if len(h5s_to_process) > args.max_files:
-        h5s_to_process = h5s_to_process[: args.max_files]
-        print(f"Limiting to first {args.max_files} files")
-
-    # Step 1: Process all files and compute category percentages
+    # Step 1: Load existing stats or compute from scratch
     files_by_category: dict[int, list[UPath]] = defaultdict(list)
     category_stats = []
 
-    print(
-        f"\nStep 1: Computing category percentages for {len(h5s_to_process)} files..."
-    )
-    for h5_file in tqdm(h5s_to_process):
-        if h5_file.name == "normalizing_dict.h5":
-            continue
-
-        try:
-            wc = read_worldcover_from_h5(h5_file)
-            if wc is None:
-                continue
-
-            percentages = compute_category_percentages(wc)
-            dominant_category = get_dominant_category(percentages)
-
-            if dominant_category is not None:
+    if stats_path.exists():
+        print(f"\nStep 1: Loading existing stats from {stats_path}...")
+        with open(stats_path, newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                filename = row["filename"]
+                dominant_category = int(row["dominant_category"])
+                h5_file = path_to_h5s / filename
                 files_by_category[dominant_category].append(h5_file)
-
-                # Store statistics
-                stats = {
-                    "filename": h5_file.name,
-                    "dominant_category": dominant_category,
-                    "dominant_category_name": WORLDCOVER_CATEGORY_NAMES.get(
-                        dominant_category, f"unknown_{dominant_category}"
-                    ),
-                }
-                # Add percentage for each category
+                # Convert percentage strings to floats for np.mean later
                 for cat in range(NUM_WORLDCOVER_CLASSES):
                     cat_name = WORLDCOVER_CATEGORY_NAMES.get(cat, f"unknown_{cat}")
-                    stats[f"{cat_name}_percent"] = percentages.get(cat, 0.0)
-                category_stats.append(stats)
-        except Exception as e:
-            print(f"Error processing {h5_file.name}: {e}")
+                    cat_key = f"{cat_name}_percent"
+                    if cat_key in row:
+                        row[cat_key] = float(row[cat_key])
+                category_stats.append(row)
+        print(f"Loaded stats for {len(category_stats)} files")
+    else:
+        h5s_to_process = list(path_to_h5s.glob("*.h5"))
+        print(f"Found {len(h5s_to_process)} h5 files")
+
+        # Limit to first max_files
+        if len(h5s_to_process) > args.max_files:
+            h5s_to_process = h5s_to_process[: args.max_files]
+            print(f"Limiting to first {args.max_files} files")
+
+        print(
+            f"\nStep 1: Computing category percentages for {len(h5s_to_process)} files..."
+        )
+        for h5_file in tqdm(h5s_to_process):
+            if h5_file.name == "normalizing_dict.h5":
+                continue
+
+            try:
+                wc = read_worldcover_from_h5(h5_file)
+                if wc is None:
+                    continue
+
+                percentages = compute_category_percentages(wc)
+                dominant_category = get_dominant_category(percentages)
+
+                if dominant_category is not None:
+                    files_by_category[dominant_category].append(h5_file)
+
+                    # Store statistics
+                    stats = {
+                        "filename": h5_file.name,
+                        "dominant_category": dominant_category,
+                        "dominant_category_name": WORLDCOVER_CATEGORY_NAMES.get(
+                            dominant_category, f"unknown_{dominant_category}"
+                        ),
+                    }
+                    # Add percentage for each category
+                    for cat in range(NUM_WORLDCOVER_CLASSES):
+                        cat_name = WORLDCOVER_CATEGORY_NAMES.get(cat, f"unknown_{cat}")
+                        stats[f"{cat_name}_percent"] = percentages.get(cat, 0.0)
+                    category_stats.append(stats)
+            except Exception as e:
+                print(f"Error processing {h5_file.name}: {e}")
 
     print("\nFound files with dominant categories:")
     total_files = sum(len(files) for files in files_by_category.values())
@@ -267,9 +287,9 @@ if __name__ == "__main__":
     np.save(output_path, indices_array)
 
     print(f"Saved {len(indices_array)} indices to {output_path}")
-    # Save category statistics
-    if category_stats:
-        stats_path = UPath(args.stats_csv)
+
+    # Save category statistics only if we computed them fresh
+    if category_stats and not stats_path.exists():
         fieldnames = ["filename", "dominant_category", "dominant_category_name"] + [
             f"{WORLDCOVER_CATEGORY_NAMES.get(cat, f'unknown_{cat}')}_percent"
             for cat in range(NUM_WORLDCOVER_CLASSES)
