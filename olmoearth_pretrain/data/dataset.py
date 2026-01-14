@@ -641,7 +641,10 @@ class OlmoEarthDataset(Dataset):
         self.apply_cutmix = apply_cutmix
         self.filter_idx_file = filter_idx_file
         if filter_idx_file is not None:
-            self.indices_to_filter = np.load(filter_idx_file)
+            self.indices_to_filter: np.ndarray | None = np.load(filter_idx_file)
+            assert isinstance(self.indices_to_filter, np.ndarray), (
+                f"Expected filter_idx_file to point to a np.ndarray, got {type(self.indices_to_filter)} instead."
+            )
         else:
             self.indices_to_filter = None
 
@@ -689,7 +692,8 @@ class OlmoEarthDataset(Dataset):
             f"tile_path={tile_path},"
             f"supported_modalities={sorted(supported_modalities)},"
             f"sample_size={num_samples},"
-            f"dtype={self.dtype}{filter_file_string}".encode()
+            f"dtype={self.dtype}"
+            f"{filter_file_string}".encode()
         )
         return sha256_hash.hexdigest()
 

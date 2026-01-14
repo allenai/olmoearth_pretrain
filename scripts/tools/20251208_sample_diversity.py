@@ -67,6 +67,8 @@ def sample_points(df: pd.DataFrame, method: str, k: int) -> np.ndarray:
     We have two methods currently:
     1. "max": sample the k points with the most combined entropy
     2. "weighted": sample k points according to their (weighted) entropy.
+
+    This is how the filter_idx_file was created, which we then pass to the dataset.
     """
     MAX_WC_ENTROPY = entropy(np.ones(12))
     MAX_S2_ENTROPY = entropy(np.ones(100))
