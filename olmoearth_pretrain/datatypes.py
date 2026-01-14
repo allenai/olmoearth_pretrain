@@ -100,7 +100,7 @@ class MaskedOlmoEarthSample(NamedTuple):
                 continue
             if key.endswith("mask"):
                 # 1s where it is missing, 0 elsewhere
-                all_but_missing = val == MaskValue.MISSING
+                all_but_missing = val == MaskValue.MISSING.value
                 return_dict[key] = val * all_but_missing
             else:
                 return_dict[key] = val

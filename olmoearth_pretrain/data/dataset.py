@@ -583,6 +583,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        cache_in_memory: bool = False,
     ):
         """Initialize the dataset.
 
@@ -608,6 +609,7 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            cache_in_memory: If True, cache the H5 files in memory.
 
         Returns:
             None
@@ -643,6 +645,8 @@ class OlmoEarthDataset(Dataset):
             self.indices_to_filter = np.load(filter_idx_file)
         else:
             self.indices_to_filter = None
+        self.cache_in_memory = cache_in_memory
+        self._memory_cache: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
 
     @property
     def fingerprint_version(self) -> str:
@@ -961,6 +965,20 @@ class OlmoEarthDataset(Dataset):
                     missing_timesteps_masks = {}
         return sample_dict, missing_timesteps_masks
 
+    def _get_cached_h5_data(
+        self, index: int, h5_file_path: UPath
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Get H5 data, using in-memory cache if enabled."""
+        if self.cache_in_memory and index in self._memory_cache:
+            return self._memory_cache[index]
+
+        sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
+
+        if self.cache_in_memory:
+            self._memory_cache[index] = (sample_dict, missing_timesteps_masks)
+
+        return sample_dict, missing_timesteps_masks
+
     def _get_h5_file_path(self, index: int) -> UPath:
         """Get the h5 file path."""
         return self.h5py_dir / ConvertToH5py.sample_file_pattern.format(index=index)
@@ -999,7 +1017,9 @@ class OlmoEarthDataset(Dataset):
             index = args.idx
         h5_file_path = self._get_h5_file_path(index)
 
-        sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
+        sample_dict, missing_timesteps_masks = self._get_cached_h5_data(
+            index, h5_file_path
+        )
         timestamps, missing_timesteps_masks = self._crop_timestamps_and_masks(
             sample_dict["timestamps"], missing_timesteps_masks
         )
@@ -1067,6 +1087,7 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    cache_in_memory: bool = False
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
