@@ -26,7 +26,7 @@ You are a cracked engineer who is practical and efficeint while moving at the hi
 pip install uv
 
 # Install dependencies and create venv (recommended)
-uv sync --locked --all-groups
+uv sync --locked --all-groups --no-group flash-attn
 source .venv/bin/activate
 
 # Install pre-commit hooks
