@@ -100,32 +100,136 @@ def get_dominant_category(percentages: dict[int, float]) -> int | None:
     return max(percentages.items(), key=lambda x: x[1])[0]
 
 
-def sample_by_dominant_category(
-    files_by_category: dict[int, list[UPath]], samples_per_category: int
+def sample_by_weighted_strategy(
+    files_by_category: dict[int, list[UPath]],
+    total_samples: int,
+    category_weights: dict[int, float],
+    others_weight: float,
 ) -> list[UPath]:
-    """Sample equal number of files for each dominant category.
+    """Sample files according to a weighted strategy.
 
     Args:
         files_by_category: Dictionary mapping category to list of file paths
-        samples_per_category: Number of samples to take per category
+        total_samples: Total number of samples to generate
+        category_weights: Dict mapping specific categories to their target weights (0-1)
+        others_weight: Weight for all other categories combined (0-1)
 
     Returns:
         List of sampled file paths
     """
     sampled_files = []
-    for category, files in files_by_category.items():
-        if len(files) >= samples_per_category:
-            sampled = random.sample(files, samples_per_category)
+    specified_categories = set(category_weights.keys())
+    other_categories = [
+        c for c in files_by_category.keys() if c not in specified_categories
+    ]
+
+    # Sample from specified categories
+    for category, weight in category_weights.items():
+        target_count = int(total_samples * weight)
+        files = files_by_category.get(category, [])
+        if len(files) >= target_count:
+            sampled = random.sample(files, target_count)
         else:
-            # If we don't have enough files, take all of them
             sampled = files
+            print(
+                f"  Warning: Only {len(files)} available for category {category}, needed {target_count}"
+            )
         sampled_files.extend(sampled)
         category_name = WORLDCOVER_CATEGORY_NAMES.get(category, f"unknown_{category}")
         print(
-            f"Category {category} ({category_name}): sampled {len(sampled)} files (out of {len(files)} available)"
+            f"  {category_name}: sampled {len(sampled)} files (target: {target_count})"
         )
 
+    # Sample from "others" using native distribution
+    if others_weight > 0 and other_categories:
+        others_total = int(total_samples * others_weight)
+        # Compute native distribution among other categories
+        other_counts = {c: len(files_by_category[c]) for c in other_categories}
+        total_other_files = sum(other_counts.values())
+
+        if total_other_files > 0:
+            for category in other_categories:
+                native_proportion = other_counts[category] / total_other_files
+                target_count = int(others_total * native_proportion)
+                files = files_by_category[category]
+                if len(files) >= target_count:
+                    sampled = random.sample(files, target_count)
+                else:
+                    sampled = files
+                sampled_files.extend(sampled)
+                category_name = WORLDCOVER_CATEGORY_NAMES.get(
+                    category, f"unknown_{category}"
+                )
+                print(
+                    f"  {category_name} (other): sampled {len(sampled)} files (target: {target_count})"
+                )
+
     return sampled_files
+
+
+def sample_random(
+    files_by_category: dict[int, list[UPath]],
+    total_samples: int,
+) -> list[UPath]:
+    """Random sample maintaining native distribution.
+
+    Args:
+        files_by_category: Dictionary mapping category to list of file paths
+        total_samples: Total number of samples to generate
+
+    Returns:
+        List of sampled file paths
+    """
+    all_files = []
+    for files in files_by_category.values():
+        all_files.extend(files)
+
+    if len(all_files) >= total_samples:
+        sampled = random.sample(all_files, total_samples)
+    else:
+        sampled = all_files
+        print(
+            f"  Warning: Only {len(all_files)} files available, needed {total_samples}"
+        )
+
+    print(f"  Random sampling: {len(sampled)} files")
+    return sampled
+
+
+# Sampling strategies for 10K samples
+SAMPLING_STRATEGIES = {
+    "strategy1": {
+        # 40% tree cover, 40% cropland, 20% others
+        "category_weights": {1: 0.40, 4: 0.40},
+        "others_weight": 0.20,
+        "description": "40% tree_cover, 40% cropland, 20% others",
+    },
+    "strategy2": {
+        # 30% tree cover, 30% cropland, 30% built-up, 10% others
+        "category_weights": {1: 0.30, 4: 0.30, 5: 0.30},
+        "others_weight": 0.10,
+        "description": "30% tree_cover, 30% cropland, 30% built_up, 10% others",
+    },
+    "strategy3": {
+        # 22% tree cover, 22% cropland, 22% grassland, 22% built-up, 8% others
+        "category_weights": {1: 0.22, 4: 0.22, 3: 0.22, 5: 0.22},
+        "others_weight": 0.12,  # 100 - 88 = 12% for others (rounding)
+        "description": "22% tree_cover, 22% cropland, 22% grassland, 22% built_up, 12% others",
+    },
+    "strategy4": {
+        # 50% cropland, 20% tree cover, 20% built-up, 10% others
+        "category_weights": {4: 0.50, 1: 0.20, 5: 0.20},
+        "others_weight": 0.10,
+        "description": "50% cropland, 20% tree_cover, 20% built_up, 10% others",
+    },
+    "strategy5": {
+        # Random sampling (native distribution)
+        "category_weights": {},
+        "others_weight": 0.0,
+        "random": True,
+        "description": "Random sampling (native distribution)",
+    },
+}
 
 
 if __name__ == "__main__":
@@ -139,16 +243,16 @@ if __name__ == "__main__":
         help="Path to directory containing h5 files",
     )
     parser.add_argument(
-        "--samples_per_category",
+        "--total_samples",
         type=int,
-        default=1000,
-        help="Number of samples to take per dominant category",
+        default=10000,
+        help="Total number of samples for weighted strategies",
     )
     parser.add_argument(
-        "--output_npy",
+        "--output_dir",
         type=str,
-        default="sampling_by_category.npy",
-        help="Output NPY file path",
+        default=".",
+        help="Output directory for strategy npy files",
     )
     parser.add_argument(
         "--stats_csv",
@@ -165,8 +269,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_files",
         type=int,
-        default=5000,
-        help="Maximum number of files to process",
+        default=-1,
+        help="Maximum number of files to process (set to -1 for no limit)",
     )
     args = parser.parse_args()
 
@@ -201,8 +305,8 @@ if __name__ == "__main__":
         h5s_to_process = list(path_to_h5s.glob("*.h5"))
         print(f"Found {len(h5s_to_process)} h5 files")
 
-        # Limit to first max_files
-        if len(h5s_to_process) > args.max_files:
+        # Limit to first max_files (unless -1 for no limit)
+        if args.max_files > 0 and len(h5s_to_process) > args.max_files:
             h5s_to_process = h5s_to_process[: args.max_files]
             print(f"Limiting to first {args.max_files} files")
 
@@ -266,28 +370,6 @@ if __name__ == "__main__":
             cat_name = WORLDCOVER_CATEGORY_NAMES.get(cat, f"unknown_{cat}")
             print(f"  Category {cat} ({cat_name}): {avg_percentages[cat]:.2f}%")
 
-    # Step 2: Sample equal numbers per category
-    print(f"\nStep 2: Sampling {args.samples_per_category} files per category...")
-    sampled_files = sample_by_dominant_category(
-        files_by_category, args.samples_per_category
-    )
-
-    print(f"\nTotal sampled files: {len(sampled_files)}")
-
-    # Extract indices from filenames (sample_x.h5 -> x)
-    indices = []
-    for file_path in sampled_files:
-        # Extract index from filename like "sample_123.h5" -> 123
-        filename = file_path.stem  # "sample_123"
-        idx = int(filename.split("_")[1])
-        indices.append(idx)
-
-    indices_array = np.array(indices, dtype=np.int64)
-    output_path = UPath(args.output_npy)
-    np.save(output_path, indices_array)
-
-    print(f"Saved {len(indices_array)} indices to {output_path}")
-
     # Save category statistics only if we computed them fresh
     if category_stats and not stats_path.exists():
         fieldnames = ["filename", "dominant_category", "dominant_category_name"] + [
@@ -300,3 +382,51 @@ if __name__ == "__main__":
             writer.writerows(category_stats)
 
         print(f"Saved category statistics to {stats_path}")
+
+    # Helper function to extract indices and save
+    def extract_and_save_indices(
+        sampled_files: list[UPath], output_path: UPath
+    ) -> None:
+        """Extract indices and save to npy file."""
+        indices = []
+        for file_path in sampled_files:
+            # Extract index from filename like "sample_123.h5" -> 123
+            filename = file_path.stem  # "sample_123"
+            idx = int(filename.split("_")[1])
+            indices.append(idx)
+
+        indices_array = np.array(indices, dtype=np.int64)
+        np.save(output_path, indices_array)
+        print(f"Saved {len(indices_array)} indices to {output_path}")
+
+    # Step 2: Run all 5 sampling strategies
+    print(f"\n{'=' * 60}")
+    print(
+        f"Running all 5 sampling strategies with {args.total_samples} total samples each"
+    )
+    print(f"{'=' * 60}")
+
+    output_dir = UPath(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for strategy_name, strategy_config in SAMPLING_STRATEGIES.items():
+        print(f"\n--- {strategy_name}: {strategy_config['description']} ---")
+
+        # Reset seed for each strategy for reproducibility
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+
+        if strategy_config.get("random", False):
+            sampled_files = sample_random(files_by_category, args.total_samples)
+        else:
+            sampled_files = sample_by_weighted_strategy(
+                files_by_category,
+                args.total_samples,
+                strategy_config["category_weights"],
+                strategy_config["others_weight"],
+            )
+
+        print(f"Total sampled: {len(sampled_files)} files")
+
+        output_path = output_dir / f"{strategy_name}_10k.npy"
+        extract_and_save_indices(sampled_files, output_path)
