@@ -15,8 +15,6 @@ NUM_GPUS=8
 PRIORITY=high
 WANDB_PROJECT=2026_01_13_tokenization_ablations
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 echo "=================================="
 echo "Launching Tokenization Ablations"
 echo "Clusters: ${CLUSTERS}"
@@ -28,7 +26,7 @@ echo ""
 
 # Experiment 1: Single-band tokenization
 echo "Launching experiment 1/3: Single-band tokenization (12 tokens)..."
-python3 "${SCRIPT_DIR}/base_single_band_s2.py" launch base_single_band_s2 ai2/jupiter \
+python3 scripts/official/tokenization_ablations/base_single_band_s2.py launch base_single_band_s2 ai2/jupiter \
   --launch.num_gpus=${NUM_GPUS} \
   --launch.clusters="${CLUSTERS}" \
   --launch.priority=${PRIORITY} \
@@ -38,7 +36,7 @@ echo ""
 
 # Experiment 2: Spectral grouping tokenization
 echo "Launching experiment 2/3: Spectral grouping tokenization (5 tokens)..."
-python3 "${SCRIPT_DIR}/base_spectral_grouping.py" launch base_spectral_grouping ai2/jupiter \
+python3 scripts/official/tokenization_ablations/base_spectral_grouping.py launch base_spectral_grouping ai2/jupiter \
   --launch.num_gpus=${NUM_GPUS} \
   --launch.clusters="${CLUSTERS}" \
   --launch.priority=${PRIORITY} \
@@ -48,7 +46,7 @@ echo ""
 
 # Experiment 3: All bands in single token
 echo "Launching experiment 3/3: All bands in single token (1 token)..."
-python3 "${SCRIPT_DIR}/base_all_bands_single_token.py" launch base_all_bands_single_token ai2/jupiter \
+python3 scripts/official/tokenization_ablations/base_all_bands_single_token.py launch base_all_bands_single_token ai2/jupiter \
   --launch.num_gpus=${NUM_GPUS} \
   --launch.clusters="${CLUSTERS}" \
   --launch.priority=${PRIORITY} \
