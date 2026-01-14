@@ -4,78 +4,39 @@ description: Use when user asks to debug beaker experiments, fix failed jobs, ch
 
 # Debugging Beaker Experiments
 
-## When to Use
-Use this workflow when the user reports a failed Beaker experiment and needs help debugging.
-
-## Step 1: Find the Experiment
-
-If the user provides an experiment ID, use it directly. Otherwise, search by name:
-
+## Quick Commands
 ```bash
-# Search experiments by name pattern in workspace
+# Find experiment
 beaker workspace experiments ai2/earth-systems --text "<search_term>"
 
-# Common search patterns:
-# - By username: --text "henryh"
-# - By project: --text "tokenization"
-# - By script name: --text "base_single_band"
-```
-
-You should look at the scripts they might have launched experiments with to find the relevant prefixes or search terms.
-## Step 2: Get Experiment Logs
-
-```bash
-# Get logs for all tasks in the experiment (most common)
+# Get logs (most common)
 beaker experiment logs <EXPERIMENT_ID> 2>&1 | tail -300
 
-# If you need more context, increase the tail limit
-beaker experiment logs <EXPERIMENT_ID> 2>&1 | tail -500
-```
-
-For longer files consider writing ad much of the file as possible to a temporary file and then iteratively summarizing
-
-## Step 3: Get Experiment Details (if needed)
-
-```bash
-# Get full experiment metadata including job IDs, status, exit codes
+# Get metadata
 beaker experiment get <EXPERIMENT_ID> --format json
 ```
 
-## Step 4: Analyze the Error
-
-Look for these common patterns in the logs:
+## Common Error Patterns
 
 1. **Python Tracebacks** - Look for `Traceback (most recent call last)` and follow to the actual error
-2. **Shape Mismatches** - einops errors like `EinopsError: Shape mismatch` often indicate tensor dimension issues
+2. **Shape Mismatches** - einops `EinopsError: Shape mismatch` → tensor dimension issues
 3. **Import Errors** - Missing modules or circular imports
 4. **CUDA/GPU Errors** - OOM, device mismatch, NCCL errors
 5. **Config Errors** - Invalid configuration values
 
-If a python error or shape mismatch write a small unit test to reproduce and then solve. If the error is more complex or needs multi-gpu to reproduce don't write a test.
+## Debugging Workflow
 
-## Step 5: Summarize Findings
+1. **Get logs**: `beaker experiment logs <EXP_ID> 2>&1 | tail -300`
+2. **Find the error**: Look for traceback, identify file and line
+3. **Read relevant code**: Use the file/line from traceback
+4. **For Python/shape errors**: Write a small unit test to reproduce, then fix
+5. **For multi-GPU errors**: Suggest how to reproduce and propose a fix directly without test (can't reproduce locally)
 
-After reading the logs, provide:
-1. **Root Cause**: The actual error and why it happened
-2. **Location**: File and line number where the error occurred
-3. **Context**: What was being executed (training, eval, etc.)
-
-## Step 6: Propose Fix
-
-Based on the error analysis:
-1. Read the relevant source files to understand the code
-2. Identify the minimal fix needed
-3. Make the changes
-4. Run relevant tests to verify the fix
-
-## Quick Reference
-
-| Command | Purpose |
-|---------|---------|
-| `beaker workspace experiments <workspace> --text "<pattern>"` | Find experiments by name |
-| `beaker experiment logs <EXP_ID>` | Get logs for experiment |
-| `beaker experiment get <EXP_ID> --format json` | Get full experiment details |
-| `beaker experiment tasks <EXP_ID>` | List tasks with job IDs |
+## Summarize Findings
+Provide:
+- **Root Cause**: The actual error and why
+- **Location**: File and line number
+- **Context**: What was being executed (training, eval, etc.)
 
 ## Example Workflow
 

@@ -4,156 +4,43 @@ description: Use when creating new pretraining experiments, modifying model arch
 
 # Experiment Development
 
----
+## Key Files to Reference
+- **Canonical experiment script**: `scripts/official/base.py` - copy and modify `build_model_config()`
+- **Shared builders**: `scripts/official/script.py` - common configs for dataloader, trainer, etc.
+- **Main entrypoint**: `olmoearth_pretrain/internal/experiment.py` - handles `launch` → `train` flow
+- **Config pattern examples**: `olmoearth_pretrain/nn/flexi_vit.py` (see `EncoderConfig`, `PredictorConfig`)
+- **Model size presets**: `olmoearth_pretrain/internal/utils.py` → `MODEL_SIZE_ARGS`
+- **Modality enum**: `olmoearth_pretrain/data/constants.py` → `Modality`
 
-## Codebase Conventions
-
-### Config Pattern
-All configurable components follow the `Config` → `build()` pattern:
-
-```python
-@dataclass
-class MyEncoderConfig(Config):
-    embedding_size: int = 768
-    supported_modality_names: list[str]
-
-    def validate(self) -> None:
-        # Check invariants
-        ...
-
-    def build(self) -> "MyEncoder":
-        self.validate()
-        return MyEncoder(**self.as_dict())
-```
+## Config Pattern
+All configurable components follow `Config` → `build()`. See `EncoderConfig` in `olmoearth_pretrain/nn/flexi_vit.py` for the canonical pattern.
 
 **Key rules:**
 - Configs are `@dataclass` subclasses of `Config`
 - `build()` validates then constructs the object
 - Use `as_dict(exclude_none=True, recurse=False)` for kwargs
-- Nested configs call `.build()` on their sub-configs
+- **Always subclass, never modify base classes**
 
-### Model Size Presets
-Use `MODEL_SIZE_ARGS` from `olmoearth_pretrain.internal.utils`:
-
-```python
-from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
-
-model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-# Returns: encoder_embedding_size, decoder_embedding_size, encoder_depth,
-#          decoder_depth, encoder_num_heads, decoder_num_heads, mlp_ratio
-```
-
-Available sizes: `nano`, `tiny`, `base`, `large`, `giga` (and `*_shallow_decoder` variants)
-
-### Experiment Script Structure
-Scripts in `scripts/official/` use builder functions injected into `main()`:
-
-```python
-from script import (
-    build_common_components,      # Shared: modalities, save paths, launch config
-    build_dataloader_config,      # DataLoader settings
-    build_dataset_config,         # Dataset paths
-    build_train_module_config,    # Optimizer, loss, masking, scheduler
-    build_trainer_config,         # Callbacks, checkpointing, W&B
-    build_visualize_config,       # Optional visualization
-)
-from olmoearth_pretrain.internal.experiment import main
-
-def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    # YOUR CUSTOM MODEL CONFIG HERE
-    ...
-
-if __name__ == "__main__":
-    main(
-        common_components_builder=build_common_components,
-        model_config_builder=build_model_config,  # Only this differs
-        train_module_config_builder=build_train_module_config,
-        dataset_config_builder=build_dataset_config,
-        dataloader_config_builder=build_dataloader_config,
-        trainer_config_builder=build_trainer_config,
-        visualize_config_builder=build_visualize_config,
-    )
-```
-
-### CommonComponents
-Passed to all builders. Contains:
-- `run_name`: Experiment identifier
-- `save_folder`: Checkpoint/artifact path
-- `training_modalities`: List of `Modality.*.name` strings
-- `launch`: Beaker launch config (or None for local)
-
-### Modalities
-Use `Modality` enum from `olmoearth_pretrain.data.constants`:
-
-```python
-from olmoearth_pretrain.data.constants import Modality
-
-training_modalities = [
-    Modality.SENTINEL2_L2A.name,
-    Modality.SENTINEL1.name,
-    Modality.LANDSAT.name,
-    # ...
-]
-```
-
-### Subclassing for New Architectures
-**Always subclass, never modify base classes:**
-
-```python
-# ✅ GOOD: Extend existing encoder
-class EncoderWithNewFeature(Encoder):
-    def __init__(self, new_param: int, **kwargs):
-        super().__init__(**kwargs)
-        self.new_layer = nn.Linear(...)
-
-@dataclass
-class EncoderWithNewFeatureConfig(EncoderConfig):
-    new_param: int = 64
-
-    def build(self) -> "EncoderWithNewFeature":
-        self.validate()
-        kwargs = self.as_dict(exclude_none=True, recurse=False)
-        kwargs.pop("supported_modality_names")
-        kwargs["supported_modalities"] = self.supported_modalities
-        return EncoderWithNewFeature(**kwargs)
-```
-
----
+## Experiment Script Structure
+Scripts in `scripts/official/` inject builder functions into `main()`. Write/modify the builder for the component you're changing (e.g., `build_model_config()` for architecture changes, `build_train_module_config()` for loss/optimizer changes). See `scripts/official/base.py` as the template.
 
 ## Launch Configuration
 
-The main entrypoint is `olmoearth_pretrain/internal/experiment.py`. When you run with `launch`, it submits to Beaker which then runs the same script with `train` subcommand.
-
-**Always use repo-relative paths** - run from repo root:
-```bash
-python3 scripts/official/your_script.py launch ...
-```
-
-### Dry Run First
-Always test config generation before launching:
+When you run with `launch`, it submits to Beaker which runs the same script with `train` subcommand.
 
 ```bash
+# Dry run first - always test config generation
 python3 scripts/official/your_script.py dry_run run_name local
-```
 
-### Launch Command
-
-```bash
+# Launch to Beaker
 python3 scripts/official/your_script.py launch run_name ai2/jupiter \
   --launch.num_gpus=8 \
   --launch.clusters="[ai2/jupiter,ai2/ceres]" \
-  --launch.priority=normal \
   --trainer.callbacks.wandb.project=YYYY_MM_DD_experiment_name
 ```
 
 ### CLI Overrides
-Use dotlist notation for any config field:
-
-```bash
---model.encoder_config.depth=24
---train_module.optim_config.lr=0.0002
---common.training_modalities="[sentinel2_l2a,sentinel1]"
-```
+Use dotlist notation: `--model.encoder_config.depth=24`
 
 ---
 
@@ -162,14 +49,6 @@ Use dotlist notation for any config field:
 **⚠️ CRITICAL: Always commit and push before launching Beaker jobs**
 
 Beaker pulls code from the repository, so uncommitted changes won't be included!
-
-```bash
-git checkout -b username/experiment-name
-git add <files>
-git commit -m "Add experiment description"
-git push origin username/experiment-name
-# NOW launch
-```
 
 ---
 

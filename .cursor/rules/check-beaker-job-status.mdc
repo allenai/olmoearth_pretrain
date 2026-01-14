@@ -4,36 +4,20 @@ description: Use when user asks to check beaker job status, monitor experiments,
 
 # Checking Beaker Job Status
 
-## When to Use
-Use this workflow when the user wants to check the status of their running or recent Beaker experiments.
-
-## Step 1: Find Experiments
-
+## Quick Commands
 ```bash
-# List experiments in workspace (most recent first)
+# Find experiments
 beaker workspace experiments ai2/earth-systems --text "<search_term>"
 
-# Common search patterns:
-# - By username: --text "henryh"
-# - By project: --text "tokenization"
-# - By date pattern in name: --text "2026_01"
-```
-
-Output shows: ID, NAME, WORKSPACE, AUTHOR, CREATED, STATUS, BUDGET
-
-## Step 2: Check Experiment Status
-
-```bash
-# Quick status check (text format)
+# Check status
 beaker experiment get <EXPERIMENT_ID>
-
-# Detailed status with timestamps (json format)
 beaker experiment get <EXPERIMENT_ID> --format json
+
+# Monitor running job
+beaker experiment logs <EXPERIMENT_ID>
 ```
 
-## Step 3: Report Status to User
-
-**ALWAYS report the status clearly using one of these categories:**
+## Status Mapping
 
 | Status in Output | Report As | Meaning |
 |------------------|-----------|---------|
@@ -44,58 +28,22 @@ beaker experiment get <EXPERIMENT_ID> --format json
 | `preempted` | **PREEMPTED** | Interrupted, may resume |
 | `canceled` | **CANCELED** | Manually stopped |
 
-**Example status report format:**
-```
-Experiment: base_all_bands_single_token-train-366f1c59
-Status: **FAILED** (exit code 1)
-Created: 2026-01-14 08:21:41
-Started: 2026-01-14 08:57:29
-Exited: 2026-01-14 08:59:23
-Duration: ~2 minutes
-```
-
 ## How to Determine Status from JSON
 
-```bash
-beaker experiment get <EXP_ID> --format json
-```
-
-Look at the `jobs[0].status` object:
+Look at `jobs[0].status`:
 - **QUEUED**: Has `created` but no `started`
 - **RUNNING**: Has `started` but no `exited`
 - **FAILED**: Has `exited` and `exitCode` != 0
 - **SUCCEEDED**: Has `exited` and `exitCode` == 0
 
-## Step 4: Check Individual Tasks/Jobs
+## Key JSON Fields
+- `status.exitCode` - 0 = success, non-zero = failure
+- `status.created` - When submitted
+- `status.started` - When began running
+- `status.exited` - When finished
+- `description` - Often contains W&B progress info
 
-```bash
-# List all tasks in an experiment
-beaker experiment tasks <EXPERIMENT_ID>
-
-# Get details for a specific job
-beaker job get <JOB_ID> --format json
-```
-
-## Step 5: Monitor Progress (for running jobs)
-
-```bash
-# Watch logs in real-time (useful for running experiments)
-beaker experiment logs <EXPERIMENT_ID>
-
-# Check experiment description (often contains progress info like step count)
-beaker experiment get <EXPERIMENT_ID> --format json | grep description
-```
-
-## Quick Reference
-
-| Command | Purpose |
-|---------|---------|
-| `beaker workspace experiments <workspace> --text "<pattern>"` | List/search experiments |
-| `beaker experiment get <EXP_ID>` | Get experiment status |
-| `beaker experiment tasks <EXP_ID>` | List tasks with their status |
-| `beaker job get <JOB_ID>` | Get specific job details |
-
-## Example: Check All Recent Experiments
+## Example Workflow
 
 ```bash
 # Find your recent experiments
@@ -111,11 +59,12 @@ beaker workspace experiments ai2/earth-systems --text "henryh"
 beaker experiment get 01KEYMZQQCW6SW71H8R7W2FD87 --format json
 ```
 
-## Key Fields in JSON Output
-
-When using `--format json`, key fields to look at:
-- `status.exitCode` - 0 = success, non-zero = failure
-- `status.created` - When experiment was submitted
-- `status.started` - When it actually began running
-- `status.exited` - When it finished (if done)
-- `description` - Often contains progress info from wandb
+**Example status report:**
+```
+Experiment: base_all_bands_single_token-train-366f1c59
+Status: **FAILED** (exit code 1)
+Created: 2026-01-14 08:21:41
+Started: 2026-01-14 08:57:29
+Exited: 2026-01-14 08:59:23
+Duration: ~2 minutes
+```
