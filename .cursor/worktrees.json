@@ -1,3 +1,7 @@
 {
-  "setup-worktree": []
+  "setup-worktree": [
+    "pip install uv",
+    "uv sync --locked --all-groups",
+    "source .venv/bin/activate"
+  ]
 }

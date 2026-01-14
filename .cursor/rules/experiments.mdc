@@ -1,7 +1,8 @@
-# Experiment Development
+---
+description: Use when creating new pretraining experiments, modifying model architecture, launching training jobs, writing experiment scripts, or working with configs in scripts/official/
+---
 
-## When to Use
-Use when creating new pretraining experiments or modifying model architecture.
+# Experiment Development
 
 ---
 
