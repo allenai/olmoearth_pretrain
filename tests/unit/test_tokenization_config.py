@@ -181,9 +181,7 @@ class TestTokenizationConfig:
         config = TokenizationConfig(
             overrides={
                 "sentinel2_l2a": ModalityTokenization(
-                    band_groups=[
-                        TokenizationBandSet(bands=[band]) for band in s2_bands
-                    ]
+                    band_groups=[TokenizationBandSet(bands=[band]) for band in s2_bands]
                 )
             }
         )

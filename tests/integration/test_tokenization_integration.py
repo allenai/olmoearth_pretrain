@@ -1,7 +1,6 @@
 """Integration tests for encoder with custom tokenization."""
 
 import pytest
-import torch
 
 from olmoearth_pretrain.data.constants import (
     Modality,
@@ -9,7 +8,7 @@ from olmoearth_pretrain.data.constants import (
     TokenizationBandSet,
     TokenizationConfig,
 )
-from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig
+from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
 
 
 class TestEncoderWithCustomTokenization:
@@ -75,7 +74,7 @@ class TestEncoderWithCustomTokenization:
             # Note: no tokenization_config field
         }
 
-        config = EncoderConfig(**old_config_dict)
+        config = EncoderConfig.from_dict(old_config_dict)
         encoder = config.build()
 
         # Should have 3 bandsets for sentinel2_l2a (the default)

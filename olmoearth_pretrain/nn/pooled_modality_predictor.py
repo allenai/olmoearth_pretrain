@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
 
-from olmoearth_pretrain.data.constants import BASE_GSD, Modality, TokenizationConfig
+from olmoearth_pretrain.data.constants import BASE_GSD, Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.attention import Mlp

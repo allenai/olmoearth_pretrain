@@ -896,10 +896,18 @@ class CompositeEncodings(nn.Module):
         device = modality_tokens.device
         modality_embed = torch.zeros(modality_tokens.shape, device=device)
         n = self.embedding_dim_per_embedding_type
+        actual_bandsets = modality_tokens.shape[-2]
 
         # Channel embeddings
         if use_modality_encodings:
             channel_embed = self.per_modality_channel_embeddings[modality.name]
+            if channel_embed.shape[0] != actual_bandsets:
+                raise ValueError(
+                    f"Channel embeddings for {modality.name} expect "
+                    f"{channel_embed.shape[0]} bandsets but tokens have "
+                    f"{actual_bandsets}. Ensure tokenization_config is "
+                    "consistently passed to the encoder/decoder and masking strategy."
+                )
             channel_embed = repeat(
                 channel_embed, f"b_s d -> {ein_string}", **ein_dict
             ).to(device)
