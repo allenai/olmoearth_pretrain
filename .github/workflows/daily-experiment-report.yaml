@@ -12,14 +12,6 @@ on:
         description: 'Comma-separated list of usernames (leave empty to use config file)'
         required: false
         default: ''
-  # Remove this after testing:
-  push:
-    branches:
-      - 'henryh/**'  # Runs on pushes to your branches
-    paths:
-      - '.github/workflows/daily-experiment-report.yaml'
-      - '.github/experiment-report-users.json'
-      - '.cursor/rules/daily-experiment-report.mdc'
 
 jobs:
   # First job: read the user list
