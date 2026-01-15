@@ -60,10 +60,11 @@ jobs:
           curl https://cursor.com/install -fsS | bash
           echo "$HOME/.cursor/bin" >> $GITHUB_PATH
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Install Beaker CLI
-        run: |
-          curl -s https://beaker.org/install.sh | bash
-          echo "$HOME/.beaker/bin" >> $GITHUB_PATH
+        run: uv tool install beaker-py
 
       - name: Install jq
         run: sudo apt-get install -y jq
