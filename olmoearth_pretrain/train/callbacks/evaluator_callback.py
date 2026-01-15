@@ -90,6 +90,9 @@ class DownstreamTaskConfig:
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
+    # Matryoshka evaluation: run probe at multiple embedding truncations
+    # e.g. [48, 96, 192, 384, 768] to track MRL effectiveness
+    matryoshka_dims: list[int] | None = None
 
 
 class DownstreamEvaluator:
@@ -146,6 +149,7 @@ class DownstreamEvaluator:
         self.select_final_test_miou_based_on_epoch_of_max_val_miou = (
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
+        self.matryoshka_dims = task.matryoshka_dims
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -325,6 +329,36 @@ class DownstreamEvaluator:
             "bootstrap_seed": self.bootstrap_seed,
         }
         result = self.eval_function(**kwargs)  # type: ignore
+
+        # Run Matryoshka multi-dim evaluation if configured
+        if self.matryoshka_dims is not None:
+            matryoshka_results = {}
+            for dim in self.matryoshka_dims:
+                logger.info(
+                    f"Running Matryoshka eval at dim {dim} for {self.dataset}..."
+                )
+                dim_kwargs = {
+                    "config": self.config,
+                    "train_embeddings": train_embeddings[..., :dim],
+                    "train_labels": train_labels,
+                    "val_embeddings": val_embeddings[..., :dim],
+                    "val_labels": val_labels,
+                    "test_embeddings": (
+                        test_embeddings[..., :dim]
+                        if test_embeddings is not None
+                        else None
+                    ),
+                    "test_labels": test_labels,
+                    "device": self.device,
+                    "n_bootstrap": self.n_bootstrap,
+                    "bootstrap_seed": self.bootstrap_seed,
+                }
+                dim_result = self.eval_function(**dim_kwargs)  # type: ignore
+                matryoshka_results[f"dim_{dim}"] = dim_result
+                logger.info(
+                    f"Matryoshka dim {dim} val_score: {dim_result.get('val_score', 'N/A')}"
+                )
+            result["matryoshka"] = matryoshka_results
 
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
@@ -576,6 +610,20 @@ class DownstreamEvaluatorCallback(Callback):
                 wandb_callback.wandb.log(
                     {"eval/test/" + evaluator.evaluation_name: test_result}
                 )
+
+        # Log Matryoshka multi-dim results if available
+        matryoshka_results = result.get("matryoshka")
+        if matryoshka_results and wandb_callback.enabled:
+            for dim_key, dim_result in matryoshka_results.items():
+                dim_val = dim_result.get("val_score", 0)
+                dim_test = dim_result.get("test_score", 0)
+                wandb_callback.wandb.log(
+                    {f"eval/{evaluator.evaluation_name}_{dim_key}": dim_val}
+                )
+                if self.run_on_test and dim_test > 0:
+                    wandb_callback.wandb.log(
+                        {f"eval/test/{evaluator.evaluation_name}_{dim_key}": dim_test}
+                    )
 
     def pre_train(self) -> None:
         """Run the evaluators on startup."""

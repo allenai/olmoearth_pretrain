@@ -759,6 +759,91 @@ class InfoNCELoss(Loss):
         return self.weight * F.cross_entropy(logits / self.tau, labels)
 
 
+@LOSS_REGISTRY.register("MatryoshkaInfoNCE")
+class MatryoshkaInfoNCELoss(Loss):
+    """InfoNCE with Matryoshka Representation Learning.
+
+    Computes contrastive loss at multiple embedding dimensions,
+    encouraging representations to be useful at all granularities.
+    """
+
+    name = "MatryoshkaInfoNCE"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        weight: float = 1.0,
+        dims: list[int] | None = None,
+        relative_weights: list[float] | None = None,
+    ):
+        """Initialize Matryoshka InfoNCE loss.
+
+        Args:
+            tau: softmax temperature
+            weight: overall weight for this loss
+            dims: embedding dimensions to use, e.g. [48, 96, 192, 384, 768]
+                  If None, auto-generates by halving from full dim down to 48
+            relative_weights: optional per-dimension weights (same length as dims).
+                              If None, uses uniform weighting.
+        """
+        self.tau = tau
+        self.weight = weight
+        self.dims = dims
+        self.relative_weights = relative_weights
+
+    def compute(
+        self, predictions: torch.Tensor, targets: torch.Tensor, **kwargs: Any
+    ) -> Tensor:
+        """Compute Matryoshka InfoNCE between predictions and targets.
+
+        Args:
+            predictions: (B, D) model predictions
+            targets: (B, D) ground truth targets
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        full_dim = predictions.shape[-1]
+
+        # Auto-generate dims if not provided: halve until 48
+        if self.dims is None:
+            dims = []
+            d = full_dim
+            while d >= 48:
+                dims.append(d)
+                d = d // 2
+            dims = sorted(dims)
+        else:
+            dims = self.dims
+
+        # Validate relative weights
+        if self.relative_weights is not None:
+            assert len(self.relative_weights) == len(dims)
+            rel_weights = self.relative_weights
+        else:
+            rel_weights = [1.0] * len(dims)
+
+        total_loss = predictions.new_zeros(())
+        for dim, rel_w in zip(dims, rel_weights):
+            # Truncate to first `dim` dimensions
+            pred_trunc = predictions[..., :dim]
+            tgt_trunc = targets[..., :dim]
+
+            # Normalize and compute similarity
+            pred_norm = F.normalize(pred_trunc, p=2, dim=-1)
+            tgt_norm = F.normalize(tgt_trunc, p=2, dim=-1)
+            logits = pred_norm @ tgt_norm.transpose(-2, -1)
+
+            labels = torch.arange(len(predictions), device=predictions.device)
+            loss = F.cross_entropy(logits / self.tau, labels)
+            total_loss = total_loss + rel_w * loss
+
+        # Average across dimensions
+        total_loss = total_loss / sum(rel_weights)
+        return self.weight * total_loss
+
+
 @LOSS_REGISTRY.register("KoLeo")
 class KoLeoLoss(Loss):
     """Loss function for cross entropy.

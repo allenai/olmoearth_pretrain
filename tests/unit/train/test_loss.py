@@ -11,6 +11,7 @@ from olmoearth_pretrain.train.loss import (
     InfoNCELoss,
     L1Loss,
     L2Loss,
+    MatryoshkaInfoNCELoss,
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
 )
@@ -238,3 +239,39 @@ def test_infonce_loss() -> None:
     loss = InfoNCELoss(weight=0.1)
     w_loss_value = loss.compute(torch.ones((b, d)), torch.zeros((b, d)))
     assert 0.1 * loss_value == w_loss_value
+
+
+def test_matryoshka_infonce_loss() -> None:
+    """Test Matryoshka InfoNCE loss with MRL."""
+    b, d = 16, 768
+
+    # Test auto-dim generation
+    loss = MatryoshkaInfoNCELoss()
+    preds = torch.randn((b, d))
+    targets = torch.randn((b, d))
+    loss_value = loss.compute(preds, targets)
+    assert loss_value > 0
+    assert loss_value.requires_grad
+
+    # Test explicit dims
+    loss_explicit = MatryoshkaInfoNCELoss(dims=[48, 192, 768])
+    loss_value_explicit = loss_explicit.compute(preds, targets)
+    assert loss_value_explicit > 0
+
+    # Test weight parameter
+    loss_weighted = MatryoshkaInfoNCELoss(weight=0.1)
+    loss_value_weighted = loss_weighted.compute(preds, targets)
+    loss_value_unweighted = MatryoshkaInfoNCELoss(weight=1.0).compute(preds, targets)
+    assert torch.isclose(loss_value_weighted, 0.1 * loss_value_unweighted)
+
+    # Test relative weights
+    loss_rel = MatryoshkaInfoNCELoss(dims=[48, 768], relative_weights=[1.0, 2.0])
+    loss_rel_value = loss_rel.compute(preds, targets)
+    assert loss_rel_value > 0
+
+    # Test that identical preds/targets give lower loss than random
+    identical_preds = torch.randn((b, d))
+    loss_identical = loss.compute(identical_preds, identical_preds.clone())
+    loss_random = loss.compute(torch.randn((b, d)), torch.randn((b, d)))
+    # Identical should have much lower loss (near 0)
+    assert loss_identical < loss_random
