@@ -81,5 +81,5 @@ jobs:
           fi
 
           agent \
-            --model claude-opus-4-5-20250514 \
+            --model auto \
             -p "Follow the instructions in .cursor/rules/daily-experiment-report.mdc to generate and send the daily experiment status report for user '$REPORT_USER'. You have access to beaker, gh, and curl commands."
