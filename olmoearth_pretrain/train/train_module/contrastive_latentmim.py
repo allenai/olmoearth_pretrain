@@ -24,7 +24,7 @@ from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
 )
-from olmoearth_pretrain.train.utils import split_batch
+from olmoearth_pretrain.train.utils import check_input, split_batch
 
 logger = getLogger(__name__)
 
@@ -214,6 +214,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     self.transform.apply(microbatch).to_device(self.device),
                     patch_size=patch_size,
                 )
+                check_input(masked_batch_a, patch_size)
+                check_input(masked_batch_b, patch_size)
+
                 # Run Encoder and decoder on the augmented input
                 loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)

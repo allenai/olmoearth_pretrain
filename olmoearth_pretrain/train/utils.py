@@ -4,10 +4,55 @@ import logging
 import os
 
 import psutil
+import torch
 
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
+
+
+def check_input(masked_batch: MaskedOlmoEarthSample, patch_size: int) -> None:
+    """Check if any samples in a batch don't have encoder or decoder tokens.
+
+    We raise an error if this is the case.
+    """
+    encoded: torch.Tensor | None = None
+    decoded: torch.Tensor | None = None
+    shape: torch.Size | None = None
+    for key, value in masked_batch.as_dict(return_none=False).items():
+        if key.endswith("mask"):
+            assert isinstance(value, torch.Tensor)
+            flat_mask = torch.flatten(value, start_dim=1)
+            encoded_for_modality = (flat_mask == MaskValue.ONLINE_ENCODER.value).sum(
+                dim=-1
+            )
+            decoded_for_modality = (flat_mask == MaskValue.DECODER.value).sum(dim=-1)
+            if encoded is None:
+                encoded = encoded_for_modality
+            else:
+                encoded += encoded_for_modality
+
+            if decoded is None:
+                decoded = decoded_for_modality
+            else:
+                decoded += decoded_for_modality
+
+            if shape is None:
+                shape = value.shape
+            elif len(value.shape) > len(shape):
+                shape = value.shape
+
+    if (encoded_for_modality == 0).any():
+        raise RuntimeError(
+            f"Got 0 encoded tokens for batch with {masked_batch.modalities}, "
+            f"with shape {shape} and patch size {patch_size}"
+        )
+    if (decoded_for_modality == 0).any():
+        raise RuntimeError(
+            f"Got 0 decoded tokens for batch with {masked_batch.modalities}, "
+            f"with shape {shape} and patch size {patch_size}"
+        )
 
 
 def split_batch(batch: OlmoEarthSample, microbatch_size: int) -> list[OlmoEarthSample]:
