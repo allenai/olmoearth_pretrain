@@ -68,12 +68,15 @@ class LatentMIM(nn.Module, DistributedMixins):
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         output_dict = self.encoder(x, patch_size=patch_size)
         token_norm_stats = output_dict.pop("token_norm_stats", None)
+        latlon_predictions = output_dict.pop("latlon_predictions", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
         )
         extra_metrics = {}
         if token_norm_stats is not None:
             extra_metrics["token_norm_stats"] = token_norm_stats
+        if latlon_predictions is not None:
+            extra_metrics["latlon_predictions"] = latlon_predictions
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)

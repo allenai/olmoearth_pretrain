@@ -1256,6 +1256,9 @@ class Encoder(FlexiVitBase):
             num_layers=num_projection_layers,
             aggregate_then_project=aggregate_then_project,
         )
+
+        # 3 because we will transform to x,y,z
+        self.latlon_predictor = nn.Linear(self.embedding_size, 3)
         self.norm = nn.LayerNorm(self.embedding_size)
         self.apply(self._init_weights)
 
@@ -1677,7 +1680,11 @@ class Encoder(FlexiVitBase):
             output_dict["token_norm_stats"] = token_norm_stats
 
         if not fast_pass:
-            output_dict["project_aggregated"] = self.project_and_aggregate(output)
+            project_and_aggregate = self.project_and_aggregate(output)
+            output_dict["project_aggregated"] = project_and_aggregate
+            output_dict["latlon_prediction"] = self.latlon_predictor(
+                project_and_aggregate
+            )
         return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:

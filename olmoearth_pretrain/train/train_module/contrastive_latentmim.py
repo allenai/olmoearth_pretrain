@@ -1,5 +1,6 @@
 """Training and optimizer abstraction for OlmoEarth Pretrain."""
 
+import math
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
@@ -11,6 +12,7 @@ from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
+from torch.nn.functional import mse_loss
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
@@ -53,6 +55,7 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
     reinit_targets: bool = False
+    latlon_prediction_weight: float = 0.1
 
     def build(
         self,
@@ -103,6 +106,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
+        latlon_prediction_weight: float = 0.1,
     ):
         """Initialize the training module.
 
@@ -130,6 +134,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
+            latlon_prediction_weight: the weight to assign to the latlon rmse
         """
         super().__init__(
             model=model,
@@ -171,6 +176,21 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 )
             self.model.target_encoder.apply(self.model.target_encoder._init_weights)
 
+        self.latlon_prediction_weight = latlon_prediction_weight
+
+    @staticmethod
+    def to_cartesian(latlons: torch.Tensor) -> torch.Tensor:
+        """lat, lon to x,y,z."""
+        with torch.no_grad():
+            # an embedding is calculated for all timesteps. This is then expanded
+            # for each timestep in the sequence
+            latlon_radians = latlons * math.pi / 180
+            lats, lons = latlon_radians[:, 0], latlon_radians[:, 1]
+            x = torch.cos(lats) * torch.cos(lons)
+            y = torch.cos(lats) * torch.sin(lons)
+            z = torch.sin(lats)
+        return torch.stack([x, y, z], dim=-1)
+
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
@@ -197,6 +217,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.tensor(0.0, device=self.device)
+        total_batch_latlon = torch.tensor(0.0, device=self.device)
         patch_size, batch_data = batch
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
@@ -215,12 +236,22 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     patch_size=patch_size,
                 )
                 # Run Encoder and decoder on the augmented input
-                loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
-                    self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
-                )
-                loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
-                    self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
-                )
+                (
+                    loss_a,
+                    latent_a,
+                    decoded_a,
+                    target_output_a,
+                    pooled_a,
+                    latlon_preds_a,
+                ) = self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
+                (
+                    loss_b,
+                    latent_b,
+                    decoded_b,
+                    target_output_b,
+                    pooled_b,
+                    latlon_preds_b,
+                ) = self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 loss = (loss_a + loss_b) / 2
 
                 # Scale loss by number of microbatches
@@ -242,6 +273,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     total_batch_con += (
                         get_local_tensor(contrastive_loss.detach()) / num_microbatches
                     )
+
+                if self.latlon_prediction_weight > 0:
+                    latlon_targets = self.to_cartesian(masked_batch_a.latlon)
+                    latlon_loss = (
+                        mse_loss(latlon_preds_a, latlon_targets)
+                        + mse_loss(latlon_preds_b, latlon_targets)
+                    ) / 2
+                    total_batch_latlon += (
+                        get_local_tensor(contrastive_loss.detach()) / num_microbatches
+                    )
+                    loss += self.latlon_prediction_weight * latlon_loss
 
                 loss = loss / num_microbatches
                 loss_val = get_local_tensor(loss.detach())
@@ -283,7 +325,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         patch_size: int,
         token_exit_cfg: dict[str, int],
     ) -> tuple[
-        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        torch.Tensor,
+        torch.Tensor,
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
@@ -295,7 +342,11 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 extra_metrics,
             ) = self.model(batch, patch_size)
             if extra_metrics is not None:
+                # remove latlon predictions
+                latlon_preds = extra_metrics.pop("latlon_predictions", None)
                 self.log_extra_metrics(extra_metrics)
+            else:
+                raise RuntimeError("Expected latlon preds in extra metrics")
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(
@@ -307,4 +358,11 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output, latent_projected_and_pooled
+            return (
+                loss,
+                latent,
+                decoded,
+                target_output,
+                latent_projected_and_pooled,
+                latlon_preds,
+            )
