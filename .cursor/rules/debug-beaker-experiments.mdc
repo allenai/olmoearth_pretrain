@@ -5,9 +5,24 @@ description: Use when user asks to debug beaker experiments, fix failed jobs, ch
 # Debugging Beaker Experiments
 
 ## Quick Commands
+
+See `check-beaker-job-status.mdc` for detailed Beaker RPC API reference.
+
 ```bash
-# Find experiment
-beaker workspace experiments ai2/earth-systems --text "<search_term>"
+# Get current user's author ID
+AUTHOR_ID=$(beaker account whoami --format json | jq -r '.[0].id')
+
+# Find experiments (use RPC API for filtering)
+beaker rpc call ListWorkloads '{
+  "options": {
+    "authorId": "'"$AUTHOR_ID"'",
+    "organizationId": "us_wvnghctl47k0",
+    "workloadType": "WORKLOAD_TYPE_EXPERIMENT",
+    "nameOrDescriptionSubstring": "<search_term>",
+    "status": "STATUS_FAILED",
+    "pageSize": 20
+  }
+}'
 
 # Get logs (most common)
 beaker experiment logs <EXPERIMENT_ID> 2>&1 | tail -300
@@ -29,8 +44,9 @@ beaker experiment get <EXPERIMENT_ID> --format json
 1. **Get logs**: `beaker experiment logs <EXP_ID> 2>&1 | tail -300`
 2. **Find the error**: Look for traceback, identify file and line
 3. **Read relevant code**: Use the file/line from traceback
-4. **For Python/shape errors**: Write a small unit test to reproduce, then fix
+4. **For Python errors**: Write a small unit test to reproduce, then fix
 5. **For multi-GPU errors**: Suggest how to reproduce and propose a fix directly without test (can't reproduce locally)
+6. **For NCCL ERRORS**: Make sure to look up further in the log files to find the underlying cause
 
 ## Summarize Findings
 Provide:
@@ -42,11 +58,22 @@ Provide:
 
 ```bash
 # 1. User says "my tokenization experiment failed"
-beaker workspace experiments ai2/earth-systems --text "tokenization"
-# Output shows: 01KEYN069TJM97JGNQ2TWRPH51
+AUTHOR_ID=$(beaker account whoami --format json | jq -r '.[0].id')
+
+beaker rpc call ListWorkloads '{
+  "options": {
+    "authorId": "'"$AUTHOR_ID"'",
+    "organizationId": "us_wvnghctl47k0",
+    "workloadType": "WORKLOAD_TYPE_EXPERIMENT",
+    "nameOrDescriptionSubstring": "tokenization",
+    "status": "STATUS_FAILED",
+    "pageSize": 10
+  }
+}'
+# Output shows experiment ID, e.g.: 01KEYN069TJM97JGNQ2TWRPH51
 
 # 2. Get the logs
-beaker experiment logs 01KEYN069TJM97JGNQ2TWRPH51 2>&1 | tail -300
+beaker experiment logs <EXPERIMENT_ID> 2>&1 | tail -300
 
 # 3. Analyze error (example: EinopsError shape mismatch)
 # 4. Read relevant code files

@@ -1,0 +1,87 @@
+# Daily Experiment Report
+# See .github/EXPERIMENT_REPORTS.md for setup instructions
+name: Daily Experiment Report
+
+on:
+  schedule:
+    # 5am PST = 1pm UTC (standard time), runs Mon-Fri
+    - cron: '0 13 * * 1-5'
+  workflow_dispatch:  # manual trigger for testing
+    inputs:
+      users:
+        description: 'Comma-separated list of usernames (leave empty to use config file)'
+        required: false
+        default: ''
+
+jobs:
+  # First job: read the user list
+  get-users:
+    runs-on: ubuntu-latest
+    outputs:
+      users: ${{ steps.get-users.outputs.users }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get user list
+        id: get-users
+        run: |
+          if [ -n "${{ github.event.inputs.users }}" ]; then
+            # Use manually provided users
+            USERS=$(echo '${{ github.event.inputs.users }}' | jq -R -c 'split(",")')
+          else
+            # Read from config file
+            USERS=$(jq -c '.users' .github/experiment-report-users.json)
+          fi
+          echo "users=$USERS" >> $GITHUB_OUTPUT
+          echo "Will generate reports for: $USERS"
+
+  # Matrix job: generate report for each user
+  report:
+    needs: get-users
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        user: ${{ fromJson(needs.get-users.outputs.users) }}
+      fail-fast: false  # Continue even if one user's report fails
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Cursor CLI
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.cursor/bin" >> $GITHUB_PATH
+
+      - name: Install Beaker CLI
+        run: curl -s https://beaker.org/install | sudo bash
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Install shell integration
+        run: agent install-shell-integration || true
+
+      - name: Generate and send report for ${{ matrix.user }}
+        env:
+          # Dynamic secret lookup: BEAKER_TOKEN_HENRYH, BEAKER_TOKEN_JOER, etc.
+          BEAKER_TOKEN: ${{ secrets[format('BEAKER_TOKEN_{0}', matrix.user)] }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.EXPERIMENT_REPORT_SLACK_WEBHOOK_URL }}
+          REPORT_USER: ${{ matrix.user }}
+        run: |
+          if [ -z "$BEAKER_TOKEN" ]; then
+            echo "::error::No BEAKER_TOKEN_${{ matrix.user }} secret found. Please add it to repository secrets."
+            exit 1
+          fi
+
+          # Run agent with permissions to execute commands
+          # --print enables all tools including bash
+          # --force allows commands without explicit approval
+          # --sandbox disabled turns off command sandboxing
+          agent \
+            --model auto \
+            --print \
+            --force \
+            --sandbox disabled \
+            "Follow the instructions in .cursor/rules/daily-experiment-report.mdc to generate and send the daily experiment status report for user '$REPORT_USER'. You have access to beaker, gh, and curl commands."
