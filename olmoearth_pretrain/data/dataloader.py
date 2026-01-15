@@ -567,7 +567,23 @@ class OlmoEarthDataLoaderConfig(Config):
     ) -> "OlmoEarthDataLoader":
         """Build the OlmoEarthDataLoader."""
         self.validate()
+        # Prepare dataset (this does all filtering)
         dataset.prepare()
+        
+        # Pre-load cache in main process AFTER all filtering is complete
+        # This must happen BEFORE workers spawn (for fork sharing)
+        if hasattr(dataset, 'cache_in_memory') and dataset.cache_in_memory:
+            if self.multiprocessing_context == "fork":
+                logger.info(
+                    "Pre-loading dataset cache into RAM (will be shared across workers via fork)..."
+                )
+                dataset.preload_cache()
+            else:
+                logger.warning(
+                    f"cache_in_memory=True with multiprocessing_context='{self.multiprocessing_context}'. "
+                    "For shared memory across workers, use multiprocessing_context='fork'. "
+                    "Otherwise each worker will have its own cache copy."
+                )
 
         return OlmoEarthDataLoader(
             dataset=dataset,

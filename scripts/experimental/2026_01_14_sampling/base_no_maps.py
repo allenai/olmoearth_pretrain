@@ -127,6 +127,7 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
         seed=3622,
         # Repeat for the 10k samples
         num_dataset_repeats_per_epoch=100,
+        multiprocessing_context="fork",
     )
 
 

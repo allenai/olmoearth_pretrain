@@ -787,6 +787,48 @@ class OlmoEarthDataset(Dataset):
         self._filter_sample_indices_by_dataset_percentage()
         self.latlon_distribution = self.latlon_distribution[self.sample_indices]
 
+    def preload_cache(self) -> None:
+        """Pre-load all filtered samples into memory cache.
+        
+        This should be called in the main process AFTER prepare() completes and BEFORE
+        workers are spawned. With fork multiprocessing, workers will share this cache
+        via copy-on-write.
+        
+        Only samples in self.sample_indices (after all filtering) will be loaded.
+        """
+        if not self.cache_in_memory:
+            return
+        
+        if not self.is_dataset_prepared:
+            raise RuntimeError(
+                "Dataset must be prepared (all filtering complete) before preloading cache. "
+                "Call prepare() first."
+            )
+        
+        if self.sample_indices is None or len(self.sample_indices) == 0:
+            logger.warning("No samples to preload (sample_indices is empty)")
+            return
+        
+        logger.info(
+            f"Pre-loading {len(self.sample_indices)} filtered samples into memory cache..."
+        )
+        total_samples = len(self.sample_indices)
+        
+        for idx, sample_idx in enumerate(self.sample_indices):
+            if idx % 1000 == 0 and idx > 0:
+                logger.info(
+                    f"Pre-loading cache: {idx}/{total_samples} ({100*idx/total_samples:.1f}%)"
+                )
+            h5_file_path = self._get_h5_file_path(sample_idx)
+            # This will load and cache the sample using the actual h5 file index
+            # The cache key is sample_idx (h5 file index), not idx (position in sample_indices)
+            self._get_cached_h5_data(sample_idx, h5_file_path)
+        
+        logger.info(
+            f"Cache pre-loading complete. Cached {len(self._memory_cache)} samples "
+            f"(out of {total_samples} filtered samples)."
+        )
+
     def get_geographic_distribution(self) -> np.ndarray:
         """Get the geographic distribution of the dataset.
 
