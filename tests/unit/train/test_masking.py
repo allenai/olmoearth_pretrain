@@ -26,7 +26,7 @@ def test_unmask() -> None:
     """Test unmasking functionality."""
     b, t, h, w = 1, 2, 4, 4
 
-    mask = torch.zeros(b, t, h, w, 3)
+    mask = torch.ones(b, t, h, w, 3) * MaskValue.DECODER.value
     # the first timestep is missing
     mask[:, 0] = MaskValue.MISSING.value
     s = MaskedOlmoEarthSample(
