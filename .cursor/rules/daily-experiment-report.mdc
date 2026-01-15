@@ -100,7 +100,7 @@ gh pr list --state merged --limit 10
 
 ## Step 5: Generate Report
 
-Format for Slack (write to `report.txt`).
+Format Slack-friendly report (write to `report.txt`), making experiment names clickable Beaker links.
 
 If `REPORT_USER` env var is set, include it in the report header.
 

@@ -44,8 +44,9 @@ beaker experiment get <EXPERIMENT_ID> --format json
 1. **Get logs**: `beaker experiment logs <EXP_ID> 2>&1 | tail -300`
 2. **Find the error**: Look for traceback, identify file and line
 3. **Read relevant code**: Use the file/line from traceback
-4. **For Python/shape errors**: Write a small unit test to reproduce, then fix
+4. **For Python errors**: Write a small unit test to reproduce, then fix
 5. **For multi-GPU errors**: Suggest how to reproduce and propose a fix directly without test (can't reproduce locally)
+6. **For NCCL ERRORS**: Make sure to look up further in the log files to find the underlying cause
 
 ## Summarize Findings
 Provide:
