@@ -546,6 +546,7 @@ class OlmoEarthDataLoaderConfig(Config):
     target_device_type: str | None = None
     drop_last: bool = True
     num_dataset_repeats_per_epoch: int = 1
+    multiprocessing_context: str = "fork"
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -604,6 +605,7 @@ class OlmoEarthDataLoaderConfig(Config):
             sampled_hw_p_list=self.sampled_hw_p_list,
             token_budget=self.token_budget,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
+            multiprocessing_context=self.multiprocessing_context,
         )
 
 
