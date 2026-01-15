@@ -43,7 +43,7 @@ beaker rpc call ListWorkloads '{
 }'
 ```
 
-From the response, filter to experiments with status `running` or `failed`.
+From the response, filter to experiments with status `running`, `failed`, or `queued`.
 
 **Sort by most recent first** (by created timestamp, descending).
 
@@ -107,7 +107,7 @@ If `REPORT_USER` env var is set, include it in the report header.
 ```
 📊 *Experiment Status Report* - {date} - {username}
 
-*Summary:* {N} running | {M} failed | {K} groups
+*Summary:* {N} running | {M} queued | {P} failed | {K} groups
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -116,6 +116,13 @@ If `REPORT_USER` env var is set, include it in the report header.
 *{group_name}* ({N} experiments)
 • `exp_id_1` - started 1h ago, step 8k/100k
 • `exp_id_2` - started 2h ago, step 15k/100k
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⏳ *QUEUED* ({N} experiments)
+
+• `exp_id_1` - queued 30m ago
+• `exp_id_2` - queued 1h ago
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
