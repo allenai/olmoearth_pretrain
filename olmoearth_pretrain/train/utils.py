@@ -19,6 +19,7 @@ def check_input(masked_batch: MaskedOlmoEarthSample, patch_size: int) -> None:
     """
     encoded: torch.Tensor | None = None
     decoded: torch.Tensor | None = None
+    missing: torch.Tensor | None = None
     shape: torch.Size | None = None
     for key, value in masked_batch.as_dict(return_none=False).items():
         if key.endswith("mask"):
@@ -28,6 +29,7 @@ def check_input(masked_batch: MaskedOlmoEarthSample, patch_size: int) -> None:
                 dim=-1
             )
             decoded_for_modality = (flat_mask == MaskValue.DECODER.value).sum(dim=-1)
+            missing_for_modality = (flat_mask == MaskValue.MISSING.value).sum(dim=-1)
             if encoded is None:
                 encoded = encoded_for_modality
             else:
@@ -38,20 +40,32 @@ def check_input(masked_batch: MaskedOlmoEarthSample, patch_size: int) -> None:
             else:
                 decoded += decoded_for_modality
 
+            if missing is None:
+                missing = missing_for_modality
+            else:
+                missing += missing_for_modality
+
             if shape is None:
                 shape = value.shape
             elif len(value.shape) > len(shape):
                 shape = value.shape
 
-    if (encoded_for_modality == 0).any():
-        raise RuntimeError(
-            f"Got 0 encoded tokens for batch with {masked_batch.modalities}, "
-            f"with shape {shape} and patch size {patch_size}"
-        )
     if (decoded_for_modality == 0).any():
+        assert isinstance(missing, torch.Tensor)
+        missing = missing[decoded_for_modality == 0]
+
         raise RuntimeError(
             f"Got 0 decoded tokens for batch with {masked_batch.modalities}, "
-            f"with shape {shape} and patch size {patch_size}"
+            f"with shape {shape} and patch size {patch_size}. "
+            f"{len(missing)} samples had 0 decoded, with {missing} missing pixels respectively."
+        )
+    if (encoded_for_modality == 0).any():
+        assert isinstance(missing, torch.Tensor)
+        missing = missing[encoded_for_modality == 0]
+        raise RuntimeError(
+            f"Got 0 encoded tokens for batch with {masked_batch.modalities}, "
+            f"with shape {shape} and patch size {patch_size}. "
+            f"{len(missing)} samples had 0 decoded, with {missing} missing pixels respectively."
         )
 
 
