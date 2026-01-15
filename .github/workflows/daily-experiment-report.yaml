@@ -66,6 +66,9 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
+      - name: Install shell integration
+        run: agent install-shell-integration || true
+
       - name: Generate and send report for ${{ matrix.user }}
         env:
           # Dynamic secret lookup: BEAKER_TOKEN_HENRYH, BEAKER_TOKEN_JOER, etc.
@@ -80,6 +83,13 @@ jobs:
             exit 1
           fi
 
+          # Run agent with permissions to execute commands
+          # --print enables all tools including bash
+          # --force allows commands without explicit approval
+          # --sandbox disabled turns off command sandboxing
           agent \
             --model auto \
-            -p "Follow the instructions in .cursor/rules/daily-experiment-report.mdc to generate and send the daily experiment status report for user '$REPORT_USER'. You have access to beaker, gh, and curl commands."
+            --print \
+            --force \
+            --sandbox disabled \
+            "Follow the instructions in .cursor/rules/daily-experiment-report.mdc to generate and send the daily experiment status report for user '$REPORT_USER'. You have access to beaker, gh, and curl commands."
