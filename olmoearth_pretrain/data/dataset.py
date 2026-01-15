@@ -1,5 +1,6 @@
 """Dataset module for OlmoEarth Pretrain."""
 
+import copy
 import hashlib
 import logging
 import shutil
@@ -970,7 +971,9 @@ class OlmoEarthDataset(Dataset):
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Get H5 data, using in-memory cache if enabled."""
         if self.cache_in_memory and index in self._memory_cache:
-            return self._memory_cache[index]
+            cached = self._memory_cache[index]
+            # Deep copy to prevent mutation of cached data
+            return copy.deepcopy(cached[0]), copy.deepcopy(cached[1])
 
         sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
 
