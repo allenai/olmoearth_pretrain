@@ -12,12 +12,13 @@ from typing import Any
 import numpy as np
 import torch
 import wandb
-from olmo_core.config import Config
 from olmo_core.io import copy_file, file_exists, join_path
 from olmo_core.train.callbacks import ProfilerCallback, WandBCallback
 from olmo_core.train.trainer import PathOrStr
 
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import BASE_GSD, Modality
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.inference_benchmarking import constants
 from olmoearth_pretrain.inference_benchmarking.data_models import RunParams
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
@@ -28,7 +29,6 @@ from olmoearth_pretrain.nn.flexi_vit import (
     TokensAndMasks,
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 NUM_S1_BANDS = Modality.SENTINEL1.num_bands
 NUM_S2_BANDS = Modality.SENTINEL2.num_bands

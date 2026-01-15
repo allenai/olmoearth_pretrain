@@ -8,12 +8,16 @@ from typing import Any
 
 import torch
 from einops import rearrange, repeat
-from olmo_core.config import Config
 from torch import Tensor, nn
 from torch.distributed.fsdp import fully_shard, register_fsdp_forward_method
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.dataset.utils import get_modality_specs_from_names
+from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data.constants import (
+    Modality,
+    ModalitySpec,
+    get_modality_specs_from_names,
+)
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.flexi_vit import (
@@ -25,7 +29,6 @@ from olmoearth_pretrain.nn.flexi_vit import (
     get_modalities_to_process,
     return_modalities_from_dict,
 )
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
 

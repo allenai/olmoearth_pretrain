@@ -512,3 +512,8 @@ class Modality:
 # Latlon and timestamps
 LATLON = ["lat", "lon"]
 TIMESTAMPS = ["day", "month", "year"]
+
+
+def get_modality_specs_from_names(names: list[str]) -> list[ModalitySpec]:
+    """Get the modality specs from the names."""
+    return [Modality.get(name) for name in names]

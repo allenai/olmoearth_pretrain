@@ -10,26 +10,53 @@ on:
 
 jobs:
   test:
+    name: Test (full dependencies)
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version-file: "pyproject.toml"
 
     - name: Install uv
       uses: astral-sh/setup-uv@v6
       with:
-        # Install a specific version of uv.
         version: "0.9.5"
 
     - name: Install dependencies
       run: |
+        # Install all groups (includes training with olmo-core, eval, dev, etc.)
         uv sync --locked --all-groups
 
-    - name: Run tests
+    - name: Run unit/integration tests
       run: |
         uv run pytest -n auto tests/
+
+    - name: Run model loader tests (with olmo-core)
+      run: |
+        uv run pytest -v tests_minimal_deps/
+
+  test-inference-only:
+    name: Test (inference-only dependencies)
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version-file: "pyproject.toml"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+      with:
+        version: "0.9.5"
+
+    - name: Run model loader tests (without olmo-core)
+      run: |
+        # Run with base deps + dev group (no training = no olmo-core)
+        uv run --group dev pytest -v tests_minimal_deps/

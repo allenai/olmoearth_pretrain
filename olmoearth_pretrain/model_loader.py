@@ -1,5 +1,9 @@
 """Load the OlmoEarth models from Hugging Face.
 
+This module works with or without olmo-core installed:
+- Without olmo-core: inference-only mode (loading pre-trained models)
+- With olmo-core: full functionality including training
+
 The weights are converted to pth file from distributed checkpoint like this:
 
     import json
@@ -28,8 +32,9 @@ from os import PathLike
 
 import torch
 from huggingface_hub import hf_hub_download
-from olmo_core.config import Config
 from upath import UPath
+
+from olmoearth_pretrain.config import Config
 
 CONFIG_FILENAME = "config.json"
 WEIGHTS_FILENAME = "weights.pth"

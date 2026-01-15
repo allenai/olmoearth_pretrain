@@ -12,10 +12,10 @@ import hdf5plugin
 import numpy as np
 import pandas as pd
 from einops import rearrange
-from olmo_core.config import Config
 from tqdm import tqdm
 from upath import UPath
 
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
     IMAGE_TILE_SIZE,
     SENTINEL1_NODATA,
@@ -23,6 +23,7 @@ from olmoearth_pretrain.data.constants import (
     Modality,
     ModalitySpec,
     TimeSpan,
+    get_modality_specs_from_names,
 )
 from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.dataset.parse import parse_dataset
@@ -32,7 +33,6 @@ from olmoearth_pretrain.dataset.sample import (
     image_tiles_to_samples,
     load_image_for_sample,
 )
-from olmoearth_pretrain.dataset.utils import get_modality_specs_from_names
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import cast
 
 import numpy as np
-from olmo_core.config import Config, StrEnum
+from olmo_core.config import StrEnum
 from olmo_core.distributed.utils import get_local_rank
 from olmo_core.launch.beaker import BeakerLaunchConfig, ExperimentSpec
 from olmo_core.train import (
@@ -19,6 +19,7 @@ from olmo_core.train.callbacks import ConfigSaverCallback, WandBCallback
 from olmo_core.utils import get_default_device, prepare_cli_environment, seed_all
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
+from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.data.dataset import (
@@ -297,7 +298,13 @@ def evaluate(config: OlmoEarthExperimentConfig) -> None:
     device = get_default_device()
     model = model.to(device)
     data_loader = MockOlmoEarthDataLoader()
-    train_module = MockLatentMIMTrainModule()
+
+    # Handle case where we're loading OlmoEarth distributed checkpoint for eval
+    if config.trainer.load_path is not None:
+        train_module = config.train_module.build(model)
+    else:
+        train_module = MockLatentMIMTrainModule()
+
     train_module.model = model
     trainer = config.trainer.build(train_module, data_loader)
     # Record the config to W&B/Comet and each checkpoint dir.

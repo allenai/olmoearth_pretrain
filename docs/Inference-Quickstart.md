@@ -15,13 +15,40 @@ cd /path/to/olmoearth_pretrain/
 uv sync
 ```
 
-Now we can use the `olmoearth_pretrain` library to initialize the model in pytorch.
-Below, we initialize the OlmoEarth-v1-Base model.
+Here's a minimal example that loads a model and runs inference with synthetic data.
+Copy and paste this entire block to run it directly:
 
-```python
+```bash
+uv run --with olmoearth-pretrain --with torch --python 3.12 - <<'EOF'
+import torch
 from olmoearth_pretrain.model_loader import ModelID, load_model_from_id
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+
+# Load model from HuggingFace
 model = load_model_from_id(ModelID.OLMOEARTH_V1_BASE)
+model.eval()
+
+# Create synthetic input (B=1, H=64, W=64, T=1, C=12 for Sentinel-2)
+dummy_image = torch.randn(1, 64, 64, 1, 12)
+dummy_mask = torch.ones(1, 64, 64, 1, 3) * MaskValue.ONLINE_ENCODER.value
+dummy_timestamps = torch.tensor([[[15, 6, 2024]]])  # day, month (0-indexed), year
+
+sample = MaskedOlmoEarthSample(
+    sentinel2_l2a=dummy_image,
+    sentinel2_l2a_mask=dummy_mask,
+    timestamps=dummy_timestamps,
+)
+
+with torch.no_grad():
+    output = model.encoder(sample, fast_pass=True, patch_size=4)
+    features = output["tokens_and_masks"].sentinel2_l2a
+    print(f"Output shape: {features.shape}")  # (B, H', W', T, S, D)
+EOF
 ```
+## Working with Real Satellite Imagery
+
+The rest of this guide shows how to load real Sentinel-2 imagery. This requires the
+full installation with `rasterio` and other data processing dependencies.
 
 ## Obtain Satellite Imagery
 
@@ -122,8 +149,10 @@ generally perform better, but require more GPU time.
 
 ```python
 import torch
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.model_loader import ModelID, load_model_from_id
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 
+model = load_model_from_id(ModelID.OLMOEARTH_V1_BASE)
 device = torch.device("cuda")
 model.to(device)
 

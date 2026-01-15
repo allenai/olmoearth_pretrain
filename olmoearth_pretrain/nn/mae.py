@@ -4,13 +4,14 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-from olmo_core.config import Config
 from torch.distributed import DeviceMesh
 from torch.distributed.fsdp import (
     MixedPrecisionPolicy,
     fully_shard,
 )
 
+from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
     PredictorConfig,
@@ -18,7 +19,6 @@ from olmoearth_pretrain.nn.flexi_vit import (
     TokensAndMasks,
 )
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 
 class MAE(nn.Module, DistributedMixins):

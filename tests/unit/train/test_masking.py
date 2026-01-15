@@ -21,6 +21,23 @@ from olmoearth_pretrain.train.masking import (
 logger = logging.getLogger(__name__)
 
 
+def test_unmask() -> None:
+    """Test unmasking functionality."""
+    b, t, h, w = 1, 2, 4, 4
+
+    mask = torch.zeros(b, t, h, w, 3)
+    # the first timestep is missing
+    mask[:, 0] = MaskValue.MISSING.value
+    s = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.ones(b, t, h, w, 12),
+        sentinel2_l2a_mask=mask,
+        timestamps=torch.ones(b, t, 3),
+    )
+    s = s.unmask()
+    assert (s.sentinel2_l2a_mask[:, 0] == MaskValue.MISSING.value).all()  # type: ignore
+    assert (s.sentinel2_l2a_mask[:, 1:] == MaskValue.ONLINE_ENCODER.value).all()  # type: ignore
+
+
 def test_random_masking_and_unmask() -> None:
     """Test random masking ratios."""
     b, h, w, t = 4, 16, 16, 8
@@ -293,7 +310,11 @@ def test_time_with_missing_timesteps_structure_masking_and_unmask() -> None:
         if modality_name.endswith("mask"):
             mask = getattr(unmasked_sample, modality_name)
             if mask is not None:
-                assert (mask == 0).all()
+                if "sentinel" not in modality_name:
+                    assert (mask == 0).all()
+                else:
+                    # check the missing timesteps are still missing
+                    assert torch.unique(mask).tolist() == [0, 3]
 
 
 def test_create_random_mask_with_missing_mask() -> None:

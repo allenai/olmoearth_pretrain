@@ -6,7 +6,6 @@ from upath import UPath
 
 from olmoearth_pretrain.data.constants import (
     BASE_RESOLUTION,
-    Modality,
     ModalitySpec,
     TimeSpan,
 )
@@ -125,10 +124,3 @@ def get_modality_fname(
     row = window_metadata.row
     fname = f"{crs}_{col}_{row}_{resolution}.{ext}"
     return modality_dir / fname
-
-
-def get_modality_specs_from_names(
-    names: list[str],
-) -> list[ModalitySpec]:
-    """Get the modality specs from the names."""
-    return [Modality.get(name) for name in names]
