@@ -125,6 +125,8 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
+        # Repeat for the 10k samples
+        num_dataset_repeats_per_epoch=100,
     )
 
 
