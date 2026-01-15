@@ -1,0 +1,70 @@
+---
+description: Use when user asks to check beaker job status, monitor experiments, see if jobs are running, check training progress, or list recent experiments
+---
+
+# Checking Beaker Job Status
+
+## Quick Commands
+```bash
+# Find experiments
+beaker workspace experiments ai2/earth-systems --text "<search_term>"
+
+# Check status
+beaker experiment get <EXPERIMENT_ID>
+beaker experiment get <EXPERIMENT_ID> --format json
+
+# Monitor running job
+beaker experiment logs <EXPERIMENT_ID>
+```
+
+## Status Mapping
+
+| Status in Output | Report As | Meaning |
+|------------------|-----------|---------|
+| `pending`, no `started` timestamp | **QUEUED** | Waiting to be scheduled |
+| `running`, has `started` but no `exited` | **RUNNING** | Currently executing |
+| `succeeded`, exitCode 0 | **SUCCEEDED** | Completed successfully |
+| `failed`, exitCode != 0 | **FAILED** | Exited with error |
+| `preempted` | **PREEMPTED** | Interrupted, may resume |
+| `canceled` | **CANCELED** | Manually stopped |
+
+## How to Determine Status from JSON
+
+Look at `jobs[0].status`:
+- **QUEUED**: Has `created` but no `started`
+- **RUNNING**: Has `started` but no `exited`
+- **FAILED**: Has `exited` and `exitCode` != 0
+- **SUCCEEDED**: Has `exited` and `exitCode` == 0
+
+## Key JSON Fields
+- `status.exitCode` - 0 = success, non-zero = failure
+- `status.created` - When submitted
+- `status.started` - When began running
+- `status.exited` - When finished
+- `description` - Often contains W&B progress info
+
+## Example Workflow
+
+```bash
+# Find your recent experiments
+beaker workspace experiments ai2/earth-systems --text "henryh"
+
+# Output example:
+# ID                          NAME                                    STATUS
+# 01KEYN069TJM97JGNQ2TWRPH51  henryh/base_all_bands-train-366f1c59   1 failed
+# 01KEYMZQQCW6SW71H8R7W2FD87  henryh/base_spectral-train-d2bc5c8c    running
+# 01KEYMZA2EK7646BHTE0Y9TF6S  henryh/base_single_band-train-8e21bbbe succeeded
+
+# Get details on running one
+beaker experiment get 01KEYMZQQCW6SW71H8R7W2FD87 --format json
+```
+
+**Example status report:**
+```
+Experiment: base_all_bands_single_token-train-366f1c59
+Status: **FAILED** (exit code 1)
+Created: 2026-01-14 08:21:41
+Started: 2026-01-14 08:57:29
+Exited: 2026-01-14 08:59:23
+Duration: ~2 minutes
+```

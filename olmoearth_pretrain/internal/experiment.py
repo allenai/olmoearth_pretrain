@@ -298,7 +298,13 @@ def evaluate(config: OlmoEarthExperimentConfig) -> None:
     device = get_default_device()
     model = model.to(device)
     data_loader = MockOlmoEarthDataLoader()
-    train_module = MockLatentMIMTrainModule()
+
+    # Handle case where we're loading OlmoEarth distributed checkpoint for eval
+    if config.trainer.load_path is not None:
+        train_module = config.train_module.build(model)
+    else:
+        train_module = MockLatentMIMTrainModule()
+
     train_module.model = model
     trainer = config.trainer.build(train_module, data_loader)
     # Record the config to W&B/Comet and each checkpoint dir.

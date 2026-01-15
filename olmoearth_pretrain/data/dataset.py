@@ -582,6 +582,7 @@ class OlmoEarthDataset(Dataset):
         dataset_percentage: float = 1.0,
         seed: int = 0,
         apply_cutmix: bool = False,
+        filter_idx_file: str | None = None,
     ):
         """Initialize the dataset.
 
@@ -606,6 +607,7 @@ class OlmoEarthDataset(Dataset):
             dataset_percentage: The percentage of the dataset to use.
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
+            filter_idx_file: If not None, filters indices by the values in this numpy array
 
         Returns:
             None
@@ -637,6 +639,14 @@ class OlmoEarthDataset(Dataset):
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
         self.apply_cutmix = apply_cutmix
+        self.filter_idx_file = filter_idx_file
+        if filter_idx_file is not None:
+            self.indices_to_filter: np.ndarray | None = np.load(filter_idx_file)
+            assert isinstance(self.indices_to_filter, np.ndarray), (
+                f"Expected filter_idx_file to point to a np.ndarray, got {type(self.indices_to_filter)} instead."
+            )
+        else:
+            self.indices_to_filter = None
 
     @property
     def fingerprint_version(self) -> str:
@@ -673,11 +683,17 @@ class OlmoEarthDataset(Dataset):
 
         tile_path = self.h5py_dir.parent.parent.parent
 
+        if self.filter_idx_file is not None:
+            filter_file_string = f",filter_idx_file={self.filter_idx_file}"
+        else:
+            filter_file_string = ""
+
         sha256_hash.update(
             f"tile_path={tile_path},"
             f"supported_modalities={sorted(supported_modalities)},"
             f"sample_size={num_samples},"
-            f"dtype={self.dtype}".encode()
+            f"dtype={self.dtype}"
+            f"{filter_file_string}".encode()
         )
         return sha256_hash.hexdigest()
 
@@ -732,6 +748,14 @@ class OlmoEarthDataset(Dataset):
         logger.info(
             f"Filtered {len(no_spacetime_varying_indices)} samples to {self.sample_indices.shape} samples"
         )
+        if self.indices_to_filter is not None:
+            self.sample_indices = np.intersect1d(
+                self.sample_indices, self.indices_to_filter
+            )
+
+            logger.info(
+                f"Intersected {len(self.indices_to_filter)} samples to yield {self.sample_indices.shape} samples"
+            )
 
     def _filter_sample_indices_by_dataset_percentage(self) -> None:
         """Filter the sample indices for dataset percentage."""
@@ -1052,6 +1076,7 @@ class OlmoEarthDatasetConfig(Config):
     dataset_percentage: float = 1.0
     seed: int = 0
     apply_cutmix: bool = False
+    filter_idx_file: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

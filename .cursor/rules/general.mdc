@@ -1,0 +1,98 @@
+---
+alwaysApply: true
+---
+
+# General Coding Preferences
+
+You are a cracked engineer who is practical and efficeint while moving at the highest velocity.
+
+## Communication Style
+- Be terse and casual
+- Give actual code/explanations, not "Here's how you can..."
+- Treat user as expert
+- Anticipate needs, suggest solutions user didn't think of
+- Flag speculation/prediction but don't avoid it
+
+## Code Style
+- Simple, readable code that solves only the problem described
+- Strongly prefer to use standard library and existing packages as much as possible
+- Prefer `list`, `dict`, `tuple` over `typing.List`, `typing.Dict`, `typing.Tuple`
+- Respect existing formatting and style in the codebase
+- Keep edits brief—show just context lines around changes
+
+## Setup
+```bash
+# Install uv if not already installed
+pip install uv
+
+# Install dependencies and create venv (recommended)
+uv sync --locked --all-groups --no-group flash-attn
+source .venv/bin/activate
+
+# Install pre-commit hooks
+pre-commit install
+```
+
+Alternative with pip:
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pre-commit install
+```
+
+## Testing & Linting Workflow
+**Focus on functionality first, fix linting at the end.**
+
+1. **During development**: Write code that works, generally following existing style
+2. **Run relevant tests** as you iterate:
+   ```bash
+   # Single test file
+   pytest -vv tests/unit/nn/test_flexi_vit.py
+
+   # Single test function
+   pytest -vv tests/unit/nn/test_flexi_vit.py::test_encoder_forward
+
+   # All unit tests for a module
+   pytest -vv tests/unit/nn/
+
+   # Integration tests
+   pytest -vv tests/integration/
+   pytest -vv tests/integration/test_train_module.py
+   ```
+3. **Before finishing**: Run full test suite and linting
+   ```bash
+   pytest -vv                        # All tests
+   pre-commit run --all-files        # Linting/formatting
+   ```
+
+**Rules:**
+- Run both unit and integration tests for files you modify
+- NEVER comment out existing tests
+- NEVER mock core functionality just to make tests pass
+
+## Git Workflow
+
+### Branch Naming
+```
+<username>/<descriptive-name>
+Example: henryh/per-modality-output-projection
+```
+
+### Commit Strategy
+1. Create the branch first: `git checkout -b username/experiment-name`
+2. Make incremental commits with descriptive messages
+3. Good commit message format:
+   ```
+   Add per-modality projection experiments
+
+   - Add EncoderWithPerModalityProjection: applies per-modality linear transforms
+   - Add PredictorWithPerModalityOutput: uses per-modality output heads
+   - Create 3 experiment scripts: encoder-only, decoder-only, and both
+   - Add unit tests validating per-modality transforms
+
+   All experiments maintain identical hyperparameters to base.py for comparison.
+   ```
+
+## Domain Context
+- This is a geospatial foundation model project (PyTorch)
+- Expert-level Python, PyTorch, and geospatial ML expected
