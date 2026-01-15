@@ -1682,7 +1682,7 @@ class Encoder(FlexiVitBase):
         if not fast_pass:
             project_and_aggregate = self.project_and_aggregate(output)
             output_dict["project_aggregated"] = project_and_aggregate
-            output_dict["latlon_prediction"] = self.latlon_predictor(
+            output_dict["latlon_predictions"] = self.latlon_predictor(
                 project_and_aggregate
             )
         return output_dict
