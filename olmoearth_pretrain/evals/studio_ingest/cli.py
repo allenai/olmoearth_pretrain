@@ -42,6 +42,7 @@ Todo:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 
@@ -49,8 +50,6 @@ from olmoearth_pretrain.evals.studio_ingest.ingest import IngestConfig, ingest_d
 
 # Band stats computation is done via band_stats.py CLI directly
 # from olmoearth_pretrain.evals.studio_ingest.band_stats import compute_band_stats
-from olmoearth_pretrain.evals.studio_ingest.registry import Registry
-from olmoearth_pretrain.evals.studio_ingest.validate import validate_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +86,6 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     print(f"  Splits: {entry.splits}")
     # Turn into the eval dataset config
     eval_config = entry.to_eval_config()
-    print(f"  Eval config: {eval_config}")
     return 0
 
 
@@ -131,7 +129,6 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Dataset groups to filter by (e.g., 'train_group')",
     )
-
 
 
 # =============================================================================

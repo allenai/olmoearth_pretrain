@@ -52,6 +52,7 @@ DEFAULT_TARGET_PROPERTY = "category"
 # Config Instantiation
 # =============================================================================
 
+
 def rslearn_task_type_to_olmoearth_task_type(rslearn_task):
     """Map rslearn Task class to olmoearth TaskType enum."""
     # Note: Adjust as needed to match all possible rslearn task types
@@ -365,7 +366,6 @@ class EvalDatasetEntry:
 
     def __post_init__(self) -> None:
         """Validate and set derived fields after initialization."""
-
         # Validate task type against enum values
         valid_task_types = {t for t in TaskType}
         if self.task_type not in valid_task_types:
@@ -458,13 +458,16 @@ class EvalDatasetEntry:
         """Get the full path to the normalization stats JSON."""
         return f"{self.weka_path}/{self.norm_stats_path}"
 
-    def to_eval_config(self) -> "EvalDatasetConfig":
+    def to_eval_config(self) -> EvalDatasetConfig:
         """Convert to EvalDatasetConfig for use with eval functions.
 
         Raises:
             ValueError: If num_classes is not set (required for eval).
         """
-        from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
+        from olmoearth_pretrain.evals.datasets.configs import (
+            EvalDatasetConfig,
+            TaskType,
+        )
 
         if self.num_classes is None:
             raise ValueError(

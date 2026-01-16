@@ -51,8 +51,16 @@ _default_workers = (os.cpu_count() or 1) - 1
 NUM_WORKERS = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", _default_workers))
 
 # Optional sampling limits via env vars
-MAX_SAMPLES = int(os.environ["OLMOEARTH_MAX_SAMPLES"]) if "OLMOEARTH_MAX_SAMPLES" in os.environ else None
-SAMPLE_FRACTION = float(os.environ["OLMOEARTH_SAMPLE_FRACTION"]) if "OLMOEARTH_SAMPLE_FRACTION" in os.environ else None
+MAX_SAMPLES = (
+    int(os.environ["OLMOEARTH_MAX_SAMPLES"])
+    if "OLMOEARTH_MAX_SAMPLES" in os.environ
+    else None
+)
+SAMPLE_FRACTION = (
+    float(os.environ["OLMOEARTH_SAMPLE_FRACTION"])
+    if "OLMOEARTH_SAMPLE_FRACTION" in os.environ
+    else None
+)
 
 
 def build_rslearn_model_dataset_for_band_stats(

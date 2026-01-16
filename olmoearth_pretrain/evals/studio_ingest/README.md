@@ -77,7 +77,11 @@ Each dataset directory contains:
 
 ## Ingestion Workflow
 
-1. **Validate**: Check rslearn dataset structure, verify modalities exist, check splits
+1. **Validate**: Check rslearn dataset structure, verify modalities exist, check splits gather information for the config
+
+Next we need to see what do we need to quickly read this when it is copied over and have a dataset class to be used dependent on the configuration that does not involve having to load all the windows and that bs with the rslearn dataset and potentially is a different format
+
+
 2. **Register**: Add entry to registry.json, create metadata.json in dataset dir
 2. **Copy**: Copy data from GCS to Weka, preserving rslearn structure
 3. Make sure that we can discover new datasets
