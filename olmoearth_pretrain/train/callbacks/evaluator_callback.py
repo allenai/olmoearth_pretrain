@@ -711,6 +711,24 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(
             f"Finished {evaluator.evaluation_name} evaluations in {eval_time:.1f} seconds."
         )
+
+        # Log Matryoshka multi-dim results as grouped chart
+        matryoshka_results = result.get("matryoshka")
+        if matryoshka_results:
+            for dim_key, dim_result in matryoshka_results.items():
+                dim = dim_key.split("_")[1]
+                dim_val = dim_result.get("val_score", 0)
+                self.trainer.record_metric(
+                    f"matryoshka/{evaluator.evaluation_name}/dim_{dim}", dim_val
+                )
+                if self.run_on_test:
+                    dim_test = dim_result.get("test_score", 0)
+                    if dim_test > 0:
+                        self.trainer.record_metric(
+                            f"matryoshka/{evaluator.evaluation_name}/test/dim_{dim}",
+                            dim_test,
+                        )
+
         result["eval_time"] = eval_time
         return result
 
