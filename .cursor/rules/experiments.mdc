@@ -60,3 +60,10 @@ Beaker pulls code from the repository, so uncommitted changes won't be included!
 | W&B Project | `YYYY_MM_DD_experiment_description` | `2025_11_21_masking_ablations` |
 | Run Name | `<base>_<variant>` | `base_encoder_per_mod_proj` |
 | Script | `base_<component>_<modification>.py` | `base_mae.py` |
+
+
+## When submitting new experiments append a new incremented number if the experiment already exists
+- checkpoint exists errors can occur if we dont bump the number such as appending _1
+
+**Pretraining Guide:**
+See [Pretraining & Architecture Design Docs](https://github.com/allenai/geofm/blob/main/docs/pretraining.md) for strategy, config, and example scripts.
