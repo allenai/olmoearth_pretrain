@@ -369,6 +369,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
         timestamps = np.concatenate([days, months, years], axis=1)  # shape: (12, 3)
 
         output_dict["timestamps"] = timestamps
+
+        latlons = np.array([rng.integers(-90, 90), rng.integers(-180, 180), 90])
+        output_dict["latlons"] = latlons
         return OlmoEarthSample(**output_dict)
 
     def get_mock_batch(self) -> OlmoEarthSample:

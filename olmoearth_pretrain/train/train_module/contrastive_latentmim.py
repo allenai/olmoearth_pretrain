@@ -274,18 +274,16 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                         get_local_tensor(contrastive_loss.detach()) / num_microbatches
                     )
 
-                if not dry_run:
-                    if self.latlon_prediction_weight > 0:
-                        latlon_targets = self.to_cartesian(masked_batch_a.latlon)
-                        latlon_loss = (
-                            mse_loss(latlon_preds_a, latlon_targets)
-                            + mse_loss(latlon_preds_b, latlon_targets)
-                        ) / 2
-                        total_batch_latlon += (
-                            get_local_tensor(contrastive_loss.detach())
-                            / num_microbatches
-                        )
-                        loss += self.latlon_prediction_weight * latlon_loss
+                if self.latlon_prediction_weight > 0:
+                    latlon_targets = self.to_cartesian(masked_batch_a.latlon)
+                    latlon_loss = (
+                        mse_loss(latlon_preds_a, latlon_targets)
+                        + mse_loss(latlon_preds_b, latlon_targets)
+                    ) / 2
+                    total_batch_latlon += (
+                        get_local_tensor(contrastive_loss.detach()) / num_microbatches
+                    )
+                    loss += self.latlon_prediction_weight * latlon_loss
 
                 loss = loss / num_microbatches
                 loss_val = get_local_tensor(loss.detach())
