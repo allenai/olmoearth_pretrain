@@ -1,0 +1,123 @@
+---
+description: Use when user asks to check beaker job status, monitor experiments, see if jobs are running, check training progress, or list recent experiments
+---
+
+# Checking Beaker Job Status
+
+## Beaker RPC API (Preferred)
+
+The RPC API provides precise server-side filtering. Use this for listing experiments.
+
+### Get Current User ID
+
+First, get the authenticated user's ID:
+
+```bash
+# Get current user's author ID
+AUTHOR_ID=$(beaker account whoami --format json | jq -r '.[0].id')
+echo "Author ID: $AUTHOR_ID"
+```
+
+### List Experiments with Filters
+
+```bash
+# Get author ID dynamically
+AUTHOR_ID=$(beaker account whoami --format json | jq -r '.[0].id')
+
+beaker rpc call ListWorkloads '{
+  "options": {
+    "authorId": "'"$AUTHOR_ID"'",
+    "organizationId": "us_wvnghctl47k0",
+    "workloadType": "WORKLOAD_TYPE_EXPERIMENT",
+    "nameOrDescriptionSubstring": "<search_phrase>",
+    "createdAfter": "2026-01-13T00:00:00Z",
+    "pageSize": 50
+  }
+}'
+```
+
+### Filter Options
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `authorId` | Filter by user ID | `$AUTHOR_ID` (from whoami) |
+| `organizationId` | AI2 org ID | `us_wvnghctl47k0` |
+| `workloadType` | Type of workload | `WORKLOAD_TYPE_EXPERIMENT` |
+| `nameOrDescriptionSubstring` | Text search | `base_spectral` |
+| `createdAfter` | ISO timestamp | `2026-01-13T00:00:00Z` |
+| `createdBefore` | ISO timestamp | `2026-01-14T00:00:00Z` |
+| `status` | Filter by status | `STATUS_RUNNING`, `STATUS_FAILED` |
+| `pageSize` | Results per page | `50` |
+| `pageToken` | For pagination | (from previous response) |
+
+### Status Values
+- `STATUS_RUNNING` - Currently executing
+- `STATUS_FAILED` - Exited with error
+- `STATUS_SUCCEEDED` - Completed successfully
+- `STATUS_CANCELED` - Manually stopped
+
+## CLI Commands (For Single Experiments)
+
+```bash
+# Get experiment details
+beaker experiment get <EXPERIMENT_ID>
+beaker experiment get <EXPERIMENT_ID> --format json
+
+# Monitor running job logs
+beaker experiment logs <EXPERIMENT_ID>
+```
+
+## Status Mapping
+
+| Status in Output | Report As | Meaning |
+|------------------|-----------|---------|
+| `pending`, no `started` timestamp | **QUEUED** | Waiting to be scheduled |
+| `running`, has `started` but no `exited` | **RUNNING** | Currently executing |
+| `succeeded`, exitCode 0 | **SUCCEEDED** | Completed successfully |
+| `failed`, exitCode != 0 | **FAILED** | Exited with error |
+| `preempted` | **PREEMPTED** | Interrupted, may resume |
+| `canceled` | **CANCELED** | Manually stopped |
+
+## Key JSON Fields
+- `status.exitCode` - 0 = success, non-zero = failure
+- `status.created` - When submitted
+- `status.started` - When began running
+- `status.exited` - When finished
+- `description` - Often contains W&B progress info
+
+## Example Workflow
+
+```bash
+# Get current user's author ID
+AUTHOR_ID=$(beaker account whoami --format json | jq -r '.[0].id')
+
+# List current user's experiments from the last 24 hours
+SINCE=$(date -u -v-24H +"%Y-%m-%dT%H:%M:%SZ")  # macOS
+# SINCE=$(date -u -d "24 hours ago" +"%Y-%m-%dT%H:%M:%SZ")  # Linux
+
+beaker rpc call ListWorkloads '{
+  "options": {
+    "authorId": "'"$AUTHOR_ID"'",
+    "organizationId": "us_wvnghctl47k0",
+    "workloadType": "WORKLOAD_TYPE_EXPERIMENT",
+    "createdAfter": "'"$SINCE"'",
+    "pageSize": 50
+  }
+}'
+
+# Get details on a specific experiment
+beaker experiment get <EXPERIMENT_ID> --format json
+
+# Check logs for a failed experiment
+beaker experiment logs <EXPERIMENT_ID> 2>&1 | tail -300
+```
+
+**Example status report:**
+```
+Experiment: base_all_bands_single_token-train-366f1c59
+Status: **FAILED** (exit code 1)
+Created: 2026-01-14 08:21:41
+Started: 2026-01-14 08:57:29
+Exited: 2026-01-14 08:59:23
+Duration: ~2 minutes
+```

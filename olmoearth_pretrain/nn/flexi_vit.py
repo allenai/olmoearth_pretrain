@@ -497,7 +497,7 @@ class MultiModalPatchEmbeddings(nn.Module):
             else:
                 mask_shape = token_mask.shape + (self.embedding_size,)
                 patchified_data = torch.zeros(
-                    mask_shape, dtype=token_mask.dtype, device=token_mask.device
+                    mask_shape, dtype=modality_data.dtype, device=token_mask.device
                 )
 
             modality_tokens.append(patchified_data)
