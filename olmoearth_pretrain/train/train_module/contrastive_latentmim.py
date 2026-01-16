@@ -323,6 +323,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 ReduceType.mean,
             )
         self.log_regularization(total_batch_reg)
+        if self.latlon_prediction_weight > 0:
+            self.trainer.record_metric(
+                "train/latlon_prediction_mse",
+                total_batch_latlon,
+                ReduceType.mean,
+            )
 
         del batch, batch_data  # In case this helps with memory utilization.
         del masked_batch_a, masked_batch_b
