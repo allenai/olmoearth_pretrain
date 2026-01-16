@@ -364,7 +364,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             output_dict["era5_10"] = mock_era5_10
         if Modality.LATLON.name in self.dataset.training_modalities:
             latlons = np.array([rng.integers(-90, 90), rng.integers(-180, 180), 90])
-            output_dict["latlons"] = latlons
+            output_dict["latlon"] = latlons
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
