@@ -282,7 +282,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                             "latlon_prediction_weight > 0 but no latlons in microbatch"
                         )
                     latlon_targets = self.to_cartesian(latlons).to(
-                        latlon_preds_a.device
+                        device=latlon_preds_a.device, dtype=latlon_preds_a.dtype
                     )
                     latlon_loss = (
                         mse_loss(latlon_preds_a, latlon_targets)
