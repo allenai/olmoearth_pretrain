@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import torch
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
+from sklearn.decomposition import PCA
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader
@@ -95,6 +96,8 @@ class DownstreamTaskConfig:
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
     # Quantize embeddings to int8 for storage efficiency evaluation
     quantize_embeddings: bool = False
+    # Reduce embedding dimensionality via PCA (None = no reduction)
+    embedding_dim: int | None = None
 
 
 class DownstreamEvaluator:
@@ -152,6 +155,7 @@ class DownstreamEvaluator:
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
         self.quantize_embeddings = task.quantize_embeddings
+        self.embedding_dim = task.embedding_dim
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -330,6 +334,72 @@ class DownstreamEvaluator:
             val_embeddings = dequantize_embeddings(val_embeddings)
             if test_embeddings is not None:
                 test_embeddings = dequantize_embeddings(test_embeddings)
+
+        # Reduce embedding dimensionality via PCA if specified
+        if self.embedding_dim is not None:
+            original_dim = train_embeddings.shape[-1]
+            logger.info(
+                f"Reducing embeddings from {original_dim} to {self.embedding_dim} dims for {self.dataset}"
+            )
+            # Flatten spatial dimensions if present (for segmentation tasks)
+            train_shape = train_embeddings.shape
+            val_shape = val_embeddings.shape
+            test_shape = test_embeddings.shape if test_embeddings is not None else None
+
+            if len(train_shape) > 2:
+                # Shape is (N, H, W, C) or similar - flatten to (N*H*W, C)
+                train_flat = train_embeddings.reshape(-1, original_dim)
+                val_flat = val_embeddings.reshape(-1, original_dim)
+                test_flat = (
+                    test_embeddings.reshape(-1, original_dim)
+                    if test_embeddings is not None
+                    else None
+                )
+            else:
+                train_flat = train_embeddings
+                val_flat = val_embeddings
+                test_flat = test_embeddings
+
+            # Fit PCA on train embeddings
+            pca = PCA(n_components=self.embedding_dim)
+            train_reduced = pca.fit_transform(train_flat.cpu().numpy())
+            val_reduced = pca.transform(val_flat.cpu().numpy())
+            test_reduced = (
+                pca.transform(test_flat.cpu().numpy())
+                if test_flat is not None
+                else None
+            )
+
+            logger.info(
+                f"PCA variance retained: {sum(pca.explained_variance_ratio_):.4f}"
+            )
+
+            # Convert back to tensors and reshape if needed
+            device = train_embeddings.device
+            dtype = train_embeddings.dtype
+            if len(train_shape) > 2:
+                new_shape = train_shape[:-1] + (self.embedding_dim,)
+                train_embeddings = torch.from_numpy(train_reduced).to(
+                    device=device, dtype=dtype
+                ).reshape(new_shape)
+                val_embeddings = torch.from_numpy(val_reduced).to(
+                    device=device, dtype=dtype
+                ).reshape(val_shape[:-1] + (self.embedding_dim,))
+                if test_reduced is not None:
+                    test_embeddings = torch.from_numpy(test_reduced).to(
+                        device=device, dtype=dtype
+                    ).reshape(test_shape[:-1] + (self.embedding_dim,))
+            else:
+                train_embeddings = torch.from_numpy(train_reduced).to(
+                    device=device, dtype=dtype
+                )
+                val_embeddings = torch.from_numpy(val_reduced).to(
+                    device=device, dtype=dtype
+                )
+                if test_reduced is not None:
+                    test_embeddings = torch.from_numpy(test_reduced).to(
+                        device=device, dtype=dtype
+                    )
 
         kwargs = {
             "config": self.config,

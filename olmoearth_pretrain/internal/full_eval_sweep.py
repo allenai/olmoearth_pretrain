@@ -62,6 +62,17 @@ quantize_args = " ".join(
     ]
 )
 
+
+def get_embedding_dim_args(dim: int) -> str:
+    """Get embedding dim args for all tasks."""
+    return " ".join(
+        [" "]
+        + [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.embedding_dim={dim}"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+
 dataset_args = " ".join(
     [" "]
     + [
@@ -538,6 +549,12 @@ def _build_default_command(
         cmd_args += quantize_args
         run_name += "_qt"
 
+    # Add embedding dim args if enabled
+    embedding_dim = getattr(args, "embedding_dim", None)
+    if embedding_dim is not None:
+        cmd_args += get_embedding_dim_args(embedding_dim)
+        run_name += f"_dim{embedding_dim}"
+
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     return (
         f"TRAIN_SCRIPT_PATH={module_path} {launch_command} {EVAL_LAUNCH_PATH} "
@@ -593,6 +610,12 @@ def _build_hyperparameter_command(
     if getattr(args, "quantize_embeddings", False):
         cmd_args += quantize_args
         run_name += "_qt"
+
+    # Add embedding dim args if enabled
+    embedding_dim = getattr(args, "embedding_dim", None)
+    if embedding_dim is not None:
+        cmd_args += get_embedding_dim_args(embedding_dim)
+        run_name += f"_dim{embedding_dim}"
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -731,6 +754,12 @@ def _build_command_from_eval_settings(
     if getattr(args, "quantize_embeddings", False):
         cmd_args += quantize_args
         run_name += "_qt"
+
+    # Add embedding dim args if enabled
+    embedding_dim = getattr(args, "embedding_dim", None)
+    if embedding_dim is not None:
+        cmd_args += get_embedding_dim_args(embedding_dim)
+        run_name += f"_dim{embedding_dim}"
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -989,6 +1018,12 @@ def main() -> None:
         "--quantize_embeddings",
         action="store_true",
         help="If set, quantize embeddings to int8 for all tasks",
+    )
+    parser.add_argument(
+        "--embedding_dim",
+        type=int,
+        default=None,
+        help="If set, reduce embeddings to this dimensionality via PCA (e.g., 128, 64)",
     )
 
     args, extra_cli = parser.parse_known_args()
