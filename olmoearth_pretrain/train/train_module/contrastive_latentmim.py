@@ -227,6 +227,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
+                microbatch, latlons = microbatch.pop("latlon")
+
                 masked_batch_a = self.masking_strategy.apply_mask(
                     self.transform.apply(microbatch).to_device(self.device),
                     patch_size=patch_size,
@@ -275,7 +277,11 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     )
 
                 if self.latlon_prediction_weight > 0:
-                    latlon_targets = self.to_cartesian(masked_batch_a.latlon)
+                    if latlons is None:
+                        raise ValueError(
+                            "latlon_prediction_weight > 0 but no latlons in microbatch"
+                        )
+                    latlon_targets = self.to_cartesian(latlons)
                     latlon_loss = (
                         mse_loss(latlon_preds_a, latlon_targets)
                         + mse_loss(latlon_preds_b, latlon_targets)

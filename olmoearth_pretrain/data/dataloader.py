@@ -362,6 +362,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 (12, Modality.ERA5_10.num_bands), dtype=np.float32
             )
             output_dict["era5_10"] = mock_era5_10
+        if Modality.LATLON.name in self.dataset.training_modalities:
+            latlons = np.array([rng.integers(-90, 90), rng.integers(-180, 180), 90])
+            output_dict["latlons"] = latlons
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
@@ -369,9 +372,6 @@ class OlmoEarthDataLoader(DataLoaderBase):
         timestamps = np.concatenate([days, months, years], axis=1)  # shape: (12, 3)
 
         output_dict["timestamps"] = timestamps
-
-        latlons = np.array([rng.integers(-90, 90), rng.integers(-180, 180), 90])
-        output_dict["latlons"] = latlons
         return OlmoEarthSample(**output_dict)
 
     def get_mock_batch(self) -> OlmoEarthSample:

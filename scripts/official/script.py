@@ -67,6 +67,7 @@ def build_common_components(
         Modality.WRI_CANOPY_HEIGHT_MAP.name,
         Modality.CDL.name,
         Modality.WORLDCEREAL.name,
+        Modality.LATLON,
     ]
     return config
 

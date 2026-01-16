@@ -532,6 +532,16 @@ class OlmoEarthSample(NamedTuple):
                 output_dict[key] = torch.cat((v[1:], v[:1]), dim=0)
         return OlmoEarthSample(**output_dict)
 
+    def pop(self, modality: str) -> tuple["OlmoEarthSample", ArrayTensor | None]:
+        """Like pop on a dict.
+
+        We need to return the OlmoEarthSample too since tuples are immutable.
+        """
+        d = self.as_dict()
+        return_val = d.pop(modality, None)
+        new_sample = OlmoEarthSample(**d)
+        return new_sample, return_val
+
 
 def collate_olmoearth_pretrain(
     batch: list[tuple[int, OlmoEarthSample]],
