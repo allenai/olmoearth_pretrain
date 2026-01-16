@@ -66,6 +66,7 @@ from olmoearth_pretrain.evals.studio_ingest.schema import (
     RSLEARN_TO_OLMOEARTH,
     EvalDatasetEntry,
     instantiate_from_config,
+    rslearn_task_type_to_olmoearth_task_type,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,14 @@ EVAL_DATASETS_ENV_VAR = "OLMOEARTH_EVAL_DATASETS"
 # Default base path on Weka where all eval datasets are stored (internal)
 # TODO: Confirm this path with the team
 DEFAULT_WEKA_BASE_PATH = "weka://dfive-default/olmoearth/eval_datasets"
+
+# Environment variable for number of workers
+# Defaults to cpu_count - 1, capped at 32 for thread pools
+import os as _os
+
+_default_workers = (_os.cpu_count() or 1) - 1
+NUM_WORKERS = int(_os.environ.get("OLMOEARTH_INGEST_WORKERS", _default_workers))
+MAX_THREAD_WORKERS = int(_os.environ.get("OLMOEARTH_INGEST_MAX_THREADS", 32))
 
 
 def get_eval_datasets_base_path() -> str:
@@ -143,6 +152,11 @@ class IngestConfig:
     name: str
     source_path: str
     olmoearth_run_config_path: str
+
+    # Optional - Sampling for stats computation
+    max_samples: int | None = None
+    sample_fraction: float | None = None
+    groups: list[str] | None = None
 
 
 # =============================================================================
@@ -208,7 +222,7 @@ def get_unique_label_values(
     rslearn_dataset = RslearnDataset(UPath(source_path))
 
     # Get all windows
-    windows = rslearn_dataset.load_windows(workers=8, show_progress=True)
+    windows = rslearn_dataset.load_windows(workers=NUM_WORKERS, show_progress=True)
     if max_windows is not None:
         windows = windows[:max_windows]
 
@@ -229,7 +243,7 @@ def get_unique_label_values(
             return set()
 
     unique_values: set[int] = set()
-    num_workers = min(32, len(windows))  # cap at 32 threads
+    num_workers = min(MAX_THREAD_WORKERS, len(windows))
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {executor.submit(scan_window_labels, w): w for w in windows}
         for future in tqdm(
@@ -299,6 +313,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     with config_upath.open() as f:
         dataset_dict = json.load(f)
         # TODO: Potentiually validate witht the rsleanr class
+    # would be nice to not have to check windows here at all
     dataset_config = DatasetConfig.model_validate(dataset_dict)
 
     # Load the olmoearth configs starting with the model config
@@ -359,34 +374,6 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
     #     # Assume that there is only one label layer
     #     break
-    # get the label values and the number of classes by scanning the data
-    import hashlib
-    import os
-    import pickle
-
-    def _labels_cache_path(source_path):
-        src_hash = hashlib.sha256(str(source_path).encode()).hexdigest()[:16]
-        cache_dir = "/tmp/olmoearth_label_cache"
-        os.makedirs(cache_dir, exist_ok=True)
-        return os.path.join(cache_dir, f"{src_hash}_labels.pkl")
-
-    cache_path = _labels_cache_path(config.source_path)
-    if os.path.exists(cache_path):
-        with open(cache_path, "rb") as f:
-            label_values, num_classes = pickle.load(f)
-    else:
-        label_values, num_classes = get_unique_label_values(
-            config.source_path, dataset_config
-        )
-        with open(cache_path, "wb") as f:
-            pickle.dump((label_values, num_classes), f)
-    logger.info(f"Found {num_classes} unique label values: {sorted(label_values)}")
-    print(label_values)
-    print(num_classes)
-
-    # get the NODATA value -> This would be in the olmoearth_run.yaml config
-    nodata_value = 0
-    zero_is_invalid = 0 == nodata_value
 
     # Extract and instantiate the rslearn task from model config
     # model.yaml structure: data.init_args.task.init_args.tasks.{task_name}
@@ -404,12 +391,43 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     )
     rslearn_task = instantiate_from_config(task_config)
 
+    # Get num_classes from the task config based on task type
+    task_init_args = task_config.get("init_args", {})
+    task_class_path = task_config.get("class_path", "")
+
+    num_classes: int | None = None
+    if "num_classes" in task_init_args:
+        # SegmentationTask, PerPixelRegressionTask with classes
+        num_classes = task_init_args["num_classes"]
+    elif "classes" in task_init_args:
+        # ClassificationTask, DetectionTask use a 'classes' list
+        num_classes = len(task_init_args["classes"])
+
+    if num_classes is None:
+        raise ValueError(
+            f"Could not determine num_classes from task config '{task_name}' "
+            f"(class_path: {task_class_path}). "
+            "Expected 'num_classes' or 'classes' in init_args."
+        )
+
+    # Assume 0-indexed consecutive labels (0 to num_classes-1)
+    label_values = set(range(num_classes))
+    logger.info(f"Got {num_classes} classes from model config: {sorted(label_values)}")
+
+    # get the NODATA value -> This would be in the olmoearth_run.yaml config
+    nodata_value = 0
+    zero_is_invalid = 0 == nodata_value
+
     # get the multilabel -> assume false for now
     is_multilabel = False
     # get the imputes -> assume no imputes for now
-    imputes = []
+    imputes: list[tuple[str, str]] = []
+    # determine if timeseries from num_timesteps
+    timeseries = num_timesteps > 1
 
     # norm stats: cache so we don't recompute every time for the same data + task
+    import hashlib
+    import os
     import pickle
 
     def _norm_stats_cache_path(source_path, modalities, task_config):
@@ -437,6 +455,9 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
             dataset_path=config.source_path,
             modalities=modality_layer_names,
             task=rslearn_task,
+            groups=config.groups,
+            max_samples=config.max_samples,
+            sample_fraction=config.sample_fraction,
         )
         with open(norm_stats_cache_path, "wb") as f:
             pickle.dump(norm_stats, f)
@@ -447,33 +468,17 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     created_at = datetime.now().isoformat()
     # TODO: get the studio task id
     # TODO: class names but that may not be easy to get as of right now
+    # Map rslearn task type to olmoearth task type
+    # Apply the mapping here
+    task_type = rslearn_task_type_to_olmoearth_task_type(rslearn_task)
 
-    # entry = EvalDatasetEntry(
-    #     name=config.name,
-    #     source_path=config.source_path,
-    #     task_type=task_type,
-    #     target_property=target_property,
-    #     classes=label_values,
-    #     num_classes=num_classes,
-    #     modalities=modalities,
-    #     weka_path=config.dest_path,
-    # )
-    raise ValueError("Not implemented")
-    # step_validate(config)
-    # dest_path = step_create_destination(config)
-
-    # try:
-    #     splits = step_copy_data(config, dest_path)
-    #     step_compute_stats(config, dest_path)
-    #     entry = step_create_metadata(config, dest_path, splits)
-    #     step_register(entry, overwrite=config.overwrite)
-    # except Exception:
-    #     # TODO: Add cleanup on failure
-    #     logger.error(
-    #         f"Ingestion failed. Partial data may exist at {dest_path}. "
-    #         "Please clean up manually."
-    #     )
-    #     raise
-
-    # logger.info(f"Successfully ingested dataset: {config.name}")
+    entry = EvalDatasetEntry(
+        name=config.name,
+        source_path=config.source_path,
+        task_type=task_type,
+        target_property=target_property,
+        classes=label_values,
+        num_classes=num_classes,
+        modalities=modalities,
+    )
     return entry

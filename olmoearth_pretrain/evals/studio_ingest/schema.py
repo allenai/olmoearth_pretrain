@@ -52,6 +52,18 @@ DEFAULT_TARGET_PROPERTY = "category"
 # Config Instantiation
 # =============================================================================
 
+def rslearn_task_type_to_olmoearth_task_type(rslearn_task):
+    """Map rslearn Task class to olmoearth TaskType enum."""
+    # Note: Adjust as needed to match all possible rslearn task types
+    rslearn_name = type(rslearn_task).__name__.lower()
+    if "classification" in rslearn_name:
+        return TaskType.CLASSIFICATION
+    elif "segmentation" in rslearn_name:
+        return TaskType.SEGMENTATION
+    else:
+        # Default/fallback; update if regression is to be supported etc.
+        raise ValueError(f"Unknown rslearn task type: {type(rslearn_task)}")
+
 
 def instantiate_from_config(config: dict) -> Any:
     """Instantiate a class from a class_path + init_args config dict.
@@ -242,7 +254,6 @@ class EvalDatasetEntry:
         # === Identity ===
         name: Unique identifier (e.g., "lfmc", "forest_loss_driver")
               Used as the directory name on Weka and for loading.
-        display_name: Human-readable name (e.g., "Live Fuel Moisture Content")
 
         # === Task Configuration ===
         task_type: One of "classification", "regression", "segmentation"
@@ -315,7 +326,6 @@ class EvalDatasetEntry:
 
     # Identity
     name: str
-    display_name: str
 
     # Task configuration
     task_type: str  # "classification", "regression", "segmentation"
@@ -331,6 +341,8 @@ class EvalDatasetEntry:
     classes: list[str] | None = None  # num classes can be derived from this
     label_target_property: str | None = None
     band_order: list[str] = field(default_factory=list)
+    imputes: list[tuple[str, str]] = field(default_factory=list)
+    timeseries: bool = False
 
     # Paths
     source_path: str = ""
@@ -353,12 +365,13 @@ class EvalDatasetEntry:
 
     def __post_init__(self) -> None:
         """Validate and set derived fields after initialization."""
-        # Validate task type
-        valid_task_types = {"classification", "regression", "segmentation"}
+
+        # Validate task type against enum values
+        valid_task_types = {t for t in TaskType}
         if self.task_type not in valid_task_types:
             raise ValueError(
                 f"Invalid task_type '{self.task_type}'. "
-                f"Must be one of: {valid_task_types}"
+                f"Must be one of: {valid_task_types} got {self.task_type}"
             )
 
         # Set num_classes from classes if not provided
@@ -373,14 +386,12 @@ class EvalDatasetEntry:
         """Convert to dictionary for JSON serialization."""
         return {
             "name": self.name,
-            "display_name": self.display_name,
             "task_type": self.task_type,
             "target_property": self.target_property,
             "classes": self.classes,
             "num_classes": self.num_classes,
             "modalities": self.modalities,
             "temporal_range": list(self.temporal_range),
-            "patch_size": self.patch_size,
             "source_path": self.source_path,
             "weka_path": self.weka_path,
             "splits": self.splits,
@@ -392,6 +403,8 @@ class EvalDatasetEntry:
             "created_by": self.created_by,
             "studio_task_id": self.studio_task_id,
             "notes": self.notes,
+            "imputes": self.imputes,
+            "timeseries": self.timeseries,
         }
 
     @classmethod
@@ -404,7 +417,6 @@ class EvalDatasetEntry:
 
         return cls(
             name=data["name"],
-            display_name=data["display_name"],
             task_type=data["task_type"],
             target_property=data["target_property"],
             classes=data.get("classes"),
@@ -423,6 +435,8 @@ class EvalDatasetEntry:
             created_by=data.get("created_by", ""),
             studio_task_id=data.get("studio_task_id"),
             notes=data.get("notes"),
+            imputes=[tuple(x) for x in data.get("imputes", [])],
+            timeseries=data.get("timeseries", False),
         )
 
     def get_weka_data_path(self, split: str) -> str:
@@ -443,3 +457,29 @@ class EvalDatasetEntry:
     def get_norm_stats_full_path(self) -> str:
         """Get the full path to the normalization stats JSON."""
         return f"{self.weka_path}/{self.norm_stats_path}"
+
+    def to_eval_config(self) -> "EvalDatasetConfig":
+        """Convert to EvalDatasetConfig for use with eval functions.
+
+        Raises:
+            ValueError: If num_classes is not set (required for eval).
+        """
+        from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
+
+        if self.num_classes is None:
+            raise ValueError(
+                f"Cannot convert '{self.name}' to EvalDatasetConfig: num_classes is required"
+            )
+
+        # For segmentation, use window_size as height_width
+        height_width = self.window_size if self.task_type == "segmentation" else None
+
+        return EvalDatasetConfig(
+            task_type=TaskType(self.task_type),
+            imputes=self.imputes,
+            num_classes=self.num_classes,
+            is_multilabel=self.multilabel,
+            supported_modalities=self.modalities,
+            height_width=height_width,
+            timeseries=self.timeseries,
+        )

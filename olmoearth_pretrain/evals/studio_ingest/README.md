@@ -78,10 +78,9 @@ Each dataset directory contains:
 ## Ingestion Workflow
 
 1. **Validate**: Check rslearn dataset structure, verify modalities exist, check splits
+2. **Register**: Add entry to registry.json, create metadata.json in dataset dir
 2. **Copy**: Copy data from GCS to Weka, preserving rslearn structure
-3. **Compute Stats**: Sample dataset and compute per-band normalization statistics
-4. **Register**: Add entry to registry.json, create metadata.json in dataset dir
-
+3. Make sure that we can discover new datasets
 ## Normalization Statistics
 
 Band statistics are computed using `band_stats.py` (moved from `scripts/tools/`).

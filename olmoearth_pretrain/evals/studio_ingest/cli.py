@@ -76,12 +76,18 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         name=args.name,
         source_path=args.source,
         olmoearth_run_config_path=args.olmoearth_run_config_path,
+        max_samples=args.max_samples,
+        sample_fraction=args.sample_fraction,
+        groups=args.groups,
     )
 
     entry = ingest_dataset(config)
     print(f"\n✓ Successfully ingested dataset: {entry.name}")
     print(f"  Location: {entry.weka_path}")
     print(f"  Splits: {entry.splits}")
+    # Turn into the eval dataset config
+    eval_config = entry.to_eval_config()
+    print(f"  Eval config: {eval_config}")
     return 0
 
 
@@ -104,6 +110,26 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
         "--olmoearth-run-config-path",
         required=True,
         help="Path to olmoearth run config (e.g., 'path/to/olmoearth_run.yaml')",
+    )
+
+    # Optional sampling arguments
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Maximum number of samples to process for stats computation",
+    )
+    parser.add_argument(
+        "--sample-fraction",
+        type=float,
+        default=None,
+        help="Fraction of samples to use (0.0-1.0) for stats computation",
+    )
+    parser.add_argument(
+        "--groups",
+        nargs="+",
+        default=None,
+        help="Dataset groups to filter by (e.g., 'train_group')",
     )
 
 

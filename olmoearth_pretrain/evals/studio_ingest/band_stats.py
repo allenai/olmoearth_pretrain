@@ -46,7 +46,13 @@ from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
     RSLEARN_TO_OLMOEARTH,
 )
 
-NUM_WORKERS = (os.cpu_count() or 1) - 1
+# Default to cpu_count - 1, but allow override via env var
+_default_workers = (os.cpu_count() or 1) - 1
+NUM_WORKERS = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", _default_workers))
+
+# Optional sampling limits via env vars
+MAX_SAMPLES = int(os.environ["OLMOEARTH_MAX_SAMPLES"]) if "OLMOEARTH_MAX_SAMPLES" in os.environ else None
+SAMPLE_FRACTION = float(os.environ["OLMOEARTH_SAMPLE_FRACTION"]) if "OLMOEARTH_SAMPLE_FRACTION" in os.environ else None
 
 
 def build_rslearn_model_dataset_for_band_stats(
@@ -286,6 +292,9 @@ def compute_band_stats_from_rslearn_dataset(
     dataset_path: str,
     modalities: list[str],
     task: RsTask,
+    groups: list[str] | None = None,
+    max_samples: int | None = MAX_SAMPLES,
+    sample_fraction: float | None = SAMPLE_FRACTION,
 ) -> dict:
     """Compute band statistics from an rslearn dataset.
 
@@ -293,6 +302,12 @@ def compute_band_stats_from_rslearn_dataset(
         dataset_path: Path to the rslearn dataset.
         modalities: List of rslearn layer names (e.g., ["sentinel2", "sentinel1"]).
         task: The rslearn Task instance, instantiated from model config.
+        groups: Optional list of dataset group names to filter by.
+        max_samples: Optional maximum number of samples to process.
+            Defaults to OLMOEARTH_MAX_SAMPLES env var if set.
+        sample_fraction: Optional fraction of samples to use (0.0-1.0).
+            Defaults to OLMOEARTH_SAMPLE_FRACTION env var if set.
+            If both max_samples and sample_fraction are set, the smaller limit is used.
 
     Returns:
         Nested dict of band statistics per modality.
@@ -302,9 +317,26 @@ def compute_band_stats_from_rslearn_dataset(
         rslearn_dataset=base_ds,
         layers=modalities,
         task=task,
+        rslearn_dataset_groups=groups,
         split="train",
         skip_targets=True,
     )
+
+    # Apply sampling if requested
+    if max_samples is not None or sample_fraction is not None:
+        import random
+
+        total_samples = len(model_ds)
+        target_samples = total_samples
+
+        if sample_fraction is not None:
+            target_samples = min(target_samples, int(total_samples * sample_fraction))
+        if max_samples is not None:
+            target_samples = min(target_samples, max_samples)
+
+        if target_samples < total_samples:
+            indices = random.sample(range(total_samples), target_samples)
+            model_ds = torch.utils.data.Subset(model_ds, indices)
 
     bands_by_modality = get_bands_by_modality(modalities)
     stats = compute_band_stats(model_ds, bands_by_modality)

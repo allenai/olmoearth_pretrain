@@ -177,3 +177,27 @@ def dataset_to_config(dataset: str) -> EvalDatasetConfig:
         return DATASET_TO_CONFIG[dataset]
     except KeyError:
         raise ValueError(f"Unrecognized dataset: {dataset}")
+
+
+def get_eval_config(dataset: str) -> EvalDatasetConfig:
+    """Get EvalDatasetConfig by name, checking both hardcoded and registry.
+
+    First checks DATASET_TO_CONFIG dict, then falls back to registry.
+
+    Args:
+        dataset: Dataset name to look up.
+
+    Returns:
+        EvalDatasetConfig for the dataset.
+
+    Raises:
+        ValueError: If dataset not found in either location.
+    """
+    if dataset in DATASET_TO_CONFIG:
+        return DATASET_TO_CONFIG[dataset]
+
+    # Try registry
+    from olmoearth_pretrain.evals.studio_ingest import get_dataset_entry
+
+    entry = get_dataset_entry(dataset)
+    return entry.to_eval_config()

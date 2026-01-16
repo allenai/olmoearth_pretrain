@@ -71,6 +71,7 @@ EVAL_TASKS = {
         num_workers=0,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         eval_interval=Duration.epochs(5),
         eval_mode=EvalMode.KNN,
     ),
