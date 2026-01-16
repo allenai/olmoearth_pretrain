@@ -448,9 +448,17 @@ if __name__ == "__main__":
     except AttributeError:
         from olmoearth_pretrain.internal.common import build_common_components
 
+    # if the user modeule has no train module , because it is an external model, we can just pass None
+    # If the model is an olmoearth model, we need to build the train module config to load the checkpoint
+    try:
+        build_train_module_config = user_mod.build_train_module_config
+    except AttributeError:
+        build_train_module_config = None
+
     build_model_config = user_mod.build_model_config
     main(
         common_components_builder=build_common_components,
         model_config_builder=build_model_config,
         trainer_config_builder=build_trainer_config,
+        train_module_config_builder=build_train_module_config,
     )
