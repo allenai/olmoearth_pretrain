@@ -229,6 +229,12 @@ SAMPLING_STRATEGIES = {
         "random": True,
         "description": "Random sampling (native distribution)",
     },
+    "strategy6": {
+        # 50% water, 20% tree cover, 10% cropland, 10% built-up, 10% others
+        "category_weights": {8: 0.50, 1: 0.20, 4: 0.10, 5: 0.10},
+        "others_weight": 0.10,
+        "description": "50% permanent_water_bodies, 20% tree_cover, 10% cropland, 10% built_up, 10% others",
+    },
 }
 
 
