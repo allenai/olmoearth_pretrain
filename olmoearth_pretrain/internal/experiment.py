@@ -300,7 +300,8 @@ def evaluate(config: OlmoEarthExperimentConfig) -> None:
     data_loader = MockOlmoEarthDataLoader()
 
     # Handle case where we're loading OlmoEarth distributed checkpoint for eval
-    if config.trainer.load_path is not None:
+    # For OlmoEarthEvaluateConfig (eval-only), use mock train module since we only need model weights
+    if config.trainer.load_path is not None and hasattr(config, "train_module"):
         train_module = config.train_module.build(model)
     else:
         train_module = MockLatentMIMTrainModule()
