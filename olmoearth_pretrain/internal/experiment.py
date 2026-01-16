@@ -139,6 +139,7 @@ class OlmoEarthEvaluateConfig(Config):
     model: Config
     trainer: TrainerConfig
     launch: OlmoEarthBeakerLaunchConfig | None = None
+    train_module: OlmoEarthTrainModuleConfig | None = None
     init_seed: int = 12536
 
 
@@ -212,6 +213,9 @@ def build_evaluate_config(
     model_config_builder: Callable[[CommonComponents], Config],
     trainer_config_builder: Callable[[CommonComponents], TrainerConfig],
     overrides: list[str],
+    train_module_config_builder: (
+        Callable[[CommonComponents], OlmoEarthTrainModuleConfig] | None
+    ) = None,
 ) -> OlmoEarthEvaluateConfig:
     """Build a OlmoEarth Evaluate experiment configuration."""
     common_overrides, overrides = split_common_overrides(overrides)
@@ -220,11 +224,15 @@ def build_evaluate_config(
     logger.info("Common: %s", common)
     model_config = model_config_builder(common)
     trainer_config = trainer_config_builder(common)
+    train_module_config = (
+        train_module_config_builder(common) if train_module_config_builder else None
+    )
     config = OlmoEarthEvaluateConfig(
         run_name=common.run_name,
         model=model_config,
         trainer=trainer_config,
         launch=common.launch,
+        train_module=train_module_config,
     )
     config = config.merge(overrides)
     return config
@@ -287,7 +295,7 @@ def train(config: OlmoEarthExperimentConfig) -> None:
     trainer.fit()
 
 
-def evaluate(config: OlmoEarthExperimentConfig) -> None:
+def evaluate(config: OlmoEarthEvaluateConfig) -> None:
     """Evaluate a checkpoint or model on downstream tasks."""
     # Set RNG states on all devices. Also, done in prepare_training_environment
     seed_all(config.init_seed)
@@ -300,9 +308,13 @@ def evaluate(config: OlmoEarthExperimentConfig) -> None:
     data_loader = MockOlmoEarthDataLoader()
 
     # Handle case where we're loading OlmoEarth distributed checkpoint for eval
-    # For OlmoEarthEvaluateConfig (eval-only), use mock train module since we only need model weights
-    if config.trainer.load_path is not None and hasattr(config, "train_module"):
+    if config.trainer.load_path is not None:
+        if config.train_module is None:
+            raise ValueError("train_module is not set so we can't load the checkpoint")
         train_module = config.train_module.build(model)
+        # Hack to satisfy init of a real train module
+        data_loader.min_patch_size = model.encoder.min_patch_size
+        data_loader.max_patch_size = model.encoder.max_patch_size
     else:
         train_module = MockLatentMIMTrainModule()
 
@@ -542,6 +554,7 @@ If running command on a local machine ie from a session, you can use the [b]loca
             model_config_builder=model_config_builder,
             trainer_config_builder=trainer_config_builder,
             overrides=overrides,
+            train_module_config_builder=train_module_config_builder,
         )
     else:
         # Training mode
