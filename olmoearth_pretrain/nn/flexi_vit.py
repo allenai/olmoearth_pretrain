@@ -980,10 +980,15 @@ class FlexiVitBase(nn.Module):
         random_channel_embeddings: bool = False,
         use_flash_attn: bool = False,
         qk_norm: bool = False,
+        q_embedding_size: int | None = None,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
 
+        if q_embedding_size is not None:
+            assert self.cross_attn, (
+                "If not cross_attn expect q_embedding_size == embedding_size"
+            )
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [x.name for x in supported_modalities]
@@ -1006,6 +1011,7 @@ class FlexiVitBase(nn.Module):
                     cross_attn=self.cross_attn,
                     drop_path=drop_path,
                     use_flash_attn=self.use_flash_attn,
+                    q_dim=q_embedding_size,
                 )
                 for _ in range(depth)
             ]
@@ -1748,7 +1754,7 @@ class PredictorBase(FlexiVitBase):
             qk_norm: Whether to apply normalization to Q and K in attention
         """
         super().__init__(
-            embedding_size=decoder_embedding_size,
+            embedding_size=encoder_embedding_size,
             depth=depth,
             mlp_ratio=mlp_ratio,
             num_heads=num_heads,
@@ -1759,21 +1765,32 @@ class PredictorBase(FlexiVitBase):
             supported_modalities=supported_modalities,
             use_flash_attn=use_flash_attn,
             qk_norm=qk_norm,
+            q_embedding_size=decoder_embedding_size,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
         self.encoder_embedding_size = encoder_embedding_size
-        self.encoder_to_decoder_embed = nn.Linear(
-            encoder_embedding_size, decoder_embedding_size, bias=True
+        self.decoder_embedding_size = decoder_embedding_size
+
+        assert self.decoder_embedding_size <= self.encoder_embedding_size, (
+            "This breaks things! Why are you trying this anyway?"
         )
+        # Removing for now, but a TODO is to add this back in case
+        # it does something
+        # self.encoder_to_decoder_embed = nn.Linear(
+        #     encoder_embedding_size, encoder_embedding_size, bias=True
+        # )
         if output_embedding_size is None:
             output_embedding_size = encoder_embedding_size
         self.output_embedding_size = output_embedding_size
         self.to_output_embed = nn.Linear(
             decoder_embedding_size, output_embedding_size, bias=True
         )
-        # THIS is the learnable mask token
-        self.mask_token = nn.Parameter(torch.zeros(decoder_embedding_size))
+        # THIS is the learnable mask token. We are doing something abit hackey here -
+        # in order to make it fit with the encoder embeddings, we are going to
+        # make it the encoder embedding size. Then we will index it to what we want
+        # before we pass it to the attention layer.
+        self.mask_token = nn.Parameter(torch.zeros(encoder_embedding_size))
 
         self.input_norm = nn.LayerNorm(encoder_embedding_size)
         self.norm = nn.LayerNorm(decoder_embedding_size)
@@ -1816,7 +1833,7 @@ class PredictorBase(FlexiVitBase):
 
     # TODO: GIVE more explicit function names
     @staticmethod
-    def split_x_y(tokens: Tensor, mask: Tensor) -> tuple[Tensor, ...]:
+    def split_x_y(tokens: Tensor, mask: Tensor, decoder_dim: int) -> tuple[Tensor, ...]:
         """Splits tokens into three groups based on mask values.
 
         This function:
@@ -1829,10 +1846,11 @@ class PredictorBase(FlexiVitBase):
         Args:
             tokens: Tokens to split of shape [B, T, D].
             mask: Mask of shape [B, T].
+            decoder_dim: the decoder dimension
 
         Returns:
-            tokens_to_decode: Tokens to be decoded of shape [B, X_len, D].
-            unmasked_tokens: Tokens to be used as context of shape [B, Y_len, D].
+            tokens_to_decode: Tokens to be decoded of shape [B, X_len, D_decode].
+            unmasked_tokens: Tokens to be used as context of shape [B, Y_len, D_encode].
             tokens_to_decode_mask: Binary mask for x tokens of shape [B, X_len].
             unmasked_tokens_mask: Binary mask for y tokens of shape [B, Y_len].
             indices: Indices for restoring the original token ordering of shape [B, T].
@@ -1863,7 +1881,7 @@ class PredictorBase(FlexiVitBase):
 
         # the y mask is going to be used to determine which of the y values take. True values
         # take part in the attention (we don't take the inverse here, unlike in the decoder)
-        tokens_to_decode = tokens[:, :max_length_of_decoded_tokens]
+        tokens_to_decode = tokens[:, :max_length_of_decoded_tokens, :decoder_dim]
         tokens_to_decode_mask = binarized_decoder_mask[
             :, :max_length_of_decoded_tokens
         ].to(org_mask_dtype)

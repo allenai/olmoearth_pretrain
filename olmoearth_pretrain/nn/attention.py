@@ -110,6 +110,7 @@ class Attention(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        q_dim: int | None = None,
     ) -> None:
         """Initialize the attention module.
 
@@ -131,9 +132,14 @@ class Attention(nn.Module):
         self.scale = self.head_dim**-0.5
 
         self.cross_attn = cross_attn
+        self.q_dim = q_dim
+        if self.q_dim is not None:
+            assert self.cross_attn, (
+                "cross_attn is False so we expect the same input for q,k,v"
+            )
         self.use_flash_attn = use_flash_attn
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
-        self.q = nn.Linear(dim, dim, bias=qkv_bias)
+        self.q = nn.Linear(q_dim, dim, bias=qkv_bias)
         self.k = nn.Linear(dim, dim, bias=qkv_bias)
         self.v = nn.Linear(dim, dim, bias=qkv_bias)
 
