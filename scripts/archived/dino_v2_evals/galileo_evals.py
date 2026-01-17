@@ -11,17 +11,6 @@ from galileo import (
     build_train_module_config,
     build_visualize_config,
 )
-from olmo_core.train.callbacks import (
-    BeakerCallback,
-    CheckpointerCallback,
-    ConfigSaverCallback,
-    GarbageCollectorCallback,
-    GPUMemoryMonitorCallback,
-)
-from olmo_core.train.checkpoint import CheckpointerConfig
-from olmo_core.train.common import Duration, LoadStrategy
-from olmo_core.train.config import TrainerConfig
-
 from helios.data.constants import Modality
 from helios.internal.common import build_common_components
 from helios.internal.experiment import (
@@ -37,6 +26,16 @@ from helios.train.callbacks import (
     HeliosWandBCallback,
 )
 from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
+from olmo_core.train.callbacks import (
+    BeakerCallback,
+    CheckpointerCallback,
+    ConfigSaverCallback,
+    GarbageCollectorCallback,
+    GPUMemoryMonitorCallback,
+)
+from olmo_core.train.checkpoint import CheckpointerConfig
+from olmo_core.train.common import Duration, LoadStrategy
+from olmo_core.train.config import TrainerConfig
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:

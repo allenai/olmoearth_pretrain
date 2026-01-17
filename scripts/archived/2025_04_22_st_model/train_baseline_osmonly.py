@@ -1,5 +1,11 @@
 """Trying to prototype fitting everything into olmo core."""
 
+from helios.data.concat import HeliosConcatDatasetConfig
+from helios.data.dataset import HeliosDatasetConfig
+from helios.internal.common import build_common_components
+from helios.internal.experiment import CommonComponents, main
+from helios.nn.flexihelios import EncoderConfig, PredictorConfig
+from helios.nn.latent_mim import LatentMIMConfig
 from olmo_core.config import DType
 from shared import (
     MAX_PATCH_SIZE,
@@ -9,13 +15,6 @@ from shared import (
     build_trainer_config,
     build_visualize_config,
 )
-
-from helios.data.concat import HeliosConcatDatasetConfig
-from helios.data.dataset import HeliosDatasetConfig
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, main
-from helios.nn.flexihelios import EncoderConfig, PredictorConfig
-from helios.nn.latent_mim import LatentMIMConfig
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
