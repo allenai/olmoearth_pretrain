@@ -447,7 +447,7 @@ class TestPredictor:
             seqlens_unmasked_tokens,
             max_length_of_decoded_tokens,
             max_length_of_unmasked_tokens,
-        ) = Predictor.split_x_y(tokens, mask)
+        ) = Predictor.split_x_y(tokens, mask, decoder_dim=1)
         # Check shapes
         assert unmasked_tokens.shape == (2, 6, 1)
         assert tokens_to_decode.shape == (2, 3, 1)
@@ -520,7 +520,7 @@ class TestPredictor:
             _,
             _,
             _,
-        ) = Predictor.split_x_y(tokens, mask)
+        ) = Predictor.split_x_y(tokens, mask, decoder_dim=1)
 
         # Check shapes
         assert tokens_to_decode.shape == (2, 3, 1)
@@ -607,7 +607,7 @@ class TestPredictor:
             _,
             _,
             _,
-        ) = Predictor.split_x_y(tokens, mask)
+        ) = Predictor.split_x_y(tokens, mask, decoder_dim=1)
 
         combined_tokens = Predictor.combine_x_y(
             tokens_to_decode=tokens_to_decode,
