@@ -64,7 +64,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config for an experiment."""
     # we overwrite some of the variables here.
     output_embedding_size = 64
-    decoder_embedding_size = 512
+    decoder_embedding_size = 64
 
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
@@ -83,10 +83,9 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         decoder_embedding_size=decoder_embedding_size,
         depth=model_size["decoder_depth"],
         mlp_ratio=model_size["mlp_ratio"],
-        # how many heads should we have? Unknown! does this even matter? Unknown!
-        # but keeping 12 heads with d64 (i.e. a head dim of 5) seems too small.
-        # we divide by 32 for decoder_embedding_size = {64, 128} and 64 otherwise
-        num_heads=decoder_embedding_size // 64,
+        # the number of heads is defined by the the attention dim,
+        # which we expand to the encoder embedding size
+        num_heads=model_size["decoder_num_heads"],
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
         output_embedding_size=output_embedding_size,
