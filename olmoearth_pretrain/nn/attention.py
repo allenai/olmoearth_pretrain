@@ -124,12 +124,14 @@ class Attention(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Enable cross-attention
             use_flash_attn: Use flash attention
+            q_dim: An optional dim to use for the queries (y)
         """
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim**-0.5
+        self.q_head_dim = q_dim if q_dim else dim // num_heads
+        self.scale = self.q_head_dim**-0.5
 
         self.cross_attn = cross_attn
         self.q_dim = q_dim
@@ -137,16 +139,17 @@ class Attention(nn.Module):
             assert self.cross_attn, (
                 "cross_attn is False so we expect the same input for q,k,v"
             )
+        out_dim = q_dim if q_dim else dim
         self.use_flash_attn = use_flash_attn
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
-        self.q = nn.Linear(q_dim, dim, bias=qkv_bias)
-        self.k = nn.Linear(dim, dim, bias=qkv_bias)
-        self.v = nn.Linear(dim, dim, bias=qkv_bias)
+        self.q = nn.Linear(q_dim if q_dim else dim, out_dim, bias=qkv_bias)
+        self.k = nn.Linear(dim, out_dim, bias=qkv_bias)
+        self.v = nn.Linear(dim, out_dim, bias=qkv_bias)
 
-        self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
+        self.q_norm = norm_layer(self.q_head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
+        self.proj = nn.Linear(out_dim, out_dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
     def sdpa(
@@ -445,6 +448,7 @@ class Block(nn.Module):
         act_layer: Activation layer. Default: nn.GELU
         norm_layer: Normalization layer. Default: nn.LayerNorm
         cross_attn: Whether to use cross attention. Default: False
+        q_dim: An optional dim to use for the queries (y)
     """
 
     def __init__(
@@ -462,6 +466,7 @@ class Block(nn.Module):
         norm_layer: nn.Module = nn.LayerNorm,
         cross_attn: bool = False,
         use_flash_attn: bool = False,
+        q_dim: int | None = None,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -479,9 +484,10 @@ class Block(nn.Module):
             norm_layer: Normalization layer
             cross_attn: Whether to use cross attention
             use_flash_attn: Whether to use flash attention
+            q_dim: An optional dim to use for the queries (y)
         """
         super().__init__()
-        self.norm1 = norm_layer(dim)
+        self.norm1 = norm_layer(q_dim if q_dim else dim)
         self.attn = Attention(
             dim,
             num_heads=num_heads,
@@ -492,21 +498,24 @@ class Block(nn.Module):
             norm_layer=norm_layer,
             cross_attn=cross_attn,
             use_flash_attn=use_flash_attn,
+            q_dim=q_dim,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
-        self.norm2 = norm_layer(dim)
+        self.norm2 = norm_layer(q_dim if q_dim else dim)
         self.mlp = Mlp(
-            in_features=dim,
-            hidden_features=int(dim * mlp_ratio),
+            in_features=q_dim if q_dim else dim,
+            hidden_features=int((q_dim if q_dim else dim) * mlp_ratio),
             act_layer=act_layer,
             drop=drop,
         )
         self.ls2 = (
-            LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
+            LayerScale(q_dim if q_dim else dim, init_values=init_values)
+            if init_values
+            else nn.Identity()
         )
 
     def forward(

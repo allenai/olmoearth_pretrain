@@ -58,7 +58,7 @@ def latent_mim_model(
     predictor_config = PredictorConfig(
         supported_modality_names=supported_modality_names,
         encoder_embedding_size=16,
-        decoder_embedding_size=16,
+        decoder_embedding_size=8,
         depth=2,
         mlp_ratio=1.0,
         num_heads=2,

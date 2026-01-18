@@ -1988,7 +1988,7 @@ class Predictor(PredictorBase):
             seqlens_unmasked_tokens,
             max_length_of_tokens_to_decode,
             max_length_of_unmasked_tokens,
-        ) = self.split_x_y(all_tokens, mask)
+        ) = self.split_x_y(all_tokens, mask, self.decoder_embedding_size)
         # Pack x tokens
         if self.use_flash_attn:
             og_shape_tokens_to_decode = tokens_to_decode.shape
@@ -2034,9 +2034,11 @@ class Predictor(PredictorBase):
                 unmasked_tokens, unmasked_tokens_mask.bool(), og_shape_unmasked_tokens
             )
 
+        # now, when we combine we will only keep the predictor dimensions, which
+        # may be less than the embedding dimension
         x = self.combine_x_y(
             tokens_to_decode=tokens_to_decode,
-            unmasked_tokens=unmasked_tokens,
+            unmasked_tokens=unmasked_tokens[..., : self.decoder_embedding_size],
             tokens_to_decode_mask=tokens_to_decode_mask,
             unmasked_tokens_mask=unmasked_tokens_mask,
             indices=indices,
@@ -2075,7 +2077,8 @@ class Predictor(PredictorBase):
             x_modality = getattr(x, modality)
             # Although, we do not account for missing tokens both proj and normalize are on token dimension so there is no mixing with real tokens
             x_modality = self.input_norm(x_modality)
-            x_modality = self.encoder_to_decoder_embed(x_modality)
+            # TODO - do we still need this encoder to decoder embed?
+            # x_modality = self.encoder_to_decoder_embed(x_modality)
             masked_modality_name = x.get_masked_modality_name(modality)
             decoder_emedded_dict[modality] = x_modality
             decoder_emedded_dict[masked_modality_name] = getattr(
