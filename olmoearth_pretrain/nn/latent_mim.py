@@ -74,6 +74,11 @@ class LatentMIM(nn.Module, DistributedMixins):
         extra_metrics = {}
         if token_norm_stats is not None:
             extra_metrics["token_norm_stats"] = token_norm_stats
+        # Add MoE aux loss to extra_metrics if MoE is enabled
+        if hasattr(self.encoder, "get_moe_aux_loss"):
+            moe_aux_loss = self.encoder.get_moe_aux_loss()
+            if moe_aux_loss.item() > 0:
+                extra_metrics["moe_aux_loss"] = moe_aux_loss
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)

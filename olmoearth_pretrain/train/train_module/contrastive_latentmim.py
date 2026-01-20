@@ -197,6 +197,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.tensor(0.0, device=self.device)
+        total_batch_moe_aux = torch.tensor(0.0, device=self.device)
         patch_size, batch_data = batch
         # Split into micro-batches.
         microbatches = split_batch(batch_data, self.rank_microbatch_size)
@@ -215,13 +216,25 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     patch_size=patch_size,
                 )
                 # Run Encoder and decoder on the augmented input
-                loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
+                loss_a, latent_a, decoded_a, target_output_a, pooled_a, extra_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
                 )
-                loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
+                loss_b, latent_b, decoded_b, target_output_b, pooled_b, extra_b = (
                     self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 )
                 loss = (loss_a + loss_b) / 2
+
+                # Accumulate MoE aux loss for logging (already added to loss in model_forward)
+                if extra_a and "moe_aux_loss" in extra_a:
+                    total_batch_moe_aux += (
+                        get_local_tensor(extra_a["moe_aux_loss"].detach())
+                        / num_microbatches
+                    )
+                if extra_b and "moe_aux_loss" in extra_b:
+                    total_batch_moe_aux += (
+                        get_local_tensor(extra_b["moe_aux_loss"].detach())
+                        / num_microbatches
+                    )
 
                 # Scale loss by number of microbatches
                 reg_term_a = self.compute_regularization(pooled_a)
@@ -272,6 +285,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 total_batch_con,
                 ReduceType.mean,
             )
+        if total_batch_moe_aux.item() > 0:
+            self.trainer.record_metric(
+                "train/moe_aux_loss",
+                total_batch_moe_aux,
+                ReduceType.mean,
+            )
         self.log_regularization(total_batch_reg)
 
         del batch, batch_data  # In case this helps with memory utilization.
@@ -283,7 +302,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         patch_size: int,
         token_exit_cfg: dict[str, int],
     ) -> tuple[
-        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        torch.Tensor,
+        dict[str, Any] | None,
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
@@ -305,6 +329,16 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
             loss = self.loss_fn(decoded, target_output)
+            # Add MoE auxiliary loss if present
+            if extra_metrics and "moe_aux_loss" in extra_metrics:
+                loss = loss + extra_metrics["moe_aux_loss"]
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output, latent_projected_and_pooled
+            return (
+                loss,
+                latent,
+                decoded,
+                target_output,
+                latent_projected_and_pooled,
+                extra_metrics,
+            )

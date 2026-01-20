@@ -19,7 +19,7 @@ from olmoearth_pretrain.data.constants import (
     get_modality_specs_from_names,
 )
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
-from olmoearth_pretrain.nn.attention import Block
+from olmoearth_pretrain.nn.attention import Block, MoEBlock
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -972,6 +972,10 @@ class FlexiVitBase(nn.Module):
         random_channel_embeddings: bool = False,
         use_flash_attn: bool = False,
         qk_norm: bool = False,
+        use_moe: bool = False,
+        num_experts: int = 8,
+        top_k: int = 2,
+        moe_aux_loss_weight: float = 0.01,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -986,22 +990,46 @@ class FlexiVitBase(nn.Module):
         self.use_flash_attn = use_flash_attn
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
-        self.blocks = nn.ModuleList(
-            [
-                Block(
-                    embedding_size,
-                    num_heads,
-                    mlp_ratio,
-                    qkv_bias=True,
-                    qk_norm=qk_norm,
-                    norm_layer=nn.LayerNorm,  # TODO: This should be configurable
-                    cross_attn=self.cross_attn,
-                    drop_path=drop_path,
-                    use_flash_attn=self.use_flash_attn,
-                )
-                for _ in range(depth)
-            ]
-        )
+        self.use_moe = use_moe
+
+        # Choose block type based on use_moe
+        if use_moe:
+            self.blocks = nn.ModuleList(
+                [
+                    MoEBlock(
+                        embedding_size,
+                        num_heads,
+                        mlp_ratio,
+                        num_experts=num_experts,
+                        top_k=top_k,
+                        aux_loss_weight=moe_aux_loss_weight,
+                        qkv_bias=True,
+                        qk_norm=qk_norm,
+                        norm_layer=nn.LayerNorm,
+                        cross_attn=self.cross_attn,
+                        drop_path=drop_path,
+                        use_flash_attn=self.use_flash_attn,
+                    )
+                    for _ in range(depth)
+                ]
+            )
+        else:
+            self.blocks = nn.ModuleList(
+                [
+                    Block(
+                        embedding_size,
+                        num_heads,
+                        mlp_ratio,
+                        qkv_bias=True,
+                        qk_norm=qk_norm,
+                        norm_layer=nn.LayerNorm,  # TODO: This should be configurable
+                        cross_attn=self.cross_attn,
+                        drop_path=drop_path,
+                        use_flash_attn=self.use_flash_attn,
+                    )
+                    for _ in range(depth)
+                ]
+            )
 
         self.composite_encodings = CompositeEncodings(
             embedding_size,
@@ -1018,6 +1046,21 @@ class FlexiVitBase(nn.Module):
             torch.nn.init.xavier_uniform_(m.weight)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
+
+    def get_moe_aux_loss(self) -> torch.Tensor:
+        """Aggregate auxiliary loss from all MoE blocks.
+
+        Returns:
+            Scalar tensor with sum of aux losses from all MoE blocks.
+            Returns 0 if MoE is not enabled.
+        """
+        if not self.use_moe:
+            return torch.tensor(0.0)
+        aux_loss = torch.tensor(0.0, device=next(self.parameters()).device)
+        for block in self.blocks:
+            if hasattr(block, "aux_loss"):
+                aux_loss = aux_loss + block.aux_loss
+        return aux_loss
 
     @staticmethod
     def grab_modality_specific_dims(modality_data: Tensor) -> tuple[int, ...]:
@@ -1197,6 +1240,10 @@ class Encoder(FlexiVitBase):
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
+        use_moe: bool = False,
+        num_experts: int = 8,
+        top_k: int = 2,
+        moe_aux_loss_weight: float = 0.01,
     ):
         """Initialize the encoder.
 
@@ -1222,6 +1269,10 @@ class Encoder(FlexiVitBase):
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
+            use_moe: Whether to use Mixture of Experts blocks
+            num_experts: Number of expert networks in MoE. Defaults to 8.
+            top_k: Number of experts each token is routed to. Defaults to 2.
+            moe_aux_loss_weight: Weight for load balancing auxiliary loss. Defaults to 0.01.
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1235,6 +1286,10 @@ class Encoder(FlexiVitBase):
             use_flash_attn=use_flash_attn,
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
+            use_moe=use_moe,
+            num_experts=num_experts,
+            top_k=top_k,
+            moe_aux_loss_weight=moe_aux_loss_weight,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -2110,6 +2165,10 @@ class EncoderConfig(Config):
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
     log_token_norm_stats: bool = False
+    use_moe: bool = False
+    num_experts: int = 8
+    top_k: int = 2
+    moe_aux_loss_weight: float = 0.01
 
     def validate(self) -> None:
         """Validate the configuration."""
