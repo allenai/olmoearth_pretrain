@@ -405,7 +405,10 @@ class SparseMoE(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass with sparse routing.
+        """Forward pass with efficient batched sparse routing.
+
+        Uses sorted token grouping for better memory access patterns and fewer
+        kernel launches compared to boolean masking per expert.
 
         Args:
             x: Input tensor of shape (B, N, D) or (B*N, D)
@@ -414,10 +417,11 @@ class SparseMoE(nn.Module):
             Output tensor of same shape as input
         """
         orig_shape = x.shape
-        x_flat = x.view(-1, x.shape[-1])  # (B*N, D)
+        x_flat = x.view(-1, x.shape[-1])  # (num_tokens, D)
+        num_tokens = x_flat.shape[0]
 
         # Compute router logits and probabilities
-        router_logits = self.router(x_flat)  # (B*N, num_experts)
+        router_logits = self.router(x_flat)  # (num_tokens, num_experts)
         router_probs = F.softmax(router_logits, dim=-1)
 
         # Select top-k experts per token
@@ -429,31 +433,47 @@ class SparseMoE(nn.Module):
         if self.training:
             self._aux_loss = self._compute_aux_loss(router_probs, top_k_indices)
 
-        # Initialize output
-        output = torch.zeros_like(x_flat)
+        # Flatten top-k selections: (num_tokens * top_k,)
+        flat_indices = top_k_indices.view(-1)  # Which expert for each (token, k) pair
+        flat_probs = top_k_probs.view(-1)  # Weight for each (token, k) pair
 
-        # Route tokens to experts
+        # Repeat input for each top-k selection: (num_tokens * top_k, D)
+        x_repeat = x_flat.repeat_interleave(self.top_k, dim=0)
+
+        # Sort by expert index for contiguous memory access patterns
+        sorted_indices, sort_order = torch.sort(flat_indices)
+        sorted_probs = flat_probs[sort_order]
+        sorted_x = x_repeat[sort_order]
+
+        # Find boundaries for each expert using bincount
+        expert_counts = torch.bincount(sorted_indices, minlength=self.num_experts)
+        expert_offsets = torch.cat(
+            [
+                torch.zeros(1, dtype=torch.long, device=x.device),
+                torch.cumsum(expert_counts, dim=0),
+            ]
+        )
+
+        # Process each expert's tokens in a batch (contiguous slices, not boolean masks)
+        sorted_outputs = torch.zeros_like(sorted_x)
         for expert_idx in range(self.num_experts):
-            # Find which tokens selected this expert in their top-k
-            expert_mask = (top_k_indices == expert_idx).any(dim=-1)
-            if not expert_mask.any():
-                continue
+            start = expert_offsets[expert_idx].item()
+            end = expert_offsets[expert_idx + 1].item()
+            if start < end:
+                sorted_outputs[start:end] = self.experts[expert_idx](
+                    sorted_x[start:end]
+                )
 
-            # Get the weight for this expert for each selected token
-            expert_weights = torch.where(
-                top_k_indices == expert_idx,
-                top_k_probs,
-                torch.zeros_like(top_k_probs),
-            ).sum(dim=-1)
+        # Apply weights
+        sorted_outputs = sorted_outputs * sorted_probs.unsqueeze(-1)
 
-            # Process tokens through this expert
-            expert_input = x_flat[expert_mask]
-            expert_output = self.experts[expert_idx](expert_input)
+        # Unsort back to original order
+        outputs = torch.zeros_like(sorted_outputs)
+        outputs[sort_order] = sorted_outputs
 
-            # Weighted accumulation
-            output[expert_mask] += (
-                expert_weights[expert_mask].unsqueeze(-1) * expert_output
-            )
+        # Reshape and sum over top-k dimension
+        outputs = outputs.view(num_tokens, self.top_k, -1)
+        output = outputs.sum(dim=1)
 
         return output.view(orig_shape)
 
