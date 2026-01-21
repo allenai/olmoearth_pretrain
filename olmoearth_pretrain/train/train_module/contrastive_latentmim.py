@@ -319,7 +319,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 extra_metrics,
             ) = self.model(batch, patch_size)
             if extra_metrics is not None:
-                self.log_extra_metrics(extra_metrics)
+                # Don't log moe_aux_loss here - it's accumulated and logged in train_batch
+                metrics_to_log = {
+                    k: v for k, v in extra_metrics.items() if k != "moe_aux_loss"
+                }
+                if metrics_to_log:
+                    self.log_extra_metrics(metrics_to_log)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(
