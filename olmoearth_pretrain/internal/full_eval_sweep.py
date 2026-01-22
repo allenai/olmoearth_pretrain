@@ -922,6 +922,19 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
             cmd += select_best_val_args()
             commands_to_run_new.append(cmd)
         commands_to_run = commands_to_run_new
+
+    # Filter out skipped tasks if task-skip-names is provided
+    if args.task_skip_names:
+        skip_names = [name.strip() for name in args.task_skip_names.split(",")]
+        tasks_to_run = [task for task in EVAL_TASKS.keys() if task not in skip_names]
+        tasks_to_run_arg = f" --trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+        commands_to_run_new = []
+        for cmd in commands_to_run:
+            logger.info(f"Adding tasks_to_run filter to {cmd}")
+            cmd += tasks_to_run_arg
+            commands_to_run_new.append(cmd)
+        commands_to_run = commands_to_run_new
+
     return commands_to_run
 
 
@@ -1001,6 +1014,12 @@ def main() -> None:
         type=str,
         required=False,
         help="Comma-separated list of model names to skip when --model=all is set",
+    )
+    parser.add_argument(
+        "--task-skip-names",
+        type=str,
+        required=False,
+        help="Comma-separated list of task names to skip (e.g., pastis128_sentinel2,pastis128_sentinel1)",
     )
     parser.add_argument(
         "--size",
