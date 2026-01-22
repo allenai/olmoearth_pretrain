@@ -80,6 +80,8 @@ class CommonComponents(Config):
     training_modalities: list[str]
     launch: OlmoEarthBeakerLaunchConfig | None = None
     nccl_debug: bool = False
+    # Enable dataloader-side masking to offload masking from GPU to dataloader workers
+    dataloader_side_masking: bool = False
     # callbacks: dict[str, Callback]
 
     def validate(self) -> None:

@@ -71,30 +71,48 @@ def build_common_components(
     return config
 
 
+def get_masking_config() -> MaskingConfig:
+    """Get the masking configuration for the experiment.
+
+    This is extracted to allow reuse in both train_module_config (legacy mode)
+    and dataloader_config (dataloader-side masking mode).
+    """
+    return MaskingConfig(
+        strategy_config={
+            # "type": "modality_cross_random",
+            "type": "random_with_decode",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            # "allow_encoding_decoding_same_bandset": True,
+            "only_decode_modalities": [
+                Modality.WORLDCOVER.name,
+                Modality.SRTM.name,
+                Modality.OPENSTREETMAP_RASTER.name,
+                Modality.WRI_CANOPY_HEIGHT_MAP.name,
+                Modality.CDL.name,
+                Modality.WORLDCEREAL.name,
+            ],
+        }
+    )
+
+
 def build_train_module_config(
     common: CommonComponents,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build the train module config for an experiment."""
+    """Build the train module config for an experiment.
+
+    Args:
+        common: Common components for the experiment. When common.dataloader_side_masking
+            is True, masking is handled in the dataloader and the train module receives
+            pre-masked batches.
+    """
+    # When dataloader_side_masking is enabled, the train module still needs
+    # the masking_config for reference (e.g., for metric naming), but the
+    # actual masking happens in the dataloader workers.
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
         rank_microbatch_size=32,
-        masking_config=MaskingConfig(
-            strategy_config={
-                # "type": "modality_cross_random",
-                "type": "random_with_decode",
-                "encode_ratio": 0.5,
-                "decode_ratio": 0.5,
-                # "allow_encoding_decoding_same_bandset": True,
-                "only_decode_modalities": [
-                    Modality.WORLDCOVER.name,
-                    Modality.SRTM.name,
-                    Modality.OPENSTREETMAP_RASTER.name,
-                    Modality.WRI_CANOPY_HEIGHT_MAP.name,
-                    Modality.CDL.name,
-                    Modality.WORLDCEREAL.name,
-                ],
-            }
-        ),
+        masking_config=get_masking_config(),
         loss_config=LossConfig(
             loss_config={
                 "type": "modality_patch_discrimination_new",
@@ -119,11 +137,19 @@ def build_train_module_config(
     )
 
 
-def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Build the dataloader config for an experiment."""
-    # things should be set during building
+def build_dataloader_config(
+    common: CommonComponents,
+) -> OlmoEarthDataLoaderConfig:
+    """Build the dataloader config for an experiment.
 
-    return OlmoEarthDataLoaderConfig(
+    Args:
+        common: Common components for the experiment. When common.dataloader_side_masking
+            is True, masking is performed in the dataloader workers (CPU) instead of
+            in the train module (GPU). This can improve throughput by offloading
+            CPU-bound masking operations to dataloader workers.
+    """
+    # Base config that's always the same
+    base_config = dict(
         num_workers=16,
         global_batch_size=512,
         token_budget=2250,
@@ -134,6 +160,21 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
         work_dir=common.save_folder,
         seed=3622,
     )
+
+    if common.dataloader_side_masking:
+        # Enable dataloader-side masking for ContrastiveLatentMIM (2 masked views)
+        return OlmoEarthDataLoaderConfig(
+            **base_config,
+            num_masked_views=2,  # ContrastiveLatentMIM needs 2 views
+            masking_config=get_masking_config(),
+            # masking_config_b is not set, so both views use the same strategy
+        )
+    else:
+        # Legacy mode: masking happens in train module
+        return OlmoEarthDataLoaderConfig(
+            **base_config,
+            num_masked_views=0,  # Explicit legacy mode
+        )
 
 
 def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
