@@ -4,6 +4,7 @@ import itertools
 import os
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from logging import getLogger
 from pathlib import Path
@@ -98,6 +99,41 @@ class OlmoEarth(torch.nn.Module):
         )["tokens_and_masks"]
 
 
+def build_default_model_config(
+    run_params: RunParams, training_modalities: list[str]
+) -> LatentMIMConfig:
+    """Default model config builder based on model_size.
+
+    Args:
+        run_params: The run parameters containing model_size.
+        training_modalities: List of modality names to support.
+
+    Returns:
+        A LatentMIMConfig for building the model.
+    """
+    model_size = MODEL_SIZE_ARGS[run_params.model_size]
+    encoder_config = EncoderConfig(
+        embedding_size=int(model_size["encoder_embedding_size"]),
+        num_heads=int(model_size["encoder_num_heads"]),
+        depth=int(model_size["encoder_depth"]),
+        mlp_ratio=float(model_size["mlp_ratio"]),
+        supported_modality_names=training_modalities,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=int(model_size["encoder_embedding_size"]),
+        decoder_embedding_size=int(model_size["decoder_embedding_size"]),
+        depth=int(model_size["decoder_depth"]),
+        mlp_ratio=float(model_size["mlp_ratio"]),
+        num_heads=int(model_size["decoder_num_heads"]),
+        supported_modality_names=training_modalities,
+        max_sequence_length=12,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
+
+
 @dataclass
 class ThroughputBenchmarkRunnerConfig(Config):
     """Defines the configuration for a throughput benchmarking run."""
@@ -116,6 +152,7 @@ class ThroughputBenchmarkRunnerConfig(Config):
     default_run_params: RunParams | None = None
     save_folder: Path | None = None
     cross_product_sweep: bool = False
+    model_config_builder: Callable[[RunParams, list[str]], Any] | None = None
 
     def build(self) -> "ThroughputBenchmarkRunner":
         """Builds a throughput benchmarking runner."""
@@ -140,6 +177,7 @@ class ThroughputBenchmarkRunnerConfig(Config):
             save_folder=self.save_folder,
             sweep_dict=sweep_dict,
             cross_product_sweep=self.cross_product_sweep,
+            model_config_builder=self.model_config_builder,
         )
 
 
@@ -164,6 +202,7 @@ class ThroughputBenchmarkRunner:
         save_folder: Path | None = None,
         sweep_dict: dict[str, Any] = {},
         cross_product_sweep: bool = False,
+        model_config_builder: Callable[[RunParams, list[str]], Any] | None = None,
     ):
         """Initializes the throughput benchmarking runner."""
         self.default_run_params = default_run_params
@@ -174,35 +213,25 @@ class ThroughputBenchmarkRunner:
         self.save_folder = save_folder
         self.sweep_dict = sweep_dict
         self.cross_product_sweep = cross_product_sweep
+        self.model_config_builder = model_config_builder
         uuid_str = str(uuid.uuid4())[:6]
         self.sweep_name = "_".join(self.sweep_dict.keys()) + "-" + uuid_str
 
     def build_model(self, run_params: RunParams) -> OlmoEarth:
-        """Builds a model based on the run parameters."""
-        model_size = MODEL_SIZE_ARGS[run_params.model_size]
-        training_modalities = self.training_modalities
-        encoder_config = EncoderConfig(
-            embedding_size=int(model_size["encoder_embedding_size"]),
-            num_heads=int(model_size["encoder_num_heads"]),
-            depth=int(model_size["encoder_depth"]),
-            mlp_ratio=float(model_size["mlp_ratio"]),
-            supported_modality_names=training_modalities,
-        )
-        decoder_config = PredictorConfig(
-            encoder_embedding_size=int(model_size["encoder_embedding_size"]),
-            decoder_embedding_size=int(model_size["decoder_embedding_size"]),
-            depth=int(model_size["decoder_depth"]),
-            mlp_ratio=float(model_size["mlp_ratio"]),
-            num_heads=int(model_size["decoder_num_heads"]),
-            supported_modality_names=training_modalities,
-            max_sequence_length=12,
-        )
-        model_config = LatentMIMConfig(
-            encoder_config=encoder_config,
-            decoder_config=decoder_config,
-        )
-        model = OlmoEarth(model_config=model_config)
-        return model
+        """Builds a model based on the run parameters.
+
+        Uses the custom model_config_builder if provided, otherwise uses
+        build_default_model_config() to create the model config.
+        """
+        if self.model_config_builder is not None:
+            model_config = self.model_config_builder(
+                run_params, self.training_modalities
+            )
+        else:
+            model_config = build_default_model_config(
+                run_params, self.training_modalities
+            )
+        return OlmoEarth(model_config=model_config)
 
     def build_sweep_run_params(self) -> list[RunParams]:
         """Builds a list of run parameters based on the sweep dictionary."""
