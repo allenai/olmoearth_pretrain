@@ -206,14 +206,15 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
                 )
-                masked_batch_a = self.masking_strategy.apply_mask(
-                    self.transform.apply(microbatch).to_device(self.device),
-                    patch_size=patch_size,
-                )
-                masked_batch_b = self.masking_strategy.apply_mask(
-                    self.transform.apply(microbatch).to_device(self.device),
-                    patch_size=patch_size,
-                )
+                with torch.no_grad():
+                    masked_batch_a = self.masking_strategy.apply_mask(
+                        self.transform.apply(microbatch).to_device(self.device),
+                        patch_size=patch_size,
+                    )
+                    masked_batch_b = self.masking_strategy.apply_mask(
+                        self.transform.apply(microbatch).to_device(self.device),
+                        patch_size=patch_size,
+                    )
                 # Run Encoder and decoder on the augmented input
                 loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
