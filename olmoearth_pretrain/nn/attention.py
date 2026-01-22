@@ -348,10 +348,14 @@ class Mlp(nn.Module):
 
 
 class SparseMoE(nn.Module):
-    """Sparse Mixture of Experts layer.
+    """Sparse Mixture of Experts layer (FSDP-compatible).
 
     Replaces a single Mlp with multiple experts + a learned router.
     Uses top-k gating to select which experts process each token.
+
+    This implementation uses batched weight tensors instead of nn.ModuleList
+    to ensure FSDP compatibility. All experts are computed in parallel using
+    einsum, then sparse selection is applied via top-k routing weights.
 
     Args:
         in_features: Number of input features
@@ -379,36 +383,63 @@ class SparseMoE(nn.Module):
     ) -> None:
         """Initialize the SparseMoE module."""
         super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
+        self.in_features = in_features
+        self.out_features = out_features or in_features
+        self.hidden_features = hidden_features or in_features
         self.num_experts = num_experts
         self.top_k = top_k
         self.aux_loss_weight = aux_loss_weight
+        self.use_bias = bias
         self._aux_loss: torch.Tensor = torch.tensor(0.0)
 
         # Router: projects input to num_experts logits
         self.router = nn.Linear(in_features, num_experts, bias=False)
 
-        # Create experts (each is an Mlp)
-        self.experts = nn.ModuleList(
-            [
-                Mlp(
-                    in_features=in_features,
-                    hidden_features=hidden_features,
-                    out_features=out_features,
-                    act_layer=act_layer,
-                    bias=bias,
-                    drop=drop,
-                )
-                for _ in range(num_experts)
-            ]
+        # Batched expert weights (all experts in single tensors for FSDP compatibility)
+        # w1: (num_experts, in_features, hidden_features)
+        # w2: (num_experts, hidden_features, out_features)
+        self.w1 = nn.Parameter(
+            torch.empty(num_experts, in_features, self.hidden_features)
+        )
+        self.w2 = nn.Parameter(
+            torch.empty(num_experts, self.hidden_features, self.out_features)
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass with efficient batched sparse routing.
+        if bias:
+            self.b1 = nn.Parameter(torch.zeros(num_experts, self.hidden_features))
+            self.b2 = nn.Parameter(torch.zeros(num_experts, self.out_features))
+        else:
+            self.register_parameter("b1", None)
+            self.register_parameter("b2", None)
 
-        Uses sorted token grouping for better memory access patterns and fewer
-        kernel launches compared to boolean masking per expert.
+        self.act = act_layer()
+        self.drop = nn.Dropout(drop)
+
+        self._init_weights()
+
+    def _init_weights(self) -> None:
+        """Initialize weights using kaiming uniform (same as nn.Linear default)."""
+        import math
+
+        for w in (self.w1, self.w2):
+            # Fan-in based initialization
+            nn.init.kaiming_uniform_(w, a=math.sqrt(5))
+
+        if self.use_bias:
+            # Bias init matching nn.Linear
+            fan_in_1 = self.in_features
+            bound_1 = 1 / math.sqrt(fan_in_1)
+            nn.init.uniform_(self.b1, -bound_1, bound_1)
+
+            fan_in_2 = self.hidden_features
+            bound_2 = 1 / math.sqrt(fan_in_2)
+            nn.init.uniform_(self.b2, -bound_2, bound_2)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass with FSDP-compatible batched expert computation.
+
+        All experts are computed in parallel using einsum (same work on all ranks),
+        then sparse top-k selection is applied to the outputs.
 
         Args:
             x: Input tensor of shape (B, N, D) or (B*N, D)
@@ -417,11 +448,10 @@ class SparseMoE(nn.Module):
             Output tensor of same shape as input
         """
         orig_shape = x.shape
-        x_flat = x.view(-1, x.shape[-1])  # (num_tokens, D)
-        num_tokens = x_flat.shape[0]
+        x_flat = x.view(-1, x.shape[-1])  # (T, D) where T = B*N
 
         # Compute router logits and probabilities
-        router_logits = self.router(x_flat)  # (num_tokens, num_experts)
+        router_logits = self.router(x_flat)  # (T, num_experts)
         router_probs = F.softmax(router_logits, dim=-1)
 
         # Select top-k experts per token
@@ -433,47 +463,29 @@ class SparseMoE(nn.Module):
         if self.training:
             self._aux_loss = self._compute_aux_loss(router_probs, top_k_indices)
 
-        # Flatten top-k selections: (num_tokens * top_k,)
-        flat_indices = top_k_indices.view(-1)  # Which expert for each (token, k) pair
-        flat_probs = top_k_probs.view(-1)  # Weight for each (token, k) pair
+        # ===== FSDP-compatible batched expert computation =====
+        # All experts computed in parallel - same work on all ranks
 
-        # Repeat input for each top-k selection: (num_tokens * top_k, D)
-        x_repeat = x_flat.repeat_interleave(self.top_k, dim=0)
+        # First layer: (T, D) @ (E, D, H) -> (T, E, H)
+        hidden = torch.einsum("td,edh->teh", x_flat, self.w1)
+        if self.b1 is not None:
+            hidden = hidden + self.b1  # Broadcasting: (T, E, H) + (E, H)
+        hidden = self.act(hidden)
+        hidden = self.drop(hidden)
 
-        # Sort by expert index for contiguous memory access patterns
-        sorted_indices, sort_order = torch.sort(flat_indices)
-        sorted_probs = flat_probs[sort_order]
-        sorted_x = x_repeat[sort_order]
+        # Second layer: (T, E, H) @ (E, H, O) -> (T, E, O)
+        expert_out = torch.einsum("teh,eho->teo", hidden, self.w2)
+        if self.b2 is not None:
+            expert_out = expert_out + self.b2  # Broadcasting: (T, E, O) + (E, O)
+        expert_out = self.drop(expert_out)
 
-        # Find boundaries for each expert using bincount
-        expert_counts = torch.bincount(sorted_indices, minlength=self.num_experts)
-        expert_offsets = torch.cat(
-            [
-                torch.zeros(1, dtype=torch.long, device=x.device),
-                torch.cumsum(expert_counts, dim=0),
-            ]
-        )
+        # ===== Sparse selection using top-k weights =====
+        # Create sparse weight mask from top-k indices
+        weights = torch.zeros_like(router_probs)  # (T, E)
+        weights.scatter_(1, top_k_indices, top_k_probs)
 
-        # Process each expert's tokens in a batch (contiguous slices, not boolean masks)
-        sorted_outputs = torch.zeros_like(sorted_x)
-        for expert_idx in range(self.num_experts):
-            start = expert_offsets[expert_idx].item()
-            end = expert_offsets[expert_idx + 1].item()
-            if start < end:
-                sorted_outputs[start:end] = self.experts[expert_idx](
-                    sorted_x[start:end]
-                )
-
-        # Apply weights
-        sorted_outputs = sorted_outputs * sorted_probs.unsqueeze(-1)
-
-        # Unsort back to original order
-        outputs = torch.zeros_like(sorted_outputs)
-        outputs[sort_order] = sorted_outputs
-
-        # Reshape and sum over top-k dimension
-        outputs = outputs.view(num_tokens, self.top_k, -1)
-        output = outputs.sum(dim=1)
+        # Weighted sum of expert outputs: (T, E, O) * (T, E, 1) -> sum -> (T, O)
+        output = (expert_out * weights.unsqueeze(-1)).sum(dim=1)
 
         return output.view(orig_shape)
 
