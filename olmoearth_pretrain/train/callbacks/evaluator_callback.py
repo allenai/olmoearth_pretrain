@@ -691,13 +691,13 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
         self, task: DownstreamTaskConfig, config: EvalDatasetConfig
     ) -> None:
         """Verify the input modality configuration for a task."""
-        # Check that input_modalities is only set for multimodal tasks
-        if (task.dataset not in ["pastis", "pastis128", "nandi", "awf"]) and len(
-            task.input_modalities
-        ) > 0:
-            raise ValueError(
-                f"input_modalities is only supported for multimodal tasks, got {task.dataset}"
-            )
+        # TODO: We should just always be explicit about the input modalities as it is a confusing default.
+        # if (task.dataset not in ["pastis", "pastis128", "nandi", "awf"]) and len(
+        #     task.input_modalities
+        # ) > 0:
+        #     raise ValueError(
+        #         f"input_modalities is only supported for multimodal tasks, got {task.dataset}"
+        #     )
         # Make sure input_modalities contains only unique modalities
         if len(task.input_modalities) != len(set(task.input_modalities)):
             raise ValueError(

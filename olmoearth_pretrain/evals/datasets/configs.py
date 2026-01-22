@@ -1,25 +1,14 @@
 """A common home for all eval dataset configs."""
 
 from dataclasses import asdict, dataclass
-from enum import Enum
 from typing import Any
 
 from olmoearth_pretrain.data.constants import Modality
 
+# Re-export for backward compatibility
+from olmoearth_pretrain.evals.task_types import TaskType, get_eval_mode
 
-class TaskType(Enum):
-    """Possible task types."""
-
-    CLASSIFICATION = "classification"
-    SEGMENTATION = "segmentation"
-
-
-def get_eval_mode(task_type: TaskType) -> str:
-    """Get the eval mode for a given task type."""
-    if task_type == TaskType.CLASSIFICATION:
-        return "knn"
-    else:
-        return "linear_probe"
+__all__ = ["TaskType", "get_eval_mode", "EvalDatasetConfig"]
 
 
 @dataclass
@@ -188,14 +177,6 @@ DATASET_TO_CONFIG = {
 
 
 def dataset_to_config(dataset: str) -> EvalDatasetConfig:
-    """Retrieve the correct config for a given dataset."""
-    try:
-        return DATASET_TO_CONFIG[dataset]
-    except KeyError:
-        raise ValueError(f"Unrecognized dataset: {dataset}")
-
-
-def get_eval_config(dataset: str) -> EvalDatasetConfig:
     """Get EvalDatasetConfig by name, checking both hardcoded and registry.
 
     First checks DATASET_TO_CONFIG dict, then falls back to registry.

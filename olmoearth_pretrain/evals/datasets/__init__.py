@@ -6,6 +6,8 @@ from olmo_core.config import StrEnum
 from torch.utils.data import Dataset
 
 import olmoearth_pretrain.evals.datasets.paths as paths
+from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
+from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
 
 from .breizhcrops import BreizhCropsDataset
 from .floods_dataset import Sen1Floods11Dataset
@@ -13,7 +15,7 @@ from .geobench_dataset import GeobenchDataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
-from .rslearn_dataset import RslearnToOlmoEarthDataset
+from .rslearn_dataset import RslearnToOlmoEarthDataset, from_registry_entry
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,37 @@ class EvalDatasetPartition(StrEnum):
     TRAIN_020X = "0.20x_train"
     TRAIN_050X = "0.50x_train"
 
+def get_eval_dataset_from_entry(
+    eval_dataset_entry: EvalDatasetEntry,
+    split: str,
+    norm_stats_from_pretrained: bool = False,
+    input_layers: list[str] | None = None,
+    partition: str = EvalDatasetPartition.TRAIN1X,
+    norm_method: str = NormMethod.NORM_NO_CLIP,
+) -> Dataset:
+    """Retrieve an eval dataset from the dataset entry.
+
+    Args:
+        eval_dataset_entry: Registry entry with dataset metadata.
+        split: Dataset split ("train", "val", "test").
+        norm_stats_from_pretrained: Whether to use pretrain normalization stats.
+        input_layers: Optional rslearn layer names. If None, derived from entry.
+        partition: Dataset partition.
+        norm_method: Normalization method.
+
+    Returns:
+        Dataset instance.
+    """
+    return from_registry_entry(
+        eval_dataset_entry,
+        split,
+        input_layers,
+        partition,
+        norm_method,
+        norm_stats_from_pretrained,
+        max_samples=1000, # Hardcoded for debugging
+    )
+
 
 def get_eval_dataset(
     eval_dataset: str,
@@ -40,17 +73,18 @@ def get_eval_dataset(
     norm_method: str = NormMethod.NORM_NO_CLIP,
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
-    if input_modalities:
-        if eval_dataset not in ["pastis", "pastis128", "nandi", "awf"]:
-            raise ValueError(
-                f"input_modalities is only supported for multimodal tasks, got {eval_dataset}"
-            )
+    # TODO: This is hacky and complicated we need a simple solution here.
+    # if input_modalities:
+    #     if eval_dataset not in ["pastis", "pastis128", "nandi", "awf"]:
+    #         raise ValueError(
+    #             f"input_modalities is only supported for multimodal tasks, got {eval_dataset}"
+    #         )
 
-    if input_layers:
-        if eval_dataset not in ["nandi", "awf"]:
-            raise ValueError(
-                f"input_layers is only supported for rslearn tasks, got {eval_dataset}"
-            )
+    # if input_layers:
+    #     if eval_dataset not in ["nandi", "awf"]:
+    #         raise ValueError(
+    #             f"input_layers is only supported for rslearn tasks, got {eval_dataset}"
+    #         )
 
     if eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
@@ -150,4 +184,12 @@ def get_eval_dataset(
             ds_norm_stats_json="awf_band_stats.json",
         )
     else:
-        raise ValueError(f"Unrecognized eval_dataset {eval_dataset}")
+        eval_dataset_entry = get_dataset_entry(eval_dataset)
+        return get_eval_dataset_from_entry(
+            eval_dataset_entry,
+            split,
+            norm_stats_from_pretrained,
+            input_layers if input_layers else None,
+            partition,
+            norm_method,
+        )

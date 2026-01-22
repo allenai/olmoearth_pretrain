@@ -15,7 +15,8 @@ from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
-from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
+from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
+from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.evals.metrics import mean_iou
 from olmoearth_pretrain.evals.utils import adjust_learning_rate
 

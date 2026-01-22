@@ -18,7 +18,8 @@ from sklearn.metrics import accuracy_score, f1_score
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
-from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
+from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
+from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.metrics import mean_iou
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback

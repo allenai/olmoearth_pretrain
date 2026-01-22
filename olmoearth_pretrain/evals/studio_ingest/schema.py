@@ -33,17 +33,21 @@ Todo:
 from __future__ import annotations
 
 import importlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 
 from rslearn.train.tasks.classification import (
     ClassificationTask as RsClassificationTask,
 )
 from rslearn.train.tasks.segmentation import SegmentationTask as RsSegmentationTask
 
-from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.evals.datasets.configs import TaskType
+from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.evals.task_types import TaskType
 
 DEFAULT_TARGET_PROPERTY = "category"
 
@@ -350,6 +354,8 @@ class EvalDatasetEntry:
 
     # Split information
     splits: dict[str, int] = field(default_factory=dict)
+    split_tag_key: str = "split"  # tag key used for splits (e.g., "split" or "helios_split")
+    groups: list[str] = field(default_factory=list)  # rslearn groups to filter by
     supports_cv: bool = False
     cv_folds: int | None = None
 
@@ -376,11 +382,9 @@ class EvalDatasetEntry:
                 f"Must be one of: {valid_task_types}"
             )
 
-        # Normalize modalities: convert Modality enums to strings
-        self.modalities = [
-            m.name if isinstance(m, Modality) else m
-            for m in self.modalities
-        ]
+        # Normalize modalities: convert ModalitySpec to lowercase name strings
+        #TODO: Can simplify this
+        self.modalities = [m.name if isinstance(m, ModalitySpec) else m.lower() if isinstance(m, str) else m for m in self.modalities]
 
         # Set num_classes from classes if not provided
         if self.classes is not None and self.num_classes is None:
@@ -413,6 +417,8 @@ class EvalDatasetEntry:
             "source_path": self.source_path,
             "weka_path": self.weka_path,
             "splits": self.splits,
+            "split_tag_key": self.split_tag_key,
+            "groups": self.groups,
             "supports_cv": self.supports_cv,
             "cv_folds": self.cv_folds,
             "norm_stats_path": self.norm_stats_path,
@@ -456,6 +462,8 @@ class EvalDatasetEntry:
             source_path=data.get("source_path", ""),
             weka_path=data.get("weka_path", ""),
             splits=data.get("splits", {}),
+            split_tag_key=data.get("split_tag_key", "split"),
+            groups=data.get("groups", []),
             supports_cv=data.get("supports_cv", False),
             cv_folds=data.get("cv_folds"),
             norm_stats_path=data.get("norm_stats_path", "norm_stats.json"),

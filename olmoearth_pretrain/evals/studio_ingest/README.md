@@ -20,8 +20,9 @@ Goals:
 1. Mindless to add a new eval to olmoearth pretrain
 2. Possible to discover existing evals not in codebase
 
-3. Possible to configure different splits of the dataset
-4. Fat to load
+3. Possible to configure different splits of the dataset and partitioning percentages
+4. Fast to load
+5. These evals don't have a properly split test set and so we would need to re-split the data for that and save that
 
 ## Overview
 

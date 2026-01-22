@@ -472,6 +472,14 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     # Apply the mapping here
     task_type = rslearn_task_type_to_olmoearth_task_type(rslearn_task)
 
+    # Extract groups and split_tag_key from data module config
+    data_init_args = model_config["data"]["init_args"]
+    train_config = data_init_args.get("train_config", {})
+    groups = train_config.get("groups", [])
+    train_tags = train_config.get("tags", {})
+    split_tag_key = list(train_tags.keys())[0] if train_tags else "split"
+    logger.info(f"Extracted groups={groups}, split_tag_key={split_tag_key}")
+
     entry = EvalDatasetEntry(
         name=config.name,
         source_path=config.source_path,
@@ -480,5 +488,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         classes=label_values,
         num_classes=num_classes,
         modalities=modalities,
+        groups=groups,
+        split_tag_key=split_tag_key,
     )
     return entry

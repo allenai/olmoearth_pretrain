@@ -8,7 +8,7 @@ from einops import rearrange, reduce
 from torch import nn
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
-from olmoearth_pretrain.evals.datasets.configs import TaskType
+from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.evals.models import (
     AnySat,
     Clay,
