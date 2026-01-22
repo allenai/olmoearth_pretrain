@@ -256,7 +256,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_sequence_length=12,
         # Enable MoE
         use_moe=True,
-        num_experts=4,
+        num_experts=8,
         top_k=2,
         moe_aux_loss_weight=0.01,
     )
