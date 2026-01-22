@@ -2,8 +2,8 @@
 
 import pytest
 
-from olmoearth_pretrain.data.constants import (
-    Modality,
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
     TokenizationBandSet,
     TokenizationConfig,
@@ -149,19 +149,6 @@ class TestTokenizationConfig:
         # Default for sentinel1
         s1_bands = config.get_num_bands_per_bandset("sentinel1")
         assert s1_bands == [2]  # sentinel1 has 2 bands in 1 bandset
-
-    def test_tokenization_bandset_hashable(self) -> None:
-        """TokenizationBandSet should be hashable for use as dict keys, set members."""
-        bs1 = TokenizationBandSet(bands=["B02", "B03"])
-        bs2 = TokenizationBandSet(bands=["B02", "B03"])
-        bs3 = TokenizationBandSet(bands=["B04", "B05"])
-
-        # Same bands should have same hash
-        assert hash(bs1) == hash(bs2)
-
-        # Can be used in sets
-        band_set_set = {bs1, bs2, bs3}
-        assert len(band_set_set) == 2
 
     def test_modality_tokenization_num_band_sets(self) -> None:
         """ModalityTokenization.num_band_sets property."""

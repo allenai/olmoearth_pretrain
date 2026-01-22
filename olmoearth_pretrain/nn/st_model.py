@@ -15,9 +15,9 @@ from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import (
     Modality,
     ModalitySpec,
-    TokenizationConfig,
     get_modality_specs_from_names,
 )
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.attention import Block

@@ -12,7 +12,8 @@ from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 
-from olmoearth_pretrain.data.constants import Modality, TokenizationConfig
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks

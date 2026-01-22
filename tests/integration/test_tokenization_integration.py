@@ -2,8 +2,8 @@
 
 import pytest
 
-from olmoearth_pretrain.data.constants import (
-    Modality,
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
     TokenizationBandSet,
     TokenizationConfig,
@@ -17,17 +17,15 @@ class TestEncoderWithCustomTokenization:
     def test_encoder_builds_with_custom_tokenization(self) -> None:
         """Encoder should build with custom tokenization config."""
         config = EncoderConfig(
-            supported_modality_names=["sentinel2_l2a"],
+            supported_modality_names=[Modality.SENTINEL2_L2A.name],
             embedding_size=64,
             depth=2,
             tokenization_config=TokenizationConfig(
                 overrides={
-                    "sentinel2_l2a": ModalityTokenization(
+                    Modality.SENTINEL2_L2A.name: ModalityTokenization(
                         band_groups=[
                             TokenizationBandSet(bands=["B02", "B03", "B04", "B08"]),
-                            TokenizationBandSet(
-                                bands=["B05", "B06", "B07", "B8A", "B11", "B12"]
-                            ),
+                            TokenizationBandSet(bands=["B05", "B06", "B07", "B8A", "B11", "B12"]),
                         ]
                     )
                 }
@@ -45,12 +43,12 @@ class TestEncoderWithCustomTokenization:
         """Output should have correct number of bandset tokens."""
         # Create encoder with 2 bandsets (each band separate for sentinel1)
         config = EncoderConfig(
-            supported_modality_names=["sentinel1"],
+            supported_modality_names=[Modality.SENTINEL1.name],
             embedding_size=64,
             depth=1,
             tokenization_config=TokenizationConfig(
                 overrides={
-                    "sentinel1": ModalityTokenization(
+                    Modality.SENTINEL1.name: ModalityTokenization(
                         band_groups=[
                             TokenizationBandSet(bands=["vv"]),
                             TokenizationBandSet(bands=["vh"]),
@@ -68,7 +66,7 @@ class TestEncoderWithCustomTokenization:
         """Configs without tokenization_config should work (backwards compat)."""
         # Simulate loading old config that doesn't have tokenization_config
         old_config_dict = {
-            "supported_modality_names": ["sentinel2_l2a"],
+            "supported_modality_names": [Modality.SENTINEL2_L2A.name],
             "embedding_size": 64,
             "depth": 2,
             # Note: no tokenization_config field
@@ -79,21 +77,21 @@ class TestEncoderWithCustomTokenization:
 
         # Should have 3 bandsets for sentinel2_l2a (the default)
         assert (
-            len(encoder.patch_embeddings.per_modality_embeddings["sentinel2_l2a"]) == 3
+            len(encoder.patch_embeddings.per_modality_embeddings[Modality.SENTINEL2_L2A.name]) == 3
         )
 
     def test_encoder_with_per_band_tokenization(self) -> None:
         """Test encoder where each band is its own token."""
         # Get all sentinel2_l2a bands
-        s2_bands = Modality.get("sentinel2_l2a").band_order
+        s2_bands = Modality.SENTINEL2_L2A.band_order
 
         config = EncoderConfig(
-            supported_modality_names=["sentinel2_l2a"],
+            supported_modality_names=[Modality.SENTINEL2_L2A.name],
             embedding_size=64,
             depth=1,
             tokenization_config=TokenizationConfig(
                 overrides={
-                    "sentinel2_l2a": ModalityTokenization(
+                    Modality.SENTINEL2_L2A.name: ModalityTokenization(
                         band_groups=[
                             TokenizationBandSet(bands=[band]) for band in s2_bands
                         ]
@@ -106,20 +104,20 @@ class TestEncoderWithCustomTokenization:
 
         # Should have as many embedding modules as bands
         num_modules = len(
-            encoder.patch_embeddings.per_modality_embeddings["sentinel2_l2a"]
+            encoder.patch_embeddings.per_modality_embeddings[Modality.SENTINEL2_L2A.name]
         )
         assert num_modules == len(s2_bands)
 
     def test_mixed_modalities_with_partial_override(self) -> None:
         """Test encoder with some modalities overridden and some using defaults."""
         config = EncoderConfig(
-            supported_modality_names=["sentinel2_l2a", "sentinel1"],
+            supported_modality_names=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
             embedding_size=64,
             depth=1,
             tokenization_config=TokenizationConfig(
                 overrides={
                     # Override sentinel1 to have each band separate
-                    "sentinel1": ModalityTokenization(
+                    Modality.SENTINEL1.name: ModalityTokenization(
                         band_groups=[
                             TokenizationBandSet(bands=["vv"]),
                             TokenizationBandSet(bands=["vh"]),
@@ -134,20 +132,20 @@ class TestEncoderWithCustomTokenization:
 
         # sentinel2_l2a should have default 3 bandsets
         assert (
-            len(encoder.patch_embeddings.per_modality_embeddings["sentinel2_l2a"]) == 3
+            len(encoder.patch_embeddings.per_modality_embeddings[Modality.SENTINEL2_L2A.name]) == 3
         )
         # sentinel1 should have 2 (overridden)
-        assert len(encoder.patch_embeddings.per_modality_embeddings["sentinel1"]) == 2
+        assert len(encoder.patch_embeddings.per_modality_embeddings[Modality.SENTINEL1.name]) == 2
 
     def test_config_validation_fails_on_invalid_band(self) -> None:
         """Config validation should fail for invalid band names."""
         config = EncoderConfig(
-            supported_modality_names=["sentinel2_l2a"],
+            supported_modality_names=[Modality.SENTINEL2_L2A.name],
             embedding_size=64,
             depth=1,
             tokenization_config=TokenizationConfig(
                 overrides={
-                    "sentinel2_l2a": ModalityTokenization(
+                    Modality.SENTINEL2_L2A.name: ModalityTokenization(
                         band_groups=[
                             TokenizationBandSet(bands=["INVALID_BAND"]),
                         ]
@@ -163,7 +161,7 @@ class TestEncoderWithCustomTokenization:
         """TokenizationConfig should be accessible from built encoder."""
         tokenization_config = TokenizationConfig(
             overrides={
-                "sentinel1": ModalityTokenization(
+                Modality.SENTINEL1.name: ModalityTokenization(
                     band_groups=[
                         TokenizationBandSet(bands=["vv"]),
                         TokenizationBandSet(bands=["vh"]),
@@ -173,7 +171,7 @@ class TestEncoderWithCustomTokenization:
         )
 
         config = EncoderConfig(
-            supported_modality_names=["sentinel1"],
+            supported_modality_names=[Modality.SENTINEL1.name],
             embedding_size=64,
             depth=1,
             tokenization_config=tokenization_config,
@@ -183,4 +181,4 @@ class TestEncoderWithCustomTokenization:
 
         # Tokenization config should be accessible
         assert encoder.tokenization_config is not None
-        assert encoder.tokenization_config.get_num_bandsets("sentinel1") == 2
+        assert encoder.tokenization_config.get_num_bandsets(Modality.SENTINEL1.name) == 2

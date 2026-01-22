@@ -15,8 +15,8 @@ from olmoearth_pretrain.data.constants import (
     MISSING_VALUE,
     Modality,
     ModalitySpec,
-    TokenizationConfig,
 )
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 
 # Re-export MaskValue and MaskedOlmoEarthSample for backwards compatibility

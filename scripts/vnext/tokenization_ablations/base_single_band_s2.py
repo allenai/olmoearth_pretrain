@@ -1,27 +1,23 @@
-"""Spectral grouping tokenization for Sentinel-2.
+"""Single-band tokenization for Sentinel-2.
 
-Hypothesis: Grouping bands by spectral similarity creates more semantically
-meaningful tokens that better align with physical properties of the Earth's surface.
+Hypothesis: Each band as its own token allows the model to learn more fine-grained
+band-specific representations, potentially improving downstream task performance
+where specific spectral bands are important.
 
 Change from baseline:
-- Sentinel-2 L2A: 5 tokens grouped by spectral similarity instead of 3 resolution-based tokens
-  - RGB (visible): B02, B03, B04
-  - NIR (near-infrared): B08, B8A
-  - Red Edge: B05, B06, B07
-  - SWIR (shortwave infrared): B11, B12
-  - Atmospheric: B01, B09
+- Sentinel-2 L2A: 12 tokens (one per band) instead of 3 bandset tokens
 - All other modalities: unchanged (use default tokenization)
 
-Expected outcome: Tokens that better capture spectral phenomena like vegetation indices,
-water detection, and atmospheric effects.
+Expected outcome: Better band-level representations at the cost of more tokens
+per spatial location.
 """
 
 import logging
 import sys
 from pathlib import Path
 
-# Add parent directory to path for script imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add official directory to path for script imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "official"))
 
 from script import (
     build_common_components,
@@ -32,7 +28,7 @@ from script import (
     build_visualize_config,
 )
 
-from olmoearth_pretrain.data.constants import (
+from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
     TokenizationBandSet,
     TokenizationConfig,
@@ -50,30 +46,32 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
-# Sentinel-2 L2A bands grouped by spectral similarity
-SENTINEL2_SPECTRAL_GROUPING = ModalityTokenization(
+# Sentinel-2 L2A bands in order: each becomes its own token
+SENTINEL2_SINGLE_BAND_TOKENIZATION = ModalityTokenization(
     band_groups=[
-        # Visible RGB
-        TokenizationBandSet(bands=["B02", "B03", "B04"]),
-        # Near-infrared
-        TokenizationBandSet(bands=["B08", "B8A"]),
-        # Red edge
-        TokenizationBandSet(bands=["B05", "B06", "B07"]),
-        # Shortwave infrared
-        TokenizationBandSet(bands=["B11", "B12"]),
-        # Atmospheric bands
-        TokenizationBandSet(bands=["B01", "B09"]),
+        TokenizationBandSet(bands=["B02"]),
+        TokenizationBandSet(bands=["B03"]),
+        TokenizationBandSet(bands=["B04"]),
+        TokenizationBandSet(bands=["B08"]),
+        TokenizationBandSet(bands=["B05"]),
+        TokenizationBandSet(bands=["B06"]),
+        TokenizationBandSet(bands=["B07"]),
+        TokenizationBandSet(bands=["B8A"]),
+        TokenizationBandSet(bands=["B11"]),
+        TokenizationBandSet(bands=["B12"]),
+        TokenizationBandSet(bands=["B01"]),
+        TokenizationBandSet(bands=["B09"]),
     ]
 )
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """Build the model config with spectral grouping tokenization for Sentinel-2."""
+    """Build the model config with single-band tokenization for Sentinel-2."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
     tokenization_config = TokenizationConfig(
         overrides={
-            "sentinel2_l2a": SENTINEL2_SPECTRAL_GROUPING,
+            "sentinel2_l2a": SENTINEL2_SINGLE_BAND_TOKENIZATION,
         }
     )
 

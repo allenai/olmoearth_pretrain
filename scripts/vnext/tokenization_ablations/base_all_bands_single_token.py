@@ -16,8 +16,8 @@ import logging
 import sys
 from pathlib import Path
 
-# Add parent directory to path for script imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add official directory to path for script imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "official"))
 
 from script import (
     build_common_components,
@@ -28,7 +28,7 @@ from script import (
     build_visualize_config,
 )
 
-from olmoearth_pretrain.data.constants import (
+from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
     TokenizationBandSet,
     TokenizationConfig,
