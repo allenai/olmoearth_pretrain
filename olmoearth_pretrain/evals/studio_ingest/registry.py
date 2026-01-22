@@ -53,8 +53,8 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # The canonical location of the registry on Weka
-# TODO: Confirm this path with the team
-REGISTRY_PATH = "weka://dfive-default/olmoearth/eval_datasets/registry.json"
+# TODO: Make a real path instead of using this for now
+REGISTRY_PATH = "/weka/dfive-default/helios/henryh/olmoearth_pretrain/eval_datasets/registry.json"
 
 # Current registry schema version
 # Increment this when making breaking changes to the schema

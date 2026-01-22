@@ -15,6 +15,14 @@ export OLMOEARTH_EVAL_DATASETS=/path/to/downloaded/datasets
 # Then use the registry loader as normal
 ```
 
+
+Goals:
+1. Mindless to add a new eval to olmoearth pretrain
+2. Possible to discover existing evals not in codebase
+
+3. Possible to configure different splits of the dataset
+4. Fat to load
+
 ## Overview
 
 This module provides tooling to:
@@ -35,6 +43,8 @@ uv sync --group ingest
 ## Steps I have done so far
 1. Found the appropriate path for the tolbi dataset in some gcs bucket (there needs to be a canonical locaiton studio can write datasets to if needed)
 2. I want to run `uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.cli ingest  --name tolbi_crops --source gs://rslearn-eai/datasets/tolbi ` and infer all the neccessary information for the task
+3. Register an eval config and the location of the dataset into whatever the registry is
+4? Actually run the eval with it
 ## Quick Start
 
 ```bash
@@ -81,83 +91,10 @@ Each dataset directory contains:
 
 Next we need to see what do we need to quickly read this when it is copied over and have a dataset class to be used dependent on the configuration that does not involve having to load all the windows and that bs with the rslearn dataset and potentially is a different format
 
-
+Goal for today is tolbi and fire through both of these steps
 2. **Register**: Add entry to registry.json, create metadata.json in dataset dir
-2. **Copy**: Copy data from GCS to Weka, preserving rslearn structure
-3. Make sure that we can discover new datasets
-## Normalization Statistics
+3. **Copy**: Copy data from GCS to Weka, preserving rslearn structure (For now we will just stream from gcs)
+4. Then we need to make sure that given the eval info we can load and run that as an eval
 
-Band statistics are computed using `band_stats.py` (moved from `scripts/tools/`).
 
-Per-band statistics:
-
-- **mean**: Mean pixel value
-- **std**: Standard deviation
-- **min/max**: Absolute min/max values
-
-To compute stats for a dataset:
-
-```bash
-uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.band_stats \
-    --ds_path gs://bucket/dataset \
-    --input_layers sentinel2 sentinel1 \
-    --output_json /path/to/norm_stats.json
-```
-
-TODO: Add p1/p99 percentile computation for robust normalization.
-
-## Using Ingested Datasets
-
-After ingestion, datasets are available via the unified loader:
-
-```python
-from olmoearth_pretrain.evals.datasets import RegistryDataset
-
-# Load by name
-dataset = RegistryDataset("lfmc", split="val")
-
-# With cross-validation
-dataset = RegistryDataset("lfmc", split="train", fold=0, num_folds=5)
-```
-
-## Module Structure
-
-```
-studio_ingest/
-├── __init__.py      # Public exports
-├── README.md        # This file
-├── schema.py        # Dataclasses for registry entries
-├── registry.py      # Read/write registry JSON
-├── band_stats.py    # Compute band normalization statistics (moved from scripts/tools/)
-├── validate.py      # Validate rslearn dataset structure
-├── ingest.py        # Main ingestion logic
-└── cli.py           # CLI entry point
-```
-
-## Target Datasets
-
-Initial datasets to ingest from Studio:
-
-- [ ] lfmc - Live Fuel Moisture Content
-- [ ] forest_loss_driver - Forest Loss Driver Classification
-- [ ] mangrove_subset - Mangrove Mapping
-- [ ] tolbi - TOLBI Classification
-- [ ] mozambique - Mozambique Land Cover
-- [ ] ecosystem - Ecosystem Classification
-
-## Troubleshooting
-
-### "Registry not found"
-
-The registry is created on first ingest. If it doesn't exist, run any ingest
-command and it will be initialized.
-
-### "Permission denied on Weka"
-
-Ensure you have write access to `weka://dfive-default/olmoearth/eval_datasets/`.
-Contact the OlmoEarth team for access.
-
-### "Modality not found in dataset"
-
-The rslearn dataset must have layers matching the specified modalities.
-Check the dataset structure with `validate` before ingesting.
+5. Make sure that we can discover new datasets

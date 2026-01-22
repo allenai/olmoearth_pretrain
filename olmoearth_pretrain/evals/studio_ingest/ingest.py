@@ -338,7 +338,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         print(layer_name)
         print(layer_config)
         olmoearth_modality = RSLEARN_TO_OLMOEARTH[layer_name]
-        modalities.append(olmoearth_modality)
+        modalities.append(olmoearth_modality.name)  # store name string, not ModalitySpec
         modality_layer_names.append(layer_name)
         # get the temporal range
         query_config = layer_config.data_source.query_config
@@ -411,7 +411,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         )
 
     # Assume 0-indexed consecutive labels (0 to num_classes-1)
-    label_values = set(range(num_classes))
+    label_values = [str(i) for i in range(num_classes)]
     logger.info(f"Got {num_classes} classes from model config: {sorted(label_values)}")
 
     # get the NODATA value -> This would be in the olmoearth_run.yaml config

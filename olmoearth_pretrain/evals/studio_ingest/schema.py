@@ -331,7 +331,6 @@ class EvalDatasetEntry:
     # Task configuration
     task_type: str  # "classification", "regression", "segmentation"
     target_property: str
-    classes: list[str] | None = None
     num_classes: int | None = None
 
     # Data configuration
@@ -365,14 +364,23 @@ class EvalDatasetEntry:
     notes: str | None = None
 
     def __post_init__(self) -> None:
-        """Validate and set derived fields after initialization."""
-        # Validate task type against enum values
-        valid_task_types = {t for t in TaskType}
+        """Validate and normalize fields after initialization."""
+        # Normalize task_type: accept both TaskType enum and string
+        if isinstance(self.task_type, TaskType):
+            self.task_type = self.task_type.value
+
+        valid_task_types = {t.value for t in TaskType}
         if self.task_type not in valid_task_types:
             raise ValueError(
                 f"Invalid task_type '{self.task_type}'. "
-                f"Must be one of: {valid_task_types} got {self.task_type}"
+                f"Must be one of: {valid_task_types}"
             )
+
+        # Normalize modalities: convert Modality enums to strings
+        self.modalities = [
+            m.name if isinstance(m, Modality) else m
+            for m in self.modalities
+        ]
 
         # Set num_classes from classes if not provided
         if self.classes is not None and self.num_classes is None:
@@ -383,7 +391,11 @@ class EvalDatasetEntry:
             self.created_at = datetime.now().isoformat()
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
+        """Convert to dictionary for JSON serialization.
+
+        Note: __post_init__ normalizes enums to strings, so task_type
+        and modalities are already strings. Only tuples need conversion.
+        """
         return {
             "name": self.name,
             "task_type": self.task_type,
@@ -392,6 +404,12 @@ class EvalDatasetEntry:
             "num_classes": self.num_classes,
             "modalities": self.modalities,
             "temporal_range": list(self.temporal_range),
+            "window_size": self.window_size,
+            "multilabel": self.multilabel,
+            "label_target_property": self.label_target_property,
+            "band_order": self.band_order,
+            "imputes": [list(t) for t in self.imputes],
+            "timeseries": self.timeseries,
             "source_path": self.source_path,
             "weka_path": self.weka_path,
             "splits": self.splits,
@@ -403,27 +421,38 @@ class EvalDatasetEntry:
             "created_by": self.created_by,
             "studio_task_id": self.studio_task_id,
             "notes": self.notes,
-            "imputes": self.imputes,
-            "timeseries": self.timeseries,
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> EvalDatasetEntry:
-        """Create from dictionary."""
-        # Handle temporal_range which may be list in JSON
+    def from_dict(cls, data: dict[str, Any]) -> "EvalDatasetEntry":
+        """Create from dictionary.
+
+        Handles conversion of:
+        - string -> kept as string (TaskType validated in __post_init__)
+        - lists -> tuples (temporal_range, imputes)
+        """
+        # Handle temporal_range: list -> tuple
         temporal_range = data.get("temporal_range", ("", ""))
         if isinstance(temporal_range, list):
             temporal_range = tuple(temporal_range)
 
+        # Handle imputes: list of lists -> list of tuples
+        imputes = [tuple(x) for x in data.get("imputes", [])]
+
         return cls(
             name=data["name"],
             task_type=data["task_type"],
-            target_property=data["target_property"],
+            target_property=data.get("target_property", "category"),
             classes=data.get("classes"),
             num_classes=data.get("num_classes"),
             modalities=data.get("modalities", []),
             temporal_range=temporal_range,
-            patch_size=data.get("patch_size", 64),
+            window_size=data.get("window_size", 64),
+            multilabel=data.get("multilabel", False),
+            label_target_property=data.get("label_target_property"),
+            band_order=data.get("band_order", []),
+            imputes=imputes,
+            timeseries=data.get("timeseries", False),
             source_path=data.get("source_path", ""),
             weka_path=data.get("weka_path", ""),
             splits=data.get("splits", {}),
@@ -435,9 +464,16 @@ class EvalDatasetEntry:
             created_by=data.get("created_by", ""),
             studio_task_id=data.get("studio_task_id"),
             notes=data.get("notes"),
-            imputes=[tuple(x) for x in data.get("imputes", [])],
-            timeseries=data.get("timeseries", False),
         )
+
+    def to_json(self, indent: int | None = 2) -> str:
+        """Serialize to JSON string."""
+        return json.dumps(self.to_dict(), indent=indent)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "EvalDatasetEntry":
+        """Deserialize from JSON string."""
+        return cls.from_dict(json.loads(json_str))
 
     def get_weka_data_path(self, split: str) -> str:
         """Get the full path to a specific split's data on Weka.

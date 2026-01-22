@@ -22,6 +22,12 @@ Usage:
 See README.md in this directory for full documentation.
 """
 
+from olmoearth_pretrain.evals.studio_ingest.registry import (
+    Registry,
+    get_dataset_entry,
+    list_dataset_names,
+    load_registry,
+)
 from olmoearth_pretrain.evals.studio_ingest.schema import (
     BandStats,
     EvalDatasetEntry,
@@ -32,4 +38,8 @@ __all__ = [
     "EvalDatasetEntry",
     "ModalityStats",
     "BandStats",
+    "Registry",
+    "get_dataset_entry",
+    "list_dataset_names",
+    "load_registry",
 ]

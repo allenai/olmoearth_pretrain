@@ -47,9 +47,7 @@ import logging
 import sys
 
 from olmoearth_pretrain.evals.studio_ingest.ingest import IngestConfig, ingest_dataset
-
-# Band stats computation is done via band_stats.py CLI directly
-# from olmoearth_pretrain.evals.studio_ingest.band_stats import compute_band_stats
+from olmoearth_pretrain.evals.studio_ingest.registry import Registry
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +82,13 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     print(f"\n✓ Successfully ingested dataset: {entry.name}")
     print(f"  Location: {entry.weka_path}")
     print(f"  Splits: {entry.splits}")
-    # Turn into the eval dataset config
-    eval_config = entry.to_eval_config()
+
+    if args.register:
+        registry = Registry.load()
+        registry.add(entry, overwrite=args.overwrite)
+        registry.save()
+        print(f"✓ Registered '{entry.name}' to registry")
+
     return 0
 
 
@@ -129,6 +132,59 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Dataset groups to filter by (e.g., 'train_group')",
     )
+    parser.add_argument(
+        "--register",
+        action="store_true",
+        help="Register the dataset to the registry after ingestion",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing registry entry if it exists",
+    )
+
+
+# =============================================================================
+# Command: list
+# =============================================================================
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List all registered datasets."""
+    registry = Registry.load()
+
+    if len(registry) == 0:
+        print("No datasets registered.")
+        return 0
+
+    print(f"Registered datasets ({len(registry)}):\n")
+    for entry in registry:
+        print(f"  {entry.name}")
+        print(f"    task: {entry.task_type}, classes: {entry.num_classes}")
+        print(f"    modalities: {entry.modalities}")
+        print(f"    path: {entry.weka_path or entry.source_path}")
+        print()
+
+    return 0
+
+
+# =============================================================================
+# Command: info
+# =============================================================================
+
+
+def cmd_info(args: argparse.Namespace) -> int:
+    """Show detailed info for a dataset."""
+    registry = Registry.load()
+
+    try:
+        entry = registry.get(args.name)
+    except KeyError as e:
+        print(f"Error: {e}")
+        return 1
+
+    print(json.dumps(entry.to_dict(), indent=2))
+    return 0
 
 
 # =============================================================================
@@ -169,6 +225,25 @@ Examples:
     )
     add_ingest_args(ingest_parser)
     ingest_parser.set_defaults(func=cmd_ingest)
+
+    # list command
+    list_parser = subparsers.add_parser(
+        "list",
+        help="List all registered datasets",
+    )
+    list_parser.set_defaults(func=cmd_list)
+
+    # info command
+    info_parser = subparsers.add_parser(
+        "info",
+        help="Show detailed info for a dataset",
+    )
+    info_parser.add_argument(
+        "--name",
+        required=True,
+        help="Name of the dataset",
+    )
+    info_parser.set_defaults(func=cmd_info)
 
     # Parse args
     args = parser.parse_args()
