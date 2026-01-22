@@ -198,3 +198,12 @@ class MaskedOlmoEarthSample(NamedTuple):
                 for key, val in self.as_dict(return_none=False).items()
             }
         )
+
+    @property
+    def batch_size(self) -> int:
+        """Get the batch size of the sample.
+
+        Returns:
+            The batch size (first dimension of timestamps tensor).
+        """
+        return self.timestamps.shape[0]
