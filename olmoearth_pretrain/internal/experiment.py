@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 from olmo_core.config import StrEnum
@@ -27,6 +27,7 @@ from olmoearth_pretrain.data.dataset import (
     collate_olmoearth_pretrain,
 )
 from olmoearth_pretrain.data.visualize import visualize_sample
+from olmoearth_pretrain.inference_benchmarking.data_models import RunParams
 from olmoearth_pretrain.inference_benchmarking.run_throughput_benchmark import (
     ThroughputBenchmarkRunnerConfig,
 )
@@ -233,12 +234,20 @@ def build_evaluate_config(
 def build_benchmark_config(
     common: CommonComponents,
     inference_benchmarking_config_builder: Callable[
-        [], ThroughputBenchmarkRunnerConfig
+        [CommonComponents], ThroughputBenchmarkRunnerConfig
     ],
     overrides: list[str],
+    benchmark_model_config_builder: (
+        Callable[[RunParams, list[str]], Any] | None
+    ) = None,
 ) -> BenchmarkExperimentConfig:
     """Build a throughput benchmarking configuration."""
-    inference_benchmarking_config = inference_benchmarking_config_builder()
+    inference_benchmarking_config = inference_benchmarking_config_builder(common)
+    # Set model_config_builder if provided separately
+    if benchmark_model_config_builder is not None:
+        inference_benchmarking_config.model_config_builder = (
+            benchmark_model_config_builder
+        )
     config = BenchmarkExperimentConfig(
         launch=common.launch,
         benchmark=inference_benchmarking_config,
@@ -480,7 +489,10 @@ def main(
         Callable[[CommonComponents], OlmoEarthVisualizeConfig] | None
     ) = None,
     inference_benchmarking_config_builder: (
-        Callable[[], ThroughputBenchmarkRunnerConfig] | None
+        Callable[[CommonComponents], ThroughputBenchmarkRunnerConfig] | None
+    ) = None,
+    benchmark_model_config_builder: (
+        Callable[[RunParams, list[str]], Any] | None
     ) = None,
 ) -> None:
     """Main entry point for OlmoEarth Pretrain experiments.
@@ -527,6 +539,7 @@ If running command on a local machine ie from a session, you can use the [b]loca
             common=common,
             inference_benchmarking_config_builder=inference_benchmarking_config_builder,
             overrides=overrides,
+            benchmark_model_config_builder=benchmark_model_config_builder,
         )
     elif (
         cmd == SubCmd.evaluate
