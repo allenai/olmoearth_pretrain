@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import cast
 
 import numpy as np
 from olmo_core.config import StrEnum
@@ -27,7 +27,6 @@ from olmoearth_pretrain.data.dataset import (
     collate_olmoearth_pretrain,
 )
 from olmoearth_pretrain.data.visualize import visualize_sample
-from olmoearth_pretrain.inference_benchmarking.data_models import RunParams
 from olmoearth_pretrain.inference_benchmarking.run_throughput_benchmark import (
     ThroughputBenchmarkRunnerConfig,
 )
@@ -148,6 +147,7 @@ class BenchmarkExperimentConfig(Config):
     """Configuration for a throughput benchmarking run."""
 
     benchmark: ThroughputBenchmarkRunnerConfig
+    model: Config | None = None
     launch: OlmoEarthBeakerLaunchConfig | None = None
 
 
@@ -237,20 +237,20 @@ def build_benchmark_config(
         [CommonComponents], ThroughputBenchmarkRunnerConfig
     ],
     overrides: list[str],
-    benchmark_model_config_builder: (
-        Callable[[RunParams, list[str]], Any] | None
-    ) = None,
+    benchmark_model_config_builder: Callable[[CommonComponents], Config] | None = None,
 ) -> BenchmarkExperimentConfig:
     """Build a throughput benchmarking configuration."""
     inference_benchmarking_config = inference_benchmarking_config_builder(common)
-    # Set model_config_builder if provided separately
+
+    # Build model config if builder is provided
+    model_config = None
     if benchmark_model_config_builder is not None:
-        inference_benchmarking_config.model_config_builder = (
-            benchmark_model_config_builder
-        )
+        model_config = benchmark_model_config_builder(common)
+
     config = BenchmarkExperimentConfig(
         launch=common.launch,
         benchmark=inference_benchmarking_config,
+        model=model_config,
     )
     config = config.merge(overrides)
     logger.info("Benchmark config: %s", config)
@@ -259,7 +259,7 @@ def build_benchmark_config(
 
 def benchmark(config: BenchmarkExperimentConfig) -> None:
     """Benchmark an experiment."""
-    runner = config.benchmark.build()
+    runner = config.benchmark.build(model_config=config.model)
     runner.run()
 
 
@@ -491,9 +491,7 @@ def main(
     inference_benchmarking_config_builder: (
         Callable[[CommonComponents], ThroughputBenchmarkRunnerConfig] | None
     ) = None,
-    benchmark_model_config_builder: (
-        Callable[[RunParams, list[str]], Any] | None
-    ) = None,
+    benchmark_model_config_builder: Callable[[CommonComponents], Config] | None = None,
 ) -> None:
     """Main entry point for OlmoEarth Pretrain experiments.
 

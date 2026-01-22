@@ -4,7 +4,6 @@ import itertools
 import os
 import time
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from logging import getLogger
 from pathlib import Path
@@ -152,10 +151,18 @@ class ThroughputBenchmarkRunnerConfig(Config):
     default_run_params: RunParams | None = None
     save_folder: Path | None = None
     cross_product_sweep: bool = False
-    model_config_builder: Callable[[RunParams, list[str]], Any] | None = None
 
-    def build(self) -> "ThroughputBenchmarkRunner":
-        """Builds a throughput benchmarking runner."""
+    def build(
+        self,
+        model_config: Any | None = None,
+    ) -> "ThroughputBenchmarkRunner":
+        """Builds a throughput benchmarking runner.
+
+        Args:
+            model_config: Optional pre-built model config. If provided, this config
+                will be used for all benchmark runs instead of building one from
+                default parameters.
+        """
         if self.default_run_params is None:
             self.default_run_params = RunParams()
 
@@ -177,7 +184,7 @@ class ThroughputBenchmarkRunnerConfig(Config):
             save_folder=self.save_folder,
             sweep_dict=sweep_dict,
             cross_product_sweep=self.cross_product_sweep,
-            model_config_builder=self.model_config_builder,
+            model_config=model_config,
         )
 
 
@@ -202,9 +209,15 @@ class ThroughputBenchmarkRunner:
         save_folder: Path | None = None,
         sweep_dict: dict[str, Any] = {},
         cross_product_sweep: bool = False,
-        model_config_builder: Callable[[RunParams, list[str]], Any] | None = None,
+        model_config: Any | None = None,
     ):
-        """Initializes the throughput benchmarking runner."""
+        """Initializes the throughput benchmarking runner.
+
+        Args:
+            model_config: Optional pre-built model config. If provided, this config
+                will be used for all benchmark runs instead of building one from
+                run parameters.
+        """
         self.default_run_params = default_run_params
         self.sweep_group_name = sweep_group_name
         self.training_modalities = training_modalities
@@ -213,20 +226,18 @@ class ThroughputBenchmarkRunner:
         self.save_folder = save_folder
         self.sweep_dict = sweep_dict
         self.cross_product_sweep = cross_product_sweep
-        self.model_config_builder = model_config_builder
+        self.model_config = model_config
         uuid_str = str(uuid.uuid4())[:6]
         self.sweep_name = "_".join(self.sweep_dict.keys()) + "-" + uuid_str
 
     def build_model(self, run_params: RunParams) -> OlmoEarth:
         """Builds a model based on the run parameters.
 
-        Uses the custom model_config_builder if provided, otherwise uses
+        Uses the pre-built model_config if provided, otherwise uses
         build_default_model_config() to create the model config.
         """
-        if self.model_config_builder is not None:
-            model_config = self.model_config_builder(
-                run_params, self.training_modalities
-            )
+        if self.model_config is not None:
+            model_config = self.model_config
         else:
             model_config = build_default_model_config(
                 run_params, self.training_modalities

@@ -15,7 +15,6 @@ Usage:
 
 import sys
 from pathlib import Path
-from typing import Any
 
 # Add official directory to path for script imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "official"))
@@ -61,18 +60,17 @@ SENTINEL2_ALL_BANDS_SINGLE_TOKEN = ModalityTokenization(
 
 
 def build_model_config_with_all_bands_tokenization(
-    run_params: RunParams, training_modalities: list[str]
-) -> Any:
+    common: CommonComponents,
+) -> LatentMIMConfig:
     """Build model config with all Sentinel-2 bands in a single token.
 
     Args:
-        run_params: The run parameters containing model_size.
-        training_modalities: List of modality names to support.
+        common: Common components containing training_modalities.
 
     Returns:
         A LatentMIMConfig with custom tokenization.
     """
-    model_size = MODEL_SIZE_ARGS[run_params.model_size]
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
     tokenization_config = TokenizationConfig(
         overrides={
@@ -85,7 +83,7 @@ def build_model_config_with_all_bands_tokenization(
         num_heads=int(model_size["encoder_num_heads"]),
         depth=int(model_size["encoder_depth"]),
         mlp_ratio=float(model_size["mlp_ratio"]),
-        supported_modality_names=training_modalities,
+        supported_modality_names=common.training_modalities,
         tokenization_config=tokenization_config,
     )
     decoder_config = PredictorConfig(
@@ -94,7 +92,7 @@ def build_model_config_with_all_bands_tokenization(
         depth=int(model_size["decoder_depth"]),
         mlp_ratio=float(model_size["mlp_ratio"]),
         num_heads=int(model_size["decoder_num_heads"]),
-        supported_modality_names=training_modalities,
+        supported_modality_names=common.training_modalities,
         max_sequence_length=12,
         tokenization_config=tokenization_config,
     )
