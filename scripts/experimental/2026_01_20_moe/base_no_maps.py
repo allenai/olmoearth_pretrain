@@ -257,7 +257,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         # Enable MoE
         use_moe=True,
         num_experts=4,
-        top_k=1,
+        top_k=2,
         moe_aux_loss_weight=0.01,
     )
     decoder_config = PredictorConfig(
