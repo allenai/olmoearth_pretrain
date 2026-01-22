@@ -119,10 +119,10 @@ def build_inference_benchmarking_config(
         num_timesteps=12,
         batch_size=128,
         bf16=True,
-        wandb_enabled=False,  # Disable wandb for local testing
+        wandb_enabled=True,
         profiler_enabled=False,
-        benchmark_interval_s=30,  # Shorter interval for testing
-        min_batches_per_interval=5,
+        benchmark_interval_s=180,
+        min_batches_per_interval=10,
     )
 
     return ThroughputBenchmarkRunnerConfig(
