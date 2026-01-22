@@ -1488,7 +1488,7 @@ def test_random_decode_masking_with_missing_modality_mask() -> None:
         assert (masked_sample.worldcover_mask == MaskValue.DECODER.value).all()
 
         # Check s2 bandset splitting behavior
-        # s2 has 3 bandsets, so with encode_ratio=0.25: ceil(3*0.25)=1 encode bandsets
+        # Bandsets are split across ALL encode-decode modalities (s2, s1, latlon)
         assert isinstance(masked_sample.sentinel2_l2a_mask, torch.Tensor)
         num_s2_bandsets = Modality.SENTINEL2_L2A.num_band_sets
         for idx in range(masked_sample.sentinel2_l2a_mask.shape[0]):
@@ -1538,6 +1538,36 @@ def test_random_decode_masking_with_missing_modality_mask() -> None:
                         assert num_decoded / num_tokens == decode_ratio
             else:
                 assert (instance_mask == MaskValue.MISSING.value).all()
+
+        # Check that at least one bandset is encoded across all encode-decode modalities
+        for idx in range(b):
+            total_encoded_bandsets = 0
+            # Count s2 encoded bandsets
+            s2_mask = masked_sample.sentinel2_l2a_mask[idx]
+            for bandset_idx in range(num_s2_bandsets):
+                if (
+                    s2_mask[0::patch_size, 0::patch_size, :, bandset_idx]
+                    == MaskValue.ONLINE_ENCODER.value
+                ).any():
+                    total_encoded_bandsets += 1
+            # Count s1 encoded bandsets (only for non-missing instances)
+            if idx < b // 2:
+                s1_mask = masked_sample.sentinel1_mask[idx]
+                for bandset_idx in range(num_s1_bandsets):
+                    if (
+                        s1_mask[0::patch_size, 0::patch_size, :, bandset_idx]
+                        == MaskValue.ONLINE_ENCODER.value
+                    ).any():
+                        total_encoded_bandsets += 1
+            # Count latlon encoded bandsets
+            latlon_mask = masked_sample.latlon_mask[idx]  # type: ignore
+            num_latlon_bandsets = Modality.LATLON.num_band_sets
+            for bandset_idx in range(num_latlon_bandsets):
+                if (latlon_mask[bandset_idx] == MaskValue.ONLINE_ENCODER.value).any():
+                    total_encoded_bandsets += 1
+            assert total_encoded_bandsets >= 1, (
+                f"Instance {idx} has no encoded bandsets across all modalities"
+            )
 
 
 def test_random_decode_masking_with_missing_modality_mask_in_instance() -> None:
@@ -1635,3 +1665,32 @@ def test_random_decode_masking_with_missing_modality_mask_in_instance() -> None:
                     assert num_decoded == 0
                 else:
                     assert num_decoded / num_tokens == decode_ratio
+
+        # Check that at least one bandset is encoded across all encode-decode modalities
+        for idx in range(b):
+            total_encoded_bandsets = 0
+            # Count s2 encoded bandsets
+            s2_mask = masked_sample.sentinel2_l2a_mask[idx]
+            for bandset_idx in range(num_s2_bandsets):
+                if (
+                    s2_mask[0::patch_size, 0::patch_size, :, bandset_idx]
+                    == MaskValue.ONLINE_ENCODER.value
+                ).any():
+                    total_encoded_bandsets += 1
+            # Count s1 encoded bandsets (only non-missing timesteps)
+            s1_mask = masked_sample.sentinel1_mask[idx]
+            for bandset_idx in range(num_s1_bandsets):
+                if (
+                    s1_mask[0::patch_size, 0::patch_size, : t // 2, bandset_idx]
+                    == MaskValue.ONLINE_ENCODER.value
+                ).any():
+                    total_encoded_bandsets += 1
+            # Count latlon encoded bandsets
+            latlon_mask = masked_sample.latlon_mask[idx]  # type: ignore
+            num_latlon_bandsets = Modality.LATLON.num_band_sets
+            for bandset_idx in range(num_latlon_bandsets):
+                if (latlon_mask[bandset_idx] == MaskValue.ONLINE_ENCODER.value).any():
+                    total_encoded_bandsets += 1
+            assert total_encoded_bandsets >= 1, (
+                f"Instance {idx} has no encoded bandsets across all modalities"
+            )
