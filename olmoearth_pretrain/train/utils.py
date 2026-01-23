@@ -2,8 +2,10 @@
 
 import logging
 import os
+from typing import Any
 
 import psutil
+import torch
 
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
@@ -79,16 +81,24 @@ def split_masked_batch(
     split_sizes = [microbatch_size] * (num_microbatches - 1)
     split_sizes.append(batch_size - microbatch_size * (num_microbatches - 1))
 
-    # Split all non-None fields at once using torch.split
+    # Split all tensor fields at once using torch.split
+    # Non-tensor metadata fields (e.g., max_encoder_seqlen) are copied as-is
     splits: dict[str, tuple] = {}
+    metadata: dict[str, Any] = {}
     for field in batch._fields:
         data = getattr(batch, field)
         if data is not None:
-            splits[field] = data.split(split_sizes, dim=0)
+            if isinstance(data, torch.Tensor):
+                splits[field] = data.split(split_sizes, dim=0)
+            else:
+                # Non-tensor field (e.g., int) - copy to all microbatches
+                metadata[field] = data
 
     # Build microbatches
     return [
-        MaskedOlmoEarthSample(**{f: chunks[i] for f, chunks in splits.items()})
+        MaskedOlmoEarthSample(
+            **{f: chunks[i] for f, chunks in splits.items()}, **metadata
+        )
         for i in range(num_microbatches)
     ]
 
