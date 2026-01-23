@@ -83,7 +83,7 @@ class TestTokenizationConfig:
         assert indices == [[2, 0]]
 
     def test_invalid_band_name_raises(self) -> None:
-        """Unknown band name should raise KeyError."""
+        """Unknown band name should raise ValueError."""
         config = TokenizationConfig(
             overrides={
                 "sentinel2_l2a": ModalityTokenization(
@@ -94,7 +94,7 @@ class TestTokenizationConfig:
             }
         )
 
-        with pytest.raises(KeyError):
+        with pytest.raises(ValueError):
             config.get_bandset_indices("sentinel2_l2a")
 
     def test_modality_without_override_uses_default(self) -> None:
