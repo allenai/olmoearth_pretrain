@@ -79,11 +79,11 @@ def get_masking_config() -> MaskingConfig:
     """
     return MaskingConfig(
         strategy_config={
-            # "type": "modality_cross_random",
-            "type": "random_with_decode",
+            "type": "modality_cross_random",
+            # "type": "random_with_decode",
             "encode_ratio": 0.5,
             "decode_ratio": 0.5,
-            # "allow_encoding_decoding_same_bandset": True,
+            "allow_encoding_decoding_same_bandset": True,
             "only_decode_modalities": [
                 Modality.WORLDCOVER.name,
                 Modality.SRTM.name,
