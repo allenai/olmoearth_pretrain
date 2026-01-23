@@ -343,6 +343,8 @@ class TestGetMockBatch:
         self, tmp_path: Path, setup_h5py_dir: Path
     ) -> None:
         """Test get_mock_batch returns correct format for single masked mode."""
+        import functools
+
         training_modalities = [
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
@@ -357,6 +359,13 @@ class TestGetMockBatch:
 
         masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
 
+        # Use batched collator (as the config.build() method does)
+        collator = functools.partial(
+            collate_single_masked_batched,
+            transform=None,
+            masking_strategy=masking_strategy,
+        )
+
         dataloader = OlmoEarthDataLoader(
             dataset=dataset,
             work_dir=tmp_path,
@@ -366,7 +375,7 @@ class TestGetMockBatch:
             sampled_hw_p_list=[8],
             token_budget=1000000,
             seed=42,
-            collator=collate_single_masked,
+            collator=collator,
             num_masked_views=1,
             masking_strategy=masking_strategy,
         )
@@ -383,6 +392,8 @@ class TestGetMockBatch:
         self, tmp_path: Path, setup_h5py_dir: Path
     ) -> None:
         """Test get_mock_batch returns correct format for double masked mode."""
+        import functools
+
         training_modalities = [
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
@@ -397,6 +408,14 @@ class TestGetMockBatch:
 
         masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
 
+        # Use batched collator (as the config.build() method does)
+        collator = functools.partial(
+            collate_double_masked_batched,
+            transform=None,
+            masking_strategy=masking_strategy,
+            masking_strategy_b=None,
+        )
+
         dataloader = OlmoEarthDataLoader(
             dataset=dataset,
             work_dir=tmp_path,
@@ -406,7 +425,7 @@ class TestGetMockBatch:
             sampled_hw_p_list=[8],
             token_budget=1000000,
             seed=42,
-            collator=collate_double_masked,
+            collator=collator,
             num_masked_views=2,
             masking_strategy=masking_strategy,
         )

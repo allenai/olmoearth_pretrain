@@ -451,41 +451,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
             for _ in range(batch_size)
         ]
 
-        if self.num_masked_views == 0 or self.masking_strategy is None:
-            # Legacy mode: return (patch_size, OlmoEarthSample) tuples
-            collated_sample = self.collator(
-                [(patch_size, sample) for sample in mock_samples]
-            )
-        elif self.num_masked_views == 1:
-            # Single masked view
-            # Add batch dimension for masking, then remove for collation
-            masked_samples = [
-                (
-                    patch_size,
-                    self.masking_strategy.apply_mask(
-                        sample.to_tensors().unsqueeze_batch(), patch_size
-                    ).squeeze_batch(),
-                )
-                for sample in mock_samples
-            ]
-            collated_sample = self.collator(masked_samples)
-        else:
-            # Double masked views (num_masked_views == 2)
-            # Add batch dimension for masking, then remove for collation
-            strategy_b = self.masking_strategy_b or self.masking_strategy
-            masked_samples = [
-                (  # type: ignore[misc]
-                    patch_size,
-                    self.masking_strategy.apply_mask(
-                        sample.to_tensors().unsqueeze_batch(), patch_size
-                    ).squeeze_batch(),
-                    strategy_b.apply_mask(
-                        sample.to_tensors().unsqueeze_batch(), patch_size
-                    ).squeeze_batch(),
-                )
-                for sample in mock_samples
-            ]
-            collated_sample = self.collator(masked_samples)
+        # Pass raw samples to the collator - the batched collators handle
+        # transform + masking internally when num_masked_views > 0
+        collated_sample = self.collator(
+            [(patch_size, sample) for sample in mock_samples]
+        )
 
         return collated_sample
 
