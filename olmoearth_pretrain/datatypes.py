@@ -649,17 +649,12 @@ class MaskedOlmoEarthSample(NamedTuple):
         All mask values are MaskValue.ONLINE_ENCODER except for MaskValue.MISSING,
         which remain MISSING.
         """
-        return_dict: dict[str, ArrayTensor] = {}
-        for key, val in self.as_dict().items():
-            if val is None:
-                continue
-            if key.endswith("mask"):
-                # 1s where it is missing, 0 elsewhere
-                all_but_missing = val == MaskValue.MISSING.value
-                return_dict[key] = val * all_but_missing
-            else:
-                return_dict[key] = val
-        return MaskedOlmoEarthSample(**return_dict)
+        updates = {}
+        for field in _MASKED_SAMPLE_MASK_FIELDS:
+            val = getattr(self, field)
+            if val is not None:
+                updates[field] = val * (val == MaskValue.MISSING.value)
+        return self._replace(**updates)
 
     @property
     def modalities(self) -> list[str]:
@@ -765,3 +760,9 @@ class MaskedOlmoEarthSample(NamedTuple):
             The batch size (first dimension of timestamps tensor).
         """
         return self.timestamps.shape[0]
+
+
+# Pre-computed tuple of mask field names for faster iteration in unmask()
+_MASKED_SAMPLE_MASK_FIELDS: tuple[str, ...] = tuple(
+    f for f in MaskedOlmoEarthSample._fields if f.endswith("_mask")
+)
