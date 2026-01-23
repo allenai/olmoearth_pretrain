@@ -182,10 +182,14 @@ class MAETrainModule(OlmoEarthTrainModule):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass of the model."""
         with self._model_forward_context():
-            # Pre-compute max_encoder_seqlen to avoid CUDA sync during forward pass
-            max_encoder_seqlen = self.model.encoder.compute_max_encoder_seqlen(
-                x, patch_size
-            )
+            # Use precomputed max_encoder_seqlen from dataloader if available
+            # (avoids CUDA sync), otherwise compute it here
+            if x.max_encoder_seqlen is not None:
+                max_encoder_seqlen = x.max_encoder_seqlen
+            else:
+                max_encoder_seqlen = self.model.encoder.compute_max_encoder_seqlen(
+                    x, patch_size
+                )
 
             latent, decoded, reconstructed = self.model(
                 x, patch_size=patch_size, max_encoder_seqlen=max_encoder_seqlen
@@ -197,11 +201,17 @@ class MAETrainModule(OlmoEarthTrainModule):
             if self.latent_mim_loss and decoded is not None:
                 with torch.no_grad():
                     logger.info("Target Encoder forward pass...")
-                    # Target encoder uses unmasked batch, compute its max_seqlen separately
+                    # Target encoder uses unmasked batch
                     unmasked_x = x.unmask()
-                    target_max_seqlen = self.model.encoder.compute_max_encoder_seqlen(
-                        unmasked_x, patch_size
-                    )
+                    # Use precomputed max_target_encoder_seqlen if available
+                    if x.max_target_encoder_seqlen is not None:
+                        target_max_seqlen = x.max_target_encoder_seqlen
+                    else:
+                        target_max_seqlen = (
+                            self.model.encoder.compute_max_encoder_seqlen(
+                                unmasked_x, patch_size
+                            )
+                        )
                     output_dict = self.model.encoder.forward(
                         unmasked_x,
                         patch_size=patch_size,

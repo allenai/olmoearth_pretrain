@@ -39,6 +39,8 @@ from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
     OlmoEarthSample,
     collate_olmoearth_pretrain,
+    compute_max_encoder_seqlen,
+    compute_max_target_encoder_seqlen,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,10 +66,25 @@ def collate_single_masked(
         return torch.stack(tensors, dim=0)
 
     patch_size, batch_zero = batch[0]
-    sample_fields = list(batch_zero.as_dict(return_none=False).keys())
+    # Exclude metadata fields (non-tensor) when stacking
+    sample_fields = list(
+        batch_zero.as_dict(return_none=False, include_metadata=False).keys()
+    )
 
     collated_dict = {field: stack_or_none(field) for field in sample_fields}
-    return patch_size, MaskedOlmoEarthSample(**collated_dict)
+    collated_sample = MaskedOlmoEarthSample(**collated_dict)
+
+    # Compute max sequence lengths on CPU (avoids CUDA sync in forward pass)
+    max_encoder_seqlen = compute_max_encoder_seqlen(collated_sample, patch_size)
+    max_target_encoder_seqlen = compute_max_target_encoder_seqlen(
+        collated_sample, patch_size
+    )
+
+    # Return sample with precomputed sequence lengths
+    return patch_size, collated_sample._replace(
+        max_encoder_seqlen=max_encoder_seqlen,
+        max_target_encoder_seqlen=max_target_encoder_seqlen,
+    )
 
 
 def collate_double_masked(
@@ -97,16 +114,40 @@ def collate_double_masked(
         return torch.stack(tensors, dim=0)
 
     patch_size, batch_zero_a, batch_zero_b = batch[0]
-    sample_fields_a = list(batch_zero_a.as_dict(return_none=False).keys())
-    sample_fields_b = list(batch_zero_b.as_dict(return_none=False).keys())
+    # Exclude metadata fields (non-tensor) when stacking
+    sample_fields_a = list(
+        batch_zero_a.as_dict(return_none=False, include_metadata=False).keys()
+    )
+    sample_fields_b = list(
+        batch_zero_b.as_dict(return_none=False, include_metadata=False).keys()
+    )
 
     collated_dict_a = {field: stack_or_none_a(field) for field in sample_fields_a}
     collated_dict_b = {field: stack_or_none_b(field) for field in sample_fields_b}
 
+    collated_sample_a = MaskedOlmoEarthSample(**collated_dict_a)
+    collated_sample_b = MaskedOlmoEarthSample(**collated_dict_b)
+
+    # Compute max sequence lengths on CPU (avoids CUDA sync in forward pass)
+    max_encoder_seqlen_a = compute_max_encoder_seqlen(collated_sample_a, patch_size)
+    max_target_encoder_seqlen_a = compute_max_target_encoder_seqlen(
+        collated_sample_a, patch_size
+    )
+    max_encoder_seqlen_b = compute_max_encoder_seqlen(collated_sample_b, patch_size)
+    max_target_encoder_seqlen_b = compute_max_target_encoder_seqlen(
+        collated_sample_b, patch_size
+    )
+
     return (
         patch_size,
-        MaskedOlmoEarthSample(**collated_dict_a),
-        MaskedOlmoEarthSample(**collated_dict_b),
+        collated_sample_a._replace(
+            max_encoder_seqlen=max_encoder_seqlen_a,
+            max_target_encoder_seqlen=max_target_encoder_seqlen_a,
+        ),
+        collated_sample_b._replace(
+            max_encoder_seqlen=max_encoder_seqlen_b,
+            max_target_encoder_seqlen=max_target_encoder_seqlen_b,
+        ),
     )
 
 

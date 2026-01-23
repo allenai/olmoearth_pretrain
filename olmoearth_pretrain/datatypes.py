@@ -626,15 +626,27 @@ class MaskedOlmoEarthSample(NamedTuple):
     wri_canopy_height_map_mask: ArrayTensor | None = None
     era5_10: ArrayTensor | None = None
     era5_10_mask: ArrayTensor | None = None
+    # Precomputed max sequence lengths (computed in dataloader to avoid GPU sync)
+    max_encoder_seqlen: int | None = None
+    max_target_encoder_seqlen: int | None = None
 
-    def as_dict(self, return_none: bool = True) -> dict[str, Any]:
+    def as_dict(
+        self, return_none: bool = True, include_metadata: bool = True
+    ) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.
+
+        Args:
+            return_none: If True, include fields with None values.
+            include_metadata: If True, include non-tensor metadata fields
+                (max_encoder_seqlen, max_target_encoder_seqlen).
 
         Returns:
             Dictionary representation of the namedtuple.
         """
         return_dict = {}
         for field in self._fields:
+            if not include_metadata and field in _MASKED_SAMPLE_METADATA_FIELDS:
+                continue
             val = getattr(self, field)
             if return_none:
                 return_dict[field] = val
@@ -664,6 +676,7 @@ class MaskedOlmoEarthSample(NamedTuple):
             for field in self._fields
             if not field.endswith("_mask")
             and field != "timestamps"
+            and field not in _MASKED_SAMPLE_METADATA_FIELDS
             and getattr(self, field) is not None
         ]
 
@@ -732,6 +745,8 @@ class MaskedOlmoEarthSample(NamedTuple):
         return MaskedOlmoEarthSample(
             **{
                 key: val.to(device, non_blocking=non_blocking)
+                if isinstance(val, torch.Tensor)
+                else val
                 for key, val in self.as_dict(return_none=False).items()
             }
         )
@@ -766,3 +781,144 @@ class MaskedOlmoEarthSample(NamedTuple):
 _MASKED_SAMPLE_MASK_FIELDS: tuple[str, ...] = tuple(
     f for f in MaskedOlmoEarthSample._fields if f.endswith("_mask")
 )
+
+# Metadata fields that are not tensors (used for filtering in various methods)
+_MASKED_SAMPLE_METADATA_FIELDS: tuple[str, ...] = (
+    "max_encoder_seqlen",
+    "max_target_encoder_seqlen",
+)
+
+
+def compute_max_encoder_seqlen(
+    x: MaskedOlmoEarthSample,
+    patch_size: int,
+    modality_names: list[str] | None = None,
+    count_mask_value: int = MaskValue.ONLINE_ENCODER.value,
+) -> int:
+    """Compute the max encoder sequence length for a batch.
+
+    This is a CPU-friendly computation that can be done in the dataloader
+    to avoid CUDA sync during the forward pass.
+
+    Args:
+        x: Masked input sample (batched)
+        patch_size: Patch size for tokenization
+        modality_names: List of modality names to process. If None, uses all
+            present modalities.
+        count_mask_value: The mask value to count (default: ONLINE_ENCODER).
+            Use ONLINE_ENCODER for encoder seqlen, or use a value that counts
+            all non-MISSING for target encoder.
+
+    Returns:
+        Maximum number of tokens with the specified mask value in any sample
+    """
+    all_masks = []
+    if modality_names is None:
+        modality_names = x.modalities
+
+    for modality in modality_names:
+        masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+        modality_mask = getattr(x, masked_modality_name)
+        if modality_mask is None:
+            continue
+
+        modality_spec = Modality.get(modality)
+
+        modality_masks = []
+        for idx in range(modality_spec.num_band_sets):
+            if not modality_spec.is_spatial:
+                # static in time - no downsampling
+                token_mask = modality_mask[..., idx]
+            else:
+                # Downsample mask by patch_size (same as in apply_embedding_to_modality)
+                token_mask = modality_mask[
+                    :,
+                    0 :: patch_size * modality_spec.image_tile_size_factor,
+                    0 :: patch_size * modality_spec.image_tile_size_factor,
+                    ...,
+                    idx,
+                ]
+            modality_masks.append(token_mask)
+
+        # Stack across band sets and flatten spatial dims
+        stacked_mask = torch.stack(modality_masks, dim=-1)
+        flat_mask = stacked_mask.reshape(stacked_mask.shape[0], -1)
+        all_masks.append(flat_mask)
+
+    if not all_masks:
+        return 0
+
+    # Concatenate across modalities
+    combined_mask = torch.cat(all_masks, dim=1)
+
+    # Count tokens with the specified mask value
+    encoder_mask = combined_mask == count_mask_value
+    seq_lengths = encoder_mask.sum(dim=-1)
+    return int(seq_lengths.max().item())
+
+
+def compute_max_target_encoder_seqlen(
+    x: MaskedOlmoEarthSample,
+    patch_size: int,
+    modality_names: list[str] | None = None,
+) -> int:
+    """Compute the max target encoder sequence length for a batch.
+
+    The target encoder processes all non-MISSING tokens (since unmask() converts
+    everything except MISSING to ONLINE_ENCODER).
+
+    This is a CPU-friendly computation that can be done in the dataloader
+    to avoid CUDA sync during the forward pass.
+
+    Args:
+        x: Masked input sample (batched)
+        patch_size: Patch size for tokenization
+        modality_names: List of modality names to process. If None, uses all
+            present modalities.
+
+    Returns:
+        Maximum number of non-MISSING tokens in any sample
+    """
+    all_masks = []
+    if modality_names is None:
+        modality_names = x.modalities
+
+    for modality in modality_names:
+        masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+        modality_mask = getattr(x, masked_modality_name)
+        if modality_mask is None:
+            continue
+
+        modality_spec = Modality.get(modality)
+
+        modality_masks = []
+        for idx in range(modality_spec.num_band_sets):
+            if not modality_spec.is_spatial:
+                # static in time - no downsampling
+                token_mask = modality_mask[..., idx]
+            else:
+                # Downsample mask by patch_size (same as in apply_embedding_to_modality)
+                token_mask = modality_mask[
+                    :,
+                    0 :: patch_size * modality_spec.image_tile_size_factor,
+                    0 :: patch_size * modality_spec.image_tile_size_factor,
+                    ...,
+                    idx,
+                ]
+            modality_masks.append(token_mask)
+
+        # Stack across band sets and flatten spatial dims
+        stacked_mask = torch.stack(modality_masks, dim=-1)
+        flat_mask = stacked_mask.reshape(stacked_mask.shape[0], -1)
+        all_masks.append(flat_mask)
+
+    if not all_masks:
+        return 0
+
+    # Concatenate across modalities
+    combined_mask = torch.cat(all_masks, dim=1)
+
+    # Count non-MISSING tokens (target encoder sees everything that's not missing)
+    non_missing_mask = combined_mask != MaskValue.MISSING.value
+    seq_lengths = non_missing_mask.sum(dim=-1)
+    return int(seq_lengths.max().item())
