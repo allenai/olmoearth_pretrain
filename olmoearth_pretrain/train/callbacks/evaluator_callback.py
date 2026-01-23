@@ -419,8 +419,9 @@ class DownstreamEvaluator:
 
         Returns:
             Dictionary with keys:
-                - val_score: Validation score
-                - test_score: Test score
+                - val_score: Validation score (float for classification, dict for segmentation)
+                - test_score: Test score (float for classification, dict for segmentation)
+                    For segmentation, dict contains: miou, overall_acc, macro_acc, micro_f1, macro_f1
                 - bootstrap_stats: Bootstrap statistics dict (empty dict if not available)
         """
         if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
@@ -538,7 +539,22 @@ class DownstreamEvaluatorCallback(Callback):
         bootstrap_stats = result["bootstrap_stats"]
 
         if wandb_callback.enabled:
-            wandb_callback.wandb.log({"eval/" + evaluator.evaluation_name: val_result})
+            # Log validation results - handle dict for segmentation
+            if isinstance(val_result, dict):
+                for metric_name, metric_value in val_result.items():
+                    wandb_callback.wandb.log(
+                        {
+                            f"eval/{evaluator.evaluation_name}/{metric_name}": metric_value
+                        }
+                    )
+                # Also log miou as the primary metric for backward compatibility
+                wandb_callback.wandb.log(
+                    {"eval/" + evaluator.evaluation_name: val_result["miou"]}
+                )
+            else:
+                wandb_callback.wandb.log(
+                    {"eval/" + evaluator.evaluation_name: val_result}
+                )
             wandb_callback.wandb.log(
                 {"eval_time/" + evaluator.evaluation_name: eval_time}
             )
@@ -552,8 +568,18 @@ class DownstreamEvaluatorCallback(Callback):
                 )
                 wandb_callback.wandb.log({f"{evaluator.evaluation_name}_step": 0})
 
+        # Check if results are valid (handle both float and dict)
+        val_valid = (
+            val_result["miou"] > 0 if isinstance(val_result, dict) else val_result > 0
+        )
+        test_valid = (
+            test_result["miou"] > 0
+            if isinstance(test_result, dict)
+            else test_result > 0
+        )
+
         # Only logging valid results to wandb
-        if val_result > 0 and test_result > 0:
+        if val_valid and test_valid:
             # Log bootstrap statistics if available
             if bootstrap_stats:
                 wandb_callback.wandb.log(
@@ -573,9 +599,22 @@ class DownstreamEvaluatorCallback(Callback):
                     }
                 )
             if self.run_on_test:
-                wandb_callback.wandb.log(
-                    {"eval/test/" + evaluator.evaluation_name: test_result}
-                )
+                # Log test results - handle dict for segmentation
+                if isinstance(test_result, dict):
+                    for metric_name, metric_value in test_result.items():
+                        wandb_callback.wandb.log(
+                            {
+                                f"eval/test/{evaluator.evaluation_name}/{metric_name}": metric_value
+                            }
+                        )
+                    # Also log miou as the primary metric for backward compatibility
+                    wandb_callback.wandb.log(
+                        {"eval/test/" + evaluator.evaluation_name: test_result["miou"]}
+                    )
+                else:
+                    wandb_callback.wandb.log(
+                        {"eval/test/" + evaluator.evaluation_name: test_result}
+                    )
 
     def pre_train(self) -> None:
         """Run the evaluators on startup."""
@@ -623,8 +662,8 @@ class DownstreamEvaluatorCallback(Callback):
 
         Returns:
             Dictionary with keys:
-                - val_score: Validation score
-                - test_score: Test score
+                - val_score: Validation score (float for classification, dict for segmentation)
+                - test_score: Test score (float for classification, dict for segmentation)
                 - eval_time: Evaluation time in seconds
                 - bootstrap_stats: Bootstrap statistics dict (empty dict if not available)
         """
@@ -635,11 +674,36 @@ class DownstreamEvaluatorCallback(Callback):
         test_result = result["test_score"]
         bootstrap_stats = result["bootstrap_stats"]
 
-        self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
-        if self.run_on_test:
+        # Record validation metrics - handle dict for segmentation
+        if isinstance(val_result, dict):
+            for metric_name, metric_value in val_result.items():
+                self.trainer.record_metric(
+                    f"eval/{evaluator.evaluation_name}/{metric_name}", metric_value
+                )
+            # Also record miou as the primary metric for backward compatibility
             self.trainer.record_metric(
-                f"eval/test/{evaluator.evaluation_name}", test_result
+                f"eval/{evaluator.evaluation_name}", val_result["miou"]
             )
+        else:
+            self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
+
+        if self.run_on_test:
+            # Record test metrics - handle dict for segmentation
+            if isinstance(test_result, dict):
+                for metric_name, metric_value in test_result.items():
+                    self.trainer.record_metric(
+                        f"eval/test/{evaluator.evaluation_name}/{metric_name}",
+                        metric_value,
+                    )
+                # Also record miou as the primary metric for backward compatibility
+                self.trainer.record_metric(
+                    f"eval/test/{evaluator.evaluation_name}", test_result["miou"]
+                )
+            else:
+                self.trainer.record_metric(
+                    f"eval/test/{evaluator.evaluation_name}", test_result
+                )
+
         # Log bootstrap statistics if available
         if bootstrap_stats:
             self.trainer.record_metric(
