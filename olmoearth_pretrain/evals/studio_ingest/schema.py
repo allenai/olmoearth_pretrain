@@ -353,6 +353,14 @@ class EvalDatasetEntry:
     band_order: list[str] = field(default_factory=list)
     imputes: list[tuple[str, str]] = field(default_factory=list)
     timeseries: bool = False
+    num_timesteps: int = 12  # Number of timesteps per sample
+
+    # Geometric transform sizing (extracted from model.yaml transforms)
+    # train_* used when training a probe head, eval_* used when evaluating
+    train_crop_size: int | None = None
+    train_pad_size: int | None = None
+    eval_crop_size: int | None = None
+    eval_pad_size: int | None = None
 
     # Paths
     source_path: str = ""
@@ -423,6 +431,11 @@ class EvalDatasetEntry:
             "band_order": self.band_order,
             "imputes": [list(t) for t in self.imputes],
             "timeseries": self.timeseries,
+            "num_timesteps": self.num_timesteps,
+            "train_crop_size": self.train_crop_size,
+            "train_pad_size": self.train_pad_size,
+            "eval_crop_size": self.eval_crop_size,
+            "eval_pad_size": self.eval_pad_size,
             "source_path": self.source_path,
             "weka_path": self.weka_path,
             "splits": self.splits,
@@ -471,6 +484,11 @@ class EvalDatasetEntry:
             band_order=data.get("band_order", []),
             imputes=imputes,
             timeseries=data.get("timeseries", False),
+            num_timesteps=data.get("num_timesteps", 12),
+            train_crop_size=data.get("train_crop_size"),
+            train_pad_size=data.get("train_pad_size"),
+            eval_crop_size=data.get("eval_crop_size"),
+            eval_pad_size=data.get("eval_pad_size"),
             source_path=data.get("source_path", ""),
             weka_path=data.get("weka_path", ""),
             splits=data.get("splits", {}),

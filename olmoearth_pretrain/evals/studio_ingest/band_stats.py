@@ -46,8 +46,8 @@ from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
     RSLEARN_TO_OLMOEARTH,
 )
 
-# Default to cpu_count - 1, but allow override via env var
-_default_workers = (os.cpu_count() or 1) - 1
+# Default to 0 (no multiprocessing), but allow override via env var
+_default_workers = 0
 NUM_WORKERS = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", _default_workers))
 
 # Optional sampling limits via env vars
@@ -138,7 +138,7 @@ def build_rslearn_model_dataset_for_band_stats(
             passthrough=False,  # Get tensors, not RasterImage
             load_all_layers=True,
             load_all_item_groups=True,
-            required=False,
+            required=False,  # Filter out windows missing this layer
         )
 
     split_config = RsSplitConfig(
@@ -156,7 +156,8 @@ def build_rslearn_model_dataset_for_band_stats(
         split_config=split_config,
         inputs=inputs,
         task=task,
-        workers=NUM_WORKERS,
+        workers=32,
+        use_index=True,
     )
 
 
@@ -188,6 +189,7 @@ def collate_inputs_only(batch):
     return [item[0] for item in batch]
 
 
+# TODO: Maybe broken
 def compute_band_stats(model_ds, bands_by_modality: dict[str, list[str]]) -> dict:
     """Compute mean/std/min/max for each band in each modality.
 
@@ -239,7 +241,11 @@ def compute_band_stats(model_ds, bands_by_modality: dict[str, list[str]]) -> dic
                 continue
 
             # Stack batch into tensor: (B, T*C, H, W)
-            cur = torch.stack([inp[modality] for inp in batch_inputs], dim=0)
+            # check the lenght of the batch inputs to make sure non zero before stacking
+            samples = [inp[modality] for inp in batch_inputs]
+            if len(samples) == 0:
+                continue
+            cur = torch.stack(samples, dim=0)
             if cur.ndim == 3:
                 cur = cur.unsqueeze(0)
             B, TC, H, W = cur.shape
@@ -293,7 +299,7 @@ def compute_band_stats(model_ds, bands_by_modality: dict[str, list[str]]) -> dic
                 }
     return out
 
-
+# TODO: Maybe broken
 def compute_band_stats_from_rslearn_dataset(
     dataset_path: str,
     modalities: list[str],

@@ -108,6 +108,7 @@ Goal for today is tolbi and fire through both of these steps
 
 `python -m olmoearth_pretrain.internal.full_eval_sweep     --cluster=local     --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000     --module_path=scripts/official/tiny.py     --trainer.callbacks.downstream_evaluator.tasks_to_run="[tolbi_crops]"     --trainer.callbacks.downstream_evaluator.eval_on_startup=True     --trainer.callbacks.downstream_evaluator.cancel_after_first_eval=True     --trainer.callbacks.wandb.enabled=False --defaults_only `
 
+`python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name tolbi_crops     --source gs://rslearn-eai/datasets/tolbi     --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/tolbi_run_data     --groups 20251210     --register     --overwrite  --max-samples=16 `
 
 Do we really want to save all the information in the registry and then rebuild the rslearn dataset or just also save the config needed to build the model dataset and go based on that
 
@@ -116,13 +117,34 @@ incompabilities
 - we definitely will need to make test splits aka new splits for all the data
 - dealing with different invalid data etc
 - scared of rslearn api changes
+"m_legacy() L242  BandSet.format uses legacy format; support will be removed after 2026-03-01."
+    - would just be another dependency to work off of as well if something stops being supported
 - how do we pick and appropriate workers and batch size for the task
 - What if the dataset is too big
 - Need to auto generate images
-- Need to ad
+- Variable time lengths means we would potentially want to do use flash attn for inference
 
 
 
 Next steps
 - pass cropping through as a transform
 - create a new test split
+
+
+
+Tasks to add
+- tolbi
+- mozambique
+- worldcover
+- fields of the world
+- canada wildfire
+
+
+` python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name wildifire_canada_test     --source  gs://rslearn-eai/datasets/wildfire/canada_fire_sat_test     --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/wildfire_run_data/  --register     --overwrite `
+
+
+- yemen crop
+- landslide
+- mangrove
+- nandi
+- awf

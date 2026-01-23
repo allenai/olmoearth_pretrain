@@ -189,6 +189,44 @@ def get_label_layer_info(dataset_config: DatasetConfig) -> tuple[str, list[str]]
 
 
 # =============================================================================
+# Transform Extraction Utilities
+# =============================================================================
+
+
+def _extract_sizing(transforms: list[dict]) -> tuple[int | None, int | None]:
+    """Extract crop and pad sizes from a list of transform configs.
+
+    Scans the transforms for Crop and Pad transforms and extracts
+    their sizing parameters.
+
+    Args:
+        transforms: List of transform config dicts with class_path and init_args.
+
+    Returns:
+        Tuple of (crop_size, pad_size), each None if not found.
+    """
+    crop_size: int | None = None
+    pad_size: int | None = None
+
+    for transform in transforms:
+        class_path = transform.get("class_path", "")
+        init_args = transform.get("init_args", {})
+
+        if "crop.Crop" in class_path:
+            crop_size = init_args.get("crop_size")
+            # Handle tuple case (min, max) - take the min for deterministic eval
+            if isinstance(crop_size, (list, tuple)):
+                crop_size = crop_size[0]
+        elif "pad.Pad" in class_path:
+            pad_size = init_args.get("size")
+            # Handle tuple case (min, max) - take the min for deterministic eval
+            if isinstance(pad_size, (list, tuple)):
+                pad_size = pad_size[0]
+
+    return crop_size, pad_size
+
+
+# =============================================================================
 # Main Ingestion Function
 # =============================================================================
 
@@ -273,10 +311,11 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         # get the temporal range
         query_config = layer_config.data_source.query_config
         # For now we raise an error if min_matches and max_matches are not the same
-        if query_config.min_matches != query_config.max_matches:
-            raise ValueError(
-                f"Min matches and max matches are not the same for layer {layer_name}"
-            )
+        # TODO: I am going to turn this off to see if it works
+        # if query_config.min_matches != query_config.max_matches:
+        #     raise ValueError(
+        #         f"Min matches and max matches are not the same for layer {layer_name}"
+        #     )
         num_timesteps_modalities.append(query_config.min_matches)
     print(modalities)
     # assert all the num_timesteps_modalities are the same
@@ -406,10 +445,26 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     # Extract groups and split_tag_key from data module config
     data_init_args = model_config["data"]["init_args"]
     train_config = data_init_args.get("train_config", {})
+    val_config = data_init_args.get("val_config", {})
+    default_config = data_init_args.get("default_config", {})
     groups = train_config.get("groups", [])
     train_tags = train_config.get("tags", {})
     split_tag_key = list(train_tags.keys())[0] if train_tags else "split"
     logger.info(f"Extracted groups={groups}, split_tag_key={split_tag_key}")
+
+    # Extract geometric sizing from transforms
+    # Train sizing comes from train_config transforms
+    train_transforms = train_config.get("transforms", [])
+    train_crop_size, train_pad_size = _extract_sizing(train_transforms)
+
+    # Eval sizing comes from val_config transforms, or default_config if val_config has none
+    eval_transforms = val_config.get("transforms", []) or default_config.get("transforms", [])
+    eval_crop_size, eval_pad_size = _extract_sizing(eval_transforms)
+
+    logger.info(
+        f"Extracted sizing: train_crop={train_crop_size}, train_pad={train_pad_size}, "
+        f"eval_crop={eval_crop_size}, eval_pad={eval_pad_size}"
+    )
 
     # Extract target layer configuration from model.yaml inputs
     # Find the input with is_target=True
@@ -444,5 +499,10 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         modalities=modalities,
         groups=groups,
         split_tag_key=split_tag_key,
+        num_timesteps=num_timesteps,
+        train_crop_size=train_crop_size,
+        train_pad_size=train_pad_size,
+        eval_crop_size=eval_crop_size,
+        eval_pad_size=eval_pad_size,
     )
     return entry

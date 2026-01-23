@@ -24,6 +24,7 @@ from rslearn.train.tasks.classification import (
 )
 from rslearn.train.tasks.segmentation import SegmentationTask as RsSegmentationTask
 from rslearn.train.model_context import RasterImage
+from rslearn.train.transforms.crop import Crop as RsCrop
 from rslearn.train.transforms.pad import Pad as RsPad
 from torch.utils.data import Dataset
 from upath import UPath
@@ -65,7 +66,6 @@ def build_rslearn_model_dataset(
     classes: list[str],
     task_type: str = "classification",
     rslearn_dataset_groups: list[str] | None = None,
-    input_size: int | None = None,
     split: str = "train",
     property_name: str = "category",
     skip_targets: bool = False,
@@ -74,6 +74,8 @@ def build_rslearn_model_dataset(
     target_layer_name: str = "label",
     target_data_type: str = "vector",
     target_bands: list[str] | None = None,
+    crop_size: int | None = None,
+    pad_size: int | None = None,
 ) -> RsModelDataset:
     """Build an rslearn ModelDataset.
 
@@ -83,7 +85,6 @@ def build_rslearn_model_dataset(
         classes: List of class names.
         task_type: "classification" or "segmentation".
         rslearn_dataset_groups: Optional list of dataset group names to include.
-        input_size: Optional input patch size (pixels) to crop/resize samples to.
         split: Dataset split to use (e.g., "train", "val", "test").
         property_name: The property in the dataset to use as the target label.
         skip_targets: Whether to skip the target loading.
@@ -91,6 +92,8 @@ def build_rslearn_model_dataset(
         target_layer_name: rslearn layer name for targets (e.g., "label", "label_raster").
         target_data_type: "vector" for classification, "raster" for segmentation.
         target_bands: List of band names for raster targets (e.g., ["label"]).
+        crop_size: If set, apply Crop transform to this size.
+        pad_size: If set, apply Pad transform to this size (center mode).
 
     Returns:
         RsModelDataset: A dataset object ready for training or evaluation.
@@ -123,18 +126,34 @@ def build_rslearn_model_dataset(
         layers_by_olmoearth[olmoearth_key].append(rslearn_layer)
         bands_by_olmoearth[olmoearth_key] = band_order
 
+    # Build image selectors for transforms (input modalities + target selectors)
+    # For plain SegmentationTask, targets are at "target/classes" and "target/valid" (not nested)
+    # Note: MultiTask would nest under task name, but we use plain SegmentationTask here
+    input_selectors = list(layers_by_olmoearth.keys())
+    if task_type == "segmentation":
+        target_selectors = ["target/classes", "target/valid"]
+    else:
+        target_selectors = []
+    all_selectors = input_selectors + target_selectors
+
     transforms = []
-    # TODO: We should add transforms such as padding if prescribed by the config or CROPPING
-    # if input_size is not None:
-    #     print(f"Adding pad transform with size {input_size}")
-        # The transforms need to be specified by the config and passed through if needed
-        # transforms.append(
-        #     RsPad(
-        #         size=input_size,
-        #         mode="center",
-        #         image_selectors=list(layers_by_olmoearth.keys()),
-        #     )
-        # )
+    # Apply crop transform if specified
+    if crop_size is not None:
+        transforms.append(
+            RsCrop(
+                crop_size=crop_size,
+                image_selectors=all_selectors,
+            )
+        )
+    # Apply pad transform if specified
+    if pad_size is not None:
+        transforms.append(
+            RsPad(
+                size=pad_size,
+                mode="center",
+                image_selectors=all_selectors,
+            )
+        )
 
     inputs: dict[str, RsDataInput] = {}
     # NOTE: Some datasets use layer suffixes (sentinel2.1, sentinel2.2, ...) for timesteps,
@@ -242,7 +261,6 @@ class RslearnToOlmoEarthDataset(Dataset):
         classes: list[str],
         input_modalities: list[str],
         ds_groups: list[str] | None = None,
-        input_size: int | None = None,
         split: str = "train",
         property_name: str = "category",
         partition: str = "default",
@@ -257,6 +275,9 @@ class RslearnToOlmoEarthDataset(Dataset):
         target_layer_name: str = "label",
         target_data_type: str = "vector",
         target_bands: list[str] | None = None,
+        crop_size: int | None = None,
+        pad_size: int | None = None,
+        num_timesteps: int = 12,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -266,6 +287,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             target_layer_name: rslearn layer name for targets (e.g., "label", "label_raster").
             target_data_type: "vector" for classification, "raster" for segmentation.
             target_bands: List of band names for raster targets.
+            crop_size: If set, apply Crop transform to this size.
+            pad_size: If set, apply Pad transform to this size (center mode).
+            num_timesteps: Number of timesteps per sample.
         """
         if split not in ("train", "val", "valid", "test"):
             raise ValueError(f"Invalid split {split}")
@@ -290,7 +314,6 @@ class RslearnToOlmoEarthDataset(Dataset):
             layers=layers,
             classes=classes,
             task_type=task_type,
-            input_size=input_size,
             split="val" if split == "valid" else split,  # rslearn uses 'val'
             property_name=property_name,
             max_samples=max_samples,
@@ -298,10 +321,13 @@ class RslearnToOlmoEarthDataset(Dataset):
             target_layer_name=target_layer_name,
             target_data_type=target_data_type,
             target_bands=target_bands,
+            crop_size=crop_size,
+            pad_size=pad_size,
         )
 
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
         self.input_modalities = input_modalities
+        self.num_timesteps = num_timesteps
         self.timestamps = torch.stack(get_timestamps(start_time, end_time))  # (T, 3)
 
         if self.norm_stats_from_pretrained:
@@ -356,29 +382,28 @@ class RslearnToOlmoEarthDataset(Dataset):
         input_dict, target, _ = self.dataset[idx]
 
         sample_dict: dict[str, Any] = {}
-        T = YEAR_NUM_TIMESTEPS
+        T = self.num_timesteps
 
         for modality in self.input_modalities:
             if modality not in input_dict:
                 raise ValueError(f"Modality {modality} not found in dataset inputs")
             num_bands = DataModality.get(modality).num_bands
             x = input_dict[modality]
-            # what is the shape of the raster image
-            # Extract tensor from RasterImage if passthrough=True
-            # RasterImage.image has shape (C, T, H, W), we need (T*C, H, W)
+            print(f"x shape: {x.shape} for modality {modality} ")
+            # Extract tensor and rearrange to OlmoEarth format (H, W, T, C)
             if isinstance(x, RasterImage):
-                x = rearrange(x.image, "c t h w -> (t c) h w")
-            # Turn into numpy array for compatibility with normalizer
-            if not isinstance(x, np.ndarray):
-                x = x.numpy()
-            if x.ndim != 3:
-                raise ValueError(
-                    f"Expected (T*C, H, W) for {modality}, got {tuple(x.shape)}"
-                )
+                # RasterImage.image has shape (C, T, H, W)
+                x = rearrange(x.image, "c t h w -> h w t c")
+            else:
+                # Tensor with shape (T*C, H, W) from rslearn
+                if not isinstance(x, np.ndarray):
+                    print("using tensor")
+                    x = x.numpy()
+                x = rearrange(x, "(t c) h w -> h w t c", t=T, c=num_bands)
+
             # Convert to dB for Sentinel-1
             if modality == DataModality.SENTINEL1.name:
                 x = convert_to_db(x)
-            x = rearrange(x, "(t c) h w -> h w t c", t=T, c=num_bands)
 
             if self.norm_stats_from_pretrained:
                 x = self.normalizer_computed.normalize(DataModality.get(modality), x)
@@ -424,6 +449,7 @@ def from_registry_entry(
     norm_method: str = "norm_no_clip",
     norm_stats_from_pretrained: bool | None = None,
     max_samples: int | None = None,
+    input_modalities_override: list[str] | None = None,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -434,6 +460,8 @@ def from_registry_entry(
         partition: Dataset partition (e.g., "default", "0.10x_train").
         norm_method: Normalization method when not using pretrain stats.
         norm_stats_from_pretrained: Override for entry.use_pretrain_norm.
+        input_modalities_override: Override modalities from entry. For multi-modal datasets,
+            allows using only a subset (e.g., just S1 or just S2).
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -444,8 +472,11 @@ def from_registry_entry(
         entry = get_dataset_entry("tolbi_crops")
         dataset = from_registry_entry(entry, split="val")
     """
-    # Use modalities from entry (lowercase to match DataModality.*.name)
-    input_modalities = [m.lower() for m in entry.modalities]
+    # Use override if provided, otherwise use modalities from entry
+    if input_modalities_override:
+        input_modalities = [m.lower() for m in input_modalities_override]
+    else:
+        input_modalities = [m.lower() for m in entry.modalities]
 
     # Derive rslearn layer names from modalities if not provided
     if not input_layers:
@@ -470,13 +501,20 @@ def from_registry_entry(
     if not use_pretrain_norm and entry.norm_stats_path:
         ds_norm_stats_json = entry.norm_stats_path
 
+    # Select sizing based on split: train uses train_* sizing, val/test uses eval_* sizing
+    if split == "train":
+        crop_size = entry.train_crop_size
+        pad_size = entry.train_pad_size
+    else:
+        crop_size = entry.eval_crop_size
+        pad_size = entry.eval_pad_size
+
     return RslearnToOlmoEarthDataset(
         ds_path=entry.source_path,
         layers=input_layers,
         classes=classes,
         input_modalities=input_modalities,
         ds_groups=entry.groups if entry.groups else None,
-        input_size=entry.window_size,
         split=split,
         property_name=entry.target_property,
         partition=partition,
@@ -491,4 +529,7 @@ def from_registry_entry(
         target_layer_name=entry.target_layer_name,
         target_data_type=entry.target_data_type,
         target_bands=entry.target_bands,
+        crop_size=crop_size,
+        pad_size=pad_size,
+        num_timesteps=entry.num_timesteps,
     )

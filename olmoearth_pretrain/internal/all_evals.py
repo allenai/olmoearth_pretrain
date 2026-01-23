@@ -320,6 +320,20 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
+    "wildifire_canada_test": DownstreamTaskConfig(
+        dataset="wildifire_canada_test",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+    ),
 }
 
 FT_EVAL_TASKS = {

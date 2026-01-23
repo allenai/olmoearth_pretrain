@@ -36,6 +36,7 @@ def get_eval_dataset_from_entry(
     split: str,
     norm_stats_from_pretrained: bool = False,
     input_layers: list[str] | None = None,
+    input_modalities: list[str] | None = None,
     partition: str = EvalDatasetPartition.TRAIN1X,
     norm_method: str = NormMethod.NORM_NO_CLIP,
 ) -> Dataset:
@@ -46,6 +47,7 @@ def get_eval_dataset_from_entry(
         split: Dataset split ("train", "val", "test").
         norm_stats_from_pretrained: Whether to use pretrain normalization stats.
         input_layers: Optional rslearn layer names. If None, derived from entry.
+        input_modalities: Optional modality override. If None, uses entry.modalities.
         partition: Dataset partition.
         norm_method: Normalization method.
 
@@ -60,6 +62,7 @@ def get_eval_dataset_from_entry(
         norm_method,
         norm_stats_from_pretrained,
         max_samples=1000, # Hardcoded for debugging
+        input_modalities_override=input_modalities,
     )
 
 
@@ -190,6 +193,7 @@ def get_eval_dataset(
             split,
             norm_stats_from_pretrained,
             input_layers if input_layers else None,
+            input_modalities if input_modalities else None,
             partition,
             norm_method,
         )

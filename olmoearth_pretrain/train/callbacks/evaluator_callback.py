@@ -29,7 +29,7 @@ from olmoearth_pretrain.evals.datasets.configs import (
     get_eval_mode,
 )
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
-from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn
+from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn, eval_collate_fn_variable_time
 from olmoearth_pretrain.evals.embeddings import get_embeddings
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
@@ -232,7 +232,7 @@ class DownstreamEvaluator:
                 input_layers=self.input_layers,
                 norm_method=self.norm_method,
             ),
-            collate_fn=eval_collate_fn,
+            collate_fn=eval_collate_fn_variable_time,
             batch_size=batch_size,
             num_workers=self.num_workers,
             generator=generator,
