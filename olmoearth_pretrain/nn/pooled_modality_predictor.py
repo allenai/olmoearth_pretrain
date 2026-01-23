@@ -375,8 +375,8 @@ class EncodeEarlyAttnPool(Encoder):
             mask: Mask to remove masked tokens from
             max_length: Optional pre-computed max sequence length. If provided,
                 skips the CUDA sync that would otherwise occur when computing
-                max_length dynamically. Use compute_max_encoder_seqlen() to
-                pre-compute this value once per batch.
+                max_length dynamically. This is computed in the dataloader via
+                compute_max_encoder_seqlen() in datatypes.py.
 
         Returns:
             tokens: [B, T, D]
@@ -674,7 +674,8 @@ class EncodeEarlyAttnPool(Encoder):
                 this enables torch based flash attention
             max_encoder_seqlen: Optional pre-computed max sequence length to avoid
                 CUDA sync in remove_masked_tokens. If None, computed dynamically.
-                Use compute_max_encoder_seqlen() to pre-compute this value once per batch.
+                This is computed in the dataloader via compute_max_encoder_seqlen()
+                in datatypes.py and stored in MaskedOlmoEarthSample.max_encoder_seqlen.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks

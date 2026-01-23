@@ -1298,8 +1298,8 @@ class Encoder(FlexiVitBase):
             mask: Mask to remove masked tokens from
             max_length: Optional pre-computed max sequence length. If provided,
                 skips the CUDA sync that would otherwise occur when computing
-                max_length dynamically. Use compute_max_encoder_seqlen() to
-                pre-compute this value once per batch.
+                max_length dynamically. This is computed in the dataloader via
+                compute_max_encoder_seqlen() in datatypes.py.
 
         Returns:
             tokens: [B, T, D]
@@ -1676,7 +1676,8 @@ class Encoder(FlexiVitBase):
                 and sorting
             max_encoder_seqlen: Optional pre-computed max sequence length to avoid
                 CUDA sync in remove_masked_tokens. If None, computed dynamically.
-                Use compute_max_encoder_seqlen() to pre-compute this value once per batch.
+                This is computed in the dataloader via compute_max_encoder_seqlen()
+                in datatypes.py and stored in MaskedOlmoEarthSample.max_encoder_seqlen.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -1711,68 +1712,6 @@ class Encoder(FlexiVitBase):
         if not fast_pass:
             output_dict["project_aggregated"] = self.project_and_aggregate(output)
         return output_dict
-
-    def compute_max_encoder_seqlen(
-        self, x: MaskedOlmoEarthSample, patch_size: int
-    ) -> int:
-        """Compute the max encoder sequence length for a batch.
-
-        This method computes the patchified mask shapes (without running embedding
-        convolutions) to determine the maximum number of ONLINE_ENCODER tokens
-        across all samples in the batch. Call this once before forward() to avoid
-        CUDA sync during the forward pass.
-
-        Note: This triggers a CUDA sync to return the Python int. Call this once
-        per batch, not per microbatch, to amortize the sync cost.
-
-        Args:
-            x: Masked input sample
-            patch_size: Patch size for tokenization
-
-        Returns:
-            Maximum number of ONLINE_ENCODER tokens in any sample
-        """
-        # Compute patchified masks without running embedding modules
-        # This mirrors the mask computation in apply_embedding_to_modality
-        all_masks = []
-        available_modalities = x.modalities
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.patch_embeddings.supported_modality_names
-        )
-
-        for modality in modalities_to_process:
-            masked_modality_name = x.get_masked_modality_name(modality)
-            modality_mask = getattr(x, masked_modality_name)
-            modality_spec = Modality.get(modality)
-
-            modality_masks = []
-            for idx in range(modality_spec.num_band_sets):
-                if not modality_spec.is_spatial:
-                    # static in time - no downsampling
-                    token_mask = modality_mask[..., idx]
-                else:
-                    # Downsample mask by patch_size (same as in apply_embedding_to_modality)
-                    token_mask = modality_mask[
-                        :,
-                        0 :: patch_size * modality_spec.image_tile_size_factor,
-                        0 :: patch_size * modality_spec.image_tile_size_factor,
-                        ...,
-                        idx,
-                    ]
-                modality_masks.append(token_mask)
-
-            # Stack across band sets and flatten spatial dims
-            stacked_mask = torch.stack(modality_masks, dim=-1)
-            flat_mask = stacked_mask.reshape(stacked_mask.shape[0], -1)
-            all_masks.append(flat_mask)
-
-        # Concatenate across modalities
-        combined_mask = torch.cat(all_masks, dim=1)
-
-        # Count ONLINE_ENCODER tokens
-        encoder_mask = combined_mask == MaskValue.ONLINE_ENCODER.value
-        seq_lengths = encoder_mask.sum(dim=-1)
-        return seq_lengths.max().item()
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""

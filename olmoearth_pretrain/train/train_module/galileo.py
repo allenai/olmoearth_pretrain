@@ -397,27 +397,13 @@ class GalileoTrainModule(OlmoEarthTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            # Use precomputed max_encoder_seqlen from dataloader if available
-            # (avoids CUDA sync), otherwise compute it here
-            if batch_a.max_encoder_seqlen is not None:
-                max_seqlen_a = batch_a.max_encoder_seqlen
-            else:
-                max_seqlen_a = self.model.encoder.compute_max_encoder_seqlen(
-                    batch_a, patch_size
-                )
-            if batch_b.max_encoder_seqlen is not None:
-                max_seqlen_b = batch_b.max_encoder_seqlen
-            else:
-                max_seqlen_b = self.model.encoder.compute_max_encoder_seqlen(
-                    batch_b, patch_size
-                )
-
+            # Use precomputed max_encoder_seqlen from dataloader (avoids CUDA sync)
             output_dict = self.model(
                 batch_a,
                 batch_b,
                 patch_size,
-                max_encoder_seqlen_a=max_seqlen_a,
-                max_encoder_seqlen_b=max_seqlen_b,
+                max_encoder_seqlen_a=batch_a.max_encoder_seqlen,
+                max_encoder_seqlen_b=batch_b.max_encoder_seqlen,
             )
             latent_a, decoded_a, latent_projected_and_pooled_a, reconstructed_a = (
                 output_dict["a"]
@@ -431,35 +417,18 @@ class GalileoTrainModule(OlmoEarthTrainModule):
                 # Target encoder uses unmasked batches
                 unmasked_a = batch_a.unmask()
                 unmasked_b = batch_b.unmask()
-                # Use precomputed max_target_encoder_seqlen if available
-                if batch_a.max_target_encoder_seqlen is not None:
-                    target_max_seqlen_a = batch_a.max_target_encoder_seqlen
-                else:
-                    target_max_seqlen_a = (
-                        self.model.target_encoder.compute_max_encoder_seqlen(
-                            unmasked_a, patch_size
-                        )
-                    )
-                if batch_b.max_target_encoder_seqlen is not None:
-                    target_max_seqlen_b = batch_b.max_target_encoder_seqlen
-                else:
-                    target_max_seqlen_b = (
-                        self.model.target_encoder.compute_max_encoder_seqlen(
-                            unmasked_b, patch_size
-                        )
-                    )
                 output_dict = self.model.target_encoder.forward(
                     unmasked_a,
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_a,
-                    max_encoder_seqlen=target_max_seqlen_a,
+                    max_encoder_seqlen=batch_a.max_target_encoder_seqlen,
                 )
                 target_output_a, _, _ = unpack_encoder_output(output_dict)
                 output_dict = self.model.target_encoder.forward(
                     unmasked_b,
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_b,
-                    max_encoder_seqlen=target_max_seqlen_b,
+                    max_encoder_seqlen=batch_b.max_target_encoder_seqlen,
                 )
                 target_output_b, _, _ = unpack_encoder_output(output_dict)
 

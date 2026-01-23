@@ -320,42 +320,27 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            # Use precomputed max_encoder_seqlen from dataloader if available
-            # (avoids CUDA sync), otherwise compute it here
-            if batch.max_encoder_seqlen is not None:
-                max_encoder_seqlen = batch.max_encoder_seqlen
-            else:
-                max_encoder_seqlen = self.model.encoder.compute_max_encoder_seqlen(
-                    batch, patch_size
-                )
-
+            # Use precomputed max_encoder_seqlen from dataloader (avoids CUDA sync)
             (
                 latent,
                 decoded,
                 latent_projected_and_pooled,
                 reconstructed,
                 extra_metrics,
-            ) = self.model(batch, patch_size, max_encoder_seqlen=max_encoder_seqlen)
+            ) = self.model(
+                batch, patch_size, max_encoder_seqlen=batch.max_encoder_seqlen
+            )
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
                 # Target encoder uses unmasked batch
                 unmasked_batch = batch.unmask()
-                # Use precomputed max_target_encoder_seqlen if available
-                if batch.max_target_encoder_seqlen is not None:
-                    target_max_seqlen = batch.max_target_encoder_seqlen
-                else:
-                    target_max_seqlen = (
-                        self.model.target_encoder.compute_max_encoder_seqlen(
-                            unmasked_batch, patch_size
-                        )
-                    )
                 output_dict = self.model.target_encoder.forward(
                     unmasked_batch,
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
-                    max_encoder_seqlen=target_max_seqlen,
+                    max_encoder_seqlen=batch.max_target_encoder_seqlen,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
             loss = self.loss_fn(decoded, target_output)
