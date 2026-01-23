@@ -1717,9 +1717,10 @@ class Encoder(FlexiVitBase):
     ) -> int:
         """Compute the max encoder sequence length for a batch.
 
-        This method performs patchification and mask collapsing to compute the
-        maximum number of ONLINE_ENCODER tokens across all samples in the batch.
-        Call this once before forward() to avoid CUDA sync during forward pass.
+        This method computes the patchified mask shapes (without running embedding
+        convolutions) to determine the maximum number of ONLINE_ENCODER tokens
+        across all samples in the batch. Call this once before forward() to avoid
+        CUDA sync during the forward pass.
 
         Note: This triggers a CUDA sync to return the Python int. Call this once
         per batch, not per microbatch, to amortize the sync cost.
@@ -1731,14 +1732,45 @@ class Encoder(FlexiVitBase):
         Returns:
             Maximum number of ONLINE_ENCODER tokens in any sample
         """
-        # Patchify to get masks
-        patchified_tokens_and_masks = self.patch_embeddings.forward(
-            x, patch_size, fast_pass=True
+        # Compute patchified masks without running embedding modules
+        # This mirrors the mask computation in apply_embedding_to_modality
+        all_masks = []
+        available_modalities = x.modalities
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.patch_embeddings.supported_modality_names
         )
-        # Collapse masks across modalities
-        _, mask = self.collapse_and_combine_hwtc(patchified_tokens_and_masks)
+
+        for modality in modalities_to_process:
+            masked_modality_name = x.get_masked_modality_name(modality)
+            modality_mask = getattr(x, masked_modality_name)
+            modality_spec = Modality.get(modality)
+
+            modality_masks = []
+            for idx in range(modality_spec.num_band_sets):
+                if not modality_spec.is_spatial:
+                    # static in time - no downsampling
+                    token_mask = modality_mask[..., idx]
+                else:
+                    # Downsample mask by patch_size (same as in apply_embedding_to_modality)
+                    token_mask = modality_mask[
+                        :,
+                        0 :: patch_size * modality_spec.image_tile_size_factor,
+                        0 :: patch_size * modality_spec.image_tile_size_factor,
+                        ...,
+                        idx,
+                    ]
+                modality_masks.append(token_mask)
+
+            # Stack across band sets and flatten spatial dims
+            stacked_mask = torch.stack(modality_masks, dim=-1)
+            flat_mask = stacked_mask.reshape(stacked_mask.shape[0], -1)
+            all_masks.append(flat_mask)
+
+        # Concatenate across modalities
+        combined_mask = torch.cat(all_masks, dim=1)
+
         # Count ONLINE_ENCODER tokens
-        encoder_mask = mask == MaskValue.ONLINE_ENCODER.value
+        encoder_mask = combined_mask == MaskValue.ONLINE_ENCODER.value
         seq_lengths = encoder_mask.sum(dim=-1)
         return seq_lengths.max().item()
 
