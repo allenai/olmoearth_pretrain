@@ -28,11 +28,6 @@ from script import (
     build_visualize_config,
 )
 
-from olmoearth_pretrain.nn.tokenization import (
-    ModalityTokenization,
-    TokenizationBandSet,
-    TokenizationConfig,
-)
 from olmoearth_pretrain.internal.experiment import CommonComponents, main
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
 from olmoearth_pretrain.nn.flexihelios import (
@@ -40,6 +35,11 @@ from olmoearth_pretrain.nn.flexihelios import (
     PredictorConfig,
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.tokenization import (
+    ModalityTokenization,
+    TokenizationBandSet,
+    TokenizationConfig,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -18,7 +18,6 @@ from olmoearth_pretrain.data.constants import (
     ModalitySpec,
     get_modality_specs_from_names,
 )
-from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
@@ -30,6 +29,7 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
 logger = logging.getLogger(__name__)

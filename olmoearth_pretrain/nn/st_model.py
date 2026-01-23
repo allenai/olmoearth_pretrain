@@ -17,7 +17,6 @@ from olmoearth_pretrain.data.constants import (
     ModalitySpec,
     get_modality_specs_from_names,
 )
-from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.attention import Block
@@ -30,6 +29,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
     get_modalities_to_process,
     return_modalities_from_dict,
 )
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 
 logger = logging.getLogger(__name__)
 

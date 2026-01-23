@@ -16,13 +16,13 @@ from olmoearth_pretrain.data.constants import (
     Modality,
     ModalitySpec,
 )
-from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 
 # Re-export MaskValue and MaskedOlmoEarthSample for backwards compatibility
 # These are now defined in olmoearth_pretrain.datatypes
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.decorators import experimental
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)

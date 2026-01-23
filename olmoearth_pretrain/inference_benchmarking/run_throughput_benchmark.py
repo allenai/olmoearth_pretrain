@@ -175,7 +175,7 @@ class ThroughputBenchmarkRunnerConfig(Config):
         if self.sweep_dict is not None:
             sweep_dict = self.sweep_dict
         else:
-            # self.sweep_keys is not None (validated above)
+            assert self.sweep_keys is not None  # validated above
             sweep_dict = {}
             for sweep_key in self.sweep_keys:
                 sweep_dict[sweep_key] = constants.SWEEPS[sweep_key]
@@ -218,6 +218,13 @@ class ThroughputBenchmarkRunner:
         """Initializes the throughput benchmarking runner.
 
         Args:
+            default_run_params: Default parameters for benchmark runs.
+            sweep_group_name: Name for the sweep group (used for logging).
+            training_modalities: List of modality names to use.
+            work_dir: Working directory for benchmark outputs.
+            save_folder: Optional folder to save results.
+            sweep_dict: Dictionary mapping parameter names to values to sweep.
+            cross_product_sweep: If True, sweep all combinations of parameters.
             model_config: Optional pre-built model config. If provided, this config
                 will be used for all benchmark runs instead of building one from
                 run parameters.

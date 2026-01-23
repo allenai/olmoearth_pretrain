@@ -1,13 +1,19 @@
 """Integration tests for encoder with custom tokenization."""
 
 import pytest
+import torch
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
 from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
     TokenizationBandSet,
     TokenizationConfig,
+)
+from olmoearth_pretrain.train.masking import MaskingConfig
+from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
+    _propagate_tokenization_config,
 )
 
 
@@ -210,16 +216,8 @@ class TestEncoderWithCustomTokenization:
         )
 
 
-import torch
-
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
-from olmoearth_pretrain.train.masking import MaskingConfig
-from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
-    _propagate_tokenization_config,
-)
-
-
 def test_masking_and_encoder_use_same_bandset_count() -> None:
+    """Test that masking and encoder use consistent bandset counts from tokenization config."""
     s2_bands = Modality.SENTINEL2_L2A.band_order
     tokenization_config = TokenizationConfig(
         overrides={

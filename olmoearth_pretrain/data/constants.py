@@ -3,7 +3,7 @@
 Warning: this is only developed for raster data currently.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 # The highest resolution that we are working at.
