@@ -105,18 +105,21 @@ class OlmoEarthSample(NamedTuple):
         """
         return [modality for modality in self.as_dict(ignore_nones=True).keys()]
 
-    def to_device(self, device: torch.device) -> OlmoEarthSample:
+    def to_device(
+        self, device: torch.device, non_blocking: bool = True
+    ) -> OlmoEarthSample:
         """Move all tensors to the specified device.
 
         Args:
             device: The device to move the tensors to.
+            non_blocking: Whether or not to use asynchronous GPU copies
 
         Returns:
             A new OlmoEarthSample with all tensors moved to the specified device.
         """
         return OlmoEarthSample(
             **{
-                key: val.to(device)
+                key: val.to(device, non_blocking=non_blocking)
                 for key, val in self.as_dict(ignore_nones=True).items()
                 if val is not None
             }
@@ -719,18 +722,21 @@ class MaskedOlmoEarthSample(NamedTuple):
         """
         return cls(**dict)
 
-    def to_device(self, device: torch.device) -> MaskedOlmoEarthSample:
+    def to_device(
+        self, device: torch.device, non_blocking: bool = True
+    ) -> MaskedOlmoEarthSample:
         """Move all tensors to the specified device.
 
         Args:
             device: The device to move the tensors to.
+            non_blocking: Whether or not to use asynchronous GPU copies
 
         Returns:
             A new MaskedOlmoEarthSample with all tensors moved to the specified device.
         """
         return MaskedOlmoEarthSample(
             **{
-                key: val.to(device)
+                key: val.to(device, non_blocking=non_blocking)
                 for key, val in self.as_dict(return_none=False).items()
             }
         )
