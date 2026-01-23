@@ -1712,6 +1712,36 @@ class Encoder(FlexiVitBase):
             output_dict["project_aggregated"] = self.project_and_aggregate(output)
         return output_dict
 
+    def compute_max_encoder_seqlen(
+        self, x: MaskedOlmoEarthSample, patch_size: int
+    ) -> int:
+        """Compute the max encoder sequence length for a batch.
+
+        This method performs patchification and mask collapsing to compute the
+        maximum number of ONLINE_ENCODER tokens across all samples in the batch.
+        Call this once before forward() to avoid CUDA sync during forward pass.
+
+        Note: This triggers a CUDA sync to return the Python int. Call this once
+        per batch, not per microbatch, to amortize the sync cost.
+
+        Args:
+            x: Masked input sample
+            patch_size: Patch size for tokenization
+
+        Returns:
+            Maximum number of ONLINE_ENCODER tokens in any sample
+        """
+        # Patchify to get masks
+        patchified_tokens_and_masks = self.patch_embeddings.forward(
+            x, patch_size, fast_pass=True
+        )
+        # Collapse masks across modalities
+        _, mask = self.collapse_and_combine_hwtc(patchified_tokens_and_masks)
+        # Count ONLINE_ENCODER tokens
+        encoder_mask = mask == MaskValue.ONLINE_ENCODER.value
+        seq_lengths = encoder_mask.sum(dim=-1)
+        return seq_lengths.max().item()
+
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
         """Apply FSDP to the model."""
         super().apply_fsdp(**fsdp_kwargs)
