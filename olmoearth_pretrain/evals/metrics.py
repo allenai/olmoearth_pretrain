@@ -2,12 +2,16 @@
 
 import torch
 
+# Label value used to mark invalid/ignored pixels in segmentation targets.
+# Pixels with this label are excluded from loss and metric calculations.
+SEGMENTATION_IGNORE_LABEL = -1
+
 
 def mean_iou(
     predictions: torch.Tensor,
     labels: torch.Tensor,
     num_classes: int,
-    ignore_label: int = -1,
+    ignore_label: int = SEGMENTATION_IGNORE_LABEL,
 ) -> float:
     """Calculate mean IoU given prediction and label tensors, ignoring pixels with a specific label.
 
@@ -15,7 +19,7 @@ def mean_iou(
     predictions (torch.Tensor): Predicted segmentation masks of shape (N, H, W)
     labels (torch.Tensor): Ground truth segmentation masks of shape (N, H, W)
     num_classes (int): Number of classes in the segmentation task
-    ignore_label (int): Label value to ignore in IoU calculation (default: -1)
+    ignore_label (int): Label value to ignore in IoU calculation (default: SEGMENTATION_IGNORE_LABEL)
 
     Returns:
     float: Mean IoU across all classes

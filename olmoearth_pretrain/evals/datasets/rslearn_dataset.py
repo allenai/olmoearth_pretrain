@@ -31,6 +31,7 @@ from upath import UPath
 from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS
 from olmoearth_pretrain.data.constants import Modality as DataModality
 from olmoearth_pretrain.data.utils import convert_to_db
+from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSample
 
 from .normalize import normalize_bands
@@ -123,7 +124,7 @@ def build_rslearn_model_dataset(
         bands_by_olmoearth[olmoearth_key] = band_order
 
     transforms = []
-    # TODO: We should add transforms such as padding if prescribed by the config
+    # TODO: We should add transforms such as padding if prescribed by the config or CROPPING
     # if input_size is not None:
     #     print(f"Adding pad transform with size {input_size}")
         # The transforms need to be specified by the config and passed through if needed
@@ -363,7 +364,6 @@ class RslearnToOlmoEarthDataset(Dataset):
             num_bands = DataModality.get(modality).num_bands
             x = input_dict[modality]
             # what is the shape of the raster image
-            print(f"Shape of {modality} raster image: {x.image.shape}")
             # Extract tensor from RasterImage if passthrough=True
             # RasterImage.image has shape (C, T, H, W), we need (T*C, H, W)
             if isinstance(x, RasterImage):
@@ -379,8 +379,6 @@ class RslearnToOlmoEarthDataset(Dataset):
             if modality == DataModality.SENTINEL1.name:
                 x = convert_to_db(x)
             x = rearrange(x, "(t c) h w -> h w t c", t=T, c=num_bands)
-            #print the shape of the tensor for the modality
-            print(f"Shape of {modality} tensor: {x.shape}")
 
             if self.norm_stats_from_pretrained:
                 x = self.normalizer_computed.normalize(DataModality.get(modality), x)
@@ -401,9 +399,22 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         olmoearth_sample = OlmoEarthSample(**sample_dict)
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(olmoearth_sample)
-        # TODO: Also need to deal with valid and invalid targets
-        return masked_sample, target["classes"].long()
 
+        #TODO: Pass through zero is invalid to set this or not
+        # Extract target classes and valid mask
+        # For segmentation, rslearn provides both "classes" and "valid" in target dict
+        #TODO: Pass through zero is invalid to set this or not
+        classes = target["classes"].long()
+        valid = target.get("valid", torch.ones_like(classes, dtype=torch.float32))
+
+        # Set invalid pixels to SEGMENTATION_IGNORE_LABEL (excluded from loss/metrics)
+        classes = torch.where(
+            valid > 0, classes, torch.tensor(SEGMENTATION_IGNORE_LABEL, dtype=classes.dtype)
+        )
+
+        return masked_sample, classes
+
+#Do we need crop size or something else passed through
 
 def from_registry_entry(
     entry: EvalDatasetEntry,

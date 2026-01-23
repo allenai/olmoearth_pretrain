@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 from olmoearth_pretrain.evals.task_types import TaskType
-from olmoearth_pretrain.evals.metrics import mean_iou
+from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL, mean_iou
 from olmoearth_pretrain.evals.utils import adjust_learning_rate
 
 logger = getLogger(__name__)
@@ -502,7 +502,7 @@ def compute_metric(
         float: Computed metric (accuracy for classification, mIoU for segmentation)
     """
     if task_type == TaskType.SEGMENTATION:
-        metric = mean_iou(preds, labels, num_classes=num_classes, ignore_label=-1)
+        metric = mean_iou(preds, labels, num_classes=num_classes, ignore_label=SEGMENTATION_IGNORE_LABEL)
     else:
         metric = accuracy_score(labels.numpy(), preds.numpy())
     return metric

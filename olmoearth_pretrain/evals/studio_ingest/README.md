@@ -20,11 +20,12 @@ Goals:
 1. Mindless to add a new eval to olmoearth pretrain
 2. Possible to discover existing evals not in codebase
 
-3. Possible to configure different splits of the dataset and partitioning percentages
+3. Well split train/val/test that gives good signal for research
 4. Fast to load
-5. These evals don't have a properly split test set and so we would need to re-split the data for that and save that
 
-
+Nice to have
+- Being able to do percentage based splits easily?
+-
 
 Notes
 6. Takes a lot fo workers and a really long time to scan for bigger datasets so to use those as in loop evals we want to cache index
@@ -106,3 +107,22 @@ Goal for today is tolbi and fire through both of these steps
 5. Make sure that we can discover new datasets
 
 `python -m olmoearth_pretrain.internal.full_eval_sweep     --cluster=local     --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000     --module_path=scripts/official/tiny.py     --trainer.callbacks.downstream_evaluator.tasks_to_run="[tolbi_crops]"     --trainer.callbacks.downstream_evaluator.eval_on_startup=True     --trainer.callbacks.downstream_evaluator.cancel_after_first_eval=True     --trainer.callbacks.wandb.enabled=False --defaults_only `
+
+
+Do we really want to save all the information in the registry and then rebuild the rslearn dataset or just also save the config needed to build the model dataset and go based on that
+
+incompabilities
+- We probably dont want random cropping for evals
+- we definitely will need to make test splits aka new splits for all the data
+- dealing with different invalid data etc
+- scared of rslearn api changes
+- how do we pick and appropriate workers and batch size for the task
+- What if the dataset is too big
+- Need to auto generate images
+- Need to ad
+
+
+
+Next steps
+- pass cropping through as a transform
+- create a new test split

@@ -21,7 +21,7 @@ from torch.utils.data import DataLoader
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
-from olmoearth_pretrain.evals.metrics import mean_iou
+from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL, mean_iou
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
@@ -174,7 +174,7 @@ def _eval_seg(
         labels_all.append(label.cpu())
     preds = torch.cat(preds_all, 0)
     labels = torch.cat(labels_all, 0)
-    return mean_iou(preds, labels, num_classes=num_classes, ignore_label=-1)
+    return mean_iou(preds, labels, num_classes=num_classes, ignore_label=SEGMENTATION_IGNORE_LABEL)
 
 
 def count_params(backbone: nn.Module, head: nn.Module) -> tuple[int, int, int, int]:
