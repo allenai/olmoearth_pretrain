@@ -49,9 +49,18 @@ class Galileo(nn.Module, DistributedMixins):
             p.requires_grad = False
 
     def forward_a(
-        self, x: MaskedOlmoEarthSample, patch_size: int
+        self,
+        x: MaskedOlmoEarthSample,
+        patch_size: int,
+        max_encoder_seqlen: int | None = None,
     ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
         """Forward pass for the Latent MIM Style.
+
+        Args:
+            x: Masked input sample
+            patch_size: Patch size for tokenization
+            max_encoder_seqlen: Optional pre-computed max sequence length to avoid
+                CUDA sync in remove_masked_tokens. If None, computed dynamically.
 
         Returns:
             latent: embeddings from encoder
@@ -60,7 +69,9 @@ class Galileo(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        output_dict = self.encoder(x, patch_size=patch_size)
+        output_dict = self.encoder(
+            x, patch_size=patch_size, max_encoder_seqlen=max_encoder_seqlen
+        )
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
         )
@@ -73,9 +84,18 @@ class Galileo(nn.Module, DistributedMixins):
         return latent, decoded, latent_projected_and_pooled, reconstructed
 
     def forward_b(
-        self, x: MaskedOlmoEarthSample, patch_size: int
+        self,
+        x: MaskedOlmoEarthSample,
+        patch_size: int,
+        max_encoder_seqlen: int | None = None,
     ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
         """Forward pass for the Latent MIM Style.
+
+        Args:
+            x: Masked input sample
+            patch_size: Patch size for tokenization
+            max_encoder_seqlen: Optional pre-computed max sequence length to avoid
+                CUDA sync in remove_masked_tokens. If None, computed dynamically.
 
         Returns:
             latent: embeddings from encoder
@@ -84,7 +104,9 @@ class Galileo(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        output_dict = self.encoder(x, patch_size=patch_size)
+        output_dict = self.encoder(
+            x, patch_size=patch_size, max_encoder_seqlen=max_encoder_seqlen
+        )
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
         )
@@ -101,13 +123,23 @@ class Galileo(nn.Module, DistributedMixins):
         input_a: MaskedOlmoEarthSample,
         input_b: MaskedOlmoEarthSample,
         patch_size: int,
+        max_encoder_seqlen_a: int | None = None,
+        max_encoder_seqlen_b: int | None = None,
     ) -> dict[
         str, tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]
     ]:
-        """Forward pass for the Galileo Style."""
+        """Forward pass for the Galileo Style.
+
+        Args:
+            input_a: First masked input sample
+            input_b: Second masked input sample
+            patch_size: Patch size for tokenization
+            max_encoder_seqlen_a: Optional pre-computed max sequence length for input_a
+            max_encoder_seqlen_b: Optional pre-computed max sequence length for input_b
+        """
         return {
-            "a": self.forward_a(input_a, patch_size),
-            "b": self.forward_b(input_b, patch_size),
+            "a": self.forward_a(input_a, patch_size, max_encoder_seqlen_a),
+            "b": self.forward_b(input_b, patch_size, max_encoder_seqlen_b),
         }
 
     def apply_fsdp(

@@ -827,7 +827,9 @@ class STEncoder(STBase):
         return exit_ids_per_modality_dict
 
     @staticmethod
-    def remove_masked_tokens(x: Tensor, mask: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    def remove_masked_tokens(
+        x: Tensor, mask: Tensor, max_length: int | None = None
+    ) -> tuple[Tensor, Tensor, Tensor]:
         """Remove masked tokens from the tokens and masks.
 
         Implementation from https://stackoverflow.com/a/68621610/2332296
@@ -839,6 +841,10 @@ class STEncoder(STBase):
         Args:
             x: Tokens to remove masked tokens from
             mask: Mask to remove masked tokens from
+            max_length: Optional pre-computed max sequence length. If provided,
+                skips the CUDA sync that would otherwise occur when computing
+                max_length dynamically. Use compute_max_encoder_seqlen() to
+                pre-compute this value once per batch.
 
         Returns:
             tokens: [B, T, D]
@@ -855,7 +861,9 @@ class STEncoder(STBase):
         x = x * sorted_mask.unsqueeze(-1)
 
         # cut off to the length of the longest sequence
-        max_length = sorted_mask.sum(-1).max()
+        if max_length is None:
+            # This causes a CUDA sync - prefer passing max_length from caller
+            max_length = sorted_mask.sum(-1).max().item()
         x = x[:, :max_length]
         # New mask chopped to the longest sequence
         updated_mask = sorted_mask[:, :max_length]

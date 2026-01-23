@@ -360,8 +360,8 @@ class EncodeEarlyAttnPool(Encoder):
 
     @staticmethod
     def remove_masked_tokens(
-        x: Tensor, mask: Tensor
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        x: Tensor, mask: Tensor, max_length: int | None = None
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, int]:
         """Remove masked tokens from the tokens and masks.
 
         Implementation from https://stackoverflow.com/a/68621610/2332296
@@ -373,13 +373,17 @@ class EncodeEarlyAttnPool(Encoder):
         Args:
             x: Tokens to remove masked tokens from
             mask: Mask to remove masked tokens from
+            max_length: Optional pre-computed max sequence length. If provided,
+                skips the CUDA sync that would otherwise occur when computing
+                max_length dynamically. Use compute_max_encoder_seqlen() to
+                pre-compute this value once per batch.
 
         Returns:
             tokens: [B, T, D]
             indices: [B, T]
             updated_mask: [B, T]
             seqlens: [B]
-            max_length: [1]
+            max_length: int
             where T is the max number of unmasked tokens for an instance
         """
         # log the shape of x and mask
@@ -395,7 +399,9 @@ class EncodeEarlyAttnPool(Encoder):
 
         # cut off to the length of the longest sequence
         seq_lengths = sorted_mask.sum(-1)
-        max_length = seq_lengths.max()
+        if max_length is None:
+            # This causes a CUDA sync - prefer passing max_length from caller
+            max_length = seq_lengths.max().item()
         x = x[:, :max_length]
         # New mask chopped to the longest sequence
         updated_mask = sorted_mask[:, :max_length]
@@ -409,22 +415,33 @@ class EncodeEarlyAttnPool(Encoder):
         exit_ids_seq: Tensor | None = None,
         exited_tokens: Tensor | None = None,
         fast_pass: bool = False,
+        max_encoder_seqlen: int | None = None,
     ) -> tuple[dict[str, Tensor], Tensor | None]:
-        """Apply the attention to the tokens and masks."""
+        """Apply the attention to the tokens and masks.
+
+        Args:
+            tokens_and_masks_dict: Dictionary of tokens and masks per modality
+            modalities_to_dims_dict: Mapping of modality names to their dimensions
+            exit_ids_seq: Optional exit IDs sequence
+            exited_tokens: Optional exited tokens
+            fast_pass: Whether to skip mask processing for inference
+            max_encoder_seqlen: Optional pre-computed max sequence length to avoid
+                CUDA sync. If None, computed dynamically.
+        """
         tokens, mask = self.collapse_and_combine_hwtc(tokens_and_masks_dict)
 
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
 
         tokens, indices, new_mask, seq_lengths, max_seqlen = self.remove_masked_tokens(
-            tokens, bool_mask
+            tokens, bool_mask, max_length=max_encoder_seqlen
         )
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
-                exit_ids_seq, bool_mask
+                exit_ids_seq, bool_mask, max_length=max_seqlen
             )
             # still linear projections
             exited_tokens, _, _, _, _ = self.remove_masked_tokens(
-                exited_tokens, bool_mask
+                exited_tokens, bool_mask, max_length=max_seqlen
             )
         cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
         # Pack x tokens
@@ -502,8 +519,20 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        max_encoder_seqlen: int | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
-        """Apply the attention to the tokens and masks."""
+        """Apply the attention to the tokens and masks.
+
+        Args:
+            x: Dictionary of tokens and masks per modality
+            timestamps: Timestamp tensor
+            patch_size: Patch size
+            input_res: Input resolution
+            token_exit_cfg: Configuration for token exit
+            fast_pass: Whether to skip mask processing for inference
+            max_encoder_seqlen: Optional pre-computed max sequence length to avoid
+                CUDA sync. If None, computed dynamically.
+        """
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -528,6 +557,7 @@ class EncodeEarlyAttnPool(Encoder):
             exit_ids_seq,
             exited_tokens,
             fast_pass,
+            max_encoder_seqlen=max_encoder_seqlen,
         )
         # update the tokens_dict with the original masks
         tokens_dict.update(original_masks_dict)
@@ -543,16 +573,18 @@ class EncodeEarlyAttnPool(Encoder):
         tokens, mask = self.collapse_and_combine_hwtc_pooled_tokens(tokens_dict)
         bool_mask = mask == MaskValue.ONLINE_ENCODER.value
 
+        # Note: For pooled tokens, we compute max_length dynamically since
+        # the shape after pooling differs from the pre-pooled max_encoder_seqlen
         tokens, indices, new_mask, seq_lengths, max_seqlen = self.remove_masked_tokens(
             tokens, bool_mask
         )
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
-                exit_ids_seq, bool_mask
+                exit_ids_seq, bool_mask, max_length=max_seqlen
             )
             # still linear projections
             exited_tokens, _, _, _, _ = self.remove_masked_tokens(
-                exited_tokens, bool_mask
+                exited_tokens, bool_mask, max_length=max_seqlen
             )
         cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
 
@@ -629,6 +661,7 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        max_encoder_seqlen: int | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -637,7 +670,11 @@ class EncodeEarlyAttnPool(Encoder):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
-            fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
+            fast_pass: Whether to always pass None as the mask to the transformer,
+                this enables torch based flash attention
+            max_encoder_seqlen: Optional pre-computed max sequence length to avoid
+                CUDA sync in remove_masked_tokens. If None, computed dynamically.
+                Use compute_max_encoder_seqlen() to pre-compute this value once per batch.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -655,6 +692,7 @@ class EncodeEarlyAttnPool(Encoder):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                max_encoder_seqlen=max_encoder_seqlen,
             )
         else:
             pooled_tokens_and_masks = {}

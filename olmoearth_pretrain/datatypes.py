@@ -766,3 +766,23 @@ class MaskedOlmoEarthSample(NamedTuple):
 _MASKED_SAMPLE_MASK_FIELDS: tuple[str, ...] = tuple(
     f for f in MaskedOlmoEarthSample._fields if f.endswith("_mask")
 )
+
+
+def compute_max_encoder_seqlen(mask: torch.Tensor) -> int:
+    """Compute the maximum number of encoder tokens across the batch.
+
+    This function computes the max sequence length of tokens marked with
+    ONLINE_ENCODER value in the mask. It triggers a CUDA sync when called,
+    so it should be called once per batch rather than in a hot loop.
+
+    Args:
+        mask: Combined mask tensor of shape [B, total_tokens] after
+            collapse_and_combine_hwtc, where values indicate token types
+            (ONLINE_ENCODER=0, TARGET_ENCODER_ONLY=1, DECODER=2, MISSING=3)
+
+    Returns:
+        The maximum number of ONLINE_ENCODER tokens in any sample in the batch.
+    """
+    encoder_mask = mask == MaskValue.ONLINE_ENCODER.value
+    seq_lengths = encoder_mask.sum(dim=-1)
+    return seq_lengths.max().item()

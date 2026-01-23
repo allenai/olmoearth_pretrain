@@ -1283,8 +1283,8 @@ class Encoder(FlexiVitBase):
 
     @staticmethod
     def remove_masked_tokens(
-        x: Tensor, mask: Tensor
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        x: Tensor, mask: Tensor, max_length: int | None = None
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, int]:
         """Remove masked tokens from the tokens and masks.
 
         Implementation from https://stackoverflow.com/a/68621610/2332296
@@ -1296,13 +1296,17 @@ class Encoder(FlexiVitBase):
         Args:
             x: Tokens to remove masked tokens from
             mask: Mask to remove masked tokens from
+            max_length: Optional pre-computed max sequence length. If provided,
+                skips the CUDA sync that would otherwise occur when computing
+                max_length dynamically. Use compute_max_encoder_seqlen() to
+                pre-compute this value once per batch.
 
         Returns:
             tokens: [B, T, D]
             indices: [B, T]
             updated_mask: [B, T]
             seqlens: [B]
-            max_length: [1]
+            max_length: int
             where T is the max number of unmasked tokens for an instance
         """
         sorted_mask, indices = torch.sort(mask, dim=1, descending=True, stable=True)
@@ -1315,7 +1319,9 @@ class Encoder(FlexiVitBase):
 
         # cut off to the length of the longest sequence
         seq_lengths = sorted_mask.sum(-1)
-        max_length = seq_lengths.max()
+        if max_length is None:
+            # This causes a CUDA sync - prefer passing max_length from caller
+            max_length = seq_lengths.max().item()
         x = x[:, :max_length]
         # New mask chopped to the longest sequence
         updated_mask = sorted_mask[:, :max_length]
@@ -1474,8 +1480,17 @@ class Encoder(FlexiVitBase):
         tokens: Tensor,
         mask: Tensor,
         fast_pass: bool,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
-        """Remove masked tokens from the tokens and masks."""
+        max_encoder_seqlen: int | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, int | None, Tensor]:
+        """Remove masked tokens from the tokens and masks.
+
+        Args:
+            tokens: Token tensor of shape [B, N, D]
+            mask: Mask tensor of shape [B, N]
+            fast_pass: Whether to skip mask processing for inference
+            max_encoder_seqlen: Optional pre-computed max sequence length to avoid
+                CUDA sync. If None, computed dynamically.
+        """
         if fast_pass and not self.use_flash_attn:
             # This is the inference fast pass
             indices = None
@@ -1486,7 +1501,9 @@ class Encoder(FlexiVitBase):
         else:
             bool_mask = mask == MaskValue.ONLINE_ENCODER.value
             tokens, indices, new_mask, seq_lengths, max_seqlen = (
-                self.remove_masked_tokens(tokens, bool_mask)
+                self.remove_masked_tokens(
+                    tokens, bool_mask, max_length=max_encoder_seqlen
+                )
             )
         return tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask
 
@@ -1510,8 +1527,20 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        max_encoder_seqlen: int | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
-        """Apply the attention to the tokens and masks."""
+        """Apply the attention to the tokens and masks.
+
+        Args:
+            x: Dictionary of tokens and masks per modality
+            timestamps: Timestamp tensor
+            patch_size: Patch size
+            input_res: Input resolution
+            token_exit_cfg: Configuration for token exit
+            fast_pass: Whether to skip mask processing for inference
+            max_encoder_seqlen: Optional pre-computed max sequence length to avoid
+                CUDA sync. If None, computed dynamically.
+        """
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -1532,16 +1561,18 @@ class Encoder(FlexiVitBase):
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
-            self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
+            self._maybe_remove_masked_tokens(
+                tokens, mask, fast_pass, max_encoder_seqlen
+            )
         )
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
-                exit_ids_seq, bool_mask
+                exit_ids_seq, bool_mask, max_length=max_seqlen
             )
             # still linear projections
             exited_tokens, _, _, _, _ = self.remove_masked_tokens(
-                exited_tokens, bool_mask
+                exited_tokens, bool_mask, max_length=max_seqlen
             )
 
         # Pack x tokens
@@ -1631,6 +1662,7 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        max_encoder_seqlen: int | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -1639,7 +1671,12 @@ class Encoder(FlexiVitBase):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
-            fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            fast_pass: Whether to always pass None as the mask to the transformer,
+                this enables torch based flash attention, and skips mask construction
+                and sorting
+            max_encoder_seqlen: Optional pre-computed max sequence length to avoid
+                CUDA sync in remove_masked_tokens. If None, computed dynamically.
+                Use compute_max_encoder_seqlen() to pre-compute this value once per batch.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -1660,6 +1697,7 @@ class Encoder(FlexiVitBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                max_encoder_seqlen=max_encoder_seqlen,
             )
         else:
             token_norm_stats = {}

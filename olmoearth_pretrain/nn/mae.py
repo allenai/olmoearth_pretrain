@@ -45,10 +45,22 @@ class MAE(nn.Module, DistributedMixins):
         self.reconstructor = reconstructor
 
     def forward(
-        self, x: MaskedOlmoEarthSample, patch_size: int
+        self,
+        x: MaskedOlmoEarthSample,
+        patch_size: int,
+        max_encoder_seqlen: int | None = None,
     ) -> tuple[TokensAndMasks, TokensAndMasks | None, TokensAndMasks | None]:
-        """Forward pass for the MAE Module."""
-        output_dict = self.encoder(x, patch_size=patch_size)
+        """Forward pass for the MAE Module.
+
+        Args:
+            x: Masked input sample
+            patch_size: Patch size for tokenization
+            max_encoder_seqlen: Optional pre-computed max sequence length to avoid
+                CUDA sync in remove_masked_tokens. If None, computed dynamically.
+        """
+        output_dict = self.encoder(
+            x, patch_size=patch_size, max_encoder_seqlen=max_encoder_seqlen
+        )
         latent, _, decoder_kwargs = unpack_encoder_output(output_dict)
         decoded = self.decoder and self.decoder(
             latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs

@@ -49,7 +49,10 @@ class LatentMIM(nn.Module, DistributedMixins):
             p.requires_grad = False
 
     def forward(
-        self, x: MaskedOlmoEarthSample, patch_size: int
+        self,
+        x: MaskedOlmoEarthSample,
+        patch_size: int,
+        max_encoder_seqlen: int | None = None,
     ) -> tuple[
         TokensAndMasks,
         TokensAndMasks,
@@ -59,6 +62,12 @@ class LatentMIM(nn.Module, DistributedMixins):
     ]:
         """Forward pass for the Latent MIM Style.
 
+        Args:
+            x: Masked input sample
+            patch_size: Patch size for tokenization
+            max_encoder_seqlen: Optional pre-computed max sequence length to avoid
+                CUDA sync in remove_masked_tokens. If None, computed dynamically.
+
         Returns:
             latent: embeddings from encoder
             decoded: predictions from decoder for masked tokens
@@ -66,7 +75,9 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        output_dict = self.encoder(x, patch_size=patch_size)
+        output_dict = self.encoder(
+            x, patch_size=patch_size, max_encoder_seqlen=max_encoder_seqlen
+        )
         token_norm_stats = output_dict.pop("token_norm_stats", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
