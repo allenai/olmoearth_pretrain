@@ -16,8 +16,10 @@ from olmoearth_pretrain.data.dataset import (
     OlmoEarthDataset,
     OlmoEarthSample,
     collate_double_masked,
+    collate_double_masked_batched,
     collate_olmoearth_pretrain,
     collate_single_masked,
+    collate_single_masked_batched,
 )
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.train.masking import MaskingConfig
@@ -347,106 +349,10 @@ class TestIterableDatasetWrapperProcessSample:
     def test_process_sample_single_masked(
         self, tmp_path: Path, setup_h5py_dir: Path
     ) -> None:
-        """Test that single masked mode returns MaskedOlmoEarthSample."""
-        training_modalities = [
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.WORLDCOVER.name,
-        ]
-        dataset = OlmoEarthDataset(
-            h5py_dir=setup_h5py_dir,
-            training_modalities=training_modalities,
-            dtype=np.float32,
-        )
-        dataset.prepare()
+        """Test that single masked mode returns raw OlmoEarthSample.
 
-        masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
-
-        dataloader = OlmoEarthDataLoader(
-            dataset=dataset,
-            work_dir=tmp_path,
-            global_batch_size=1,
-            min_patch_size=1,
-            max_patch_size=1,
-            sampled_hw_p_list=[8],
-            token_budget=1000000,
-            seed=42,
-            collator=collate_single_masked,
-            num_masked_views=1,
-            masking_strategy=masking_strategy,
-        )
-        dataloader.reshuffle()
-
-        wrapper = _IterableDatasetWrapper(dataloader)
-
-        # Get a sample from the dataset
-        sample = dataloader._get_dataset_item(0, 1, 8)
-
-        # Process it
-        result = wrapper._process_sample(sample)
-
-        # Should return (patch_size, MaskedOlmoEarthSample)
-        assert len(result) == 2
-        assert result[0] == 1  # patch_size
-        assert isinstance(result[1], MaskedOlmoEarthSample)
-        # Check mask values are present
-        assert result[1].sentinel2_l2a_mask is not None
-
-    def test_process_sample_double_masked(
-        self, tmp_path: Path, setup_h5py_dir: Path
-    ) -> None:
-        """Test that double masked mode returns two MaskedOlmoEarthSamples."""
-        training_modalities = [
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.WORLDCOVER.name,
-        ]
-        dataset = OlmoEarthDataset(
-            h5py_dir=setup_h5py_dir,
-            training_modalities=training_modalities,
-            dtype=np.float32,
-        )
-        dataset.prepare()
-
-        masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
-
-        dataloader = OlmoEarthDataLoader(
-            dataset=dataset,
-            work_dir=tmp_path,
-            global_batch_size=1,
-            min_patch_size=1,
-            max_patch_size=1,
-            sampled_hw_p_list=[8],
-            token_budget=1000000,
-            seed=42,
-            collator=collate_double_masked,
-            num_masked_views=2,
-            masking_strategy=masking_strategy,
-        )
-        dataloader.reshuffle()
-
-        wrapper = _IterableDatasetWrapper(dataloader)
-
-        # Get a sample from the dataset
-        sample = dataloader._get_dataset_item(0, 1, 8)
-
-        # Process it
-        result = wrapper._process_sample(sample)
-
-        # Should return (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample)
-        assert len(result) == 3
-        patch_size_out, masked_a, masked_b = result  # type: ignore[misc]
-        assert patch_size_out == 1  # patch_size
-        assert isinstance(masked_a, MaskedOlmoEarthSample)
-        assert isinstance(masked_b, MaskedOlmoEarthSample)
-
-    def test_process_sample_double_masked_different_seeds(
-        self, tmp_path: Path, setup_h5py_dir: Path
-    ) -> None:
-        """Test double masked returns two different masks even with same strategy.
-
-        When using the same masking strategy for both views, they should still
-        produce different masks due to independent random sampling.
+        When num_masked_views > 0, _process_sample returns raw samples
+        and the batched collator handles transform + masking.
         """
         training_modalities = [
             Modality.SENTINEL2_L2A.name,
@@ -460,7 +366,56 @@ class TestIterableDatasetWrapperProcessSample:
         )
         dataset.prepare()
 
-        # Use same strategy for both - masks should still differ due to random sampling
+        masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+
+        dataloader = OlmoEarthDataLoader(
+            dataset=dataset,
+            work_dir=tmp_path,
+            global_batch_size=1,
+            min_patch_size=1,
+            max_patch_size=1,
+            sampled_hw_p_list=[8],
+            token_budget=1000000,
+            seed=42,
+            collator=collate_single_masked,
+            num_masked_views=1,
+            masking_strategy=masking_strategy,
+        )
+        dataloader.reshuffle()
+
+        wrapper = _IterableDatasetWrapper(dataloader)
+
+        # Get a sample from the dataset
+        sample = dataloader._get_dataset_item(0, 1, 8)
+
+        # Process it - now returns raw sample (masking happens in collator)
+        result = wrapper._process_sample(sample)
+
+        # Should return (patch_size, OlmoEarthSample) - raw sample
+        assert len(result) == 2
+        assert result[0] == 1  # patch_size
+        assert isinstance(result[1], OlmoEarthSample)
+
+    def test_process_sample_double_masked(
+        self, tmp_path: Path, setup_h5py_dir: Path
+    ) -> None:
+        """Test that double masked mode returns raw OlmoEarthSample.
+
+        When num_masked_views > 0, _process_sample returns raw samples
+        and the batched collator handles transform + masking.
+        """
+        training_modalities = [
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.WORLDCOVER.name,
+        ]
+        dataset = OlmoEarthDataset(
+            h5py_dir=setup_h5py_dir,
+            training_modalities=training_modalities,
+            dtype=np.float32,
+        )
+        dataset.prepare()
+
         masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
 
         dataloader = OlmoEarthDataLoader(
@@ -475,7 +430,6 @@ class TestIterableDatasetWrapperProcessSample:
             collator=collate_double_masked,
             num_masked_views=2,
             masking_strategy=masking_strategy,
-            # masking_strategy_b not set - uses masking_strategy for both
         )
         dataloader.reshuffle()
 
@@ -484,23 +438,22 @@ class TestIterableDatasetWrapperProcessSample:
         # Get a sample from the dataset
         sample = dataloader._get_dataset_item(0, 1, 8)
 
-        # Process it
+        # Process it - now returns raw sample (masking happens in collator)
         result = wrapper._process_sample(sample)
 
-        # Should return (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample)
-        assert len(result) == 3
-        patch_size_out, masked_a, masked_b = result  # type: ignore[misc]
-        assert isinstance(masked_a, MaskedOlmoEarthSample)
-        assert isinstance(masked_b, MaskedOlmoEarthSample)
-        # The two masks should be different (independent random sampling)
-        assert masked_a.sentinel2_l2a_mask is not None
-        assert masked_b.sentinel2_l2a_mask is not None
-        assert not torch.equal(masked_a.sentinel2_l2a_mask, masked_b.sentinel2_l2a_mask)
+        # Should return (patch_size, OlmoEarthSample) - raw sample
+        assert len(result) == 2
+        assert result[0] == 1  # patch_size
+        assert isinstance(result[1], OlmoEarthSample)
 
-    def test_process_sample_with_no_transform(
+    def test_process_sample_returns_raw_for_masked_mode(
         self, tmp_path: Path, setup_h5py_dir: Path
     ) -> None:
-        """Test processing without transform still works."""
+        """Test _process_sample returns raw sample when num_masked_views > 0.
+
+        The masking is now handled by the batched collator, so _process_sample
+        should just pass through the raw sample.
+        """
         training_modalities = [
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
@@ -513,7 +466,6 @@ class TestIterableDatasetWrapperProcessSample:
         )
         dataset.prepare()
 
-        # No transform - just masking
         masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
 
         dataloader = OlmoEarthDataLoader(
@@ -527,7 +479,7 @@ class TestIterableDatasetWrapperProcessSample:
             seed=42,
             collator=collate_single_masked,
             num_masked_views=1,
-            transform=None,  # No transform
+            transform=None,
             masking_strategy=masking_strategy,
         )
         dataloader.reshuffle()
@@ -537,11 +489,11 @@ class TestIterableDatasetWrapperProcessSample:
         # Get a sample from the dataset
         sample = dataloader._get_dataset_item(0, 1, 8)
 
-        # Process it - should work without transform
+        # Process it - returns raw sample
         result = wrapper._process_sample(sample)
 
         assert len(result) == 2
-        assert isinstance(result[1], MaskedOlmoEarthSample)
+        assert isinstance(result[1], OlmoEarthSample)
 
 
 class TestGetMockBatch:
@@ -664,3 +616,142 @@ class TestGetMockBatch:
         assert patch_size == 1
         assert isinstance(sample_a, MaskedOlmoEarthSample)
         assert isinstance(sample_b, MaskedOlmoEarthSample)
+
+
+class TestCollateSingleMaskedBatched:
+    """Tests for collate_single_masked_batched function."""
+
+    def test_collate_single_masked_batched_applies_masking(self) -> None:
+        """Test that collate_single_masked_batched applies masking to the batch."""
+        # Create raw OlmoEarthSamples (numpy arrays, as they come from the dataset)
+        sample1 = OlmoEarthSample(
+            sentinel2_l2a=np.ones((8, 8, 12, 13), dtype=np.float32),
+            latlon=np.array([0.5, 0.5], dtype=np.float32),
+            timestamps=np.array([[1, 1, 2020] for _ in range(12)], dtype=np.int32),
+        )
+        sample2 = OlmoEarthSample(
+            sentinel2_l2a=np.ones((8, 8, 12, 13), dtype=np.float32) * 2,
+            latlon=np.array([0.6, 0.6], dtype=np.float32),
+            timestamps=np.array([[1, 1, 2020] for _ in range(12)], dtype=np.int32),
+        )
+
+        masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+
+        batch = [(1, sample1), (1, sample2)]
+        patch_size, collated = collate_single_masked_batched(
+            batch, transform=None, masking_strategy=masking_strategy
+        )
+
+        assert patch_size == 1
+        assert isinstance(collated, MaskedOlmoEarthSample)
+        assert collated.sentinel2_l2a is not None
+        assert collated.sentinel2_l2a_mask is not None
+        # Batch dimension should be present
+        assert collated.sentinel2_l2a.shape[0] == 2
+        assert collated.sentinel2_l2a_mask.shape[0] == 2
+        assert collated.latlon is not None
+        assert collated.latlon.shape == (2, 2)
+
+    def test_collate_single_masked_batched_with_transform(self) -> None:
+        """Test that collate_single_masked_batched applies transform before masking."""
+        from olmoearth_pretrain.data.transform import TransformConfig
+
+        sample1 = OlmoEarthSample(
+            sentinel2_l2a=np.ones((8, 8, 12, 13), dtype=np.float32),
+            latlon=np.array([0.5, 0.5], dtype=np.float32),
+            timestamps=np.array([[1, 1, 2020] for _ in range(12)], dtype=np.int32),
+        )
+        sample2 = OlmoEarthSample(
+            sentinel2_l2a=np.ones((8, 8, 12, 13), dtype=np.float32) * 2,
+            latlon=np.array([0.6, 0.6], dtype=np.float32),
+            timestamps=np.array([[1, 1, 2020] for _ in range(12)], dtype=np.int32),
+        )
+
+        transform = TransformConfig(transform_type="no_transform").build()
+        masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+
+        batch = [(1, sample1), (1, sample2)]
+        patch_size, collated = collate_single_masked_batched(
+            batch, transform=transform, masking_strategy=masking_strategy
+        )
+
+        assert patch_size == 1
+        assert isinstance(collated, MaskedOlmoEarthSample)
+        assert collated.sentinel2_l2a is not None
+        assert collated.sentinel2_l2a_mask is not None
+
+
+class TestCollateDoubleMaskedBatched:
+    """Tests for collate_double_masked_batched function."""
+
+    def test_collate_double_masked_batched_applies_two_masks(self) -> None:
+        """Test that collate_double_masked_batched applies two independent masks."""
+        sample1 = OlmoEarthSample(
+            sentinel2_l2a=np.ones((8, 8, 12, 13), dtype=np.float32),
+            latlon=np.array([0.5, 0.5], dtype=np.float32),
+            timestamps=np.array([[1, 1, 2020] for _ in range(12)], dtype=np.int32),
+        )
+        sample2 = OlmoEarthSample(
+            sentinel2_l2a=np.ones((8, 8, 12, 13), dtype=np.float32) * 2,
+            latlon=np.array([0.6, 0.6], dtype=np.float32),
+            timestamps=np.array([[1, 1, 2020] for _ in range(12)], dtype=np.int32),
+        )
+
+        masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+
+        batch = [(1, sample1), (1, sample2)]
+        patch_size, collated_a, collated_b = collate_double_masked_batched(
+            batch,
+            transform=None,
+            masking_strategy=masking_strategy,
+            masking_strategy_b=None,  # Uses same strategy
+        )
+
+        assert patch_size == 1
+        assert isinstance(collated_a, MaskedOlmoEarthSample)
+        assert isinstance(collated_b, MaskedOlmoEarthSample)
+        assert collated_a.sentinel2_l2a is not None
+        assert collated_b.sentinel2_l2a is not None
+        assert collated_a.sentinel2_l2a_mask is not None
+        assert collated_b.sentinel2_l2a_mask is not None
+        # Batch dimension should be present
+        assert collated_a.sentinel2_l2a.shape[0] == 2
+        assert collated_b.sentinel2_l2a.shape[0] == 2
+        # The two masks should be different (independent random sampling)
+        assert not torch.equal(
+            collated_a.sentinel2_l2a_mask, collated_b.sentinel2_l2a_mask
+        )
+
+    def test_collate_double_masked_batched_different_strategies(self) -> None:
+        """Test that collate_double_masked_batched can use different strategies."""
+        sample1 = OlmoEarthSample(
+            sentinel2_l2a=np.ones((8, 8, 12, 13), dtype=np.float32),
+            latlon=np.array([0.5, 0.5], dtype=np.float32),
+            timestamps=np.array([[1, 1, 2020] for _ in range(12)], dtype=np.int32),
+        )
+        sample2 = OlmoEarthSample(
+            sentinel2_l2a=np.ones((8, 8, 12, 13), dtype=np.float32) * 2,
+            latlon=np.array([0.6, 0.6], dtype=np.float32),
+            timestamps=np.array([[1, 1, 2020] for _ in range(12)], dtype=np.int32),
+        )
+
+        masking_strategy_a = MaskingConfig(
+            strategy_config={"type": "random", "encode_ratio": 0.3, "decode_ratio": 0.7}
+        ).build()
+        masking_strategy_b = MaskingConfig(
+            strategy_config={"type": "random", "encode_ratio": 0.7, "decode_ratio": 0.3}
+        ).build()
+
+        batch = [(1, sample1), (1, sample2)]
+        patch_size, collated_a, collated_b = collate_double_masked_batched(
+            batch,
+            transform=None,
+            masking_strategy=masking_strategy_a,
+            masking_strategy_b=masking_strategy_b,
+        )
+
+        assert patch_size == 1
+        assert isinstance(collated_a, MaskedOlmoEarthSample)
+        assert isinstance(collated_b, MaskedOlmoEarthSample)
+        assert collated_a.sentinel2_l2a_mask is not None
+        assert collated_b.sentinel2_l2a_mask is not None

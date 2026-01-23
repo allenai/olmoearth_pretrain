@@ -7,7 +7,11 @@ import logging
 import shutil
 import time
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+if TYPE_CHECKING:
+    from olmoearth_pretrain.data.transform import Transform
+    from olmoearth_pretrain.train.masking import MaskingStrategy
 
 import h5py
 
@@ -108,6 +112,76 @@ def collate_double_masked(
         MaskedOlmoEarthSample(**collated_dict_a),
         MaskedOlmoEarthSample(**collated_dict_b),
     )
+
+
+def collate_single_masked_batched(
+    batch: list[tuple[int, OlmoEarthSample]],
+    transform: Transform | None,
+    masking_strategy: MaskingStrategy,
+) -> tuple[int, MaskedOlmoEarthSample]:
+    """Collate function that applies transform and masking to the full batch.
+
+    This function first collates raw OlmoEarthSamples into a batched tensor,
+    then applies transform and masking to the entire batch at once, enabling
+    vectorized operations.
+
+    Args:
+        batch: List of (patch_size, OlmoEarthSample) tuples.
+        transform: Optional transform to apply to the batch.
+        masking_strategy: Masking strategy to apply to the batch.
+
+    Returns:
+        A tuple of (patch_size, MaskedOlmoEarthSample).
+    """
+    # First, collate raw samples into a batched OlmoEarthSample
+    patch_size, stacked_sample = collate_olmoearth_pretrain(batch)
+
+    # Apply transform to the batch (if configured)
+    if transform is not None:
+        stacked_sample = transform.apply(stacked_sample)
+
+    # Apply masking to the batch
+    masked_sample = masking_strategy.apply_mask(stacked_sample, patch_size)
+
+    return patch_size, masked_sample
+
+
+def collate_double_masked_batched(
+    batch: list[tuple[int, OlmoEarthSample]],
+    transform: Transform | None,
+    masking_strategy: MaskingStrategy,
+    masking_strategy_b: MaskingStrategy | None,
+) -> tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample]:
+    """Collate function that applies transform and two masking strategies to the full batch.
+
+    This function first collates raw OlmoEarthSamples into a batched tensor,
+    then applies transform and two independent masking strategies to the entire
+    batch at once, enabling vectorized operations.
+
+    Args:
+        batch: List of (patch_size, OlmoEarthSample) tuples.
+        transform: Optional transform to apply to the batch.
+        masking_strategy: First masking strategy to apply.
+        masking_strategy_b: Second masking strategy to apply. If None, uses masking_strategy.
+
+    Returns:
+        A tuple of (patch_size, MaskedOlmoEarthSample_a, MaskedOlmoEarthSample_b).
+    """
+    # First, collate raw samples into a batched OlmoEarthSample
+    patch_size, stacked_sample = collate_olmoearth_pretrain(batch)
+
+    # Apply transform to the batch (if configured)
+    if transform is not None:
+        stacked_sample = transform.apply(stacked_sample)
+
+    # Apply both masking strategies to the batch
+    masked_sample_a = masking_strategy.apply_mask(stacked_sample, patch_size)
+    strategy_b = (
+        masking_strategy_b if masking_strategy_b is not None else masking_strategy
+    )
+    masked_sample_b = strategy_b.apply_mask(stacked_sample, patch_size)
+
+    return patch_size, masked_sample_a, masked_sample_b
 
 
 class GetItemArgs(NamedTuple):

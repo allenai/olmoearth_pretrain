@@ -1,5 +1,6 @@
 """OlmoEarth Pretrain DataLoader."""
 
+import functools
 import logging
 import math
 import multiprocessing as mp
@@ -31,11 +32,10 @@ from olmoearth_pretrain.data.dataset import (
     GetItemArgs,
     OlmoEarthDataset,
     OlmoEarthSample,
-    collate_double_masked,
-    collate_single_masked,
+    collate_double_masked_batched,
+    collate_single_masked_batched,
 )
 from olmoearth_pretrain.data.transform import Transform, TransformConfig
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.train.masking import MaskingConfig, MaskingStrategy
 
 logger = logging.getLogger(__name__)
@@ -607,49 +607,33 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
 
     def _process_sample(
         self, sample: tuple[int, OlmoEarthSample]
-    ) -> (
-        tuple[int, OlmoEarthSample]
-        | tuple[int, MaskedOlmoEarthSample]
-        | tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample]
-    ):
-        """Process a sample, optionally applying transform and masking.
+    ) -> tuple[int, OlmoEarthSample]:
+        """Process a sample, optionally applying transform in legacy mode.
+
+        When num_masked_views > 0, transform and masking are handled by the
+        batched collator, so this function just returns the raw sample.
+
+        When num_masked_views == 0 (legacy mode), transform is applied here
+        if configured.
 
         Args:
             sample: A tuple of (patch_size, OlmoEarthSample).
 
         Returns:
-            Depending on num_masked_views:
-            - 0: (patch_size, OlmoEarthSample) - legacy mode
-            - 1: (patch_size, MaskedOlmoEarthSample) - single masked view
-            - 2: (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample) - double masked views
+            A tuple of (patch_size, OlmoEarthSample).
         """
         patch_size, olmo_sample = sample
 
-        # Apply transform if configured
+        # When num_masked_views > 0, transform + masking are handled by
+        # the batched collator, so just return the raw sample
+        if self.num_masked_views > 0:
+            return (patch_size, olmo_sample)
+
+        # Legacy mode (num_masked_views == 0): apply transform if configured
         if self.transform is not None:
             olmo_sample = self.transform.apply(olmo_sample)
 
-        # If no masking configured, return the (possibly transformed) sample
-        if self.num_masked_views == 0 or self.masking_strategy is None:
-            return (patch_size, olmo_sample)
-
-        # Convert to tensors and add batch dimension for masking
-        # Masking strategies expect batched input (B, T, H, W, C)
-        sample_tensor = olmo_sample.to_tensors().unsqueeze_batch()
-
-        if self.num_masked_views == 1:
-            # Single masked view (for LatentMIM, MAE)
-            masked = self.masking_strategy.apply_mask(sample_tensor, patch_size)
-            # Remove batch dimension since collator will stack samples
-            return (patch_size, masked.squeeze_batch())
-        else:
-            # Double masked views (for ContrastiveLatentMIM, Galileo)
-            masked_a = self.masking_strategy.apply_mask(sample_tensor, patch_size)
-            # Use masking_strategy_b if provided, otherwise use the same strategy
-            strategy_b = self.masking_strategy_b or self.masking_strategy
-            masked_b = strategy_b.apply_mask(sample_tensor, patch_size)
-            # Remove batch dimension since collator will stack samples
-            return (patch_size, masked_a.squeeze_batch(), masked_b.squeeze_batch())
+        return (patch_size, olmo_sample)
 
     def __iter__(self) -> Iterator[Any]:
         """Iterate over the dataset.
@@ -673,7 +657,8 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             )
         )
 
-        # Apply transform and masking (if configured) to each sample
+        # Process each sample (transform is applied here only in legacy mode;
+        # when num_masked_views > 0, transform + masking happen in the collator)
         processed_instance_iterator = (
             self._process_sample(sample) for sample in raw_instance_iterator
         )
@@ -753,10 +738,21 @@ class OlmoEarthDataLoaderConfig(Config):
         )
 
         # Select appropriate collator based on num_masked_views
+        # When num_masked_views > 0, use batched collators that apply transform + masking
+        # to the entire batch at once for better vectorization
         if self.num_masked_views == 1:
-            collator = collate_single_masked
+            collator = functools.partial(
+                collate_single_masked_batched,
+                transform=transform,
+                masking_strategy=masking_strategy,
+            )
         elif self.num_masked_views == 2:
-            collator = collate_double_masked
+            collator = functools.partial(
+                collate_double_masked_batched,
+                transform=transform,
+                masking_strategy=masking_strategy,
+                masking_strategy_b=masking_strategy_b,
+            )
         # else: use the provided collator (legacy mode)
 
         return OlmoEarthDataLoader(
