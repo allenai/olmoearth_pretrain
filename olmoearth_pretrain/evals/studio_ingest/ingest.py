@@ -188,76 +188,6 @@ def get_label_layer_info(dataset_config: DatasetConfig) -> tuple[str, list[str]]
     return None
 
 
-def get_unique_label_values(
-    source_path: str,
-    dataset_config: DatasetConfig,
-    max_windows: int | None = None,
-) -> tuple[set[int], int]:
-    """Scan the rslearn dataset to get unique label values.
-
-    Iterates through all windows in the dataset, reads the label raster
-    from each, and collects all unique integer values.
-
-    Args:
-        source_path: Path to the rslearn dataset
-        dataset_config: The parsed DatasetConfig
-        max_windows: Optional limit on number of windows to scan (for debugging)
-
-    Returns:
-        Tuple of (set of unique label values, number of classes)
-
-    Raises:
-        ValueError: If no label layer is found in the dataset
-    """
-    # Find the label layer
-    label_info = get_label_layer_info(dataset_config)
-    if label_info is None:
-        raise ValueError(
-            "No label layer found in dataset. Label layer should have no data_source."
-        )
-    label_layer_name, label_bands = label_info
-    logger.info(f"Found label layer: {label_layer_name} with bands: {label_bands}")
-
-    # Load the rslearn dataset
-    rslearn_dataset = RslearnDataset(UPath(source_path))
-
-    # Get all windows
-    windows = rslearn_dataset.load_windows(workers=NUM_WORKERS, show_progress=True)
-    if max_windows is not None:
-        windows = windows[:max_windows]
-
-    logger.info(f"Scanning {len(windows)} windows for unique label values...")
-
-    def scan_window_labels(window):
-        """Scan a single window for unique label values."""
-        try:
-            raster_dir = window.get_raster_dir(label_layer_name, label_bands)
-            if not raster_dir.exists():
-                return set()
-            label_raster = GEOTIFF_RASTER_FORMAT.decode_raster(
-                raster_dir, window.projection, window.bounds
-            )
-            return set(np.unique(label_raster).astype(int).tolist())
-        except Exception as e:
-            logger.warning(f"Error reading label for window {window.name}: {e}")
-            return set()
-
-    unique_values: set[int] = set()
-    num_workers = min(MAX_THREAD_WORKERS, len(windows))
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = {executor.submit(scan_window_labels, w): w for w in windows}
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="Scanning labels"
-        ):
-            unique_values.update(future.result())
-
-    # Filter out common NODATA values if needed (typically -1 or 255 for uint8)
-    # For now, we return all values and let the caller handle NODATA filtering
-    num_classes = len(unique_values)
-
-    return unique_values, num_classes
-
-
 # =============================================================================
 # Main Ingestion Function
 # =============================================================================
@@ -415,7 +345,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     logger.info(f"Got {num_classes} classes from model config: {sorted(label_values)}")
 
     # get the NODATA value -> This would be in the olmoearth_run.yaml config
-    nodata_value = 0
+    nodata_value = 0 # TODO: This could be very problematic as well because we are sending the label values as zero indexed but could be that zero is nodata vlaue
     zero_is_invalid = 0 == nodata_value
 
     # get the multilabel -> assume false for now
@@ -451,6 +381,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
             norm_stats = pickle.load(f)
         logger.info(f"Loaded cached norm stats from {norm_stats_cache_path}")
     else:
+        logger.info(f"Computing norm stats for {config.source_path}")
         norm_stats = compute_band_stats_from_rslearn_dataset(
             dataset_path=config.source_path,
             modalities=modality_layer_names,
@@ -480,6 +411,26 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     split_tag_key = list(train_tags.keys())[0] if train_tags else "split"
     logger.info(f"Extracted groups={groups}, split_tag_key={split_tag_key}")
 
+    # Extract target layer configuration from model.yaml inputs
+    # Find the input with is_target=True
+    inputs_config = data_init_args.get("inputs", {})
+    target_layer_name = "label"  # default
+    target_data_type = "vector"  # default
+    target_bands: list[str] | None = None
+
+    for input_key, input_cfg in inputs_config.items():
+        if input_cfg.get("is_target"):
+            # Found the target input
+            layers = input_cfg.get("layers", [])
+            target_layer_name = layers[0] if layers else "label"
+            target_data_type = input_cfg.get("data_type", "vector")
+            target_bands = input_cfg.get("bands")
+            logger.info(
+                f"Extracted target config: layer={target_layer_name}, "
+                f"data_type={target_data_type}, bands={target_bands}"
+            )
+            break
+
     entry = EvalDatasetEntry(
         name=config.name,
         source_path=config.source_path,
@@ -487,6 +438,9 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         target_property=target_property,
         classes=label_values,
         num_classes=num_classes,
+        target_layer_name=target_layer_name,
+        target_data_type=target_data_type,
+        target_bands=target_bands,
         modalities=modalities,
         groups=groups,
         split_tag_key=split_tag_key,

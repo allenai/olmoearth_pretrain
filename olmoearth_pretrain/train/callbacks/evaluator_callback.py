@@ -277,9 +277,10 @@ class DownstreamEvaluator:
     def _val_embed_probe(self) -> dict[str, float | dict]:
         """Validate the model using embeddings and probe (knn or linear probe)."""
         logger.info(f"Validating {self.dataset} with {self.eval_mode}")
+        logger.info(f"Getting train loader for {self.dataset}...")
         train_loader = self._get_data_loader("train", self.embedding_batch_size)
+        logger.info(f"Getting val loader for {self.dataset}...")
         val_loader = self._get_data_loader("valid", self.embedding_batch_size)
-        test_loader = self._get_data_loader("test", self.embedding_batch_size)
 
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
@@ -289,6 +290,8 @@ class DownstreamEvaluator:
         logger.info(f"Getting val embeddings for {self.dataset}...")
         val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
         if self.run_on_test:
+            logger.info(f"Getting test loader for {self.dataset}...")
+            test_loader = self._get_data_loader("test", self.embedding_batch_size)
             logger.info(f"Getting test embeddings for {self.dataset}...")
             test_embeddings, test_labels = self._get_embeddings(
                 test_loader, is_train=False

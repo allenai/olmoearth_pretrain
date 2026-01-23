@@ -24,6 +24,11 @@ Goals:
 4. Fast to load
 5. These evals don't have a properly split test set and so we would need to re-split the data for that and save that
 
+
+
+Notes
+6. Takes a lot fo workers and a really long time to scan for bigger datasets so to use those as in loop evals we want to cache index
+
 ## Overview
 
 This module provides tooling to:
@@ -99,3 +104,5 @@ Goal for today is tolbi and fire through both of these steps
 
 
 5. Make sure that we can discover new datasets
+
+`python -m olmoearth_pretrain.internal.full_eval_sweep     --cluster=local     --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000     --module_path=scripts/official/tiny.py     --trainer.callbacks.downstream_evaluator.tasks_to_run="[tolbi_crops]"     --trainer.callbacks.downstream_evaluator.eval_on_startup=True     --trainer.callbacks.downstream_evaluator.cancel_after_first_eval=True     --trainer.callbacks.wandb.enabled=False --defaults_only `

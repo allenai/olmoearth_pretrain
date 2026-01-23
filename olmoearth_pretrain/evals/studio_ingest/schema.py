@@ -337,6 +337,12 @@ class EvalDatasetEntry:
     target_property: str
     num_classes: int | None = None
 
+    # Target/label layer configuration (from model.yaml inputs)
+    # These define how rslearn loads the target data
+    target_layer_name: str = "label"  # rslearn layer name, e.g., "label_raster"
+    target_data_type: str = "vector"  # "vector" for classification, "raster" for segmentation
+    target_bands: list[str] | None = None  # e.g., ["label"] for raster targets
+
     # Data configuration
     modalities: list[str] = field(default_factory=list)
     temporal_range: tuple[str, str] = ("", "")
@@ -406,6 +412,9 @@ class EvalDatasetEntry:
             "target_property": self.target_property,
             "classes": self.classes,
             "num_classes": self.num_classes,
+            "target_layer_name": self.target_layer_name,
+            "target_data_type": self.target_data_type,
+            "target_bands": self.target_bands,
             "modalities": self.modalities,
             "temporal_range": list(self.temporal_range),
             "window_size": self.window_size,
@@ -451,6 +460,9 @@ class EvalDatasetEntry:
             target_property=data.get("target_property", "category"),
             classes=data.get("classes"),
             num_classes=data.get("num_classes"),
+            target_layer_name=data.get("target_layer_name", "label"),
+            target_data_type=data.get("target_data_type", "vector"),
+            target_bands=data.get("target_bands"),
             modalities=data.get("modalities", []),
             temporal_range=temporal_range,
             window_size=data.get("window_size", 64),

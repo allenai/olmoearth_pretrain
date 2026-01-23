@@ -62,7 +62,7 @@ SAMPLE_FRACTION = (
     else None
 )
 
-
+# TODO: THis is too hardcoded and should use the new improved build_rslearn_model_dataset function and is currently broken tolbi too big to test on
 def build_rslearn_model_dataset_for_band_stats(
     rslearn_dataset: RslearnDataset,
     layers: list[str],
@@ -127,19 +127,17 @@ def build_rslearn_model_dataset_for_band_stats(
         # )
 
     inputs: dict[str, RsDataInput] = {}
-    # Expand each rslearn layer name to time-indexed variants, keep the first *per base layer*
+    # NOTE: Some datasets use layer suffixes for timesteps, others use load_all_item_groups.
+    # For band stats, we just need one timestep, so keep it simple.
+    # Don't use passthrough=True - we want tensors, not RasterImage objects.
     for olmoearth_key, per_key_layers in layers_by_olmoearth.items():
-        expanded: list[str] = []
-        for base in per_key_layers:
-            # convention: base, then base.1 ... base.(YEAR_NUM_TIMESTEPS-1)
-            expanded.append(base)
-            expanded.extend(f"{base}.{i}" for i in range(1, YEAR_NUM_TIMESTEPS))
         inputs[olmoearth_key] = RsDataInput(
             data_type="raster",
-            layers=expanded,
+            layers=per_key_layers,
             bands=bands_by_olmoearth[olmoearth_key],
-            passthrough=True,
+            passthrough=False,  # Get tensors, not RasterImage
             load_all_layers=True,
+            load_all_item_groups=True,
             required=False,
         )
 

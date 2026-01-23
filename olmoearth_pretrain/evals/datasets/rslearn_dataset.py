@@ -23,6 +23,7 @@ from rslearn.train.tasks.classification import (
     ClassificationTask as RsClassificationTask,
 )
 from rslearn.train.tasks.segmentation import SegmentationTask as RsSegmentationTask
+from rslearn.train.model_context import RasterImage
 from rslearn.train.transforms.pad import Pad as RsPad
 from torch.utils.data import Dataset
 from upath import UPath
@@ -66,6 +67,9 @@ def build_rslearn_model_dataset(
     skip_targets: bool = False,
     max_samples: int | None = None,
     split_tag_key: str = "split",
+    target_layer_name: str = "label",
+    target_data_type: str = "vector",
+    target_bands: list[str] | None = None,
 ) -> RsModelDataset:
     """Build an rslearn ModelDataset.
 
@@ -80,6 +84,9 @@ def build_rslearn_model_dataset(
         property_name: The property in the dataset to use as the target label.
         skip_targets: Whether to skip the target loading.
         split_tag_key: The tag key used to identify splits (e.g., "split" or "helios_split").
+        target_layer_name: rslearn layer name for targets (e.g., "label", "label_raster").
+        target_data_type: "vector" for classification, "raster" for segmentation.
+        target_bands: List of band names for raster targets (e.g., ["label"]).
 
     Returns:
         RsModelDataset: A dataset object ready for training or evaluation.
@@ -123,26 +130,30 @@ def build_rslearn_model_dataset(
         )
 
     inputs: dict[str, RsDataInput] = {}
-    # Expand each rslearn layer name to time-indexed variants
+    # NOTE: Some datasets use layer suffixes (sentinel2.1, sentinel2.2, ...) for timesteps,
+    # others use load_all_item_groups=True with a single layer name. The rslearn DataInput
+    # handles this via load_all_layers and load_all_item_groups options.
+    # passthrough=False so rslearn converts to tensors (not RasterImage objects)
     for olmoearth_key, per_key_layers in layers_by_olmoearth.items():
-        expanded: list[str] = []
-        for base in per_key_layers:
-            # convention: base, then base.1 ... base.(YEAR_NUM_TIMESTEPS-1)
-            expanded.append(base)
-            expanded.extend(f"{base}.{i}" for i in range(1, YEAR_NUM_TIMESTEPS))
         inputs[olmoearth_key] = RsDataInput(
             data_type="raster",
-            layers=expanded,
+            layers=per_key_layers,
             bands=bands_by_olmoearth[olmoearth_key],
-            passthrough=True,
+            passthrough=True,  # Must be True so data ends up in input_dict for transforms
             load_all_layers=True,
+            # TODO: This needs to be configurable in the dataset entry but we hardcode for now
+            load_all_item_groups=True,
         )
 
-    inputs["targets"] = RsDataInput(
-        data_type="vector",
-        layers=["label"],
-        is_target=True,
-    )
+    # Build target input based on task type
+    target_input_kwargs: dict[str, Any] = {
+        "data_type": target_data_type,
+        "layers": [target_layer_name],
+        "is_target": True,
+    }
+    if target_bands:
+        target_input_kwargs["bands"] = target_bands
+    inputs["targets"] = RsDataInput(**target_input_kwargs)
 
     split_config = RsSplitConfig(
         transforms=transforms,
@@ -171,6 +182,8 @@ def build_rslearn_model_dataset(
         inputs=inputs,
         task=task,
         workers=32,
+        use_index=True,
+        # refresh_index=True,
     )
 
 
@@ -234,12 +247,18 @@ class RslearnToOlmoEarthDataset(Dataset):
         task_type: str = "classification",
         max_samples: int | None = None,
         split_tag_key: str = "split",
+        target_layer_name: str = "label",
+        target_data_type: str = "vector",
+        target_bands: list[str] | None = None,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
         Args:
             max_samples: If set, limits the dataset to this many samples (for fast debugging).
             split_tag_key: The tag key used to identify splits (e.g., "split" or "helios_split").
+            target_layer_name: rslearn layer name for targets (e.g., "label", "label_raster").
+            target_data_type: "vector" for classification, "raster" for segmentation.
+            target_bands: List of band names for raster targets.
         """
         if split not in ("train", "val", "valid", "test"):
             raise ValueError(f"Invalid split {split}")
@@ -256,6 +275,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             raise ValueError(f"Input modalities must be in {self.allowed_modalities} but got {input_modalities}")
 
         # Build rslearn ModelDataset for the split
+        print(f"Building rslearn ModelDataset for {ds_path}")
         dataset = RslearnDataset(UPath(ds_path))
         self.dataset = build_rslearn_model_dataset(
             rslearn_dataset=dataset,
@@ -268,6 +288,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             property_name=property_name,
             max_samples=max_samples,
             split_tag_key=split_tag_key,
+            target_layer_name=target_layer_name,
+            target_data_type=target_data_type,
+            target_bands=target_bands,
         )
 
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
@@ -333,6 +356,10 @@ class RslearnToOlmoEarthDataset(Dataset):
                 raise ValueError(f"Modality {modality} not found in dataset inputs")
             num_bands = DataModality.get(modality).num_bands
             x = input_dict[modality]
+            # Extract tensor from RasterImage if passthrough=True
+            # RasterImage.image has shape (C, T, H, W), we need (T*C, H, W)
+            if isinstance(x, RasterImage):
+                x = rearrange(x.image, "c t h w -> (t c) h w")
             # Turn into numpy array for compatibility with normalizer
             if not isinstance(x, np.ndarray):
                 x = x.numpy()
@@ -364,7 +391,8 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         olmoearth_sample = OlmoEarthSample(**sample_dict)
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(olmoearth_sample)
-        return masked_sample, target["class"].long()
+        # TODO: Also need to deal with valid and invalid targets
+        return masked_sample, target["classes"].long()
 
 
 def from_registry_entry(
@@ -439,4 +467,7 @@ def from_registry_entry(
         task_type=entry.task_type,
         max_samples=max_samples,
         split_tag_key=entry.split_tag_key,
+        target_layer_name=entry.target_layer_name,
+        target_data_type=entry.target_data_type,
+        target_bands=entry.target_bands,
     )
