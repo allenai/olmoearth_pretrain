@@ -55,6 +55,9 @@ OLMOEARTH_TO_RSLEARN: dict[str, str] = {
 }
 
 
+
+# Why are we extracting the info if we could just build this from the config using rslearn?
+# SO that it is maintainable if the rslearn set up or api or config changes in the future?
 def build_rslearn_model_dataset(
     rslearn_dataset: RslearnDataset,
     layers: list[str],
@@ -120,14 +123,17 @@ def build_rslearn_model_dataset(
         bands_by_olmoearth[olmoearth_key] = band_order
 
     transforms = []
-    if input_size is not None:
-        transforms.append(
-            RsPad(
-                size=input_size,
-                mode="center",
-                image_selectors=list(layers_by_olmoearth.keys()),
-            )
-        )
+    # TODO: We should add transforms such as padding if prescribed by the config
+    # if input_size is not None:
+    #     print(f"Adding pad transform with size {input_size}")
+        # The transforms need to be specified by the config and passed through if needed
+        # transforms.append(
+        #     RsPad(
+        #         size=input_size,
+        #         mode="center",
+        #         image_selectors=list(layers_by_olmoearth.keys()),
+        #     )
+        # )
 
     inputs: dict[str, RsDataInput] = {}
     # NOTE: Some datasets use layer suffixes (sentinel2.1, sentinel2.2, ...) for timesteps,
@@ -356,6 +362,8 @@ class RslearnToOlmoEarthDataset(Dataset):
                 raise ValueError(f"Modality {modality} not found in dataset inputs")
             num_bands = DataModality.get(modality).num_bands
             x = input_dict[modality]
+            # what is the shape of the raster image
+            print(f"Shape of {modality} raster image: {x.image.shape}")
             # Extract tensor from RasterImage if passthrough=True
             # RasterImage.image has shape (C, T, H, W), we need (T*C, H, W)
             if isinstance(x, RasterImage):
@@ -371,6 +379,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             if modality == DataModality.SENTINEL1.name:
                 x = convert_to_db(x)
             x = rearrange(x, "(t c) h w -> h w t c", t=T, c=num_bands)
+            #print the shape of the tensor for the modality
+            print(f"Shape of {modality} tensor: {x.shape}")
 
             if self.norm_stats_from_pretrained:
                 x = self.normalizer_computed.normalize(DataModality.get(modality), x)
