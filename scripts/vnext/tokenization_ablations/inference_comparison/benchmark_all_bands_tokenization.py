@@ -113,7 +113,7 @@ def build_inference_benchmarking_config(
         use_s2=True,
         use_landsat=False,
         image_size=16,
-        patch_size=4,
+        patch_size=1,
         num_timesteps=12,
         batch_size=128,
         bf16=True,
@@ -126,7 +126,7 @@ def build_inference_benchmarking_config(
     return ThroughputBenchmarkRunnerConfig(
         default_run_params=default_run_params,
         training_modalities=[Modality.SENTINEL2_L2A.name],
-        sweep_keys=["batch_size"],
+        sweep_dict={"batch_size": [8, 16, 32, 64, 128]},
         sweep_group_name="all_bands_tokenization_benchmark",
         work_dir=Path("./benchmark_work_dir"),
         # model_config_builder is passed separately to main()
