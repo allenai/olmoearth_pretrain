@@ -3,6 +3,7 @@
 import logging
 
 import torch
+from sklearn.decomposition import PCA
 from torch.utils.data import DataLoader
 
 from olmoearth_pretrain.evals.eval_wrapper import EvalWrapper
@@ -74,8 +75,6 @@ def reduce_embedding_dim(
         Tuple of (train_reduced, val_reduced, test_reduced, variance_retained)
         where variance_retained is the sum of explained variance ratios.
     """
-    from sklearn.decomposition import PCA
-
     original_dim = train_embeddings.shape[-1]
     train_shape = train_embeddings.shape
     val_shape = val_embeddings.shape
