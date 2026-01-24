@@ -32,5 +32,6 @@ def test_reduce_embedding_dim() -> None:
 
     assert train_out.shape == (500, 256)
     assert val_out.shape == (100, 256)
+    assert test_out is not None
     assert test_out.shape == (100, 256)
     assert 0 < variance <= 1.0

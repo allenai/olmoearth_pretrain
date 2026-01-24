@@ -160,8 +160,8 @@ def get_embeddings(
     Returns:
         Tuple of (embeddings, labels). If quantize=True, embeddings are int8.
     """
-    embeddings = []
-    labels = []
+    embeddings_list: list[torch.Tensor] = []
+    labels_list: list[torch.Tensor] = []
     model.eval()
     device = model.device
     total_samples = len(data_loader)
@@ -188,12 +188,12 @@ def get_embeddings(
                     is_train=is_train,
                 )
 
-            embeddings.append(batch_embeddings.cpu())
-            labels.append(label)
+            embeddings_list.append(batch_embeddings.cpu())
+            labels_list.append(label)
             logger.info(f"Processed {i} / {total_samples}")
 
-    embeddings = torch.cat(embeddings, dim=0)  # (N, dim)
-    labels = torch.cat(labels, dim=0)  # (N)
+    embeddings = torch.cat(embeddings_list, dim=0)  # (N, dim)
+    labels = torch.cat(labels_list, dim=0)  # (N)
 
     # Apply quantization if requested
     if quantize:
