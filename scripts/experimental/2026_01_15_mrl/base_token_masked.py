@@ -108,9 +108,9 @@ def build_train_module_config(
                 "same_target_threshold": 0.999,
                 "mask_negatives_for_modalities": [
                     Modality.WORLDCOVER.name,
-                    # Modality.SRTM.name,
+                    Modality.SRTM.name,
                     Modality.OPENSTREETMAP_RASTER.name,
-                    # Modality.WRI_CANOPY_HEIGHT_MAP.name,
+                    Modality.WRI_CANOPY_HEIGHT_MAP.name,
                     Modality.CDL.name,
                     Modality.WORLDCEREAL.name,
                 ],
