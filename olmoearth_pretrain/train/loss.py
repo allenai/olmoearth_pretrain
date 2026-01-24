@@ -369,6 +369,145 @@ class ModalityPatchDiscriminationLossNew(Loss):
         return self.weight * total_loss
 
 
+@LOSS_REGISTRY.register("modality_patch_discrimination_variance_weighted")
+class ModalityPatchDiscriminationVarianceWeighted(Loss):
+    """Loss function for per-modality patch discrimination with variance-based token weighting.
+
+    Tokens with higher variance (more diverse spectral content) receive higher weight.
+    This encourages the model to focus on informative tokens rather than homogeneous regions.
+    """
+
+    name = "ModalityPatchDiscVar"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        pred2unit: bool = False,
+        weight: float = 1.0,
+        modality_weights: dict[str, float] | None = None,
+        variance_weight_strength: float = 1.0,
+        min_weight: float = 0.1,
+    ):
+        """Initialize variance-weighted patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            weight: the weight to apply to this loss
+            modality_weights: the weights to apply to each modality
+            variance_weight_strength: how aggressively to weight by variance
+                (0=uniform, 1=linear, 2=squared)
+            min_weight: minimum weight for any token (prevents ignoring
+                low-variance tokens entirely)
+        """
+        self.tau = tau
+        self.pred2unit = pred2unit
+        self.weight = weight
+        self.modality_weights = modality_weights
+        self.variance_weight_strength = variance_weight_strength
+        self.min_weight = min_weight
+
+    def compute_token_weights(self, target_tokens: Tensor) -> Tensor:
+        """Compute variance-based weights for each token.
+
+        Args:
+            target_tokens: [num_tokens, dim] normalized target embeddings
+
+        Returns:
+            [num_tokens] weights that sum to num_tokens (to maintain gradient scale)
+        """
+        # Compute variance across feature dimension for each token
+        # High variance = diverse/informative token
+        # Low variance = homogeneous token (water, uniform surfaces)
+        token_variance = target_tokens.var(dim=-1)  # [num_tokens]
+
+        # Apply strength parameter (0=uniform, 1=linear, 2=squared emphasis)
+        if self.variance_weight_strength != 1.0:
+            token_variance = token_variance**self.variance_weight_strength
+
+        # Add minimum weight to prevent completely ignoring low-variance tokens
+        token_weights = token_variance + self.min_weight
+
+        # Normalize so weights sum to num_tokens (maintains gradient scale)
+        num_tokens = target_tokens.shape[0]
+        token_weights = token_weights / (token_weights.sum() + 1e-8) * num_tokens
+
+        return token_weights.detach()  # Detach to prevent gradients through weights
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute variance-weighted patch discrimination loss."""
+        modality_preds, modality_masks = predictions.flatten_tokens_and_masks(
+            return_lists=True
+        )
+        modality_targets = targets.flatten_tokens_and_masks(return_lists=True)[0]
+
+        total_loss = 0
+        for all_preds, all_masks, all_targets, modality in zip(
+            modality_preds, modality_masks, modality_targets, targets.modalities
+        ):
+            pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            bs, nt, _ = pred.shape
+
+            if self.pred2unit:
+                pred_mu = pred.mean(1, keepdims=True)
+                pred_std = pred.std(1, keepdims=True)
+                pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+            pred = F.normalize(pred, p=2, dim=-1)
+            target = F.normalize(target, p=2, dim=-1)
+
+            count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+            losses = []
+            start = 0
+
+            for c in count:
+                end = start + c
+                if c == 0:
+                    continue
+
+                pred_sample = pred[:, start:end, :]  # [1, num_tokens, dim]
+                target_sample = target[:, start:end, :]  # [1, num_tokens, dim]
+
+                # Compute variance-based weights for this sample's tokens
+                token_weights = self.compute_token_weights(
+                    target_sample.squeeze(0)  # [num_tokens, dim]
+                )  # [num_tokens]
+
+                # Compute similarity scores
+                score_sample = (
+                    torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
+                )
+
+                # Cross-entropy loss per token
+                labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
+                per_token_loss = F.cross_entropy(
+                    score_sample.flatten(0, 1),
+                    labels.flatten(0, 1),
+                    reduction="none",
+                ) * (self.tau * 2)  # [num_tokens]
+
+                # Apply variance-based weighting
+                weighted_loss = (per_token_loss * token_weights).mean()
+
+                losses.append(weighted_loss)
+                start = end
+
+            if len(losses) == 0:
+                continue
+
+            loss = torch.stack(losses).mean()
+
+            if self.modality_weights is not None:
+                loss = loss * self.modality_weights.get(modality, 1.0)
+
+            total_loss += loss
+
+        return self.weight * total_loss
+
+
 @LOSS_REGISTRY.register("patch_discrimination")
 class PatchDiscriminationLoss(Loss):
     """Loss function for patch discrimination task."""
