@@ -379,16 +379,22 @@ class DownstreamEvaluator:
             dtype = train_embeddings.dtype
             if len(train_shape) > 2:
                 new_shape = train_shape[:-1] + (self.embedding_dim,)
-                train_embeddings = torch.from_numpy(train_reduced).to(
-                    device=device, dtype=dtype
-                ).reshape(new_shape)
-                val_embeddings = torch.from_numpy(val_reduced).to(
-                    device=device, dtype=dtype
-                ).reshape(val_shape[:-1] + (self.embedding_dim,))
+                train_embeddings = (
+                    torch.from_numpy(train_reduced)
+                    .to(device=device, dtype=dtype)
+                    .reshape(new_shape)
+                )
+                val_embeddings = (
+                    torch.from_numpy(val_reduced)
+                    .to(device=device, dtype=dtype)
+                    .reshape(val_shape[:-1] + (self.embedding_dim,))
+                )
                 if test_reduced is not None:
-                    test_embeddings = torch.from_numpy(test_reduced).to(
-                        device=device, dtype=dtype
-                    ).reshape(test_shape[:-1] + (self.embedding_dim,))
+                    test_embeddings = (
+                        torch.from_numpy(test_reduced)
+                        .to(device=device, dtype=dtype)
+                        .reshape(test_shape[:-1] + (self.embedding_dim,))
+                    )
             else:
                 train_embeddings = torch.from_numpy(train_reduced).to(
                     device=device, dtype=dtype
