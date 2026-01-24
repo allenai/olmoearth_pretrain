@@ -510,6 +510,147 @@ class ModalityPatchDiscriminationVarianceWeighted(Loss):
         return self.weight * total_loss
 
 
+@LOSS_REGISTRY.register("modality_patch_discrimination_masked_negatives")
+class ModalityPatchDiscriminationMaskedNegatives(Loss):
+    """Patch discrimination that masks out same-target negatives.
+
+    Useful for map modalities where many tokens may have the same class/embedding.
+    When computing contrastive loss, tokens with identical target embeddings
+    are not treated as negatives (they are masked out from the denominator).
+    """
+
+    name = "ModalityPatchDiscMasked"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        pred2unit: bool = False,
+        weight: float = 1.0,
+        modality_weights: dict[str, float] | None = None,
+        same_target_threshold: float = 0.999,
+        mask_negatives_for_modalities: list[str] | None = None,
+    ):
+        """Initialize masked negatives patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            weight: the weight to apply to this loss
+            modality_weights: the weights to apply to each modality
+            same_target_threshold: cosine similarity threshold to consider targets as same
+            mask_negatives_for_modalities: list of modality names to apply masking for.
+                If None, applies to all modalities.
+        """
+        self.tau = tau
+        self.pred2unit = pred2unit
+        self.weight = weight
+        self.modality_weights = modality_weights
+        self.same_target_threshold = same_target_threshold
+        self.mask_negatives_for_modalities = mask_negatives_for_modalities
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute patch discrimination loss with masked same-target negatives."""
+        modality_preds, modality_masks = predictions.flatten_tokens_and_masks(
+            return_lists=True
+        )
+        modality_targets = targets.flatten_tokens_and_masks(return_lists=True)[0]
+
+        total_loss = 0
+        for all_preds, all_masks, all_targets, modality in zip(
+            modality_preds, modality_masks, modality_targets, targets.modalities
+        ):
+            pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            pred = pred.float()
+            target = target.float()
+
+            if pred.shape[1] == 0:
+                continue
+
+            bs, nt, _ = pred.shape
+
+            if self.pred2unit:
+                pred_mu = pred.mean(1, keepdims=True)
+                pred_std = pred.std(1, keepdims=True)
+                pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+            pred = F.normalize(pred, p=2, dim=-1)
+            target = F.normalize(target, p=2, dim=-1)
+
+            # Check if we should mask negatives for this modality
+            should_mask = (
+                self.mask_negatives_for_modalities is None
+                or modality in self.mask_negatives_for_modalities
+            )
+
+            count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+            losses = []
+            start = 0
+
+            for c in count:
+                c_val = c.item() if hasattr(c, "item") else int(c)
+                end = start + c_val
+                if c_val == 0:
+                    continue
+
+                pred_sample = pred[:, start:end, :]
+                target_sample = target[:, start:end, :]
+
+                # Compute similarity scores
+                score_sample = (
+                    torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
+                )
+
+                # Apply same-target masking if enabled for this modality
+                if should_mask and c_val > 1:
+                    target_flat = target_sample.squeeze(0)  # [c, dim]
+                    target_sim = target_flat @ target_flat.T  # [c, c]
+                    same_target = target_sim > self.same_target_threshold
+
+                    # Mask: same target but not self (diagonal)
+                    diagonal = torch.eye(
+                        c_val, dtype=torch.bool, device=target_flat.device
+                    )
+                    invalid_negatives = same_target & ~diagonal
+
+                    # Check if any token has valid negatives
+                    valid_neg_count = (~same_target).sum(dim=-1)
+                    if valid_neg_count.min() == 0:
+                        # Some tokens have no valid negatives - skip this sample
+                        start = end
+                        continue
+
+                    # Apply mask to scores: set invalid negatives to -inf
+                    score_sample = score_sample.masked_fill(
+                        invalid_negatives[None, :, :], float("-inf")
+                    )
+
+                # Standard cross-entropy
+                labels = torch.arange(c_val, dtype=torch.long, device=pred.device)[None]
+                loss = F.cross_entropy(
+                    score_sample.flatten(0, 1),
+                    labels.flatten(0, 1),
+                    reduction="none",
+                ) * (self.tau * 2)
+
+                loss = loss.mean()
+                losses.append(loss)
+                start = end
+
+            if len(losses) == 0:
+                continue
+
+            loss = torch.stack(losses).mean()
+            if self.modality_weights is not None:
+                loss = loss * self.modality_weights.get(modality, 1.0)
+
+            total_loss += loss
+
+        return self.weight * total_loss
+
+
 @LOSS_REGISTRY.register("patch_discrimination")
 class PatchDiscriminationLoss(Loss):
     """Loss function for patch discrimination task."""
