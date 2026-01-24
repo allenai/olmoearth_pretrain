@@ -8,8 +8,8 @@ and percent change between fp32 and int8.
 Output: quant_comparison.csv
 """
 
-import wandb
 import pandas as pd
+import wandb
 
 WANDB_ENTITY = "eai-ai2"
 PROJECT = "mike-quant-experiment-int8-sweep"

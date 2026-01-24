@@ -11,8 +11,8 @@ Outputs a comparison CSV with eval metrics and percent change vs fp32 baseline.
 Output: dim_reduction_comparison.csv
 """
 
-import wandb
 import pandas as pd
+import wandb
 
 WANDB_ENTITY = "eai-ai2"
 PROJECT = "mike-quant-experiment"
