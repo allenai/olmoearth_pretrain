@@ -449,6 +449,8 @@ class ModalityPatchDiscriminationVarianceWeighted(Loss):
         ):
             pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
             target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            pred = pred.float()
+            target = target.float()
             bs, nt, _ = pred.shape
 
             if self.pred2unit:

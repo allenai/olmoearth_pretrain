@@ -68,6 +68,7 @@ def build_common_components(
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
+        Modality.LATLON.name,
         Modality.WORLDCOVER.name,
         Modality.SRTM.name,
         Modality.OPENSTREETMAP_RASTER.name,
@@ -180,7 +181,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             eval_interval=Duration.steps(4000),
-            matryoshka_dims=[48, 96, 192, 384, 768],
         ),
         "m_so2sat": DownstreamTaskConfig(
             dataset="m-so2sat",
