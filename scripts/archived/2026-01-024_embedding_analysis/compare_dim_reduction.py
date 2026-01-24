@@ -54,7 +54,7 @@ for run_id, run_name in run_info:
         for key, value in run.summary.items():
             if not key.startswith("eval/") or key.startswith("eval/test/"):
                 continue
-            if not isinstance(value, (int, float)):
+            if not isinstance(value, int | float):
                 continue
             task = key.replace("eval/", "")
             config_metrics[config_name][task] = value

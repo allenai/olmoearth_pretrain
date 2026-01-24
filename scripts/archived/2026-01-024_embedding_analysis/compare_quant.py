@@ -49,7 +49,7 @@ for run_id, run_name in run_info:
     for key, value in summary_items:
         if not key.startswith("eval/") or key.startswith("eval/test/"):
             continue
-        if not isinstance(value, (int, float)):
+        if not isinstance(value, int | float):
             continue
         # Keep max across sweep
         target[key] = max(target.get(key, float("-inf")), value)
