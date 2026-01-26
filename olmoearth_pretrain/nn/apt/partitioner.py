@@ -71,9 +71,10 @@ class QuadtreePartitioner:
     def __init__(
         self,
         scorer: Scorer,
-        base_patch_size: int = 16,
-        num_scales: int = 3,
-        thresholds: list[float] | None = None,
+        base_patch_size: int = 1,
+        num_scales: int = 4,
+        thresholds: list[float]
+        | None = None,  # How do I appropriately set these thresholds? Need to do some experimentation and visualization to determine the best thresholds.
     ):
         """Initialize the partitioner.
 

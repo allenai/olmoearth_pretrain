@@ -86,8 +86,12 @@ class EntropyScorer(Scorer):
 
     def __init__(
         self,
-        num_bins: int = 32,
-        bands: tuple[int, ...] = (0, 1, 2),
+        num_bins: int = 32,  # TODO: where did this come from?
+        bands: tuple[int, ...] = (
+            0,
+            1,
+            2,
+        ),  # TODO: I think this might be wrong and we should get the band order using constants instead of hardcoding
         normalizer: Normalizer | None = None,
         modality: ModalitySpec | None = None,
     ):
@@ -142,6 +146,7 @@ class EntropyScorer(Scorer):
         return float(np.mean(entropies))
 
 
+# TODO: Very experimental, may not be useful
 class LaplacianScorer(Scorer):
     """Compute patch complexity using Laplacian edge detection.
 
