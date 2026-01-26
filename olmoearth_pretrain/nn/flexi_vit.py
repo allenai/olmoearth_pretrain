@@ -513,6 +513,97 @@ class MultiModalPatchEmbeddings(nn.Module):
         """Apply torch.compile to the model."""
         self.compile(dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
 
+    def _create_fake_modality_input(
+        self,
+        modality: str,
+        batch_size: int,
+        height: int,
+        width: int,
+        time: int,
+        patch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[Tensor, Tensor]:
+        """Create fake input data for a missing modality with all-MISSING masks.
+
+        This ensures all per-modality encoder parameters are touched on all ranks
+        during distributed training, avoiding NCCL sync errors when a modality
+        is entirely missing from a batch on some ranks.
+
+        Args:
+            modality: Name of the modality to create fake inputs for
+            batch_size: Batch size
+            height: Height dimension (at base resolution)
+            width: Width dimension (at base resolution)
+            time: Number of timesteps
+            patch_size: Patch size for patchification
+            device: Device to create tensors on
+            dtype: Data type for the tensors
+
+        Returns:
+            Tuple of (tokens, masks) with all-MISSING masks
+        """
+        modality_spec = Modality.get(modality)
+
+        # Create fake data and mask shapes based on modality type
+        if modality_spec.is_spacetime_varying:
+            # Spatial + temporal modality: [B, H, W, T, C]
+            h = height * modality_spec.image_tile_size_factor
+            w = width * modality_spec.image_tile_size_factor
+            data_shape = (batch_size, h, w, time, modality_spec.num_bands)
+            # Mask shape after patchification: [B, H//p, W//p, T, num_band_sets]
+            p = patch_size * modality_spec.image_tile_size_factor
+            mask_shape = (batch_size, h // p, w // p, time, modality_spec.num_band_sets)
+        elif modality_spec.is_space_only_varying:
+            # Spatial only modality: [B, H, W, 1, C]
+            h = height * modality_spec.image_tile_size_factor
+            w = width * modality_spec.image_tile_size_factor
+            data_shape = (batch_size, h, w, 1, modality_spec.num_bands)
+            p = patch_size * modality_spec.image_tile_size_factor
+            mask_shape = (batch_size, h // p, w // p, 1, modality_spec.num_band_sets)
+        elif modality_spec.is_time_only_varying:
+            # Time only modality: [B, T, C]
+            data_shape = (batch_size, time, modality_spec.num_bands)
+            mask_shape = (batch_size, time, modality_spec.num_band_sets)
+        else:
+            # Static modality (e.g., latlon): [B, C]
+            data_shape = (batch_size, modality_spec.num_bands)
+            mask_shape = (batch_size, modality_spec.num_band_sets)
+
+        # Create fake data (zeros) and all-MISSING mask
+        fake_data = torch.zeros(data_shape, device=device, dtype=dtype)
+        fake_mask = torch.full(
+            mask_shape, fill_value=MaskValue.MISSING.value, device=device, dtype=dtype
+        )
+
+        # Pass through embedding modules (we need to actually run them for gradient sync)
+        modality_tokens, modality_masks = [], []
+        for idx in range(modality_spec.num_band_sets):
+            modality_specific_kwargs = {}
+            if not modality_spec.is_spatial:
+                token_mask = fake_mask[..., idx]
+            else:
+                p = patch_size * modality_spec.image_tile_size_factor
+                token_mask = fake_mask[:, 0::1, 0::1, ..., idx]
+                modality_specific_kwargs = {"patch_size": patch_size}
+
+            # Always run through the embedding module to ensure param sync
+            buffer_name = self._get_buffer_name(modality, idx)
+            patchified_data = torch.index_select(
+                fake_data, -1, getattr(self, buffer_name)
+            )
+            embedding_module = self.per_modality_embeddings[modality][
+                self._get_embedding_module_name(modality, idx)
+            ]
+            patchified_data = embedding_module(
+                patchified_data, **modality_specific_kwargs
+            )
+
+            modality_tokens.append(patchified_data)
+            modality_masks.append(token_mask)
+
+        return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
+
     def forward(
         self,
         input_data: MaskedOlmoEarthSample,
@@ -530,18 +621,65 @@ class MultiModalPatchEmbeddings(nn.Module):
         [1, 1, 0, 0]
         [1, 1, 0, 0]
         for the H, W dimensions
+
+        Note: This method always processes ALL supported modalities, even if they
+        are missing from the input. For missing modalities, fake inputs with
+        all-MISSING masks are passed through the encoders. This ensures all
+        per-modality encoder parameters are touched on all ranks during distributed
+        training, avoiding NCCL sync errors.
         """
         output_dict = {}
-        modalities_to_process = get_modalities_to_process(
-            input_data.modalities, self.supported_modality_names
-        )
-        for modality in modalities_to_process:
-            modality_tokens, modality_masks = self.apply_embedding_to_modality(
-                modality, input_data, patch_size, fast_pass
-            )
+        available_modalities = set(input_data.modalities)
+
+        # Get reference dimensions from the input data for creating fake inputs
+        batch_size = input_data.timestamps.shape[0]
+        time = input_data.timestamps.shape[1]
+        device = input_data.timestamps.device
+        dtype = input_data.timestamps.dtype
+
+        # Find a spatial modality to get height/width
+        height, width = None, None
+        for mod_name in available_modalities:
+            mod_data = getattr(input_data, mod_name)
+            if mod_data is not None:
+                mod_spec = Modality.get(mod_name)
+                if mod_spec.is_spatial and len(mod_data.shape) >= 4:
+                    # Get base height/width by dividing by image_tile_size_factor
+                    height = mod_data.shape[1] // mod_spec.image_tile_size_factor
+                    width = mod_data.shape[2] // mod_spec.image_tile_size_factor
+                    dtype = mod_data.dtype
+                    device = mod_data.device
+                    break
+
+        # Process all supported modalities
+        for modality in self.supported_modality_names:
+            if modality in available_modalities:
+                # Modality is present - process normally
+                modality_tokens, modality_masks = self.apply_embedding_to_modality(
+                    modality, input_data, patch_size, fast_pass
+                )
+            else:
+                # Modality is missing - create fake inputs with all-MISSING masks
+                # This ensures encoder parameters are touched for distributed sync
+                if height is None or width is None:
+                    # If no spatial modality found, use default dimensions
+                    # This shouldn't happen in practice but provides a fallback
+                    height, width = 16, 16
+                modality_tokens, modality_masks = self._create_fake_modality_input(
+                    modality=modality,
+                    batch_size=batch_size,
+                    height=height,
+                    width=width,
+                    time=time,
+                    patch_size=patch_size,
+                    device=device,
+                    dtype=dtype,
+                )
+
             output_dict[modality] = modality_tokens
             modality_mask_name = input_data.get_masked_modality_name(modality)
             output_dict[modality_mask_name] = modality_masks
+
         return output_dict
 
 
