@@ -9,6 +9,7 @@ import torch
 from torch.utils.data import default_collate
 
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
+from olmoearth_pretrain.data.constants import Modality
 
 
 def eval_collate_fn(
@@ -42,7 +43,7 @@ def eval_collate_fn_variable_time(
             val = getattr(s, modality)
             if val is not None and val.ndim == 4:  # (H, W, T, C)
                 max_t = max(max_t, val.shape[2])
-
+    print(f"Max temporal length: {max_t}")
     # Pad each sample
     padded_dicts = []
     for s in samples:
@@ -92,6 +93,10 @@ def eval_collate_fn_variable_time(
 
         padded_dicts.append(padded)
 
+    # print out all the padded sizes for all the keys
+    for padded in padded_dicts:
+        for modality in padded:
+            print(f"Modality: {modality}, Shape: {padded[modality].shape}")
     collated_sample = default_collate(padded_dicts)
     collated_target = default_collate(list(targets))
     return MaskedOlmoEarthSample(**collated_sample), collated_target

@@ -308,6 +308,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         # Build rslearn ModelDataset for the split
         print(f"Building rslearn ModelDataset for {ds_path}")
         dataset = RslearnDataset(UPath(ds_path))
+        # print the pad size
+        print(f"Pad size: {pad_size}")
         self.dataset = build_rslearn_model_dataset(
             rslearn_dataset=dataset,
             rslearn_dataset_groups=ds_groups,
@@ -417,7 +419,7 @@ class RslearnToOlmoEarthDataset(Dataset):
                     maxs=modality_stats["maxs"],
                     method=self.norm_method,
                 )
-
+            print(f"x shape: {x.shape} for modality {modality} after normalization")
             sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
 
         sample_dict["timestamps"] = self.timestamps
