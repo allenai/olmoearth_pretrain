@@ -324,6 +324,8 @@ class ModalityPatchDiscriminationLossNew(Loss):
             # TODO: Skip unqueeze and the for loop when mask_other_samples is True
             pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
             target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            pred = pred.float()
+            target = target.float()
             bs, nt, _ = pred.shape
 
             if self.pred2unit:
