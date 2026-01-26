@@ -296,18 +296,22 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
     ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
+            # Use precomputed max_encoder_seqlen from dataloader (avoids CUDA sync)
             latent, decoded, _, reconstructed, extra_metrics = self.model(
-                batch, patch_size
+                batch, patch_size, max_encoder_seqlen=batch.max_encoder_seqlen
             )
 
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
+                # Target encoder uses unmasked batch
+                unmasked_batch = batch.unmask()
                 output_dict = self.model.target_encoder.forward(
-                    batch.unmask(),
+                    unmasked_batch,
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
+                    max_encoder_seqlen=batch.max_target_encoder_seqlen,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
             loss = self.loss_fn(decoded, target_output)

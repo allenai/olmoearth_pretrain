@@ -397,7 +397,14 @@ class GalileoTrainModule(OlmoEarthTrainModule):
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            output_dict = self.model(batch_a, batch_b, patch_size)
+            # Use precomputed max_encoder_seqlen from dataloader (avoids CUDA sync)
+            output_dict = self.model(
+                batch_a,
+                batch_b,
+                patch_size,
+                max_encoder_seqlen_a=batch_a.max_encoder_seqlen,
+                max_encoder_seqlen_b=batch_b.max_encoder_seqlen,
+            )
             latent_a, decoded_a, latent_projected_and_pooled_a, reconstructed_a = (
                 output_dict["a"]
             )
@@ -407,16 +414,21 @@ class GalileoTrainModule(OlmoEarthTrainModule):
 
             with torch.no_grad():
                 logger.info("target encoder running here")
+                # Target encoder uses unmasked batches
+                unmasked_a = batch_a.unmask()
+                unmasked_b = batch_b.unmask()
                 output_dict = self.model.target_encoder.forward(
-                    batch_a.unmask(),
+                    unmasked_a,
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_a,
+                    max_encoder_seqlen=batch_a.max_target_encoder_seqlen,
                 )
                 target_output_a, _, _ = unpack_encoder_output(output_dict)
                 output_dict = self.model.target_encoder.forward(
-                    batch_b.unmask(),
+                    unmasked_b,
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_b,
+                    max_encoder_seqlen=batch_b.max_target_encoder_seqlen,
                 )
                 target_output_b, _, _ = unpack_encoder_output(output_dict)
 

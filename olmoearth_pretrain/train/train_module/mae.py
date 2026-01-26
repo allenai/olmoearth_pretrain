@@ -182,7 +182,10 @@ class MAETrainModule(OlmoEarthTrainModule):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass of the model."""
         with self._model_forward_context():
-            latent, decoded, reconstructed = self.model(x, patch_size=patch_size)
+            # Use precomputed max_encoder_seqlen from dataloader (avoids CUDA sync)
+            latent, decoded, reconstructed = self.model(
+                x, patch_size=patch_size, max_encoder_seqlen=x.max_encoder_seqlen
+            )
 
             loss = torch.zeros([], device=self.device)
             if self.mae_loss and reconstructed is not None:
@@ -190,10 +193,13 @@ class MAETrainModule(OlmoEarthTrainModule):
             if self.latent_mim_loss and decoded is not None:
                 with torch.no_grad():
                     logger.info("Target Encoder forward pass...")
+                    # Target encoder uses unmasked batch
+                    unmasked_x = x.unmask()
                     output_dict = self.model.encoder.forward(
-                        x.unmask(),
+                        unmasked_x,
                         patch_size=patch_size,
                         token_exit_cfg=self.token_exit_cfg,
+                        max_encoder_seqlen=x.max_target_encoder_seqlen,
                     )
                     target_output, _, _ = unpack_encoder_output(output_dict)
                 loss += self.latent_mim_loss.compute(decoded, target_output)
