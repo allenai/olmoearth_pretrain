@@ -313,55 +313,55 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 (standard_hw, standard_hw, 12, 2), dtype=np.float32
             )
             output_dict[Modality.SENTINEL1.name] = mock_sentinel1
-        if Modality.WORLDCOVER.name in self.dataset.training_modalities:
-            mock_worldcover = rng.random(
-                (standard_hw, standard_hw, 1, 1), dtype=np.float32
-            )
-            output_dict["worldcover"] = mock_worldcover
-        if Modality.LATLON.name in self.dataset.training_modalities:
-            mock_latlon = rng.random((2,), dtype=np.float32)
-            output_dict["latlon"] = mock_latlon
-        if Modality.OPENSTREETMAP_RASTER.name in self.dataset.training_modalities:
-            mock_openstreetmap_raster = rng.random(
-                (standard_hw, standard_hw, 1, 30), dtype=np.float32
-            )
-            output_dict["openstreetmap_raster"] = mock_openstreetmap_raster
-        if Modality.SRTM.name in self.dataset.training_modalities:
-            mock_srtm = rng.random((standard_hw, standard_hw, 1, 1), dtype=np.float32)
-            output_dict["srtm"] = mock_srtm
+        # if Modality.WORLDCOVER.name in self.dataset.training_modalities:
+        #     mock_worldcover = rng.random(
+        #         (standard_hw, standard_hw, 1, 1), dtype=np.float32
+        #     )
+        #     output_dict["worldcover"] = mock_worldcover
+        # if Modality.LATLON.name in self.dataset.training_modalities:
+        #     mock_latlon = rng.random((2,), dtype=np.float32)
+        #     output_dict["latlon"] = mock_latlon
+        # if Modality.OPENSTREETMAP_RASTER.name in self.dataset.training_modalities:
+        #     mock_openstreetmap_raster = rng.random(
+        #         (standard_hw, standard_hw, 1, 30), dtype=np.float32
+        #     )
+        #     output_dict["openstreetmap_raster"] = mock_openstreetmap_raster
+        # if Modality.SRTM.name in self.dataset.training_modalities:
+        #     mock_srtm = rng.random((standard_hw, standard_hw, 1, 1), dtype=np.float32)
+        #     output_dict["srtm"] = mock_srtm
         if Modality.LANDSAT.name in self.dataset.training_modalities:
             mock_landsat = rng.random(
                 (standard_hw, standard_hw, 12, Modality.LANDSAT.num_bands),
                 dtype=np.float32,
             )
             output_dict["landsat"] = mock_landsat
-        if Modality.GSE.name in self.dataset.training_modalities:
-            mock_gse = rng.random(
-                (standard_hw, standard_hw, 1, Modality.GSE.num_bands), dtype=np.float32
-            )
-            output_dict["gse"] = mock_gse
-        if Modality.CDL.name in self.dataset.training_modalities:
-            mock_cdl = rng.random(
-                (standard_hw, standard_hw, 1, Modality.CDL.num_bands), dtype=np.float32
-            )
-            output_dict["cdl"] = mock_cdl
-        if Modality.WORLDPOP.name in self.dataset.training_modalities:
-            mock_worldpop = rng.random(
-                (standard_hw, standard_hw, 1, Modality.WORLDPOP.num_bands),
-                dtype=np.float32,
-            )
-            output_dict["worldpop"] = mock_worldpop
-        if Modality.WRI_CANOPY_HEIGHT_MAP.name in self.dataset.training_modalities:
-            mock_wri_canopy_height_map = rng.random(
-                (standard_hw, standard_hw, 1, Modality.WRI_CANOPY_HEIGHT_MAP.num_bands),
-                dtype=np.float32,
-            )
-            output_dict["wri_canopy_height_map"] = mock_wri_canopy_height_map
-        if Modality.ERA5_10.name in self.dataset.training_modalities:
-            mock_era5_10 = rng.random(
-                (12, Modality.ERA5_10.num_bands), dtype=np.float32
-            )
-            output_dict["era5_10"] = mock_era5_10
+        # if Modality.GSE.name in self.dataset.training_modalities:
+        #     mock_gse = rng.random(
+        #         (standard_hw, standard_hw, 1, Modality.GSE.num_bands), dtype=np.float32
+        #     )
+        #     output_dict["gse"] = mock_gse
+        # if Modality.CDL.name in self.dataset.training_modalities:
+        #     mock_cdl = rng.random(
+        #         (standard_hw, standard_hw, 1, Modality.CDL.num_bands), dtype=np.float32
+        #     )
+        #     output_dict["cdl"] = mock_cdl
+        # if Modality.WORLDPOP.name in self.dataset.training_modalities:
+        #     mock_worldpop = rng.random(
+        #         (standard_hw, standard_hw, 1, Modality.WORLDPOP.num_bands),
+        #         dtype=np.float32,
+        #     )
+        #     output_dict["worldpop"] = mock_worldpop
+        # if Modality.WRI_CANOPY_HEIGHT_MAP.name in self.dataset.training_modalities:
+        #     mock_wri_canopy_height_map = rng.random(
+        #         (standard_hw, standard_hw, 1, Modality.WRI_CANOPY_HEIGHT_MAP.num_bands),
+        #         dtype=np.float32,
+        #     )
+        #     output_dict["wri_canopy_height_map"] = mock_wri_canopy_height_map
+        # if Modality.ERA5_10.name in self.dataset.training_modalities:
+        #     mock_era5_10 = rng.random(
+        #         (12, Modality.ERA5_10.num_bands), dtype=np.float32
+        #     )
+        #     output_dict["era5_10"] = mock_era5_10
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
