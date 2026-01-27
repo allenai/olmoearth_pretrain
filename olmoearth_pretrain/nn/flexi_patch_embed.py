@@ -5,13 +5,15 @@ by https://github.com/bwconrad/flexivit/
 """
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
+import numpy as np
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from torch import Tensor
+from torch import Tensor, vmap
 
 from olmoearth_pretrain.data.constants import ModalitySpec
 
@@ -31,6 +33,8 @@ class FlexiPatchEmbed(nn.Module):
         bias: bool = True,
         interpolation: str = "bicubic",
         antialias: bool = True,
+        use_pseudoinverse: bool = False,
+        patch_size_seq: Sequence[int] = (1, 2, 3, 4, 5, 6, 7, 8),
     ) -> None:
         """2D image to patch embedding w/ flexible patch sizes.
 
@@ -45,7 +49,11 @@ class FlexiPatchEmbed(nn.Module):
             norm_layer: Optional normalization layer
             bias: Whether to use bias in convolution
             interpolation: Resize interpolation type
-            antialias: Whether to apply antialiasing resizing (TODO: Add a link or more info)
+            antialias: Whether to apply antialiasing resizing
+            use_pseudoinverse: If True, use pseudoinverse to resize patch embedding weights
+                instead of resizing the input image. This preserves more information.
+            patch_size_seq: Sequence of patch sizes to precompute pseudoinverse matrices for.
+                Only used when use_pseudoinverse=True.
         """
         super().__init__()
 
@@ -68,6 +76,84 @@ class FlexiPatchEmbed(nn.Module):
         # Flexi specific attributes
         self.interpolation = interpolation
         self.antialias = antialias
+        self.use_pseudoinverse = use_pseudoinverse
+        self.patch_size_seq = patch_size_seq
+
+        # Pre-calculate pinvs for pseudoinverse resizing
+        if self.use_pseudoinverse:
+            self.pinvs: dict[tuple[int, int], Tensor] = self._cache_pinvs()
+        else:
+            self.pinvs = {}
+
+    def _cache_pinvs(self) -> dict[tuple[int, int], Tensor]:
+        """Pre-calculate all pinv matrices for patch sizes in patch_size_seq."""
+        pinvs = {}
+        for ps in self.patch_size_seq:
+            # Account for modality's image_tile_size_factor
+            actual_ps = ps * self.modality_spec.image_tile_size_factor
+            tuple_ps = self.to_2tuple(actual_ps)
+            if tuple_ps != self.patch_size:
+                pinvs[tuple_ps] = self._calculate_pinv(self.patch_size, tuple_ps)
+        return pinvs
+
+    def _resize_for_pinv(self, x: Tensor, shape: tuple[int, int]) -> Tensor:
+        """Resize tensor for pinv calculation."""
+        x_resized = F.interpolate(
+            x[None, None, ...],
+            shape,
+            mode=self.interpolation,
+            antialias=self.antialias,
+        )
+        return x_resized[0, 0, ...]
+
+    def _calculate_pinv(
+        self, old_shape: tuple[int, int], new_shape: tuple[int, int]
+    ) -> Tensor:
+        """Calculate pseudoinverse matrix for resizing from old_shape to new_shape.
+
+        Creates a resize matrix by applying interpolation to basis vectors,
+        then computes its pseudoinverse.
+        """
+        mat = []
+        for i in range(int(np.prod(old_shape))):
+            basis_vec = torch.zeros(old_shape)
+            basis_vec[np.unravel_index(i, old_shape)] = 1.0
+            mat.append(self._resize_for_pinv(basis_vec, new_shape).reshape(-1))
+        resize_matrix = torch.stack(mat)
+        return torch.linalg.pinv(resize_matrix)
+
+    def resize_patch_embed(
+        self, patch_embed: Tensor, new_patch_size: tuple[int, int]
+    ) -> Tensor:
+        """Resize patch_embed to target resolution via pseudo-inverse resizing.
+
+        Args:
+            patch_embed: Original patch embedding weights [out_ch, in_ch, H, W]
+            new_patch_size: Target patch size (H', W')
+
+        Returns:
+            Resized patch embedding weights [out_ch, in_ch, H', W']
+        """
+        # Return original kernel if no resize is necessary
+        if self.patch_size == new_patch_size:
+            return patch_embed
+
+        # Get or calculate pseudo-inverse of resize matrix
+        if new_patch_size not in self.pinvs:
+            self.pinvs[new_patch_size] = self._calculate_pinv(
+                self.patch_size, new_patch_size
+            )
+        pinv = self.pinvs[new_patch_size].to(device=patch_embed.device)
+
+        def resample_patch_embed(patch_embed: Tensor) -> Tensor:
+            h, w = new_patch_size
+            resampled_kernel = pinv @ patch_embed.reshape(-1)
+            return rearrange(resampled_kernel, "(h w) -> h w", h=h, w=w)
+
+        # Use vmap for efficient batched application over out_ch and in_ch dims
+        v_resample_patch_embed = vmap(vmap(resample_patch_embed, 0, 0), 1, 1)
+
+        return v_resample_patch_embed(patch_embed)
 
     @staticmethod
     def to_2tuple(x: Any) -> Any:
@@ -128,8 +214,17 @@ class FlexiPatchEmbed(nn.Module):
         assert isinstance(patch_size, tuple) and len(patch_size) == 2, (
             "patch_size must be a 2-tuple"
         )
-        # Resize input
-        if patch_size != self.patch_size:
+
+        # Apply patch embedding
+        if patch_size == self.patch_size:
+            # Use original weights directly
+            x = self.proj(x)
+        elif self.use_pseudoinverse:
+            # Resize weights using pseudoinverse, then apply conv
+            weight = self.resize_patch_embed(self.proj.weight, patch_size)
+            x = F.conv2d(x, weight, bias=self.proj.bias, stride=patch_size)
+        else:
+            # Original approach: resize input image, then apply conv
             shape = x.shape[-2:]
             new_shape = (
                 shape[0] // patch_size[0] * self.patch_size[0],
@@ -141,8 +236,8 @@ class FlexiPatchEmbed(nn.Module):
                 mode=self.interpolation,
                 antialias=self.antialias,
             )
-        # Apply conv with resized weights
-        x = self.proj(x)
+            x = self.proj(x)
+
         # At this point x has embedding dim sized channel dimension
         if has_time_dimension:
             _, d, h, w = x.shape

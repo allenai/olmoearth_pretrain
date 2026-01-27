@@ -371,6 +371,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         supported_modality_names: list[str],
         max_patch_size: int,
         embedding_size: int,
+        use_pseudoinverse: bool = False,
     ):
         """Initialize the patch embeddings.
 
@@ -379,11 +380,14 @@ class MultiModalPatchEmbeddings(nn.Module):
                 instantiation supports
             max_patch_size: Maximum size of patches
             embedding_size: Size of embeddings
+            use_pseudoinverse: If True, use pseudoinverse to resize patch embedding
+                weights instead of resizing input images.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
         self.supported_modality_names = supported_modality_names
+        self.use_pseudoinverse = use_pseudoinverse
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -445,6 +449,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                         embedding_size=self.embedding_size,
                         patch_size_at_16=self.max_patch_size,
                         modality_spec=modality_spec,
+                        use_pseudoinverse=self.use_pseudoinverse,
                     )
                     for idx, channel_set_idxs in enumerate(
                         modality_spec.bandsets_as_indices()
@@ -1197,6 +1202,7 @@ class Encoder(FlexiVitBase):
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
+        use_pseudoinverse: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1222,6 +1228,8 @@ class Encoder(FlexiVitBase):
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
+            use_pseudoinverse: If True, use pseudoinverse to resize patch embedding
+                weights instead of resizing input images.
         """
         super().__init__(
             embedding_size=embedding_size,
@@ -1250,6 +1258,7 @@ class Encoder(FlexiVitBase):
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
+            use_pseudoinverse=use_pseudoinverse,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -2110,6 +2119,7 @@ class EncoderConfig(Config):
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
     log_token_norm_stats: bool = False
+    use_pseudoinverse: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
