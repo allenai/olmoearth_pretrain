@@ -561,6 +561,8 @@ class MultiModalPatchEmbeddings(nn.Module):
 
         Returns data in full modality format (all bands, mask with bandset dim)
         so it can be processed by patchify_modality_bandset the same way as real data.
+        This is necessary to ensure that the encoder parameters are touched on all ranks during distributed training,
+        avoiding NCCL sync errors when a modality is entirely missing from a batch on some ranks when using fsdp.
 
         Args:
             modality: Name of the modality to create fake inputs for
