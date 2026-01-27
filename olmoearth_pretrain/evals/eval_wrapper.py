@@ -27,6 +27,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
     PoolingType,
     TokensAndMasks,
 )
+from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoder
 from olmoearth_pretrain.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from olmoearth_pretrain.nn.st_model import STBase
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
@@ -401,7 +402,7 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     Returns:
         The appropriate eval wrapper for the given model.
     """
-    if isinstance(model, FlexiVitBase) or isinstance(model, STBase):
+    if isinstance(model, FlexiVitBase) or isinstance(model, STBase) or isinstance(model, APTEncoder ):
         logger.info("Using OlmoEarthEvalWrapper")
         return OlmoEarthEvalWrapper(model=model, **kwargs)
     elif isinstance(model, Panopticon):

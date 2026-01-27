@@ -90,6 +90,9 @@ class DownstreamTaskConfig:
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
+    # APT (Adaptive Patch Transformers) - if True, uses adaptive patching
+    use_apt: bool = False
+    apt_modality: str = "sentinel2_l2a"  # Which modality to apply APT to
 
 
 class DownstreamEvaluator:
@@ -146,6 +149,8 @@ class DownstreamEvaluator:
         self.select_final_test_miou_based_on_epoch_of_max_val_miou = (
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
+        self.use_apt = task.use_apt
+        self.apt_modality = task.apt_modality
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -263,6 +268,22 @@ class DownstreamEvaluator:
                 f"No patch size found from model for {self.dataset}, using task patch size {self.patch_size}"
             )
 
+        # Wrap model with APT if enabled (use finetune config with masking disabled)
+        if self.use_apt:
+            from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoder
+            from olmoearth_pretrain.nn.apt.config import APTConfig
+
+            apt_config = APTConfig.default_s2_finetune_config()
+            model = APTEncoder(
+                encoder=model,
+                apt_config=apt_config,
+                apt_modality=self.apt_modality,
+            )
+            logger.info(
+                f"APT enabled for modality: {self.apt_modality}, "
+                f"masking disabled: {apt_config.disable_masking}"
+            )
+
         # Superset of the kwargs the wrapper may need
         wrapper_kwargs = {
             "task_type": self.config.task_type,
@@ -343,6 +364,57 @@ class DownstreamEvaluator:
         )
         return best_checkpoint_path
 
+    def _get_local_model(self) -> torch.nn.Module:
+        """Get a local (non-FSDP) version of the model for evaluation.
+
+        This creates a fresh model from the config and loads the state dict
+        from the FSDP model, avoiding all the DTensor/FSDP compatibility issues.
+        """
+        import json
+
+        import torch.distributed.checkpoint.state_dict as dist_cp_sd
+
+        from olmoearth_pretrain.config import Config
+
+        # Get the FSDP model
+        if hasattr(self.trainer.train_module.model, "encoder"):
+            fsdp_model = self.trainer.train_module.model.encoder
+        else:
+            fsdp_model = self.trainer.train_module.model
+
+        # Build a fresh model from the config
+        load_path = self.trainer.load_path
+        if load_path is None:
+            raise ValueError("No load_path set on trainer, cannot create local model")
+
+        with open(f"{load_path}/config.json") as f:
+            config_dict = json.load(f)
+            model_config = Config.from_dict(config_dict["model"])
+
+        # Build fresh model (no FSDP wrapping)
+        local_model = model_config.build()
+
+        # Get encoder if the full model was built
+        if hasattr(local_model, "encoder"):
+            local_model = local_model.encoder
+
+        # Get the full state dict from the FSDP model
+        sd_options = dist_cp_sd.StateDictOptions(
+            full_state_dict=True,
+            cpu_offload=True,
+        )
+        fsdp_state_dict = dist_cp_sd.get_model_state_dict(fsdp_model, options=sd_options)
+
+        # Load into the fresh model
+        local_model.load_state_dict(fsdp_state_dict, strict=True)
+
+        # Move to the right device
+        device = next(fsdp_model.parameters()).device
+        local_model = local_model.to(device)
+
+        logger.info("Created local (non-FSDP) model for evaluation")
+        return local_model
+
     def _val_finetune(self) -> dict[str, Any]:
         """Validate the model using finetuning."""
         logger.info(f"Validating {self.dataset} with finetune")
@@ -357,11 +429,30 @@ class DownstreamEvaluator:
         else:
             test_loader = None
 
-        # Use encoder if present
-        if hasattr(self.trainer.train_module.model, "encoder"):
-            model = self.trainer.train_module.model.encoder
+        # Get model - use local (non-FSDP) version for APT to avoid DTensor issues
+        if self.use_apt:
+            from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoder
+            from olmoearth_pretrain.nn.apt.config import APTConfig
+
+            # Get a clean local model (no FSDP/DTensor)
+            model = self._get_local_model()
+
+            apt_config = APTConfig.default_s2_finetune_config()
+            model = APTEncoder(
+                encoder=model,
+                apt_config=apt_config,
+                apt_modality=self.apt_modality,
+            )
+            logger.info(
+                f"APT enabled for finetune, modality: {self.apt_modality}, "
+                f"masking disabled: {apt_config.disable_masking}"
+            )
         else:
-            model = self.trainer.train_module.model
+            # Use encoder if present (original FSDP model)
+            if hasattr(self.trainer.train_module.model, "encoder"):
+                model = self.trainer.train_module.model.encoder
+            else:
+                model = self.trainer.train_module.model
 
         original_state = {
             k: v.detach().cpu().clone() for k, v in model.state_dict().items()

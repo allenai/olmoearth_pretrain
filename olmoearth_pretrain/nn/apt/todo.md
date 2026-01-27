@@ -14,4 +14,7 @@
 
 # THoughts
 - do we need the patch descriptor class
--  TOken counter and visualizer
+
+# Done
+- [x] Token counter/reduction logging in partitioner (use `log_stats=True` in `partition()` or `partition_temporal()`)
+- [x] Logs: token count, uniform baseline, reduction %, tokens by scale

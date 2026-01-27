@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any
 
 from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data.constants import Modality
 
 
 class ScorerType(Enum):
@@ -68,9 +69,9 @@ class APTPartitionerConfig(Config):
                    Length should be num_scales - 1.
     """
 
-    base_patch_size: int = 16
-    num_scales: int = 3
-    thresholds: list[float] = field(default_factory=lambda: [5.5, 4.0])
+    base_patch_size: int = 4  # Smallest patch: 4px
+    num_scales: int = 2  # Scales: 4, 8
+    thresholds: list[float] = field(default_factory=lambda: [2.0])  # Single threshold for 8→4 split
 
     def validate(self) -> None:
         """Validate configuration."""
@@ -99,7 +100,7 @@ class APTPartitionerConfig(Config):
             thresholds=self.thresholds,
         )
 
-
+#TODO: THis should ne fixed ased on the partitioner config
 @dataclass
 class APTEmbedConfig(Config):
     """Configuration for APT adaptive patch embedding.
@@ -111,8 +112,8 @@ class APTEmbedConfig(Config):
     """
 
     embedding_size: int = 768
-    base_patch_size: int = 16
-    num_scales: int = 3
+    base_patch_size: int = 4  # Smallest patch: 4px
+    num_scales: int = 2  # Scales: 4, 8
 
     def build(self, base_patch_embed):
         """Build the adaptive embed instance.
@@ -177,7 +178,7 @@ class APTMaskingConfig(Config):
     apt_modalities: list[str] = field(default_factory=lambda: ["sentinel2_l2a"])
     encode_ratio: float = 0.5
     decode_ratio: float = 0.5
-    base_patch_size: int = 16
+    base_patch_size: int = 4  # Match APT base patch size
     base_strategy_kwargs: dict = field(default_factory=dict)
 
     def build(self):
@@ -218,6 +219,7 @@ class APTConfig(Config):
     masking: APTMaskingConfig = field(default_factory=APTMaskingConfig)
     apt_modalities: list[str] = field(default_factory=lambda: ["sentinel2_l2a"])
     enabled: bool = True
+    disable_masking: bool = False  # If True, use all tokens (for finetuning)
 
     def validate(self) -> None:
         """Validate the complete configuration."""
@@ -271,18 +273,18 @@ class APTConfig(Config):
             scorer=APTScorerConfig(
                 scorer_type=ScorerType.ENTROPY,
                 num_bins=32,
-                bands=(0, 1, 2),  # B02, B03, B04 (RGB-equivalent)
+                bands=[Modality.SENTINEL2_L2A.band_order.index(band) for band in ["B02", "B03", "B04"]], # B02, B03, B04 (RGB-equivalent)
                 normalize=True,
             ),
             partitioner=APTPartitionerConfig(
-                base_patch_size=16,
-                num_scales=3,  # 16, 32, 64
-                thresholds=[5.5, 4.0],
+                base_patch_size=4,  # Smallest patch: 4px
+                num_scales=2,  # Scales: 4, 8
+                thresholds=[.8],  # Single threshold for 8→4 split
             ),
             embed=APTEmbedConfig(
                 embedding_size=768,
-                base_patch_size=16,
-                num_scales=3,
+                base_patch_size=4,
+                num_scales=2,
             ),
             transform=APTTransformConfig(modality_name="sentinel2_l2a"),
             masking=APTMaskingConfig(
@@ -291,3 +293,17 @@ class APTConfig(Config):
             apt_modalities=["sentinel2_l2a"],
             enabled=True,
         )
+
+    @classmethod
+    def default_s2_finetune_config(cls) -> "APTConfig":
+        """Get default configuration for Sentinel-2 finetuning (no masking).
+
+        Returns:
+            APTConfig configured for S2 with masking disabled
+        """
+        config = cls.default_s2_config()
+        config.disable_masking = True
+        # For finetuning, use all tokens (encode_ratio=1.0)
+        config.masking.encode_ratio = 1.0
+        config.masking.decode_ratio = 0.0
+        return config

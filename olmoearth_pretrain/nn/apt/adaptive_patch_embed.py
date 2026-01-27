@@ -140,7 +140,10 @@ class AdaptivePatchEmbed(nn.Module):
         """
         # base_patch_embed expects [B, H, W, C] and returns [B, 1, 1, D]
         # for a single-patch input
-        embedded = self.base_patch_embed(patch)
+        # Pass patch_size to tell FlexiPatchEmbed what size our input patches are
+        # The input H, W should match base_patch_size
+        input_size = patch.shape[1]  # H dimension
+        embedded = self.base_patch_embed(patch, patch_size=input_size)
 
         # Flatten spatial dims
         if embedded.ndim == 4:

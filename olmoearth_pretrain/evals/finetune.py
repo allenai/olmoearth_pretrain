@@ -248,7 +248,8 @@ def run_finetune_eval(
         _, _ = ft(_to_device(sample_batch, device), label.to(device))
 
     # Freeze the backbone for the first 20% of the epochs
-    freeze_epochs = math.ceil(0.2 * epochs) if epochs > 0 else 0
+    # Set to 0 for full finetuning from the start
+    freeze_epochs = 0  # math.ceil(0.2 * epochs) if epochs > 0 else 0
     backbone_unfrozen = freeze_epochs == 0
     if not backbone_unfrozen:
         _set_backbone_trainable(ft.backbone, False)

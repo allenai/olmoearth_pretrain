@@ -92,8 +92,7 @@ class QuadtreePartitioner:
         self.num_scales = num_scales
 
         if thresholds is None:
-            # Default thresholds from APT paper, adjusted for remote sensing
-            thresholds = [5.5] * (num_scales - 1)
+            raise ValueError("Thresholds must be provided")
         if len(thresholds) != num_scales - 1:
             raise ValueError(
                 f"Expected {num_scales - 1} thresholds, got {len(thresholds)}"
@@ -107,12 +106,14 @@ class QuadtreePartitioner:
         self,
         image: np.ndarray,
         timestep: int | None = None,
+        log_stats: bool = False,
     ) -> list[PatchDescriptor]:
         """Partition an image into adaptive patches.
 
         Args:
             image: Image with shape [H, W, C]
             timestep: Optional timestep index for temporal data
+            log_stats: Whether to log token count and reduction ratio
 
         Returns:
             List of PatchDescriptor objects describing the partition
@@ -144,7 +145,36 @@ class QuadtreePartitioner:
                     timestep=timestep,
                 )
 
+        if log_stats:
+            self._log_partition_stats(patches, (h, w))
+
         return patches
+
+    def _log_partition_stats(
+        self, patches: list[PatchDescriptor], image_shape: tuple[int, int]
+    ) -> None:
+        """Log token count and reduction statistics.
+
+        Args:
+            patches: List of patch descriptors
+            image_shape: (H, W) of the image
+        """
+        token_count = self.get_token_count(patches)
+        reduction_ratio = self.get_reduction_ratio(patches, image_shape)
+        h, w = image_shape
+        uniform_tokens = (h // self.base_patch_size) * (w // self.base_patch_size)
+
+        # Count patches by scale
+        scale_counts = {}
+        for p in patches:
+            scale_counts[p.scale] = scale_counts.get(p.scale, 0) + 1
+
+        logger.info(
+            f"APT Partition Stats: "
+            f"tokens={token_count} (uniform would be {uniform_tokens}), "
+            f"reduction={1 - reduction_ratio:.1%}, "
+            f"by_scale={scale_counts}"
+        )
 
     def _partition_recursive(
         self,
@@ -219,11 +249,13 @@ class QuadtreePartitioner:
     def partition_temporal(
         self,
         image: np.ndarray,
+        log_stats: bool = False,
     ) -> list[list[PatchDescriptor]]:
         """Partition a temporal image stack.
 
         Args:
             image: Image with shape [H, W, T, C]
+            log_stats: Whether to log token count and reduction ratio
 
         Returns:
             List of patch descriptor lists, one per timestep
@@ -233,10 +265,51 @@ class QuadtreePartitioner:
 
         for ti in range(t):
             frame = image[:, :, ti, :]
-            patches = self.partition(frame, timestep=ti)
+            patches = self.partition(frame, timestep=ti, log_stats=False)
             all_patches.append(patches)
 
+        if log_stats:
+            self._log_temporal_partition_stats(all_patches, (h, w), t)
+
         return all_patches
+
+    def _log_temporal_partition_stats(
+        self,
+        all_patches: list[list[PatchDescriptor]],
+        image_shape: tuple[int, int],
+        num_timesteps: int,
+    ) -> None:
+        """Log token count and reduction statistics for temporal data.
+
+        Args:
+            all_patches: List of patch descriptor lists per timestep
+            image_shape: (H, W) of each frame
+            num_timesteps: Number of timesteps
+        """
+        total_tokens = sum(len(patches) for patches in all_patches)
+        h, w = image_shape
+        uniform_tokens_per_frame = (h // self.base_patch_size) * (
+            w // self.base_patch_size
+        )
+        uniform_tokens_total = uniform_tokens_per_frame * num_timesteps
+        reduction_ratio = total_tokens / uniform_tokens_total if uniform_tokens_total > 0 else 1.0
+
+        # Aggregate scale counts across all timesteps
+        scale_counts = {}
+        for patches in all_patches:
+            for p in patches:
+                scale_counts[p.scale] = scale_counts.get(p.scale, 0) + 1
+
+        avg_tokens_per_frame = total_tokens / num_timesteps if num_timesteps > 0 else 0
+
+        logger.info(
+            f"APT Temporal Partition Stats: "
+            f"total_tokens={total_tokens}, "
+            f"avg_per_frame={avg_tokens_per_frame:.1f} (uniform would be {uniform_tokens_per_frame}), "
+            f"reduction={1 - reduction_ratio:.1%}, "
+            f"timesteps={num_timesteps}, "
+            f"by_scale={scale_counts}"
+        )
 
     def get_token_count(self, patches: list[PatchDescriptor]) -> int:
         """Get total token count from patch descriptors.
