@@ -53,6 +53,7 @@ def return_modalities_from_dict(
     ]
 
 
+#TODO: THis is hacky and has lots of syncs and should probabaly be done on the masking side and passed
 def get_never_encoded_decoded_bandsets(
     input_data: "MaskedOlmoEarthSample",
     supported_modality_names: list[str],
