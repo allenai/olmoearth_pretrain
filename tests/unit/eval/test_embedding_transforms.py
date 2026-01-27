@@ -10,6 +10,8 @@ from olmoearth_pretrain.evals.embedding_transforms import (
 
 
 class TestQuantization:
+    """Tests for int8 quantization functions."""
+
     def test_roundtrip(self) -> None:
         """Verify quantize → dequantize preserves values approximately."""
         embeddings = torch.randn(100, 768)
@@ -22,6 +24,8 @@ class TestQuantization:
 
 
 class TestDimReduction:
+    """Tests for PCA dimensionality reduction."""
+
     def test_pca_shapes(self) -> None:
         """Verify PCA dimension reduction produces correct shapes."""
         train = torch.randn(500, 768)
