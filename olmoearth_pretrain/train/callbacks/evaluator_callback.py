@@ -35,6 +35,7 @@ from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
 from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
+from olmoearth_pretrain.nn.apt.config import APTConfig
 from olmoearth_pretrain.nn.flexi_vit import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
@@ -93,6 +94,7 @@ class DownstreamTaskConfig:
     # APT (Adaptive Patch Transformers) - if True, uses adaptive patching
     use_apt: bool = False
     apt_modality: str = "sentinel2_l2a"  # Which modality to apply APT to
+    apt_config: APTConfig | None = None  # APT config (uses default_s2_finetune_config if None)
 
 
 class DownstreamEvaluator:
@@ -151,6 +153,7 @@ class DownstreamEvaluator:
         )
         self.use_apt = task.use_apt
         self.apt_modality = task.apt_modality
+        self.apt_config = task.apt_config
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -271,9 +274,8 @@ class DownstreamEvaluator:
         # Wrap model with APT if enabled (use finetune config with masking disabled)
         if self.use_apt:
             from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoder
-            from olmoearth_pretrain.nn.apt.config import APTConfig
 
-            apt_config = APTConfig.default_s2_finetune_config()
+            apt_config = self.apt_config if self.apt_config is not None else APTConfig.default_s2_finetune_config()
             model = APTEncoder(
                 encoder=model,
                 apt_config=apt_config,
@@ -281,7 +283,9 @@ class DownstreamEvaluator:
             )
             logger.info(
                 f"APT enabled for modality: {self.apt_modality}, "
-                f"masking disabled: {apt_config.disable_masking}"
+                f"masking disabled: {apt_config.disable_masking}, "
+                f"thresholds: {apt_config.partitioner.thresholds}, "
+                f"num_scales: {apt_config.partitioner.num_scales}"
             )
 
         # Superset of the kwargs the wrapper may need
@@ -432,12 +436,11 @@ class DownstreamEvaluator:
         # Get model - use local (non-FSDP) version for APT to avoid DTensor issues
         if self.use_apt:
             from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoder
-            from olmoearth_pretrain.nn.apt.config import APTConfig
 
             # Get a clean local model (no FSDP/DTensor)
             model = self._get_local_model()
 
-            apt_config = APTConfig.default_s2_finetune_config()
+            apt_config = self.apt_config if self.apt_config is not None else APTConfig.default_s2_finetune_config()
             model = APTEncoder(
                 encoder=model,
                 apt_config=apt_config,
@@ -445,7 +448,9 @@ class DownstreamEvaluator:
             )
             logger.info(
                 f"APT enabled for finetune, modality: {self.apt_modality}, "
-                f"masking disabled: {apt_config.disable_masking}"
+                f"masking disabled: {apt_config.disable_masking}, "
+                f"thresholds: {apt_config.partitioner.thresholds}, "
+                f"num_scales: {apt_config.partitioner.num_scales}"
             )
         else:
             # Use encoder if present (original FSDP model)
