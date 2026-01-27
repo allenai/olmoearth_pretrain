@@ -19,7 +19,6 @@ import h5py
 import hdf5plugin  # noqa: F401
 import numpy as np
 import pandas as pd
-import torch
 from olmo_core.data.utils import get_rng
 from torch.utils.data import Dataset
 from upath import UPath
@@ -46,72 +45,6 @@ from olmoearth_pretrain.datatypes import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def collate_single_masked(
-    batch: list[tuple[int, MaskedOlmoEarthSample]],
-) -> tuple[int, MaskedOlmoEarthSample]:
-    """Collate function for single masked batches (LatentMIM, MAE).
-
-    Args:
-        batch: List of (patch_size, MaskedOlmoEarthSample) tuples.
-
-    Returns:
-        A tuple of (patch_size, collated MaskedOlmoEarthSample).
-    """
-
-    def stack_or_none(attr: str) -> torch.Tensor | None:
-        """Stack the tensors while handling None values."""
-        if getattr(batch[0][1], attr) is None:
-            return None
-        tensors = [getattr(sample, attr) for _, sample in batch]
-        return torch.stack(tensors, dim=0)
-
-    patch_size, batch_zero = batch[0]
-    sample_fields = list(batch_zero.as_dict(return_none=False).keys())
-
-    collated_dict = {field: stack_or_none(field) for field in sample_fields}
-    return patch_size, MaskedOlmoEarthSample(**collated_dict)
-
-
-def collate_double_masked(
-    batch: list[tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample]],
-) -> tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample]:
-    """Collate function for double masked batches (ContrastiveLatentMIM, Galileo).
-
-    Args:
-        batch: List of (patch_size, MaskedOlmoEarthSample_a, MaskedOlmoEarthSample_b) tuples.
-
-    Returns:
-        A tuple of (patch_size, collated MaskedOlmoEarthSample_a, collated MaskedOlmoEarthSample_b).
-    """
-
-    def stack_or_none_a(attr: str) -> torch.Tensor | None:
-        """Stack the tensors for view a while handling None values."""
-        if getattr(batch[0][1], attr) is None:
-            return None
-        tensors = [getattr(sample_a, attr) for _, sample_a, _ in batch]
-        return torch.stack(tensors, dim=0)
-
-    def stack_or_none_b(attr: str) -> torch.Tensor | None:
-        """Stack the tensors for view b while handling None values."""
-        if getattr(batch[0][2], attr) is None:
-            return None
-        tensors = [getattr(sample_b, attr) for _, _, sample_b in batch]
-        return torch.stack(tensors, dim=0)
-
-    patch_size, batch_zero_a, batch_zero_b = batch[0]
-    sample_fields_a = list(batch_zero_a.as_dict(return_none=False).keys())
-    sample_fields_b = list(batch_zero_b.as_dict(return_none=False).keys())
-
-    collated_dict_a = {field: stack_or_none_a(field) for field in sample_fields_a}
-    collated_dict_b = {field: stack_or_none_b(field) for field in sample_fields_b}
-
-    return (
-        patch_size,
-        MaskedOlmoEarthSample(**collated_dict_a),
-        MaskedOlmoEarthSample(**collated_dict_b),
-    )
 
 
 def collate_single_masked_batched(

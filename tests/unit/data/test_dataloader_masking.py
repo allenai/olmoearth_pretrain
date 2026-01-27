@@ -14,10 +14,8 @@ from olmoearth_pretrain.data.dataloader import (
 from olmoearth_pretrain.data.dataset import (
     OlmoEarthDataset,
     OlmoEarthSample,
-    collate_double_masked,
     collate_double_masked_batched,
     collate_olmoearth_pretrain,
-    collate_single_masked,
     collate_single_masked_batched,
 )
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
@@ -141,93 +139,6 @@ class TestMaskedOlmoEarthSampleToDevice:
         assert moved_sample.sentinel2_l2a_mask.device.type == "cpu"
         assert moved_sample.latlon.device.type == "cpu"
         assert moved_sample.timestamps.device.type == "cpu"
-
-
-class TestCollateSingleMasked:
-    """Tests for collate_single_masked function."""
-
-    def test_collate_single_masked_stacks_correctly(self) -> None:
-        """Test that collate_single_masked correctly stacks masked samples."""
-        sample1 = MaskedOlmoEarthSample(
-            sentinel2_l2a=torch.ones((8, 8, 12, 13)),
-            sentinel2_l2a_mask=torch.zeros((8, 8, 12, 13)),
-            latlon=torch.ones((2,)),
-            latlon_mask=torch.zeros((2,)),
-            timestamps=torch.ones((12, 3)),
-        )
-        sample2 = MaskedOlmoEarthSample(
-            sentinel2_l2a=torch.ones((8, 8, 12, 13)) * 2,
-            sentinel2_l2a_mask=torch.ones((8, 8, 12, 13)),
-            latlon=torch.ones((2,)) * 2,
-            latlon_mask=torch.ones((2,)),
-            timestamps=torch.ones((12, 3)) * 2,
-        )
-
-        batch = [(1, sample1), (1, sample2)]
-        patch_size, collated = collate_single_masked(batch)
-
-        assert patch_size == 1
-        assert collated.sentinel2_l2a is not None
-        assert collated.sentinel2_l2a_mask is not None
-        assert collated.latlon is not None
-        assert collated.sentinel2_l2a.shape == (2, 8, 8, 12, 13)
-        assert collated.sentinel2_l2a_mask.shape == (2, 8, 8, 12, 13)
-        assert collated.latlon.shape == (2, 2)
-        assert collated.timestamps.shape == (2, 12, 3)
-
-        # Check values are correct
-        assert sample1.sentinel2_l2a is not None
-        assert sample2.sentinel2_l2a is not None
-        assert collated.sentinel2_l2a[0].sum() == sample1.sentinel2_l2a.sum()
-        assert collated.sentinel2_l2a[1].sum() == sample2.sentinel2_l2a.sum()
-
-
-class TestCollateDoubleMasked:
-    """Tests for collate_double_masked function."""
-
-    def test_collate_double_masked_stacks_correctly(self) -> None:
-        """Test that collate_double_masked correctly stacks double masked samples."""
-        sample1_a = MaskedOlmoEarthSample(
-            sentinel2_l2a=torch.ones((8, 8, 12, 13)),
-            sentinel2_l2a_mask=torch.zeros((8, 8, 12, 13)),
-            latlon=torch.ones((2,)),
-            latlon_mask=torch.zeros((2,)),
-            timestamps=torch.ones((12, 3)),
-        )
-        sample1_b = MaskedOlmoEarthSample(
-            sentinel2_l2a=torch.ones((8, 8, 12, 13)) * 2,
-            sentinel2_l2a_mask=torch.ones((8, 8, 12, 13)),
-            latlon=torch.ones((2,)) * 2,
-            latlon_mask=torch.ones((2,)),
-            timestamps=torch.ones((12, 3)),
-        )
-        sample2_a = MaskedOlmoEarthSample(
-            sentinel2_l2a=torch.ones((8, 8, 12, 13)) * 3,
-            sentinel2_l2a_mask=torch.zeros((8, 8, 12, 13)),
-            latlon=torch.ones((2,)) * 3,
-            latlon_mask=torch.zeros((2,)),
-            timestamps=torch.ones((12, 3)),
-        )
-        sample2_b = MaskedOlmoEarthSample(
-            sentinel2_l2a=torch.ones((8, 8, 12, 13)) * 4,
-            sentinel2_l2a_mask=torch.ones((8, 8, 12, 13)),
-            latlon=torch.ones((2,)) * 4,
-            latlon_mask=torch.ones((2,)),
-            timestamps=torch.ones((12, 3)),
-        )
-
-        batch = [(1, sample1_a, sample1_b), (1, sample2_a, sample2_b)]
-        patch_size, collated_a, collated_b = collate_double_masked(batch)
-
-        assert patch_size == 1
-        assert collated_a.sentinel2_l2a is not None
-        assert collated_b.sentinel2_l2a is not None
-        assert collated_a.latlon is not None
-        assert collated_b.latlon is not None
-        assert collated_a.sentinel2_l2a.shape == (2, 8, 8, 12, 13)
-        assert collated_b.sentinel2_l2a.shape == (2, 8, 8, 12, 13)
-        assert collated_a.latlon.shape == (2, 2)
-        assert collated_b.latlon.shape == (2, 2)
 
 
 class TestDataLoaderConfigValidation:
