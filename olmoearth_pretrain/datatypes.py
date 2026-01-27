@@ -511,22 +511,6 @@ class OlmoEarthSample(NamedTuple):
                 output_dict[key] = torch.cat((v[1:], v[:1]), dim=0)
         return OlmoEarthSample(**output_dict)
 
-    def unsqueeze_batch(self) -> OlmoEarthSample:
-        """Add a batch dimension (dim 0) to all tensors.
-
-        This is useful when applying masking to a single sample, as masking
-        strategies expect batched input.
-
-        Returns:
-            A new OlmoEarthSample with batch dimension added to all tensors.
-        """
-        return OlmoEarthSample(
-            **{
-                key: val.unsqueeze(0) if isinstance(val, torch.Tensor) else val
-                for key, val in self.as_dict(ignore_nones=True).items()
-            }
-        )
-
 
 def collate_olmoearth_pretrain(
     batch: list[tuple[int, OlmoEarthSample]],
@@ -716,22 +700,6 @@ class MaskedOlmoEarthSample(NamedTuple):
         return MaskedOlmoEarthSample(
             **{
                 key: val.to(device, non_blocking=non_blocking)
-                for key, val in self.as_dict(return_none=False).items()
-            }
-        )
-
-    def squeeze_batch(self) -> MaskedOlmoEarthSample:
-        """Remove the batch dimension (dim 0) from all tensors.
-
-        This is useful after applying masking to a single sample that was
-        unsqueezed to add a batch dimension.
-
-        Returns:
-            A new MaskedOlmoEarthSample with batch dimension removed from all tensors.
-        """
-        return MaskedOlmoEarthSample(
-            **{
-                key: val.squeeze(0) if isinstance(val, torch.Tensor) else val
                 for key, val in self.as_dict(return_none=False).items()
             }
         )

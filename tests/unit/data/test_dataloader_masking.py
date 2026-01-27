@@ -22,51 +22,6 @@ from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.train.masking import MaskingConfig
 
 
-class TestOlmoEarthSampleUnsqueezeBatch:
-    """Tests for OlmoEarthSample.unsqueeze_batch() method."""
-
-    def test_unsqueeze_batch_adds_batch_dimension(self) -> None:
-        """Test that unsqueeze_batch adds a batch dimension to all tensors."""
-        sample = OlmoEarthSample(
-            sentinel2_l2a=torch.ones((8, 8, 12, 13)),
-            latlon=torch.tensor([0.5, 0.5]),
-            timestamps=torch.zeros((12, 3), dtype=torch.int32),
-        )
-
-        batched = sample.unsqueeze_batch()
-
-        assert batched.sentinel2_l2a is not None
-        assert batched.latlon is not None
-        assert batched.timestamps is not None
-        assert batched.sentinel2_l2a.shape == (1, 8, 8, 12, 13)
-        assert batched.latlon.shape == (1, 2)
-        assert batched.timestamps.shape == (1, 12, 3)
-
-
-class TestMaskedOlmoEarthSampleSqueezeBatch:
-    """Tests for MaskedOlmoEarthSample.squeeze_batch() method."""
-
-    def test_squeeze_batch_removes_batch_dimension(self) -> None:
-        """Test that squeeze_batch removes the batch dimension from all tensors."""
-        masked_sample = MaskedOlmoEarthSample(
-            sentinel2_l2a=torch.ones((1, 8, 8, 12, 13)),
-            sentinel2_l2a_mask=torch.ones((1, 8, 8, 12, 7)),
-            latlon=torch.tensor([[0.5, 0.5]]),
-            timestamps=torch.zeros((1, 12, 3), dtype=torch.int32),
-        )
-
-        squeezed = masked_sample.squeeze_batch()
-
-        assert squeezed.sentinel2_l2a is not None
-        assert squeezed.sentinel2_l2a_mask is not None
-        assert squeezed.latlon is not None
-        assert squeezed.timestamps is not None
-        assert squeezed.sentinel2_l2a.shape == (8, 8, 12, 13)
-        assert squeezed.sentinel2_l2a_mask.shape == (8, 8, 12, 7)
-        assert squeezed.latlon.shape == (2,)
-        assert squeezed.timestamps.shape == (12, 3)
-
-
 class TestMaskedOlmoEarthSampleToDevice:
     """Tests for MaskedOlmoEarthSample.to_device() method."""
 
