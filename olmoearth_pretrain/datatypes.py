@@ -158,6 +158,52 @@ class MaskedOlmoEarthSample(NamedTuple):
 
         return MaskedOlmoEarthSample(**masked_sample_dict)
 
+    def log_mask_counts(self, name: str = "") -> None:
+        """Print and log the counts of all mask values for all modality bandsets.
+
+        Args:
+            name: Optional name to identify this sample in the output.
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        header = f"=== Mask Value Counts{' for ' + name if name else ''} ==="
+        print(header)
+        logger.info(header)
+
+        mask_value_names = {v.value: v.name for v in MaskValue}
+
+        for modality in self.modalities:
+            mask_name = self.get_masked_modality_name(modality)
+            mask = getattr(self, mask_name, None)
+
+            if mask is None:
+                msg = f"  {modality}: mask is None"
+                print(msg)
+                logger.info(msg)
+                continue
+
+            # Mask shape: [..., num_band_sets] where last dim is bandset
+            num_bandsets = mask.shape[-1]
+
+            for bandset_idx in range(num_bandsets):
+                bandset_mask = mask[..., bandset_idx]
+                counts = {}
+                for mask_val in MaskValue:
+                    count = (bandset_mask == mask_val.value).sum().item()
+                    if count > 0:
+                        counts[mask_val.name] = count
+
+                total = bandset_mask.numel()
+                counts_str = ", ".join(f"{k}={v}" for k, v in counts.items())
+                msg = f"  {modality}[{bandset_idx}]: {counts_str} (total={total})"
+                print(msg)
+                logger.info(msg)
+
+        print("=" * len(header))
+        logger.info("=" * len(header))
+
     @classmethod
     def from_dict(cls, dict: dict[str, Any]) -> MaskedOlmoEarthSample:
         """Create a MaskedOlmoEarthSample from a dictionary, creating empty tensors for missing modalities.
