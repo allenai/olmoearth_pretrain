@@ -203,7 +203,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         name=common.run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
-        enabled=False,
+        enabled=True,
     )
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
 
