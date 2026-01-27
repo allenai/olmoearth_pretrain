@@ -1,37 +1,37 @@
-"""EuroSAT finetuning evaluation with tiny model.
+"""SO2Sat finetuning evaluation with tiny model.
 
-This script loads a pretrained tiny model and evaluates on EuroSAT with APT
+This script loads a pretrained tiny model and evaluates on SO2Sat with APT
 (Adaptive Patch Transformers) for adaptive patching based on image complexity.
 
 Usage:
     # Local evaluation with the tiny checkpoint
-    python scripts/official/apt/apt_eurosat_eval_tiny.py evaluate \
-        apt_eurosat_eval_tiny local \
+    python scripts/official/apt/apt_so2sat_eval_tiny.py evaluate \
+        apt_so2sat_eval_tiny local \
         --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000
 
     # On Beaker
-    python scripts/official/apt/apt_eurosat_eval_tiny.py launch \
-        apt_eurosat_eval_tiny ai2/saturn-cirrascale \
+    python scripts/official/apt/apt_so2sat_eval_tiny.py launch \
+        apt_so2sat_eval_tiny ai2/saturn-cirrascale \
         --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000
 
     # Override APT thresholds (list of floats, one per scale transition)
-    python scripts/official/apt/apt_eurosat_eval_tiny.py evaluate \
-        apt_eurosat_eval_tiny local \
+    python scripts/official/apt/apt_so2sat_eval_tiny.py evaluate \
+        apt_so2sat_eval_tiny local \
         --trainer.load_path=/path/to/checkpoint \
-        --trainer.callbacks.downstream_evaluator.tasks.m-eurosat-finetune-apt.apt_config.partitioner.thresholds=[0.5]
+        --trainer.callbacks.downstream_evaluator.tasks.so2sat_finetune_apt.apt_config.partitioner.thresholds=[0.5]
 
     # Override APT num_scales (number of patch size scales: 1=base only, 2=base+2x, etc.)
-    python scripts/official/apt/apt_eurosat_eval_tiny.py evaluate \
-        apt_eurosat_eval_tiny local \
+    python scripts/official/apt/apt_so2sat_eval_tiny.py evaluate \
+        apt_so2sat_eval_tiny local \
         --trainer.load_path=/path/to/checkpoint \
-        --trainer.callbacks.downstream_evaluator.tasks.m-eurosat-finetune-apt.apt_config.partitioner.num_scales=3 \
-        --trainer.callbacks.downstream_evaluator.tasks.m-eurosat-finetune-apt.apt_config.partitioner.thresholds=[0.5,1.0]
+        --trainer.callbacks.downstream_evaluator.tasks.so2sat_finetune_apt.apt_config.partitioner.num_scales=3 \
+        --trainer.callbacks.downstream_evaluator.tasks.so2sat_finetune_apt.apt_config.partitioner.thresholds=[0.5,1.0]
 
     # Override APT base_patch_size
-    python scripts/official/apt/apt_eurosat_eval_tiny.py evaluate \
-        apt_eurosat_eval_tiny local \
+    python scripts/official/apt/apt_so2sat_eval_tiny.py evaluate \
+        apt_so2sat_eval_tiny local \
         --trainer.load_path=/path/to/checkpoint \
-        --trainer.callbacks.downstream_evaluator.tasks.m-eurosat-finetune-apt.apt_config.partitioner.base_patch_size=2
+        --trainer.callbacks.downstream_evaluator.tasks.so2sat_finetune_apt.apt_config.partitioner.base_patch_size=2
 
 APT Configuration:
     The apt_config field supports these overridable nested fields:
@@ -131,7 +131,7 @@ def build_common_components(
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config - using TINY model size."""
-    model_size = MODEL_SIZE_ARGS["tiny_shallow_decoder"]  # <-- Use tiny instead of base_shallow_decoder
+    model_size = MODEL_SIZE_ARGS["tiny_shallow_decoder"]
 
     encoder_config = EncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
@@ -238,13 +238,13 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     )
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
 
-    # EuroSAT finetuning evaluation with APT
+    # SO2Sat finetuning evaluation with APT
     # Build APT config - can be overridden via command line
     apt_config = APTConfig.default_s2_finetune_config()
 
     EVAL_TASKS = {
-        "m_eurosat_finetune_apt": DownstreamTaskConfig(
-            dataset="m-eurosat",
+        "so2sat_finetune_apt": DownstreamTaskConfig(
+            dataset="so2sat",
             embedding_batch_size=128,
             num_workers=0,
             pooling_type=PoolingType.MEAN,
@@ -271,8 +271,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             checkpointer=checkpointer_config,
         )
         .with_callback("wandb", wandb_callback)
-        # .with_callback("speed_monitor", OlmoEarthSpeedMonitorCallback())
-        # .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback(
             "downstream_evaluator",
@@ -304,7 +302,7 @@ def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig
 
 
 if __name__ == "__main__":
-    logger.info("Using TINY model configuration with APT enabled")
+    logger.info("Using TINY model configuration with APT enabled for SO2Sat")
     logger.info("APT thresholds and scales can be overridden via command line - see docstring")
 
     main(

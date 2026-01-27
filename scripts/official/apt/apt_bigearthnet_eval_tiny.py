@@ -1,37 +1,37 @@
-"""EuroSAT finetuning evaluation with tiny model.
+"""BigEarthNet finetuning evaluation with tiny model.
 
-This script loads a pretrained tiny model and evaluates on EuroSAT with APT
+This script loads a pretrained tiny model and evaluates on BigEarthNet with APT
 (Adaptive Patch Transformers) for adaptive patching based on image complexity.
 
 Usage:
     # Local evaluation with the tiny checkpoint
-    python scripts/official/apt/apt_eurosat_eval_tiny.py evaluate \
-        apt_eurosat_eval_tiny local \
+    python scripts/official/apt/apt_bigearthnet_eval_tiny.py evaluate \
+        apt_bigearthnet_eval_tiny local \
         --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000
 
     # On Beaker
-    python scripts/official/apt/apt_eurosat_eval_tiny.py launch \
-        apt_eurosat_eval_tiny ai2/saturn-cirrascale \
+    python scripts/official/apt/apt_bigearthnet_eval_tiny.py launch \
+        apt_bigearthnet_eval_tiny ai2/saturn-cirrascale \
         --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000
 
     # Override APT thresholds (list of floats, one per scale transition)
-    python scripts/official/apt/apt_eurosat_eval_tiny.py evaluate \
-        apt_eurosat_eval_tiny local \
+    python scripts/official/apt/apt_bigearthnet_eval_tiny.py evaluate \
+        apt_bigearthnet_eval_tiny local \
         --trainer.load_path=/path/to/checkpoint \
-        --trainer.callbacks.downstream_evaluator.tasks.m-eurosat-finetune-apt.apt_config.partitioner.thresholds=[0.5]
+        --trainer.callbacks.downstream_evaluator.tasks.bigearthnet_finetune_apt.apt_config.partitioner.thresholds=[0.5]
 
     # Override APT num_scales (number of patch size scales: 1=base only, 2=base+2x, etc.)
-    python scripts/official/apt/apt_eurosat_eval_tiny.py evaluate \
-        apt_eurosat_eval_tiny local \
+    python scripts/official/apt/apt_bigearthnet_eval_tiny.py evaluate \
+        apt_bigearthnet_eval_tiny local \
         --trainer.load_path=/path/to/checkpoint \
-        --trainer.callbacks.downstream_evaluator.tasks.m-eurosat-finetune-apt.apt_config.partitioner.num_scales=3 \
-        --trainer.callbacks.downstream_evaluator.tasks.m-eurosat-finetune-apt.apt_config.partitioner.thresholds=[0.5,1.0]
+        --trainer.callbacks.downstream_evaluator.tasks.bigearthnet_finetune_apt.apt_config.partitioner.num_scales=3 \
+        --trainer.callbacks.downstream_evaluator.tasks.bigearthnet_finetune_apt.apt_config.partitioner.thresholds=[0.5,1.0]
 
     # Override APT base_patch_size
-    python scripts/official/apt/apt_eurosat_eval_tiny.py evaluate \
-        apt_eurosat_eval_tiny local \
+    python scripts/official/apt/apt_bigearthnet_eval_tiny.py evaluate \
+        apt_bigearthnet_eval_tiny local \
         --trainer.load_path=/path/to/checkpoint \
-        --trainer.callbacks.downstream_evaluator.tasks.m-eurosat-finetune-apt.apt_config.partitioner.base_patch_size=2
+        --trainer.callbacks.downstream_evaluator.tasks.bigearthnet_finetune_apt.apt_config.partitioner.base_patch_size=2
 
 APT Configuration:
     The apt_config field supports these overridable nested fields:
@@ -98,7 +98,6 @@ from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
 
 logger = logging.getLogger(__name__)
 
-# Model configuration for tiny
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
@@ -113,7 +112,6 @@ def build_common_components(
     """Build the common components for an experiment."""
     config = build_common_components_default(script, cmd, run_name, cluster, overrides)
 
-    # Match the modalities the tiny model was trained on
     config.training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
@@ -131,7 +129,7 @@ def build_common_components(
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """Build the model config - using TINY model size."""
-    model_size = MODEL_SIZE_ARGS["tiny_shallow_decoder"]  # <-- Use tiny instead of base_shallow_decoder
+    model_size = MODEL_SIZE_ARGS["tiny_shallow_decoder"]
 
     encoder_config = EncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
@@ -226,7 +224,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 1
     LOAD_STRATEGY = LoadStrategy.always
 
-    WANDB_USERNAME = "eai-ai2"  # nosec
+    WANDB_USERNAME = "eai-ai2"
     WANDB_PROJECT = "01_2026_apt_investigation"
 
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -238,13 +236,11 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     )
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
 
-    # EuroSAT finetuning evaluation with APT
-    # Build APT config - can be overridden via command line
     apt_config = APTConfig.default_s2_finetune_config()
 
     EVAL_TASKS = {
-        "m_eurosat_finetune_apt": DownstreamTaskConfig(
-            dataset="m-eurosat",
+        "bigearthnet_finetune_apt": DownstreamTaskConfig(
+            dataset="m-bigearthnet",
             embedding_batch_size=128,
             num_workers=0,
             pooling_type=PoolingType.MEAN,
@@ -254,9 +250,9 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ft_batch_size=32,
             epochs=50,
             eval_interval=Duration.steps(1),
-            use_apt=True,  # Enable APT adaptive patching
-            apt_modality="sentinel2_l2a",  # Apply APT to S2
-            apt_config=apt_config,  # APT config - thresholds/scales can be overridden
+            use_apt=True,
+            apt_modality="sentinel2_l2a",
+            apt_config=apt_config,
         ),
     }
 
@@ -271,8 +267,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             checkpointer=checkpointer_config,
         )
         .with_callback("wandb", wandb_callback)
-        # .with_callback("speed_monitor", OlmoEarthSpeedMonitorCallback())
-        # .with_callback("gpu_memory_monitor", GPUMemoryMonitorCallback())
         .with_callback("config_saver", ConfigSaverCallback())
         .with_callback(
             "downstream_evaluator",
@@ -304,7 +298,7 @@ def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig
 
 
 if __name__ == "__main__":
-    logger.info("Using TINY model configuration with APT enabled")
+    logger.info("Using TINY model configuration with APT enabled for BigEarthNet")
     logger.info("APT thresholds and scales can be overridden via command line - see docstring")
 
     main(
