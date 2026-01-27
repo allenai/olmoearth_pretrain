@@ -145,10 +145,14 @@ class FlexiPatchEmbed(nn.Module):
             )
         pinv = self.pinvs[new_patch_size].to(device=patch_embed.device)
 
+        # Store original dtype for casting back after matmul
+        orig_dtype = patch_embed.dtype
+
         def resample_patch_embed(patch_embed: Tensor) -> Tensor:
             h, w = new_patch_size
-            resampled_kernel = pinv @ patch_embed.reshape(-1)
-            return rearrange(resampled_kernel, "(h w) -> h w", h=h, w=w)
+            # Cast to float32 for numerical stability, then back to original dtype
+            resampled_kernel = pinv @ patch_embed.float().reshape(-1)
+            return rearrange(resampled_kernel, "(h w) -> h w", h=h, w=w).to(orig_dtype)
 
         # Use vmap for efficient batched application over out_ch and in_ch dims
         v_resample_patch_embed = vmap(vmap(resample_patch_embed, 0, 0), 1, 1)
