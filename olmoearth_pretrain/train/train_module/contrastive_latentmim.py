@@ -210,17 +210,21 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     self.transform.apply(microbatch).to_device(self.device),
                     patch_size=patch_size,
                 )
+                logger.info(f"Masked batch A applied")
                 masked_batch_b = self.masking_strategy.apply_mask(
                     self.transform.apply(microbatch).to_device(self.device),
                     patch_size=patch_size,
                 )
+                logger.info(f"Masked batch B applied")
                 # Run Encoder and decoder on the augmented input
                 loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
                 )
+                logger.info(f"Model forward A applied")
                 loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
                     self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 )
+                logger.info(f"Model forward B applied")
                 loss = (loss_a + loss_b) / 2
 
                 # Scale loss by number of microbatches
@@ -257,6 +261,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
 
                 del latent_a, latent_b
                 loss.backward()
+                logger.info(f"Loss backward applied")
 
         if dry_run:
             return
