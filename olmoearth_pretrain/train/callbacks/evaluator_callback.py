@@ -30,11 +30,11 @@ from olmoearth_pretrain.evals.datasets.configs import (
 )
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn
-from olmoearth_pretrain.evals.embeddings import (
+from olmoearth_pretrain.evals.embedding_transforms import (
     dequantize_embeddings,
-    get_embeddings,
     reduce_embedding_dim,
 )
+from olmoearth_pretrain.evals.embeddings import get_embeddings
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
