@@ -204,6 +204,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
         enabled=True,
+        upload_dataset_distribution_pre_train=False
     )
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
 
