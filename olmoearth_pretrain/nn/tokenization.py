@@ -5,7 +5,7 @@ enabling experiments with different tokenization strategies (e.g., per-band toke
 spectral groupings, etc.).
 
 Example:
-    >>> from olmoearth_pretrain.nn.tokenization import TokenizationConfig, ModalityTokenization, TokenizationBandSet
+    >>> from olmoearth_pretrain.nn.tokenization import TokenizationConfig, ModalityTokenization
     >>> from olmoearth_pretrain.data.constants import Modality
     >>>
     >>> # Create config with per-band tokenization for Sentinel-2
@@ -13,7 +13,7 @@ Example:
     >>> config = TokenizationConfig(
     ...     overrides={
     ...         Modality.SENTINEL2_L2A.name: ModalityTokenization(
-    ...             band_groups=[TokenizationBandSet(bands=[b]) for b in s2_bands]
+    ...             band_groups=[[b] for b in s2_bands]
     ...         )
     ...     }
     ... )
@@ -28,26 +28,17 @@ from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 
 
 @dataclass
-class TokenizationBandSet:
-    """A custom band grouping for tokenization (references bands by name).
-
-    Unlike BandSet, this does not include resolution information since it's
-    only used to specify how bands should be grouped into tokens, not how
-    they are stored.
-    """
-
-    bands: list[str]  # Band names (must exist in modality's band_order)
-
-
-@dataclass
 class ModalityTokenization:
     """Custom tokenization configuration for a single modality.
 
     Specifies how bands should be grouped into tokens. Each band_group
     becomes a separate token.
+
+    Args:
+        band_groups: List of band groups, where each group is a list of band names.
     """
 
-    band_groups: list[TokenizationBandSet]
+    band_groups: list[list[str]]
 
     def compute_indices(self, base_modality: ModalitySpec) -> list[list[int]]:
         """Map band names to indices based on the base modality's band order.
@@ -65,7 +56,7 @@ class ModalityTokenization:
         result = []
         for group in self.band_groups:
             group_indices = []
-            for band in group.bands:
+            for band in group:
                 if band not in name_to_idx:
                     raise ValueError(
                         f"Band '{band}' not found in modality '{base_modality.name}'. "
@@ -77,7 +68,7 @@ class ModalityTokenization:
 
     def get_num_bands_per_group(self) -> list[int]:
         """Get the number of bands in each group."""
-        return [len(group.bands) for group in self.band_groups]
+        return [len(group) for group in self.band_groups]
 
     @property
     def num_band_sets(self) -> int:
@@ -95,7 +86,7 @@ class ModalityTokenization:
         """
         valid_bands = set(base_modality.band_order)
         for group in self.band_groups:
-            for band in group.bands:
+            for band in group:
                 if band not in valid_bands:
                     raise ValueError(
                         f"Band '{band}' not found in modality '{base_modality.name}'. "

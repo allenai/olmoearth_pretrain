@@ -641,10 +641,6 @@ class MAELoss(Loss):
         self.weight = weight
         self.tokenization_config = tokenization_config or TokenizationConfig()
 
-    def _get_bandset_indices(self, modality_name: str) -> list[list[int]]:
-        """Get the bandset indices for a modality."""
-        return self.tokenization_config.get_bandset_indices(modality_name)
-
     # data: [B, H, W, T, C]
     def _flatten_spatiotemporal_data(
         self, data: TokensAndMasks
@@ -656,7 +652,7 @@ class MAELoss(Loss):
             if pred is not None:
                 mask = getattr(data, data.get_masked_modality_name(modality))
                 for idx, channel_set_idxs in enumerate(
-                    self._get_bandset_indices(modality)
+                    self.tokenization_config.get_bandset_indices(modality)
                 ):
                     bs_mask = mask[..., idx]
                     bs_mask = repeat(

@@ -5,7 +5,6 @@ import pytest
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
-    TokenizationBandSet,
     TokenizationConfig,
 )
 
@@ -30,8 +29,8 @@ class TestTokenizationConfig:
             overrides={
                 Modality.SENTINEL1.name: ModalityTokenization(
                     band_groups=[
-                        TokenizationBandSet(bands=["vv"]),
-                        TokenizationBandSet(bands=["vh"]),
+                        ["vv"],
+                        ["vh"],
                     ]
                 )
             }
@@ -48,11 +47,11 @@ class TestTokenizationConfig:
                 Modality.SENTINEL2_L2A.name: ModalityTokenization(
                     band_groups=[
                         # RGB-like group
-                        TokenizationBandSet(bands=["B02", "B03", "B04"]),
+                        ["B02", "B03", "B04"],
                         # NIR group
-                        TokenizationBandSet(bands=["B08", "B8A"]),
+                        ["B08", "B8A"],
                         # SWIR group
-                        TokenizationBandSet(bands=["B11", "B12"]),
+                        ["B11", "B12"],
                     ]
                 )
             }
@@ -70,7 +69,7 @@ class TestTokenizationConfig:
                 Modality.SENTINEL2_L2A.name: ModalityTokenization(
                     band_groups=[
                         # Request B04 before B02 (reversed from data order)
-                        TokenizationBandSet(bands=["B04", "B02"]),
+                        ["B04", "B02"],
                     ]
                 )
             }
@@ -86,7 +85,7 @@ class TestTokenizationConfig:
             overrides={
                 Modality.SENTINEL2_L2A.name: ModalityTokenization(
                     band_groups=[
-                        TokenizationBandSet(bands=["B02", "INVALID_BAND"]),
+                        ["B02", "INVALID_BAND"],
                     ]
                 )
             }
@@ -99,9 +98,7 @@ class TestTokenizationConfig:
         """Modalities not in overrides use default bandsets."""
         config = TokenizationConfig(
             overrides={
-                Modality.SENTINEL1.name: ModalityTokenization(
-                    band_groups=[TokenizationBandSet(bands=["vv"])]
-                )
+                Modality.SENTINEL1.name: ModalityTokenization(band_groups=[["vv"]])
             }
         )
 
@@ -119,7 +116,7 @@ class TestTokenizationConfig:
             overrides={
                 Modality.SENTINEL2_L2A.name: ModalityTokenization(
                     band_groups=[
-                        TokenizationBandSet(bands=["B02", "INVALID_BAND"]),
+                        ["B02", "INVALID_BAND"],
                     ]
                 )
             }
@@ -133,7 +130,7 @@ class TestTokenizationConfig:
         config = TokenizationConfig(
             overrides={
                 "INVALID_MODALITY": ModalityTokenization(
-                    band_groups=[TokenizationBandSet(bands=["B02"])],
+                    band_groups=[["B02"]],
                 )
             }
         )
@@ -147,8 +144,8 @@ class TestTokenizationConfig:
             overrides={
                 Modality.SENTINEL2_L2A.name: ModalityTokenization(
                     band_groups=[
-                        TokenizationBandSet(bands=["B02", "B03", "B04"]),
-                        TokenizationBandSet(bands=["B08"]),
+                        ["B02", "B03", "B04"],
+                        ["B08"],
                     ]
                 )
             }
@@ -167,9 +164,9 @@ class TestTokenizationConfig:
         """ModalityTokenization.num_band_sets property."""
         tokenization = ModalityTokenization(
             band_groups=[
-                TokenizationBandSet(bands=["B02", "B03"]),
-                TokenizationBandSet(bands=["B04"]),
-                TokenizationBandSet(bands=["B08"]),
+                ["B02", "B03"],
+                ["B04"],
+                ["B08"],
             ]
         )
         assert tokenization.num_band_sets == 3
@@ -180,7 +177,7 @@ class TestTokenizationConfig:
         config = TokenizationConfig(
             overrides={
                 Modality.SENTINEL2_L2A.name: ModalityTokenization(
-                    band_groups=[TokenizationBandSet(bands=[band]) for band in s2_bands]
+                    band_groups=[[band] for band in s2_bands]
                 )
             }
         )
@@ -207,7 +204,7 @@ class TestTokenizationWithMasking:
         tokenization_config = TokenizationConfig(
             overrides={
                 Modality.SENTINEL2_L2A.name: ModalityTokenization(
-                    band_groups=[TokenizationBandSet(bands=["B02", "B03"])]
+                    band_groups=[["B02", "B03"]]
                 )
             }
         )

@@ -37,7 +37,6 @@ from olmoearth_pretrain.nn.flexihelios import (
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
-    TokenizationBandSet,
     TokenizationConfig,
 )
 
@@ -49,18 +48,18 @@ MIN_PATCH_SIZE = 1
 # Sentinel-2 L2A bands in order: each becomes its own token
 SENTINEL2_SINGLE_BAND_TOKENIZATION = ModalityTokenization(
     band_groups=[
-        TokenizationBandSet(bands=["B02"]),
-        TokenizationBandSet(bands=["B03"]),
-        TokenizationBandSet(bands=["B04"]),
-        TokenizationBandSet(bands=["B08"]),
-        TokenizationBandSet(bands=["B05"]),
-        TokenizationBandSet(bands=["B06"]),
-        TokenizationBandSet(bands=["B07"]),
-        TokenizationBandSet(bands=["B8A"]),
-        TokenizationBandSet(bands=["B11"]),
-        TokenizationBandSet(bands=["B12"]),
-        TokenizationBandSet(bands=["B01"]),
-        TokenizationBandSet(bands=["B09"]),
+        ["B02"],
+        ["B03"],
+        ["B04"],
+        ["B08"],
+        ["B05"],
+        ["B06"],
+        ["B07"],
+        ["B8A"],
+        ["B11"],
+        ["B12"],
+        ["B01"],
+        ["B09"],
     ]
 )
 

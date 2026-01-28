@@ -32,29 +32,26 @@ from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
-    TokenizationBandSet,
     TokenizationConfig,
 )
 
 # All Sentinel-2 L2A bands in a single token
 SENTINEL2_ALL_BANDS_SINGLE_TOKEN = ModalityTokenization(
     band_groups=[
-        TokenizationBandSet(
-            bands=[
-                "B02",
-                "B03",
-                "B04",
-                "B08",
-                "B05",
-                "B06",
-                "B07",
-                "B8A",
-                "B11",
-                "B12",
-                "B01",
-                "B09",
-            ]
-        ),
+        [
+            "B02",
+            "B03",
+            "B04",
+            "B08",
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12",
+            "B01",
+            "B09",
+        ],
     ]
 )
 

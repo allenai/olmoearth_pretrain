@@ -41,7 +41,6 @@ from olmoearth_pretrain.nn.flexihelios import (
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
-    TokenizationBandSet,
     TokenizationConfig,
 )
 
@@ -54,15 +53,15 @@ MIN_PATCH_SIZE = 1
 SENTINEL2_SPECTRAL_GROUPING = ModalityTokenization(
     band_groups=[
         # Visible RGB
-        TokenizationBandSet(bands=["B02", "B03", "B04"]),
+        ["B02", "B03", "B04"],
         # Near-infrared
-        TokenizationBandSet(bands=["B08", "B8A"]),
+        ["B08", "B8A"],
         # Red edge
-        TokenizationBandSet(bands=["B05", "B06", "B07"]),
+        ["B05", "B06", "B07"],
         # Shortwave infrared
-        TokenizationBandSet(bands=["B11", "B12"]),
+        ["B11", "B12"],
         # Atmospheric bands
-        TokenizationBandSet(bands=["B01", "B09"]),
+        ["B01", "B09"],
     ]
 )
 

@@ -69,6 +69,7 @@ pre-commit install
 - Run both unit and integration tests for files you modify
 - NEVER comment out existing tests
 - NEVER mock core functionality just to make tests pass
+- **Test file naming**: Tests should mirror the module path they test. For `olmoearth_pretrain/nn/foo.py`, the test file goes in `tests/unit/nn/test_foo.py` (not `tests/unit/test_foo.py`)
 
 ## Git Workflow
 

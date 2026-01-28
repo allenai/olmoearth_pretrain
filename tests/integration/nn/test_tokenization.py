@@ -8,7 +8,6 @@ from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
 from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
-    TokenizationBandSet,
     TokenizationConfig,
 )
 from olmoearth_pretrain.train.masking import MaskingConfig
@@ -30,10 +29,8 @@ class TestEncoderWithCustomTokenization:
                 overrides={
                     Modality.SENTINEL2_L2A.name: ModalityTokenization(
                         band_groups=[
-                            TokenizationBandSet(bands=["B02", "B03", "B04", "B08"]),
-                            TokenizationBandSet(
-                                bands=["B05", "B06", "B07", "B8A", "B11", "B12"]
-                            ),
+                            ["B02", "B03", "B04", "B08"],
+                            ["B05", "B06", "B07", "B8A", "B11", "B12"],
                         ]
                     )
                 }
@@ -58,8 +55,8 @@ class TestEncoderWithCustomTokenization:
                 overrides={
                     Modality.SENTINEL1.name: ModalityTokenization(
                         band_groups=[
-                            TokenizationBandSet(bands=["vv"]),
-                            TokenizationBandSet(bands=["vh"]),
+                            ["vv"],
+                            ["vh"],
                         ]
                     )
                 }
@@ -105,9 +102,7 @@ class TestEncoderWithCustomTokenization:
             tokenization_config=TokenizationConfig(
                 overrides={
                     Modality.SENTINEL2_L2A.name: ModalityTokenization(
-                        band_groups=[
-                            TokenizationBandSet(bands=[band]) for band in s2_bands
-                        ]
+                        band_groups=[[band] for band in s2_bands]
                     )
                 }
             ),
@@ -137,8 +132,8 @@ class TestEncoderWithCustomTokenization:
                     # Override sentinel1 to have each band separate
                     Modality.SENTINEL1.name: ModalityTokenization(
                         band_groups=[
-                            TokenizationBandSet(bands=["vv"]),
-                            TokenizationBandSet(bands=["vh"]),
+                            ["vv"],
+                            ["vh"],
                         ]
                     )
                     # sentinel2_l2a uses default (3 bandsets)
@@ -177,7 +172,7 @@ class TestEncoderWithCustomTokenization:
                 overrides={
                     Modality.SENTINEL2_L2A.name: ModalityTokenization(
                         band_groups=[
-                            TokenizationBandSet(bands=["INVALID_BAND"]),
+                            ["INVALID_BAND"],
                         ]
                     )
                 }
@@ -193,8 +188,8 @@ class TestEncoderWithCustomTokenization:
             overrides={
                 Modality.SENTINEL1.name: ModalityTokenization(
                     band_groups=[
-                        TokenizationBandSet(bands=["vv"]),
-                        TokenizationBandSet(bands=["vh"]),
+                        ["vv"],
+                        ["vh"],
                     ]
                 )
             }
@@ -223,9 +218,7 @@ def test_masking_and_encoder_use_same_bandset_count() -> None:
         overrides={
             Modality.SENTINEL2_L2A.name: ModalityTokenization(
                 band_groups=[
-                    TokenizationBandSet(
-                        bands=list(s2_bands)
-                    )  # All bands in single token
+                    list(s2_bands)  # All bands in single token
                 ]
             )
         }
