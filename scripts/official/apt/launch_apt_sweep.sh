@@ -24,7 +24,8 @@ set -e
 # Configuration
 MODE="${1:-local}"  # "local" or "beaker"
 CHECKPOINT="${2:-/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000}"
-CLUSTER="ai2/saturn-cirrascale"
+CLUSTER="ai2/saturn-cirrascale"  # Default cluster for the positional arg
+CLUSTERS_OVERRIDE='--launch.clusters=["ai2/titan","ai2/saturn-cirrascale","ai2/jupiter"]'
 
 # APT thresholds to test (for 2-scale: base 4px, max 8px)
 APT_THRESHOLDS=("0.25" "0.5" "0.8" "1.2")
@@ -54,9 +55,11 @@ SCRIPT_DIR="scripts/official/apt"
 if [ "$MODE" == "beaker" ]; then
     CMD="launch"
     CLUSTER_ARG="$CLUSTER"
+    EXTRA_ARGS="$CLUSTERS_OVERRIDE"
 else
     CMD="evaluate"
     CLUSTER_ARG="local"
+    EXTRA_ARGS=""
 fi
 
 echo "=============================================="
@@ -79,7 +82,7 @@ for dataset in eurosat mados so2sat bigearthnet; do
     task_name="${DATASETS_NO_APT[$dataset]}"
 
     for patch_size in "${PATCH_SIZES[@]}"; do
-        run_name="${dataset}_baseline_p${patch_size}"
+        run_name="1_${dataset}_baseline_p${patch_size}"
         script="${SCRIPT_DIR}/${dataset}_eval_tiny.py"
 
         echo ""
@@ -89,7 +92,8 @@ for dataset in eurosat mados so2sat bigearthnet; do
         python "$script" $CMD \
             "$run_name" "$CLUSTER_ARG" \
             --trainer.load_path="$CHECKPOINT" \
-            --trainer.callbacks.downstream_evaluator.tasks.${task_name}.patch_size=$patch_size
+            --trainer.callbacks.downstream_evaluator.tasks.${task_name}.patch_size=$patch_size \
+            $EXTRA_ARGS
     done
 done
 
@@ -105,7 +109,7 @@ for dataset in eurosat mados so2sat bigearthnet; do
     task_name="${DATASETS_APT[$dataset]}"
 
     for threshold in "${APT_THRESHOLDS[@]}"; do
-        run_name="${dataset}_apt_t${threshold}"
+        run_name="1_${dataset}_apt_t${threshold}"
         script="${SCRIPT_DIR}/apt_${dataset}_eval_tiny.py"
 
         echo ""
@@ -115,7 +119,8 @@ for dataset in eurosat mados so2sat bigearthnet; do
         python "$script" $CMD \
             "$run_name" "$CLUSTER_ARG" \
             --trainer.load_path="$CHECKPOINT" \
-            --trainer.callbacks.downstream_evaluator.tasks.${task_name}.apt_config.partitioner.thresholds="[$threshold]"
+            --trainer.callbacks.downstream_evaluator.tasks.${task_name}.apt_config.partitioner.thresholds="[$threshold]" \
+            $EXTRA_ARGS
     done
 done
 
