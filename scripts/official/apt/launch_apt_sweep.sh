@@ -71,31 +71,13 @@ echo "Cluster: $CLUSTER_ARG"
 echo "=============================================="
 echo ""
 
------------------------------------------------------------------------------
-PART 1: Baseline experiments (no APT) at different patch sizes
------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# PART 1: Baseline experiments (no APT) at different patch sizes
+# -----------------------------------------------------------------------------
 echo "=============================================="
 echo "PART 1: Baseline (No APT) Experiments"
 echo "=============================================="
 
-# for dataset in eurosat mados so2sat bigearthnet; do
-#     task_name="${DATASETS_NO_APT[$dataset]}"
-
-#     for patch_size in "${PATCH_SIZES[@]}"; do
-#         run_name="1_${dataset}_baseline_p${patch_size}"
-#         script="${SCRIPT_DIR}/${dataset}_eval_tiny.py"
-
-#         echo ""
-#         echo ">>> Launching: $run_name"
-#         echo "    Dataset: $dataset, Patch Size: $patch_size"
-
-#         python "$script" $CMD \
-#             "$run_name" "$CLUSTER_ARG" \
-#             --trainer.load_path="$CHECKPOINT" \
-#             --trainer.callbacks.downstream_evaluator.tasks.${task_name}.patch_size=$patch_size \
-#             $EXTRA_ARGS
-#     done
-# done
 for dataset in bigearthnet; do
     task_name="${DATASETS_NO_APT[$dataset]}"
 
