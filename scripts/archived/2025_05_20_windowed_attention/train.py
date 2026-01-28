@@ -1,5 +1,6 @@
 """Trying to prototype fitting everything into olmo core."""
 
+from helios.internal.experiment import main
 from shared import (
     build_dataloader_config,
     build_dataset_config,
@@ -9,8 +10,6 @@ from shared import (
     build_visualize_config,
     my_build_common_components,
 )
-
-from helios.internal.experiment import main
 
 if __name__ == "__main__":
     main(

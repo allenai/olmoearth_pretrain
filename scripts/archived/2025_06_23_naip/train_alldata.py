@@ -5,20 +5,19 @@ It corresponds to this run:
 - W&B: https://wandb.ai/eai-ai2/v0.2_sweep/runs/ra4x5vlx
 """
 
-from train import (
-    build_dataloader_config,
-    build_model_config,
-    build_train_module_config,
-    build_trainer_config,
-    build_visualize_config,
-)
-
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.common import build_common_components
 from helios.internal.experiment import (
     CommonComponents,
     main,
+)
+from train import (
+    build_dataloader_config,
+    build_model_config,
+    build_train_module_config,
+    build_trainer_config,
+    build_visualize_config,
 )
 
 
