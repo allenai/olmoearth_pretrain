@@ -239,7 +239,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     apt_config = APTConfig.default_s2_finetune_config()
 
     EVAL_TASKS = {
-        "bigearthnet_finetune_apt": DownstreamTaskConfig(
+        "m_bigearthnet_finetune": DownstreamTaskConfig(
             dataset="m-bigearthnet",
             embedding_batch_size=128,
             num_workers=0,

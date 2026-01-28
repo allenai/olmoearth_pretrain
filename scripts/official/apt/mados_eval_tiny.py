@@ -23,6 +23,7 @@ from olmo_core.distributed.parallel.data_parallel import (
     DataParallelConfig,
     DataParallelType,
 )
+from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmo_core.optim import AdamWConfig
 from olmo_core.optim.scheduler import CosWithWarmup
 from olmo_core.train.callbacks import (
@@ -213,7 +214,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             embedding_batch_size=128,
             num_workers=0,
             pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
+            norm_stats_from_pretrained=False,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
             eval_mode=EvalMode.FINETUNE,
             ft_lr=1e-4,
             ft_batch_size=32,

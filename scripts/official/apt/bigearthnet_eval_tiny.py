@@ -208,7 +208,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
 
     EVAL_TASKS = {
-        "bigearthnet_finetune": DownstreamTaskConfig(
+        "m_bigearthnet_finetune": DownstreamTaskConfig(
             dataset="m-bigearthnet",
             embedding_batch_size=128,
             num_workers=0,

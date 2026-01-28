@@ -57,6 +57,7 @@ from olmo_core.train.callbacks import (
     GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
 )
+from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
@@ -243,12 +244,13 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     apt_config = APTConfig.default_s2_finetune_config()
 
     EVAL_TASKS = {
-        "mados_finetune_apt": DownstreamTaskConfig(
+        "mados_finetune": DownstreamTaskConfig(
             dataset="mados",
             embedding_batch_size=128,
             num_workers=0,
             pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
+            norm_stats_from_pretrained=False    ,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
             eval_mode=EvalMode.FINETUNE,
             ft_lr=1e-4,
             ft_batch_size=32,

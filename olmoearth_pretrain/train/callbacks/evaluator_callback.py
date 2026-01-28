@@ -433,12 +433,11 @@ class DownstreamEvaluator:
         else:
             test_loader = None
 
-        # Get model - use local (non-FSDP) version for APT to avoid DTensor issues
+        # Get model - always use local (non-FSDP) version to avoid DTensor issues
+        model = self._get_local_model()
+
         if self.use_apt:
             from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoder
-
-            # Get a clean local model (no FSDP/DTensor)
-            model = self._get_local_model()
 
             apt_config = self.apt_config if self.apt_config is not None else APTConfig.default_s2_finetune_config()
             model = APTEncoder(
@@ -452,12 +451,6 @@ class DownstreamEvaluator:
                 f"thresholds: {apt_config.partitioner.thresholds}, "
                 f"num_scales: {apt_config.partitioner.num_scales}"
             )
-        else:
-            # Use encoder if present (original FSDP model)
-            if hasattr(self.trainer.train_module.model, "encoder"):
-                model = self.trainer.train_module.model.encoder
-            else:
-                model = self.trainer.train_module.model
 
         original_state = {
             k: v.detach().cpu().clone() for k, v in model.state_dict().items()

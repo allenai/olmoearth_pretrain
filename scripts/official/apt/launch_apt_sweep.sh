@@ -36,14 +36,14 @@ PATCH_SIZES=("4" "8")
 declare -A DATASETS_NO_APT=(
     ["eurosat"]="m_eurosat_finetune"
     ["mados"]="mados_finetune"
-    ["so2sat"]="so2sat_finetune"
+    ["so2sat"]="m_so2sat_finetune"
     ["bigearthnet"]="bigearthnet_finetune"
 )
 
 declare -A DATASETS_APT=(
     ["eurosat"]="m_eurosat_finetune_apt"
     ["mados"]="mados_finetune_apt"
-    ["so2sat"]="so2sat_finetune_apt"
+    ["so2sat"]="m_so2sat_finetune_apt"
     ["bigearthnet"]="bigearthnet_finetune_apt"
 )
 
