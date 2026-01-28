@@ -9,6 +9,7 @@ Output: quant_comparison.csv
 """
 
 import pandas as pd
+
 import wandb
 
 WANDB_ENTITY = "eai-ai2"

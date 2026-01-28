@@ -78,7 +78,7 @@ repos:
     rev: v0.12.8
     hooks:
       - id: ruff
-        args: [ --fix, -v ]
+        args: [ --fix ]
       - id: ruff-format
   - repo: https://github.com/hadolint/hadolint
     rev: v2.7.0

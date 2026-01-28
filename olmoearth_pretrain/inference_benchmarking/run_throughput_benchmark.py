@@ -11,11 +11,11 @@ from typing import Any
 
 import numpy as np
 import torch
-import wandb
 from olmo_core.io import copy_file, file_exists, join_path
 from olmo_core.train.callbacks import ProfilerCallback, WandBCallback
 from olmo_core.train.trainer import PathOrStr
 
+import wandb
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import BASE_GSD, Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
