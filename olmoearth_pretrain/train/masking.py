@@ -12,15 +12,13 @@ from einops import rearrange, repeat
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality, ModalitySpec
-
-# Re-export MaskValue and MaskedOlmoEarthSample for backwards compatibility
-# These are now defined in olmoearth_pretrain.datatypes
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
     MaskValue,
     OlmoEarthSample,
 )
 from olmoearth_pretrain.decorators import experimental
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
@@ -37,6 +35,8 @@ class MaskingStrategy:
 
     Be sure to implement apply_mask in subclasses.
     """
+
+    tokenization_config: TokenizationConfig | None = None
 
     @property
     def name(self) -> str:
@@ -57,6 +57,18 @@ class MaskingStrategy:
             raise AttributeError("Decode ratio not set")
         return self._decode_ratio
 
+    def _get_num_bandsets(self, modality_name: str) -> int:
+        """Get the number of bandsets for a modality, using tokenization config if available."""
+        if self.tokenization_config is not None:
+            return self.tokenization_config.get_num_bandsets(modality_name)
+        return Modality.get(modality_name).num_band_sets
+
+    def _get_bandset_indices(self, modality_name: str) -> list[list[int]]:
+        """Get the bandset indices for a modality, using tokenization config if available."""
+        if self.tokenization_config is not None:
+            return self.tokenization_config.get_bandset_indices(modality_name)
+        return Modality.get(modality_name).bandsets_as_indices()
+
     def apply_mask(
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
     ) -> MaskedOlmoEarthSample:
@@ -74,7 +86,8 @@ class MaskingStrategy:
     ) -> torch.Tensor:
         """Get the missing mask for the input data."""
         missing_mask = mask.new_zeros(mask.shape, dtype=torch.bool)
-        for i, band_set_indices in enumerate(modality.bandsets_as_indices()):
+        bandset_indices = self._get_bandset_indices(modality.name)
+        for i, band_set_indices in enumerate(bandset_indices):
             instance_band_set = instance[..., band_set_indices]
             missing_mask_band_set = instance_band_set == MISSING_VALUE
             missing_mask_band_set_any = missing_mask_band_set.any(dim=-1)
@@ -105,7 +118,7 @@ class MaskingStrategy:
         decode_ratio: float | None = None,
     ) -> ArrayTensor:
         mask_shape = list(shape)
-        mask_shape[-1] = modality.num_band_sets
+        mask_shape[-1] = self._get_num_bandsets(modality.name)
         if modality.is_spatial:
             patch_size = patch_size_at_16 * modality.image_tile_size_factor
             mask_shape[1] //= patch_size
@@ -335,7 +348,7 @@ class TimeMaskingStrategy(MaskingStrategy):
                         temporal_mask = self._create_temporal_mask(
                             shape, timesteps_with_at_least_one_modality, device
                         )
-                    b_s = modality.num_band_sets
+                    b_s = self._get_num_bandsets(modality.name)
                     b, h, w = list(shape[:-2]) + [1] * (3 - len(shape[:-2]))
                     # Repeat shares a view of the temporal masks so if we don't clone future changes may propogate across modalities
                     mask = repeat(
@@ -509,7 +522,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
                     t = shape[-2]
                 else:
                     t = 1
-                b_s = modality.num_band_sets
+                b_s = self._get_num_bandsets(modality.name)
                 # Mask is a view of the spatial mask, so changes to mask will change spatial_mask
                 mask = repeat(resized_spatial_mask, "... -> ... t b_s", t=t, b_s=b_s)
                 mask = mask.view(*shape[:-1], b_s).clone()

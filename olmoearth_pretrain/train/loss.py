@@ -13,8 +13,8 @@ from einops import rearrange, repeat
 from torch import Tensor
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.flexi_vit import PoolingType, TokensAndMasks
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
@@ -624,6 +624,7 @@ class MAELoss(Loss):
         loss_function: str = "MSELoss",
         only_decode: bool = True,
         weight: float = 1.0,
+        tokenization_config: TokenizationConfig | None = None,
         **kwargs: Any,
     ):
         """Initialize MAE loss.
@@ -632,11 +633,13 @@ class MAELoss(Loss):
             loss_function: pytorch loss to use
             only_decode: only calculate loss on DECODER masked tokens, otherwise all
             weight: the weight to apply to this loss
+            tokenization_config: Optional config for custom band groupings
             **kwargs: arguments for pytorch loss constructor
         """
         self.only_decode = only_decode
         self.loss = getattr(torch.nn, loss_function)(reduction="sum", **kwargs)
         self.weight = weight
+        self.tokenization_config = tokenization_config or TokenizationConfig()
 
     # data: [B, H, W, T, C]
     def _flatten_spatiotemporal_data(
@@ -645,12 +648,11 @@ class MAELoss(Loss):
         masks = []
         datas = []
         for modality in data.modalities:
-            modality_spec = Modality.get(modality)
             pred = getattr(data, modality)
             if pred is not None:
                 mask = getattr(data, data.get_masked_modality_name(modality))
                 for idx, channel_set_idxs in enumerate(
-                    modality_spec.bandsets_as_indices()
+                    self.tokenization_config.get_bandset_indices(modality)
                 ):
                     bs_mask = mask[..., idx]
                     bs_mask = repeat(
