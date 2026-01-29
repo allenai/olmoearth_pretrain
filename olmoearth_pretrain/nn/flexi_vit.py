@@ -53,7 +53,7 @@ def return_modalities_from_dict(
     ]
 
 
-#TODO: THis is hacky and has lots of syncs and should probabaly be done on the masking side and passed
+# TODO: THis is hacky and has lots of syncs and should probabaly be done on the masking side and passed
 def get_never_encoded_decoded_bandsets(
     input_data: "MaskedOlmoEarthSample",
     supported_modality_names: list[str],
@@ -468,7 +468,6 @@ class MultiModalPatchEmbeddings(nn.Module):
         """Get the patch embedding module for a modality."""
         modality_spec = Modality.get(modality)
 
-
         if not modality_spec.is_spatial:
             # static in space
             return nn.ModuleDict(
@@ -505,8 +504,6 @@ class MultiModalPatchEmbeddings(nn.Module):
         bandset_idx: int,
     ) -> tuple[Tensor, Tensor]:
         """Apply embedding to a modality."""
-
-
         modality_spec = Modality.get(modality_name)
 
         modality_specific_kwargs = {}
@@ -530,9 +527,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         embedding_module = self.per_modality_embeddings[modality_name][
             self._get_embedding_module_name(modality_name, bandset_idx)
         ]
-        patchified_data = embedding_module(
-            patchified_data, **modality_specific_kwargs
-        )
+        patchified_data = embedding_module(patchified_data, **modality_specific_kwargs)
 
         return patchified_data, token_mask
 
@@ -548,12 +543,10 @@ class MultiModalPatchEmbeddings(nn.Module):
     def _create_fake_modality_bandset_input(
         self,
         modality: str,
-        bandset_idx: int,
         batch_size: int,
         height: int,
         width: int,
         time: int,
-        patch_size: int,
         device: torch.device,
         dtype: torch.dtype,
     ) -> tuple[Tensor, Tensor]:
@@ -582,6 +575,8 @@ class MultiModalPatchEmbeddings(nn.Module):
 
         # Create fake data and mask in full modality format
         # Data has all bands, mask has bandset dimension
+        data_shape: tuple[int, ...]
+        mask_shape: tuple[int, ...]
         if modality_spec.is_spacetime_varying:
             # Spatial + temporal modality: [B, H, W, T, num_bands]
             h = height * modality_spec.image_tile_size_factor
@@ -682,21 +677,25 @@ class MultiModalPatchEmbeddings(nn.Module):
                         # If no spatial modality found, use default dimensions
                         # This shouldn't happen in practice but provides a fallback
                         height, width = 16, 16
-                    logger.info(f"Creating fake inputs for modality: {modality}, bandset: {idx}")
-                    modality_data, modality_mask = self._create_fake_modality_bandset_input(
-                        modality=modality,
-                        bandset_idx=idx,
-                        batch_size=batch_size,
-                        height=height,
-                        width=width,
-                        time=time,
-                        patch_size=patch_size,
-                        device=device,
-                        dtype=dtype,
+                    logger.info(
+                        f"Creating fake inputs for modality: {modality}, bandset: {idx}"
+                    )
+                    modality_data, modality_mask = (
+                        self._create_fake_modality_bandset_input(
+                            modality=modality,
+                            batch_size=batch_size,
+                            height=height,
+                            width=width,
+                            time=time,
+                            device=device,
+                            dtype=dtype,
+                        )
                     )
                 else:
                     modality_data = getattr(input_data, modality)
-                    modality_mask = getattr(input_data, input_data.get_masked_modality_name(modality))
+                    modality_mask = getattr(
+                        input_data, input_data.get_masked_modality_name(modality)
+                    )
                 # Modality is present - process normally
                 logger.info(f"Processing modality: {modality}")
                 modality_tokens, modality_masks = self.patchify_modality_bandset(

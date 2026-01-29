@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from enum import Enum
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -11,6 +12,8 @@ from olmoearth_pretrain.types import ArrayTensor
 
 if TYPE_CHECKING:
     from olmoearth_pretrain.data.dataset import OlmoEarthSample
+
+logger = logging.getLogger(__name__)
 
 
 class MaskValue(Enum):
@@ -164,15 +167,9 @@ class MaskedOlmoEarthSample(NamedTuple):
         Args:
             name: Optional name to identify this sample in the output.
         """
-        import logging
-
-        logger = logging.getLogger(__name__)
-
         header = f"=== Mask Value Counts{' for ' + name if name else ''} ==="
         print(header)
         logger.info(header)
-
-        mask_value_names = {v.value: v.name for v in MaskValue}
 
         for modality in self.modalities:
             mask_name = self.get_masked_modality_name(modality)
