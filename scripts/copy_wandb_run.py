@@ -4,9 +4,8 @@
 import argparse
 from collections import defaultdict
 
-from tqdm import tqdm
-
 import wandb
+from tqdm import tqdm
 
 METRICS = [
     "eval/pastis",
