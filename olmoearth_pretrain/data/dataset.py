@@ -334,44 +334,13 @@ class OlmoEarthDataset(Dataset):
 
         return full_timesteps_data
 
-    @staticmethod
-    def _get_expected_shape(
-        modality: str, height: int | None, width: int | None, time: int
-    ) -> tuple[int, ...]:
-        """Get expected shape for a modality without creating OlmoEarthSample."""
-        modality_spec = Modality.get(modality)
-        num_bands = modality_spec.num_bands
-
-        if modality_spec.is_spacetime_varying:
-            assert height is not None and width is not None, (
-                f"height and width required for spatial modality {modality}"
-            )
-            return (
-                height * modality_spec.image_tile_size_factor,
-                width * modality_spec.image_tile_size_factor,
-                time,
-                num_bands,
-            )
-        elif modality_spec.is_space_only_varying:
-            assert height is not None and width is not None, (
-                f"height and width required for spatial modality {modality}"
-            )
-            return (
-                height * modality_spec.image_tile_size_factor,
-                width * modality_spec.image_tile_size_factor,
-                1,
-                num_bands,
-            )
-        elif modality_spec.is_time_only_varying:
-            return (time, num_bands)
-        else:
-            return (num_bands,)
-
     def _fill_missing_modality(
         self, modality: str, height: int | None, width: int | None, time: int
     ) -> np.ndarray:
         """Fill an array of shape of modality with the missing value."""
-        expected_shape = self._get_expected_shape(modality, height, width, time)
+        expected_shape = OlmoEarthSample.compute_expected_shape(
+            modality, height, width, time
+        )
         logger.debug(f"Filling {modality} with shape {expected_shape}")
         return np.full(
             expected_shape,

@@ -223,32 +223,59 @@ class OlmoEarthSample(NamedTuple):
         )[0]
         return timesteps_with_at_least_one_modality
 
-    def get_expected_shape(self, attribute: str, mask: bool = False) -> tuple[int, ...]:
-        """Get the expected shape of an attribute."""
+    @staticmethod
+    def compute_expected_shape(
+        attribute: str,
+        height: int | None,
+        width: int | None,
+        time: int,
+        mask: bool = False,
+    ) -> tuple[int, ...]:
+        """Get expected shape for a modality given dimensions.
+
+        Args:
+            attribute: The modality name.
+            height: Height in pixels (required for spatial modalities).
+            width: Width in pixels (required for spatial modalities).
+            time: Number of timesteps.
+            mask: If True, use num_band_sets instead of num_bands.
+
+        Returns:
+            Expected shape tuple for the modality.
+        """
         modality_spec = Modality.get(attribute)
-        if mask:
-            num_bands = modality_spec.num_band_sets
-        else:
-            num_bands = modality_spec.num_bands
+        num_bands = modality_spec.num_band_sets if mask else modality_spec.num_bands
 
         if modality_spec.is_spacetime_varying:
+            assert height is not None and width is not None, (
+                f"height and width required for spatial modality {attribute}"
+            )
             return (
-                self.height * modality_spec.image_tile_size_factor,
-                self.width * modality_spec.image_tile_size_factor,
-                self.time,
+                height * modality_spec.image_tile_size_factor,
+                width * modality_spec.image_tile_size_factor,
+                time,
                 num_bands,
             )
         elif modality_spec.is_space_only_varying:
+            assert height is not None and width is not None, (
+                f"height and width required for spatial modality {attribute}"
+            )
             return (
-                self.height * modality_spec.image_tile_size_factor,
-                self.width * modality_spec.image_tile_size_factor,
+                height * modality_spec.image_tile_size_factor,
+                width * modality_spec.image_tile_size_factor,
                 1,
                 num_bands,
             )
         elif modality_spec.is_time_only_varying:
-            return (self.time, num_bands)
+            return (time, num_bands)
         else:
             return (num_bands,)
+
+    def get_expected_shape(self, attribute: str, mask: bool = False) -> tuple[int, ...]:
+        """Get expected shape of an attribute using this sample's dimensions."""
+        return OlmoEarthSample.compute_expected_shape(
+            attribute, self.height, self.width, self.time, mask
+        )
 
     def _get_max_t_within_token_budget(
         self, h_w_p: int, max_tokens_per_instance: int
