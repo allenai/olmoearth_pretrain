@@ -15,7 +15,7 @@ WANDB_PROJECT="2026_01_27_maps_ablation"
 python scripts/official/base.py launch ablation_no_worldcover $CLUSTER \
     --common.dataloader_side_masking=True \
     --common.training_modalities='[sentinel2_l2a,sentinel1,landsat,srtm,openstreetmap_raster,wri_canopy_height_map,cdl,worldcereal]' \
-    --dataloader.masking_config.strategy_config.only_decode_modalities='[srtm,openstreetmap_raster,wri_canopy_height_map,cdl,worldcereal]' \
+    --data_loader.masking_config.strategy_config.only_decode_modalities='[srtm,openstreetmap_raster,wri_canopy_height_map,cdl,worldcereal]' \
     --launch.clusters="$CLUSTERS" \
     --launch.priority=$PRIORITY \
     --trainer.callbacks.wandb.project=$WANDB_PROJECT
@@ -24,7 +24,7 @@ python scripts/official/base.py launch ablation_no_worldcover $CLUSTER \
 python scripts/official/base.py launch ablation_no_srtm $CLUSTER \
     --common.dataloader_side_masking=True \
     --common.training_modalities='[sentinel2_l2a,sentinel1,landsat,worldcover,openstreetmap_raster,wri_canopy_height_map,cdl,worldcereal]' \
-    --dataloader.masking_config.strategy_config.only_decode_modalities='[worldcover,openstreetmap_raster,wri_canopy_height_map,cdl,worldcereal]' \
+    --data_loader.masking_config.strategy_config.only_decode_modalities='[worldcover,openstreetmap_raster,wri_canopy_height_map,cdl,worldcereal]' \
     --launch.clusters="$CLUSTERS" \
     --launch.priority=$PRIORITY \
     --trainer.callbacks.wandb.project=$WANDB_PROJECT
@@ -33,7 +33,7 @@ python scripts/official/base.py launch ablation_no_srtm $CLUSTER \
 python scripts/official/base.py launch ablation_no_openstreetmap_raster $CLUSTER \
     --common.dataloader_side_masking=True \
     --common.training_modalities='[sentinel2_l2a,sentinel1,landsat,worldcover,srtm,wri_canopy_height_map,cdl,worldcereal]' \
-    --dataloader.masking_config.strategy_config.only_decode_modalities='[worldcover,srtm,wri_canopy_height_map,cdl,worldcereal]' \
+    --data_loader.masking_config.strategy_config.only_decode_modalities='[worldcover,srtm,wri_canopy_height_map,cdl,worldcereal]' \
     --launch.clusters="$CLUSTERS" \
     --launch.priority=$PRIORITY \
     --trainer.callbacks.wandb.project=$WANDB_PROJECT
@@ -42,7 +42,7 @@ python scripts/official/base.py launch ablation_no_openstreetmap_raster $CLUSTER
 python scripts/official/base.py launch ablation_no_wri_canopy_height_map $CLUSTER \
     --common.dataloader_side_masking=True \
     --common.training_modalities='[sentinel2_l2a,sentinel1,landsat,worldcover,srtm,openstreetmap_raster,cdl,worldcereal]' \
-    --dataloader.masking_config.strategy_config.only_decode_modalities='[worldcover,srtm,openstreetmap_raster,cdl,worldcereal]' \
+    --data_loader.masking_config.strategy_config.only_decode_modalities='[worldcover,srtm,openstreetmap_raster,cdl,worldcereal]' \
     --launch.clusters="$CLUSTERS" \
     --launch.priority=$PRIORITY \
     --trainer.callbacks.wandb.project=$WANDB_PROJECT
@@ -51,7 +51,7 @@ python scripts/official/base.py launch ablation_no_wri_canopy_height_map $CLUSTE
 python scripts/official/base.py launch ablation_no_cdl $CLUSTER \
     --common.dataloader_side_masking=True \
     --common.training_modalities='[sentinel2_l2a,sentinel1,landsat,worldcover,srtm,openstreetmap_raster,wri_canopy_height_map,worldcereal]' \
-    --dataloader.masking_config.strategy_config.only_decode_modalities='[worldcover,srtm,openstreetmap_raster,wri_canopy_height_map,worldcereal]' \
+    --data_loader.masking_config.strategy_config.only_decode_modalities='[worldcover,srtm,openstreetmap_raster,wri_canopy_height_map,worldcereal]' \
     --launch.clusters="$CLUSTERS" \
     --launch.priority=$PRIORITY \
     --trainer.callbacks.wandb.project=$WANDB_PROJECT
@@ -60,7 +60,7 @@ python scripts/official/base.py launch ablation_no_cdl $CLUSTER \
 python scripts/official/base.py launch ablation_no_worldcereal $CLUSTER \
     --common.dataloader_side_masking=True \
     --common.training_modalities='[sentinel2_l2a,sentinel1,landsat,worldcover,srtm,openstreetmap_raster,wri_canopy_height_map,cdl]' \
-    --dataloader.masking_config.strategy_config.only_decode_modalities='[worldcover,srtm,openstreetmap_raster,wri_canopy_height_map,cdl]' \
+    --data_loader.masking_config.strategy_config.only_decode_modalities='[worldcover,srtm,openstreetmap_raster,wri_canopy_height_map,cdl]' \
     --launch.clusters="$CLUSTERS" \
     --launch.priority=$PRIORITY \
     --trainer.callbacks.wandb.project=$WANDB_PROJECT
