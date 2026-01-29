@@ -324,7 +324,7 @@ class OlmoEarthDataset(Dataset):
             dtype=self.dtype,
         )
 
-        # Copy the existing data to the appropriate timestep positions using vectorized indexing
+        # Copy the existing data to the appropriate timestep positions
         present_indices = np.where(missing_timestep_mask)[0]
         num_to_copy = min(len(present_indices), t)
         if num_to_copy > 0:
