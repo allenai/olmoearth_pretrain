@@ -12,6 +12,8 @@ from olmoearth_pretrain.train.loss import (
     L1Loss,
     L2Loss,
     MatryoshkaInfoNCELoss,
+    MatryoshkaModalityPatchDiscriminationLoss,
+    ModalityPatchDiscriminationLossNew,
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
 )
@@ -275,3 +277,73 @@ def test_matryoshka_infonce_loss() -> None:
     loss_random = loss.compute(torch.randn((b, d)), torch.randn((b, d)))
     # Identical should have much lower loss (near 0)
     assert loss_identical < loss_random
+
+
+def test_matryoshka_modality_patch_disc_loss() -> None:
+    """Test Matryoshka modality patch discrimination loss with MRL."""
+    b, t_h, t_w, t, d = 4, 4, 4, 2, 768
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+        sentinel1=torch.randn((b, t_h, t_w, t, d)),
+        sentinel1_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+        sentinel1=torch.randn((b, t_h, t_w, t, d)),
+        sentinel1_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+
+    # Test with auto-generated dims
+    loss = MatryoshkaModalityPatchDiscriminationLoss()
+    loss_value = loss.compute(preds, targets)
+    assert loss_value > 0
+    assert loss_value.requires_grad
+
+    # Test with explicit dims
+    loss_explicit = MatryoshkaModalityPatchDiscriminationLoss(
+        dims=[48, 96, 192, 384, 768]
+    )
+    loss_explicit_value = loss_explicit.compute(preds, targets)
+    assert loss_explicit_value > 0
+
+    # Test weight parameter
+    loss_weighted = MatryoshkaModalityPatchDiscriminationLoss(weight=0.5)
+    loss_weighted_value = loss_weighted.compute(preds, targets)
+    loss_unweighted = MatryoshkaModalityPatchDiscriminationLoss(weight=1.0)
+    loss_unweighted_value = loss_unweighted.compute(preds, targets)
+    assert torch.isclose(loss_weighted_value, 0.5 * loss_unweighted_value)
+
+    # Test relative weights
+    loss_rel = MatryoshkaModalityPatchDiscriminationLoss(
+        dims=[48, 768], relative_weights=[1.0, 2.0]
+    )
+    loss_rel_value = loss_rel.compute(preds, targets)
+    assert loss_rel_value > 0
+
+
+def test_matryoshka_vs_regular_modality_patch_disc() -> None:
+    """Test that Matryoshka with full dim only matches regular loss."""
+    b, t_h, t_w, t, d = 4, 4, 4, 2, 768
+
+    torch.manual_seed(42)
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+
+    # Regular loss
+    regular_loss = ModalityPatchDiscriminationLossNew(tau=0.1)
+    regular_value = regular_loss.compute(preds, targets)
+
+    # Matryoshka with only full dim should match
+    mrl_loss = MatryoshkaModalityPatchDiscriminationLoss(tau=0.1, dims=[768])
+    mrl_value = mrl_loss.compute(preds, targets)
+
+    assert torch.isclose(regular_value, mrl_value, rtol=1e-4)

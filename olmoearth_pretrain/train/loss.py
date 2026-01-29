@@ -371,6 +371,176 @@ class ModalityPatchDiscriminationLossNew(Loss):
         return self.weight * total_loss
 
 
+@LOSS_REGISTRY.register("matryoshka_modality_patch_discrimination")
+class MatryoshkaModalityPatchDiscriminationLoss(Loss):
+    """Per-modality patch discrimination with Matryoshka representation learning.
+
+    Computes patch discrimination loss at multiple embedding dimensions,
+    forcing important features to concentrate in early dimensions.
+    """
+
+    name = "MatryoshkaModalityPatchDisc"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        pred2unit: bool = False,
+        weight: float = 1.0,
+        dims: list[int] | None = None,
+        relative_weights: list[float] | None = None,
+        modality_weights: dict[str, float] | None = None,
+    ):
+        """Initialize Matryoshka modality patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            weight: the overall weight to apply to this loss
+            dims: embedding dimensions to use, e.g. [48, 96, 192, 384, 768].
+                  If None, auto-generates by halving from full dim down to 48
+            relative_weights: optional per-dimension weights (same length as dims).
+                              If None, uses uniform weighting.
+            modality_weights: the weights to apply to each modality
+        """
+        self.tau = tau
+        self.pred2unit = pred2unit
+        self.weight = weight
+        self.dims = dims
+        self.relative_weights = relative_weights
+        self.modality_weights = modality_weights
+
+    def _compute_patch_disc_for_dim(
+        self,
+        modality_preds: list[Tensor],
+        modality_masks: list[Tensor],
+        modality_targets: list[Tensor],
+        modalities: list[str],
+        dim: int,
+    ) -> Tensor:
+        """Compute patch discrimination loss for a single dimension truncation."""
+        total_loss = modality_preds[0].new_zeros(())
+
+        for all_preds, all_masks, all_targets, modality in zip(
+            modality_preds, modality_masks, modality_targets, modalities
+        ):
+            # Truncate to first `dim` dimensions
+            all_preds_trunc = all_preds[..., :dim]
+            all_targets_trunc = all_targets[..., :dim]
+
+            pred = all_preds_trunc[all_masks == MaskValue.DECODER.value].unsqueeze(
+                dim=0
+            )
+            target = all_targets_trunc[all_masks == MaskValue.DECODER.value].unsqueeze(
+                dim=0
+            )
+            pred = pred.float()
+            target = target.float()
+            bs, nt, _ = pred.shape
+
+            if nt == 0:
+                continue
+
+            if self.pred2unit:
+                pred_mu = pred.mean(1, keepdims=True)
+                pred_std = pred.std(1, keepdims=True)
+                pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+            pred = F.normalize(pred, p=2, dim=-1)
+            target = F.normalize(target, p=2, dim=-1)
+
+            count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+            losses = []
+            start = 0
+            for c in count:
+                end = start + c
+                if c == 0:
+                    continue
+                pred_sample = pred[:, start:end, :]
+                target_sample = target[:, start:end, :]
+                score_sample = (
+                    torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
+                )
+                labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
+                loss = F.cross_entropy(
+                    score_sample.flatten(0, 1),
+                    labels.flatten(0, 1),
+                    reduction="none",
+                ) * (self.tau * 2)
+                loss = loss.mean()
+                losses.append(loss)
+                start = end
+
+            if len(losses) == 0:
+                continue
+
+            loss = torch.stack(losses).mean()
+            if self.modality_weights is not None:
+                loss = loss * self.modality_weights[modality]
+            total_loss = total_loss + loss
+
+        return total_loss
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute Matryoshka patch discrimination loss.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        modality_preds, modality_masks = predictions.flatten_tokens_and_masks(
+            return_lists=True
+        )
+        modality_targets = targets.flatten_tokens_and_masks(return_lists=True)[0]
+
+        # Get full embedding dimension from first non-empty modality
+        full_dim = None
+        for pred in modality_preds:
+            if pred.numel() > 0:
+                full_dim = pred.shape[-1]
+                break
+        if full_dim is None:
+            return modality_preds[0].new_zeros(())
+
+        # Auto-generate dims if not provided: halve until 48
+        if self.dims is None:
+            dims = []
+            d = full_dim
+            while d >= 48:
+                dims.append(d)
+                d = d // 2
+            dims = sorted(dims)
+        else:
+            dims = self.dims
+
+        # Validate relative weights
+        if self.relative_weights is not None:
+            assert len(self.relative_weights) == len(dims)
+            rel_weights = self.relative_weights
+        else:
+            rel_weights = [1.0] * len(dims)
+
+        total_loss = modality_preds[0].new_zeros(())
+        for dim, rel_w in zip(dims, rel_weights):
+            dim_loss = self._compute_patch_disc_for_dim(
+                modality_preds,
+                modality_masks,
+                modality_targets,
+                targets.modalities,
+                dim,
+            )
+            total_loss = total_loss + rel_w * dim_loss
+
+        # Average across dimensions
+        total_loss = total_loss / sum(rel_weights)
+        return self.weight * total_loss
+
+
 @LOSS_REGISTRY.register("modality_patch_discrimination_variance_weighted")
 class ModalityPatchDiscriminationVarianceWeighted(Loss):
     """Loss function for per-modality patch discrimination with variance-based token weighting.
