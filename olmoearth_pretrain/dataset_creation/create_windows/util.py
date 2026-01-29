@@ -14,8 +14,9 @@ import tqdm
 from rasterio.crs import CRS
 from rslearn.config import QueryConfig, SpaceMode
 from rslearn.const import WGS84_PROJECTION
-from rslearn.data_sources import DataSource, data_source_from_config
+from rslearn.data_sources import DataSource
 from rslearn.dataset import Dataset, Window
+from rslearn.dataset.storage.file import FileWindowStorage
 from rslearn.utils.geometry import Projection, STGeometry
 from rslearn.utils.get_utm_ups_crs import get_utm_ups_projection
 from rslearn.utils.mp import StarImapUnorderedWrapper
@@ -145,7 +146,7 @@ def create_window(ds_path: UPath, metadata: WindowMetadata) -> list[Window]:
 
         # Create the window.
         window = Window(
-            path=Window.get_window_root(ds_path, group, window_name),
+            storage=FileWindowStorage(ds_path),
             group=group,
             name=window_name,
             projection=projection,
@@ -169,7 +170,7 @@ def get_naip_source(ds_path: UPath) -> DataSource:
         the data source.
     """
     dataset = Dataset(ds_path)
-    return data_source_from_config(dataset.layers["naip"], dataset.path)
+    return dataset.layers["naip"].instantiate_data_source()
 
 
 @functools.cache
@@ -183,7 +184,7 @@ def get_sentinel2_source(ds_path: UPath) -> DataSource:
         the data source.
     """
     dataset = Dataset(ds_path)
-    return data_source_from_config(dataset.layers["sentinel2_freq"], dataset.path)
+    return dataset.layers["sentinel2_freq"].instantiate_data_source()
 
 
 def get_highres_times(ds_path: UPath, tile: Tile) -> list[datetime]:

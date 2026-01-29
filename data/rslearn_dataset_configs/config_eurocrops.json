@@ -1,0 +1,25 @@
+{
+  "layers": {
+    "eurocrops": {
+      "data_source": {
+        "name": "rslearn.data_sources.eurocrops.EuroCrops"
+      },
+      "type": "vector"
+    }
+  },
+  "tile_store": {
+    "class_path": "rslearn.tile_stores.default.DefaultTileStore",
+    "init_args": {
+      "vector_format": {
+        "class_path": "rslearn.utils.vector_format.TileVectorFormat",
+        "init_args": {
+          "projection": {
+            "crs": "EPSG:3857",
+            "x_resolution": 10,
+            "y_resolution": 10
+          }
+        }
+      }
+    }
+  }
+}
