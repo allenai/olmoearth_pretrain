@@ -108,18 +108,12 @@ def quantize_embeddings_percentile(
     # Move quantiles to same device
     quantiles = quantiles.to(embeddings.device)
 
-    # For each dimension, use searchsorted to find bucket indices
-    # quantiles shape: (dim, num_buckets+1)
-    # We need to find which bucket each value falls into
-    quantized = torch.zeros_like(flat, dtype=torch.int8)
-
-    for d in range(dim):
-        # Get bucket index for each value in this dimension
-        # searchsorted returns index where value would be inserted
-        # We subtract 1 and clamp to get bucket index
-        bucket_idx = torch.searchsorted(quantiles[d], flat[:, d]) - 1
-        bucket_idx = bucket_idx.clamp(0, num_buckets - 1)
-        quantized[:, d] = bucket_idx.to(torch.int8)
+    # Vectorized searchsorted: transpose to (dim, N_total) for batched search
+    # quantiles: (dim, num_buckets+1), flat.T: (dim, N_total)
+    # searchsorted returns index where value would be inserted
+    bucket_idx = torch.searchsorted(quantiles, flat.T) - 1  # (dim, N_total)
+    bucket_idx = bucket_idx.clamp(0, num_buckets - 1)
+    quantized = bucket_idx.T.to(torch.int8)  # (N_total, dim)
 
     return quantized.reshape(original_shape)
 
@@ -145,16 +139,19 @@ def dequantize_embeddings_percentile(
     dim = original_shape[-1]
 
     # Flatten to (N_total, dim)
-    flat = quantized.reshape(-1, dim).long()
+    # Convert to uint8 first to handle int8 wrap-around (128-255 stored as -128 to -1)
+    flat = quantized.reshape(-1, dim).to(torch.uint8).long()
+    n_total = flat.shape[0]
 
     # Move midpoints to same device
     midpoints = midpoints.to(quantized.device)
 
-    # Look up midpoint values for each bucket index
-    dequantized = torch.zeros(flat.shape, dtype=torch.float32, device=quantized.device)
-
-    for d in range(dim):
-        dequantized[:, d] = midpoints[d, flat[:, d]]
+    # Vectorized lookup using advanced indexing
+    # d_indices: (N_total, dim) where each row is [0, 1, 2, ..., dim-1]
+    d_indices = (
+        torch.arange(dim, device=quantized.device).unsqueeze(0).expand(n_total, -1)
+    )
+    dequantized = midpoints[d_indices, flat]  # (N_total, dim)
 
     return dequantized.reshape(original_shape)
 
