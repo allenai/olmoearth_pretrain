@@ -1,7 +1,13 @@
 """Post-extraction transforms for embeddings (quantization, dim reduction)."""
 
+import logging
+from typing import Any
+
+import h5py
 import torch
 from sklearn.decomposition import PCA
+
+logger = logging.getLogger(__name__)
 
 # === Quantization ===
 # Constants matching AlphaEarth's scheme
@@ -44,6 +50,113 @@ def dequantize_embeddings(quantized: torch.Tensor) -> torch.Tensor:
     # Apply square, preserve sign: x = |rescaled|^power * sign(rescaled)
     dequantized = rescaled.abs().pow(QUANTIZE_POWER) * rescaled.sign()
     return dequantized
+
+
+# === Percentile-based Quantization ===
+
+
+def load_quantile_config(path: str) -> dict[str, Any]:
+    """Load quantile boundaries and midpoints from HDF5 file.
+
+    Args:
+        path: Path to quantiles.h5 file
+
+    Returns:
+        Dictionary with keys like "8bit", "4bit", "2bit", "1bit", each containing:
+            - "quantiles": torch.Tensor of shape (dim, num_buckets+1)
+            - "midpoints": torch.Tensor of shape (dim, num_buckets)
+    """
+    config: dict[str, Any] = {}
+    with h5py.File(path, "r") as f:
+        for bits in [8, 4, 2, 1]:
+            key = f"{bits}bit"
+            if key in f:
+                config[key] = {
+                    "quantiles": torch.from_numpy(f[key]["quantiles"][:]),
+                    "midpoints": torch.from_numpy(f[key]["midpoints"][:]),
+                }
+        if "dim" in f:
+            config["dim"] = int(f["dim"][()])
+    return config
+
+
+def quantize_embeddings_percentile(
+    embeddings: torch.Tensor,
+    quantiles: torch.Tensor,
+    bits: int,
+) -> torch.Tensor:
+    """Quantize embeddings using precomputed percentile boundaries.
+
+    For each dimension, finds which bucket each value falls into based on
+    the precomputed quantile boundaries.
+
+    Args:
+        embeddings: Float tensor of shape (N, dim) or (N, H, W, dim)
+        quantiles: Boundary values of shape (dim, num_buckets+1)
+        bits: Number of bits (1, 2, 4, or 8)
+
+    Returns:
+        Int8 tensor of same shape with values in [0, 2^bits - 1]
+    """
+    num_buckets = 2**bits
+    original_shape = embeddings.shape
+    dim = original_shape[-1]
+
+    # Flatten to (N_total, dim)
+    flat = embeddings.reshape(-1, dim)
+
+    # Move quantiles to same device
+    quantiles = quantiles.to(embeddings.device)
+
+    # For each dimension, use searchsorted to find bucket indices
+    # quantiles shape: (dim, num_buckets+1)
+    # We need to find which bucket each value falls into
+    quantized = torch.zeros_like(flat, dtype=torch.int8)
+
+    for d in range(dim):
+        # Get bucket index for each value in this dimension
+        # searchsorted returns index where value would be inserted
+        # We subtract 1 and clamp to get bucket index
+        bucket_idx = torch.searchsorted(quantiles[d], flat[:, d]) - 1
+        bucket_idx = bucket_idx.clamp(0, num_buckets - 1)
+        quantized[:, d] = bucket_idx.to(torch.int8)
+
+    return quantized.reshape(original_shape)
+
+
+def dequantize_embeddings_percentile(
+    quantized: torch.Tensor,
+    midpoints: torch.Tensor,
+) -> torch.Tensor:
+    """Dequantize embeddings using precomputed midpoint values.
+
+    Maps each bucket index back to its corresponding midpoint value
+    (the value at the center percentile of that bucket).
+
+    Args:
+        quantized: Int8 tensor of shape (N, dim) or (N, H, W, dim)
+            with values in [0, 2^bits - 1]
+        midpoints: Dequantization values of shape (dim, num_buckets)
+
+    Returns:
+        Float32 tensor of same shape
+    """
+    original_shape = quantized.shape
+    dim = original_shape[-1]
+
+    # Flatten to (N_total, dim)
+    flat = quantized.reshape(-1, dim).long()
+
+    # Move midpoints to same device
+    midpoints = midpoints.to(quantized.device)
+
+    # Look up midpoint values for each bucket index
+    dequantized = torch.zeros(flat.shape, dtype=torch.float32, device=quantized.device)
+
+    for d in range(dim):
+        dequantized[:, d] = midpoints[d, flat[:, d]]
+
+    return dequantized.reshape(original_shape)
 
 
 # === Dimensionality Reduction ===
