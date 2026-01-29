@@ -6,6 +6,7 @@ import os
 import psutil
 
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,46 @@ def split_batch(batch: OlmoEarthSample, microbatch_size: int) -> list[OlmoEarthS
         microbatches.append(OlmoEarthSample(**microbatch_dict))
 
     return microbatches
+
+
+def split_masked_batch(
+    batch: MaskedOlmoEarthSample, microbatch_size: int
+) -> list[MaskedOlmoEarthSample]:
+    """Split a 'batch' MaskedOlmoEarthSample into a list of micro-batches.
+
+    Each micro-batch has a batch dimension up to microbatch_size.
+
+    Args:
+        batch (MaskedOlmoEarthSample): A MaskedOlmoEarthSample object whose first
+            dimension (B) is the batch size.
+        microbatch_size (int): The maximum batch size for each micro-batch.
+
+    Returns:
+        list[MaskedOlmoEarthSample]: List of MaskedOlmoEarthSample objects.
+    """
+    batch_size = batch.timestamps.shape[0]
+
+    if batch_size <= microbatch_size:
+        return [batch]
+
+    num_microbatches = (batch_size + microbatch_size - 1) // microbatch_size
+
+    # Compute split sizes (last chunk may be smaller)
+    split_sizes = [microbatch_size] * (num_microbatches - 1)
+    split_sizes.append(batch_size - microbatch_size * (num_microbatches - 1))
+
+    # Split all non-None fields at once using torch.split
+    splits: dict[str, tuple] = {}
+    for field in batch._fields:
+        data = getattr(batch, field)
+        if data is not None:
+            splits[field] = data.split(split_sizes, dim=0)
+
+    # Build microbatches
+    return [
+        MaskedOlmoEarthSample(**{f: chunks[i] for f, chunks in splits.items()})
+        for i in range(num_microbatches)
+    ]
 
 
 def log_memory_usage_for_process(process: psutil.Process) -> tuple[int, int, int, int]:

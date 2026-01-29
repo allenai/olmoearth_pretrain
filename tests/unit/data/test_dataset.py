@@ -168,7 +168,9 @@ class TestOlmoEarthDataset:
         )
 
         # Test filling a missing modality
-        filled_data = dataset._fill_missing_modality(sample, "sentinel1")
+        filled_data = dataset._fill_missing_modality(
+            "sentinel1", sample.height, sample.width, sample.time
+        )
 
         # Check shape matches expected shape
         expected_shape = sample.get_expected_shape("sentinel1")

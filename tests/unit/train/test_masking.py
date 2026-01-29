@@ -14,6 +14,7 @@ from olmoearth_pretrain.train.masking import (
     ModalityCrossSpaceMaskingStrategy,
     RandomMaskingStrategy,
     RandomRangeMaskingStrategy,
+    RandomWithDecodeMaskingStrategy,
     SpaceMaskingStrategy,
     TimeMaskingStrategy,
 )
@@ -25,7 +26,7 @@ def test_unmask() -> None:
     """Test unmasking functionality."""
     b, t, h, w = 1, 2, 4, 4
 
-    mask = torch.zeros(b, t, h, w, 3)
+    mask = torch.ones(b, t, h, w, 3) * MaskValue.DECODER.value
     # the first timestep is missing
     mask[:, 0] = MaskValue.MISSING.value
     s = MaskedOlmoEarthSample(
@@ -1436,3 +1437,260 @@ class TestModalityCrossMaskingStrategy:
             for encoded_decoded_tuple in encoded_decoded_bandsets
         }
         assert counts == {2, 3, 4, 5}
+
+
+def test_random_decode_masking_with_missing_modality_mask() -> None:
+    """Test RandomWithDecodeMaskingStrategy with missing_modalities_masks.
+
+    The new behavior splits bandsets into encode-only and decode-only groups:
+    - For encode bandsets: encode_ratio of tokens are encoded, rest are target-only
+    - For decode bandsets: decode_ratio of tokens are decoded, rest are target-only
+    """
+    b, h, w, t = 10, 16, 16, 8
+
+    days = torch.randint(1, 31, (b, t, 1), dtype=torch.long)
+    months = torch.randint(1, 13, (b, t, 1), dtype=torch.long)
+    years = torch.randint(2018, 2020, (b, t, 1), dtype=torch.long)
+    timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
+    # Include all modalities but mark some sentinel1 samples as missing
+    sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
+    sentinel1_num_bands = Modality.SENTINEL1.num_bands
+    worldcover_num_bands = Modality.WORLDCOVER.num_bands
+    latlon_num_bands = Modality.LATLON.num_bands
+
+    # Create a missing mask for sentinel1 where half the batch is missing
+    sentinel1 = torch.ones((b, h, w, t, sentinel1_num_bands))
+    sentinel1[b // 2 :] = MISSING_VALUE
+
+    # Create the OlmoEarthSample with missing_modalities_masks
+    batch = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
+        sentinel1=sentinel1,
+        latlon=torch.ones((b, latlon_num_bands)),
+        timestamps=timestamps,
+        worldcover=torch.ones((b, h, w, worldcover_num_bands)),
+    )
+
+    # Test the RandomMaskingStrategy
+    encode_ratio, decode_ratio = 0.25, 0.5
+    strategy = RandomWithDecodeMaskingStrategy(
+        encode_ratio=encode_ratio,
+        decode_ratio=decode_ratio,
+        only_decode_modalities=["worldcover"],
+    )
+
+    for patch_size in [1, 2, 4]:
+        # Apply masking
+        masked_sample = strategy.apply_mask(batch, patch_size=patch_size)
+
+        # first, lets check that worldcover is all decode only
+        assert isinstance(masked_sample.worldcover_mask, torch.Tensor)
+        assert (masked_sample.worldcover_mask == MaskValue.DECODER.value).all()
+
+        # Check s2 bandset splitting behavior
+        # Bandsets are split across ALL encode-decode modalities (s2, s1, latlon)
+        assert isinstance(masked_sample.sentinel2_l2a_mask, torch.Tensor)
+        num_s2_bandsets = Modality.SENTINEL2_L2A.num_band_sets
+        for idx in range(masked_sample.sentinel2_l2a_mask.shape[0]):
+            instance_mask = masked_sample.sentinel2_l2a_mask[idx]
+            # Check each bandset has the right ratios
+            for bandset_idx in range(num_s2_bandsets):
+                bandset_mask = instance_mask[
+                    0::patch_size, 0::patch_size, :, bandset_idx
+                ]
+                num_tokens = bandset_mask.numel()
+                num_encoded = (
+                    (bandset_mask == MaskValue.ONLINE_ENCODER.value).sum().item()
+                )
+                num_decoded = (bandset_mask == MaskValue.DECODER.value).sum().item()
+
+                # Each bandset is either encode-only or decode-only
+                if num_encoded > 0:
+                    # This is an encode bandset: encode_ratio encoded, rest target-only
+                    assert num_encoded / num_tokens == encode_ratio
+                    assert num_decoded == 0
+                else:
+                    # This is a decode bandset: decode_ratio decoded, rest target-only
+                    assert num_decoded / num_tokens == decode_ratio
+
+        # then we check that half the s1 batch was masked correctly
+        assert isinstance(masked_sample.sentinel1_mask, torch.Tensor)
+        num_s1_bandsets = Modality.SENTINEL1.num_band_sets
+        for idx in range(masked_sample.sentinel1_mask.shape[0]):
+            instance_mask = masked_sample.sentinel1_mask[idx]
+            if idx < (masked_sample.sentinel1_mask.shape[0] // 2):
+                # Check each bandset has the right ratios
+                for bandset_idx in range(num_s1_bandsets):
+                    bandset_mask = instance_mask[
+                        0::patch_size, 0::patch_size, :, bandset_idx
+                    ]
+                    num_tokens = bandset_mask.numel()
+                    num_encoded = (
+                        (bandset_mask == MaskValue.ONLINE_ENCODER.value).sum().item()
+                    )
+                    num_decoded = (bandset_mask == MaskValue.DECODER.value).sum().item()
+
+                    # Each bandset is either encode-only or decode-only
+                    if num_encoded > 0:
+                        assert num_encoded / num_tokens == encode_ratio
+                        assert num_decoded == 0
+                    else:
+                        assert num_decoded / num_tokens == decode_ratio
+            else:
+                assert (instance_mask == MaskValue.MISSING.value).all()
+
+        # Check that at least one bandset is encoded across all encode-decode modalities
+        for idx in range(b):
+            total_encoded_bandsets = 0
+            # Count s2 encoded bandsets
+            s2_mask = masked_sample.sentinel2_l2a_mask[idx]
+            for bandset_idx in range(num_s2_bandsets):
+                if (
+                    s2_mask[0::patch_size, 0::patch_size, :, bandset_idx]
+                    == MaskValue.ONLINE_ENCODER.value
+                ).any():
+                    total_encoded_bandsets += 1
+            # Count s1 encoded bandsets (only for non-missing instances)
+            if idx < b // 2:
+                s1_mask = masked_sample.sentinel1_mask[idx]
+                for bandset_idx in range(num_s1_bandsets):
+                    if (
+                        s1_mask[0::patch_size, 0::patch_size, :, bandset_idx]
+                        == MaskValue.ONLINE_ENCODER.value
+                    ).any():
+                        total_encoded_bandsets += 1
+            # Count latlon encoded bandsets
+            latlon_mask = masked_sample.latlon_mask[idx]  # type: ignore
+            num_latlon_bandsets = Modality.LATLON.num_band_sets
+            for bandset_idx in range(num_latlon_bandsets):
+                if (latlon_mask[bandset_idx] == MaskValue.ONLINE_ENCODER.value).any():
+                    total_encoded_bandsets += 1
+            assert total_encoded_bandsets >= 1, (
+                f"Instance {idx} has no encoded bandsets across all modalities"
+            )
+
+
+def test_random_decode_masking_with_missing_modality_mask_in_instance() -> None:
+    """Test RandomWithDecodeMaskingStrategy with missing_modalities_masks.
+
+    This tests the case where some timesteps within an instance are missing.
+    The new behavior splits bandsets into encode-only and decode-only groups.
+    """
+    b, h, w, t = 10, 16, 16, 8
+
+    days = torch.randint(1, 31, (b, t, 1), dtype=torch.long)
+    months = torch.randint(1, 13, (b, t, 1), dtype=torch.long)
+    years = torch.randint(2018, 2020, (b, t, 1), dtype=torch.long)
+    timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
+    # Include all modalities but mark some sentinel1 samples as missing
+    sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
+    sentinel1_num_bands = Modality.SENTINEL1.num_bands
+    worldcover_num_bands = Modality.WORLDCOVER.num_bands
+    latlon_num_bands = Modality.LATLON.num_bands
+
+    # Create a missing mask for sentinel1 where half the timesteps are missing
+    sentinel1 = torch.ones((b, h, w, t, sentinel1_num_bands))
+    sentinel1[:, :, :, t // 2 :] = MISSING_VALUE
+
+    # Create the OlmoEarthSample with missing_modalities_masks
+    batch = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
+        sentinel1=sentinel1,
+        latlon=torch.ones((b, latlon_num_bands)),
+        timestamps=timestamps,
+        worldcover=torch.ones((b, h, w, worldcover_num_bands)),
+    )
+
+    # Test the RandomMaskingStrategy
+    encode_ratio, decode_ratio = 0.25, 0.5
+    strategy = RandomWithDecodeMaskingStrategy(
+        encode_ratio=encode_ratio,
+        decode_ratio=decode_ratio,
+        only_decode_modalities=["worldcover"],
+    )
+
+    for patch_size in [1, 2, 4]:
+        # Apply masking
+        masked_sample = strategy.apply_mask(batch, patch_size=patch_size)
+
+        # first, lets check that worldcover is all decode only
+        assert isinstance(masked_sample.worldcover_mask, torch.Tensor)
+        assert (masked_sample.worldcover_mask == MaskValue.DECODER.value).all()
+
+        # Check s2 bandset splitting behavior
+        assert isinstance(masked_sample.sentinel2_l2a_mask, torch.Tensor)
+        num_s2_bandsets = Modality.SENTINEL2_L2A.num_band_sets
+        for idx in range(masked_sample.sentinel2_l2a_mask.shape[0]):
+            instance_mask = masked_sample.sentinel2_l2a_mask[idx]
+            # Check each bandset has the right ratios
+            for bandset_idx in range(num_s2_bandsets):
+                bandset_mask = instance_mask[
+                    0::patch_size, 0::patch_size, :, bandset_idx
+                ]
+                num_tokens = bandset_mask.numel()
+                num_encoded = (
+                    (bandset_mask == MaskValue.ONLINE_ENCODER.value).sum().item()
+                )
+                num_decoded = (bandset_mask == MaskValue.DECODER.value).sum().item()
+
+                # Each bandset is either encode-only or decode-only
+                if num_encoded > 0:
+                    assert num_encoded / num_tokens == encode_ratio
+                    assert num_decoded == 0
+                else:
+                    assert num_decoded / num_tokens == decode_ratio
+
+        # Check s1 with partial missing timesteps
+        assert isinstance(masked_sample.sentinel1_mask, torch.Tensor)
+        num_s1_bandsets = Modality.SENTINEL1.num_band_sets
+        for idx in range(masked_sample.sentinel1_mask.shape[0]):
+            instance_mask = masked_sample.sentinel1_mask[idx]
+            mask_as_tokens = instance_mask[0::patch_size, 0::patch_size]
+            # Check that the missing timesteps are still missing
+            assert (mask_as_tokens[:, :, t // 2 :] == MaskValue.MISSING.value).all()
+
+            # Check each bandset for the non-missing portion
+            for bandset_idx in range(num_s1_bandsets):
+                # Only check the non-missing timesteps
+                bandset_mask = mask_as_tokens[:, :, : t // 2, bandset_idx]
+                num_tokens = bandset_mask.numel()
+                num_encoded = (
+                    (bandset_mask == MaskValue.ONLINE_ENCODER.value).sum().item()
+                )
+                num_decoded = (bandset_mask == MaskValue.DECODER.value).sum().item()
+
+                # Each bandset is either encode-only or decode-only
+                if num_encoded > 0:
+                    assert num_encoded / num_tokens == encode_ratio
+                    assert num_decoded == 0
+                else:
+                    assert num_decoded / num_tokens == decode_ratio
+
+        # Check that at least one bandset is encoded across all encode-decode modalities
+        for idx in range(b):
+            total_encoded_bandsets = 0
+            # Count s2 encoded bandsets
+            s2_mask = masked_sample.sentinel2_l2a_mask[idx]
+            for bandset_idx in range(num_s2_bandsets):
+                if (
+                    s2_mask[0::patch_size, 0::patch_size, :, bandset_idx]
+                    == MaskValue.ONLINE_ENCODER.value
+                ).any():
+                    total_encoded_bandsets += 1
+            # Count s1 encoded bandsets (only non-missing timesteps)
+            s1_mask = masked_sample.sentinel1_mask[idx]
+            for bandset_idx in range(num_s1_bandsets):
+                if (
+                    s1_mask[0::patch_size, 0::patch_size, : t // 2, bandset_idx]
+                    == MaskValue.ONLINE_ENCODER.value
+                ).any():
+                    total_encoded_bandsets += 1
+            # Count latlon encoded bandsets
+            latlon_mask = masked_sample.latlon_mask[idx]  # type: ignore
+            num_latlon_bandsets = Modality.LATLON.num_band_sets
+            for bandset_idx in range(num_latlon_bandsets):
+                if (latlon_mask[bandset_idx] == MaskValue.ONLINE_ENCODER.value).any():
+                    total_encoded_bandsets += 1
+            assert total_encoded_bandsets >= 1, (
+                f"Instance {idx} has no encoded bandsets across all modalities"
+            )

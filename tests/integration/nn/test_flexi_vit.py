@@ -176,7 +176,7 @@ class TestMultiModalPatchEmbeddings:
             latlon_num_band_sets,
             embedding_size,
         )  # B, C_G , D
-        assert (output["latlon"] == 0).all()
+        assert (output["latlon_mask"] == 1).all()
         assert output["latlon_mask"].shape == (B, latlon_num_band_sets)  # B, C_G
 
 
