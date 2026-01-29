@@ -613,6 +613,41 @@ class L2Loss(Loss):
         return F.mse_loss(pred, target)
 
 
+@LOSS_REGISTRY.register("smooth_l1")
+class SmoothL1Loss(Loss):
+    """Loss function for Smooth L1 (Huber loss)."""
+
+    name = "SmoothL1"
+
+    def __init__(self, beta: float = 1.0):
+        """Initialize Smooth L1 loss.
+
+        Args:
+            beta: Specifies the threshold at which to change between L1 and L2 loss.
+                  Default is 1.0.
+        """
+        self.beta = beta
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute Smooth L1 loss between predictions and targets.
+
+        Args:
+            predictions: Model predictions.
+            targets: Ground truth targets.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The computed loss value.
+        """
+        all_preds, all_masks = predictions.flatten_tokens_and_masks()
+        all_targets = targets.flatten_tokens_and_masks()[0]
+        pred = all_preds[all_masks == MaskValue.DECODER.value]
+        target = all_targets[all_masks == MaskValue.DECODER.value]
+        return F.smooth_l1_loss(pred, target, beta=self.beta)
+
+
 @LOSS_REGISTRY.register("mae")
 class MAELoss(Loss):
     """Loss function masked auto-encoding (reconstruction)."""
