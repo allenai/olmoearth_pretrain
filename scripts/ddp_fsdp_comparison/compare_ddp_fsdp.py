@@ -44,7 +44,7 @@ from olmoearth_pretrain.internal.experiment import (
     main,
 )
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
-from olmoearth_pretrain.nn.flexivit import EncoderConfig, PoolingType, PredictorConfig
+from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PoolingType, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
