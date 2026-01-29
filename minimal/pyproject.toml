@@ -1,0 +1,31 @@
+[project]
+name = "olmoearth-pretrain-minimal"
+version = "0.0.1"
+description = "Minimal OlmoEarth Pretrain package for model initialization"
+authors = [
+    { name = "OlmoEarth Team" },
+]
+readme = "README.md"
+requires-python = ">=3.11, <3.14"
+dependencies = [
+    # Minimal inference dependencies
+    "einops>=0.7.0",
+    "huggingface_hub",
+    "numpy>=1.26.4",
+    "torch>=2.7,<2.8",
+    "universal-pathlib>=0.2.5",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["olmoearth_pretrain*"]
+
+[tool.ruff]
+fix = true
+
+[tool.ruff.lint]
+extend-select = ["D", "I", "UP"]
+
