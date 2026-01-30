@@ -24,7 +24,6 @@ from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.data.dataset import (
     OlmoEarthDatasetConfig,
-    collate_olmoearth_pretrain,
 )
 from olmoearth_pretrain.data.visualize import visualize_sample
 from olmoearth_pretrain.inference_benchmarking.run_throughput_benchmark import (
@@ -80,8 +79,6 @@ class CommonComponents(Config):
     training_modalities: list[str]
     launch: OlmoEarthBeakerLaunchConfig | None = None
     nccl_debug: bool = False
-    # Enable dataloader-side masking to offload masking from GPU to dataloader workers
-    dataloader_side_masking: bool = False
     # callbacks: dict[str, Callback]
 
     def validate(self) -> None:
@@ -291,10 +288,8 @@ def train(config: OlmoEarthExperimentConfig) -> None:
     model = model.to(device)
     train_module = config.train_module.build(model)
     dataset = config.dataset.build()
-    # TODO: akward harcoding of the collator here
     data_loader = config.data_loader.build(
         dataset,
-        collator=collate_olmoearth_pretrain,
         dp_process_group=train_module.dp_process_group,
     )
     trainer = config.trainer.build(train_module, data_loader)
@@ -346,9 +341,7 @@ def visualize(config: OlmoEarthExperimentConfig) -> None:
     global_step = config.visualize.global_step
     dataset = config.dataset.build()
     if global_step is not None:
-        data_loader = config.data_loader.build(
-            dataset, collator=collate_olmoearth_pretrain, dp_process_group=None
-        )
+        data_loader = config.data_loader.build(dataset, dp_process_group=None)
         sample_indices = data_loader.fast_forward(global_step)
     else:
         sample_indices = np.random.randint(
@@ -373,10 +366,7 @@ def launch(config: OlmoEarthExperimentConfig) -> None:
 def prep(config: OlmoEarthExperimentConfig) -> None:
     """Prepare the dataset for an experiment."""
     dataset = config.dataset.build()
-    # TODO: akward harcoding of the collator here
-    data_loader = config.data_loader.build(
-        dataset, collator=collate_olmoearth_pretrain, dp_process_group=None
-    )
+    data_loader = config.data_loader.build(dataset, dp_process_group=None)
     data_loader.reshuffle(epoch=1)
     # Also may want to create the first index of shuffling here for starters
 

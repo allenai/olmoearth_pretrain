@@ -1,5 +1,6 @@
 """Unit tests for dataloader module."""
 
+import functools
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +10,11 @@ from olmoearth_pretrain.data.dataloader import (
     OlmoEarthDataLoader,
     _IterableDatasetWrapper,
 )
-from olmoearth_pretrain.data.dataset import OlmoEarthDataset, collate_olmoearth_pretrain
+from olmoearth_pretrain.data.dataset import (
+    OlmoEarthDataset,
+    collate_single_masked_batched,
+)
+from olmoearth_pretrain.train.masking import MaskingConfig
 
 
 def test_get_batch_item_params_iterator(tmp_path: Path, setup_h5py_dir: Path) -> None:
@@ -27,6 +32,10 @@ def test_get_batch_item_params_iterator(tmp_path: Path, setup_h5py_dir: Path) ->
         training_modalities=training_modalities,
         dtype=np.float32,
     )
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    collator = functools.partial(
+        collate_single_masked_batched, transform=None, masking_strategy=masking_strategy
+    )
 
     dataset.prepare()
     dataloader = OlmoEarthDataLoader(
@@ -39,12 +48,14 @@ def test_get_batch_item_params_iterator(tmp_path: Path, setup_h5py_dir: Path) ->
         seed=0,
         shuffle=True,
         num_workers=0,
-        collator=collate_olmoearth_pretrain,
+        collator=collator,
         target_device_type="cpu",
         token_budget=1000000,
         min_patch_size=1,
         max_patch_size=1,
         sampled_hw_p_list=[256],
+        masking_strategy=masking_strategy,
+        num_masked_views=1,
     )
 
     dataloader.reshuffle()
@@ -119,6 +130,10 @@ def _create_test_dataloader(
             return self.length
 
     dataset = MockDataset(length=20)
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    collator = functools.partial(
+        collate_single_masked_batched, transform=None, masking_strategy=masking_strategy
+    )
     return OlmoEarthDataLoader(
         dataset=dataset,
         work_dir=tmp_path,
@@ -129,13 +144,15 @@ def _create_test_dataloader(
         seed=seed,
         shuffle=shuffle,
         num_workers=0,
-        collator=collate_olmoearth_pretrain,
+        collator=collator,
         target_device_type="cpu",
         token_budget=1000000,
         min_patch_size=1,
         max_patch_size=1,
         sampled_hw_p_list=[256],
         num_dataset_repeats_per_epoch=num_dataset_repeats_per_epoch,
+        masking_strategy=masking_strategy,
+        num_masked_views=1,
     )
 
 

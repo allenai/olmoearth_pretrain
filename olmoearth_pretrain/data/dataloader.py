@@ -647,7 +647,6 @@ class OlmoEarthDataLoaderConfig(Config):
     def build(
         self,
         dataset: OlmoEarthDataset,
-        collator: Callable,
         dp_process_group: dist.ProcessGroup | None = None,
     ) -> "OlmoEarthDataLoader":
         """Build the OlmoEarthDataLoader."""
@@ -668,6 +667,7 @@ class OlmoEarthDataLoaderConfig(Config):
         # Select appropriate collator based on num_masked_views
         # Use batched collators that apply transform + masking to the entire batch
         # at once for better vectorization
+        collator: Callable
         if self.num_masked_views == 1:
             collator = functools.partial(
                 collate_single_masked_batched,
