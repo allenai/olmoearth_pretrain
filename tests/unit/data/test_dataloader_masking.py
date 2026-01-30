@@ -15,7 +15,6 @@ from olmoearth_pretrain.data.dataset import (
     OlmoEarthDataset,
     OlmoEarthSample,
     collate_double_masked_batched,
-    collate_olmoearth_pretrain,
     collate_single_masked_batched,
 )
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
@@ -26,7 +25,7 @@ class TestDataLoaderConfigValidation:
     """Tests for OlmoEarthDataLoaderConfig validation."""
 
     def test_config_validation_requires_masking_config(self) -> None:
-        """Test that masking_config is required when num_masked_views > 0."""
+        """Test that masking_config is always required."""
         config = OlmoEarthDataLoaderConfig(
             work_dir="/tmp/test",
             global_batch_size=2,
@@ -34,7 +33,7 @@ class TestDataLoaderConfigValidation:
             max_patch_size=8,
             sampled_hw_p_list=[4],
             seed=42,
-            num_masked_views=1,  # Requires masking_config
+            num_masked_views=1,
             masking_config=None,  # Not provided
         )
 
@@ -54,7 +53,23 @@ class TestDataLoaderConfigValidation:
             masking_config=MaskingConfig(strategy_config={"type": "random"}),
         )
 
-        with pytest.raises(ValueError, match="num_masked_views must be 0, 1, or 2"):
+        with pytest.raises(ValueError, match="num_masked_views must be 1 or 2"):
+            config.validate()
+
+    def test_config_validation_invalid_num_masked_views_zero(self) -> None:
+        """Test that num_masked_views=0 raises ValueError."""
+        config = OlmoEarthDataLoaderConfig(
+            work_dir="/tmp/test",
+            global_batch_size=2,
+            min_patch_size=1,
+            max_patch_size=8,
+            sampled_hw_p_list=[4],
+            seed=42,
+            num_masked_views=0,  # Invalid (legacy mode removed)
+            masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        )
+
+        with pytest.raises(ValueError, match="num_masked_views must be 1 or 2"):
             config.validate()
 
     def test_config_validation_valid_single_masked(self) -> None:
@@ -93,43 +108,6 @@ class TestDataLoaderConfigValidation:
 
 class TestGetMockBatch:
     """Tests for OlmoEarthDataLoader.get_mock_batch method."""
-
-    def test_get_mock_batch_legacy_mode(
-        self, tmp_path: Path, setup_h5py_dir: Path
-    ) -> None:
-        """Test get_mock_batch returns correct format in legacy mode."""
-        training_modalities = [
-            Modality.SENTINEL2_L2A.name,
-            Modality.SENTINEL1.name,
-            Modality.WORLDCOVER.name,
-        ]
-        dataset = OlmoEarthDataset(
-            h5py_dir=setup_h5py_dir,
-            training_modalities=training_modalities,
-            dtype=np.float32,
-        )
-        dataset.prepare()
-
-        dataloader = OlmoEarthDataLoader(
-            dataset=dataset,
-            work_dir=tmp_path,
-            global_batch_size=2,
-            min_patch_size=1,
-            max_patch_size=1,
-            sampled_hw_p_list=[8],
-            token_budget=1000000,
-            seed=42,
-            collator=collate_olmoearth_pretrain,
-            num_masked_views=0,  # Legacy mode
-        )
-
-        mock_batch = dataloader.get_mock_batch()
-
-        # Should return (patch_size, OlmoEarthSample)
-        assert len(mock_batch) == 2
-        patch_size, sample = mock_batch
-        assert patch_size == 1
-        assert isinstance(sample, OlmoEarthSample)
 
     def test_get_mock_batch_single_masked(
         self, tmp_path: Path, setup_h5py_dir: Path

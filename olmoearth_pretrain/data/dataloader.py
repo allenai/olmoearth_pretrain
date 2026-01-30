@@ -70,11 +70,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
         persistent_workers: bool = True,
         multiprocessing_context: str = "spawn",
         num_dataset_repeats_per_epoch: int = 1,
-        # New fields for dataloader-side masking
+        # Dataloader-side masking
         transform: Transform | None = None,
         masking_strategy: MaskingStrategy | None = None,
         masking_strategy_b: MaskingStrategy | None = None,
-        num_masked_views: int = 0,
+        num_masked_views: int = 1,
     ):
         """Initialize the OlmoEarthDataLoader.
 
@@ -100,9 +100,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
             multiprocessing_context: Multiprocessing context ("spawn" or "forkserver").
             num_dataset_repeats_per_epoch: Number of times to repeat the dataset per epoch.
             transform: Optional transform to apply in the dataloader workers.
-            masking_strategy: Optional masking strategy to apply in the dataloader workers.
+            masking_strategy: Masking strategy to apply in the dataloader workers.
             masking_strategy_b: Optional second masking strategy for Galileo-style training.
-            num_masked_views: Number of masked views to return (0=legacy, 1=single, 2=double).
+            num_masked_views: Number of masked views to return (1=single, 2=double).
         """
         super().__init__(
             work_dir=work_dir,
@@ -138,14 +138,10 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.num_masked_views = num_masked_views
 
         # Validate configuration
-        if num_masked_views > 0 and masking_strategy is None:
-            raise ValueError(
-                "masking_strategy must be provided when num_masked_views > 0"
-            )
-        if num_masked_views not in (0, 1, 2):
-            raise ValueError(
-                f"num_masked_views must be 0, 1, or 2, got {num_masked_views}"
-            )
+        if masking_strategy is None:
+            raise ValueError("masking_strategy must be provided")
+        if num_masked_views not in (1, 2):
+            raise ValueError(f"num_masked_views must be 1 or 2, got {num_masked_views}")
 
         if self.num_workers > 0 and self.multiprocessing_context == "forkserver":
             # Overhead of loading modules on import by preloading them
@@ -429,7 +425,6 @@ class OlmoEarthDataLoader(DataLoaderBase):
         """Get a mock batch, for dry-run of forward and backward pass.
 
         Returns the appropriate batch format based on num_masked_views:
-        - 0: (patch_size, OlmoEarthSample) - legacy mode
         - 1: (patch_size, MaskedOlmoEarthSample) - single masked view
         - 2: (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample) - double masked
         """
@@ -578,13 +573,11 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
     def __iter__(self) -> Iterator[Any]:
         """Iterate over the dataset.
 
-        Yields batches in one of three formats depending on num_masked_views:
-        - 0: (patch_size, OlmoEarthSample) - legacy mode
+        Yields batches in one of two formats depending on num_masked_views:
         - 1: (patch_size, MaskedOlmoEarthSample) - single masked view
         - 2: (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample) - double masked views
 
-        When num_masked_views > 0, transform and masking are applied in the
-        batched collator for better vectorization.
+        Transform and masking are applied in the batched collator for better vectorization.
         """
         global_indices = self.data_loader.get_global_indices()
         indices = self.data_loader._get_local_instance_indices(global_indices)
@@ -631,7 +624,7 @@ class OlmoEarthDataLoaderConfig(Config):
     transform_config: TransformConfig | None = None
     masking_config: MaskingConfig | None = None
     masking_config_b: MaskingConfig | None = None
-    num_masked_views: int = 0  # 0 = legacy (no masking), 1 = single, 2 = double
+    num_masked_views: int = 1  # 1 = single, 2 = double
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -639,13 +632,11 @@ class OlmoEarthDataLoaderConfig(Config):
             raise ValueError("Work directory is not set")
         if self.min_patch_size > self.max_patch_size:
             raise ValueError("min_patch_size must be less than max_patch_size")
-        if self.num_masked_views > 0 and self.masking_config is None:
+        if self.masking_config is None:
+            raise ValueError("masking_config must be provided")
+        if self.num_masked_views not in (1, 2):
             raise ValueError(
-                "masking_config must be provided when num_masked_views > 0"
-            )
-        if self.num_masked_views not in (0, 1, 2):
-            raise ValueError(
-                f"num_masked_views must be 0, 1, or 2, got {self.num_masked_views}"
+                f"num_masked_views must be 1 or 2, got {self.num_masked_views}"
             )
 
     @property
@@ -663,34 +654,33 @@ class OlmoEarthDataLoaderConfig(Config):
         self.validate()
         dataset.prepare()
 
-        # Build transform and masking strategies if configured
+        # Build transform and masking strategies
         transform = (
             self.transform_config.build() if self.transform_config is not None else None
         )
-        masking_strategy = (
-            self.masking_config.build() if self.masking_config is not None else None
-        )
+        # masking_config is required (validated above)
+        assert self.masking_config is not None
+        masking_strategy = self.masking_config.build()
         masking_strategy_b = (
             self.masking_config_b.build() if self.masking_config_b is not None else None
         )
 
         # Select appropriate collator based on num_masked_views
-        # When num_masked_views > 0, use batched collators that apply transform + masking
-        # to the entire batch at once for better vectorization
+        # Use batched collators that apply transform + masking to the entire batch
+        # at once for better vectorization
         if self.num_masked_views == 1:
             collator = functools.partial(
                 collate_single_masked_batched,
                 transform=transform,
                 masking_strategy=masking_strategy,
             )
-        elif self.num_masked_views == 2:
+        else:  # num_masked_views == 2
             collator = functools.partial(
                 collate_double_masked_batched,
                 transform=transform,
                 masking_strategy=masking_strategy,
                 masking_strategy_b=masking_strategy_b,
             )
-        # else: use the provided collator (legacy mode)
 
         return OlmoEarthDataLoader(
             dataset=dataset,

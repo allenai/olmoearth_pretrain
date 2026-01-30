@@ -10,7 +10,10 @@ from olmo_core.optim.adamw import AdamWConfig
 from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.data.dataset import OlmoEarthSample, collate_olmoearth_pretrain
+from olmoearth_pretrain.data.dataset import (
+    OlmoEarthSample,
+    collate_single_masked_batched,
+)
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
@@ -171,7 +174,13 @@ def test_train_batch_without_missing_modalities(
     set_random_seeds: None,
 ) -> None:
     """Test train batch without missing modalities."""
-    batch = collate_olmoearth_pretrain(samples_without_missing_modalities)
+    # Create a fresh masking strategy for collation (MaskingConfig.build() mutates the config)
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    batch = collate_single_masked_batched(
+        samples_without_missing_modalities,
+        transform=None,
+        masking_strategy=masking_strategy,
+    )
     train_module = train_module_config.build(latent_mim_model, device="cpu")
     with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
         # Mock the trainer property
@@ -193,8 +202,13 @@ def test_train_batch_with_missing_modalities(
     set_random_seeds: None,
 ) -> None:
     """Test train batch with missing modalities."""
-    # Create a collated batch
-    batch = collate_olmoearth_pretrain(samples_with_missing_modalities)
+    # Create a collated batch with masking (using fresh MaskingConfig since build() mutates)
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    batch = collate_single_masked_batched(
+        samples_with_missing_modalities,
+        transform=None,
+        masking_strategy=masking_strategy,
+    )
     train_module = train_module_config.build(latent_mim_model, device="cpu")
     with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
         # Mock the trainer property

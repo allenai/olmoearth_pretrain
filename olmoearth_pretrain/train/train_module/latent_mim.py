@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from logging import getLogger
-from typing import Any, cast
+from typing import Any
 
 import torch
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
@@ -13,7 +13,6 @@ from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
@@ -25,7 +24,7 @@ from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
 )
-from olmoearth_pretrain.train.utils import split_batch, split_masked_batch
+from olmoearth_pretrain.train.utils import split_masked_batch
 
 logger = getLogger(__name__)
 
@@ -184,7 +183,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
 
     def train_batch(
         self,
-        batch: tuple[int, OlmoEarthSample] | tuple[int, MaskedOlmoEarthSample],
+        batch: tuple[int, MaskedOlmoEarthSample],
         dry_run: bool = False,
     ) -> None:
         """Train a batch.
@@ -200,8 +199,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
 
         Args:
-            batch: Either a legacy (patch_size, OlmoEarthSample) tuple or a pre-masked
-                (patch_size, MaskedOlmoEarthSample) tuple from the dataloader.
+            batch: A (patch_size, MaskedOlmoEarthSample) tuple from the dataloader.
             dry_run: If True, skip metric recording and just run forward/backward.
         """
         if not dry_run:
@@ -213,41 +211,18 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         patch_size = batch[0]
         batch_data = batch[1]
 
-        # Detect batch type and split accordingly
-        is_pre_masked = isinstance(batch_data, MaskedOlmoEarthSample)
-        if is_pre_masked:
-            masked_microbatches = split_masked_batch(
-                cast(MaskedOlmoEarthSample, batch_data), self.rank_microbatch_size
-            )
-            num_microbatches = len(masked_microbatches)
-        else:
-            unmasked_microbatches = split_batch(
-                cast(OlmoEarthSample, batch_data), self.rank_microbatch_size
-            )
-            num_microbatches = len(unmasked_microbatches)
+        # Split batch into microbatches
+        masked_microbatches = split_masked_batch(batch_data, self.rank_microbatch_size)
+        num_microbatches = len(masked_microbatches)
 
         for microbatch_idx in range(num_microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
-                if is_pre_masked:
-                    # Pre-masked from dataloader - just move to device
-                    microbatch_masked = masked_microbatches[microbatch_idx]
-                    logger.info(
-                        f"Training microbatch {microbatch_idx} of {num_microbatches} "
-                        f"with batch size {microbatch_masked.timestamps.shape[0]} on rank {get_local_rank()} (pre-masked)"
-                    )
-                    masked_batch = microbatch_masked.to_device(self.device)
-                else:
-                    # Legacy mode - apply transform and masking on GPU
-                    microbatch_unmasked = unmasked_microbatches[microbatch_idx]
-                    print(
-                        f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch_unmasked.batch_size} on rank {get_local_rank()}\n"
-                    )
-                    transformed = self.transform.apply(microbatch_unmasked).to_device(
-                        self.device
-                    )
-                    masked_batch = self.masking_strategy.apply_mask(
-                        transformed, patch_size=patch_size
-                    )
+                microbatch_masked = masked_microbatches[microbatch_idx]
+                logger.info(
+                    f"Training microbatch {microbatch_idx} of {num_microbatches} "
+                    f"with batch size {microbatch_masked.timestamps.shape[0]} on rank {get_local_rank()}"
+                )
+                masked_batch = microbatch_masked.to_device(self.device)
 
                 # Run Encoder and decoder on the augmented input
                 loss, latent, decoded, target_output = self.model_forward(
