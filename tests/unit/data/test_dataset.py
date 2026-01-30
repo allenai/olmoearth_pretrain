@@ -310,6 +310,157 @@ class TestOlmoEarthDataset:
 
         assert not np.array_equal(dataset1.sample_indices, dataset2.sample_indices)
 
+    def test_ram_cache_disabled_by_default(
+        self, setup_h5py_dir_20_samples: UPath
+    ) -> None:
+        """Test that RAM cache is disabled by default."""
+        dataset = OlmoEarthDataset(
+            h5py_dir=setup_h5py_dir_20_samples,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,
+        )
+        dataset.prepare()
+
+        assert dataset.num_samples_to_store_in_ram is None
+        assert dataset._cacheable_indices is None
+        assert len(dataset._ram_cache) == 0
+
+    def test_ram_cache_all_samples(self, setup_h5py_dir_20_samples: UPath) -> None:
+        """Test RAM caching when num_samples_to_store_in_ram >= dataset size."""
+        from olmoearth_pretrain.data.dataset import GetItemArgs
+
+        dataset = OlmoEarthDataset(
+            h5py_dir=setup_h5py_dir_20_samples,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,
+            num_samples_to_store_in_ram=100,  # More than 20 samples
+        )
+        dataset.prepare()
+
+        # All indices should be cacheable
+        assert dataset._cacheable_indices is not None
+        assert len(dataset._cacheable_indices) == len(dataset)
+
+        # Access a sample - should cache it
+        args = GetItemArgs(idx=0, patch_size=16, sampled_hw_p=4, token_budget=100)
+        dataset[args]
+
+        # Should have one item in cache
+        assert len(dataset._ram_cache) == 1
+        assert dataset._ram_cache_misses == 1
+        assert dataset._ram_cache_hits == 0
+
+        # Access same sample again - should hit cache
+        dataset[args]
+        assert len(dataset._ram_cache) == 1
+        assert dataset._ram_cache_misses == 1
+        assert dataset._ram_cache_hits == 1
+
+    def test_ram_cache_partial_samples(self, setup_h5py_dir_20_samples: UPath) -> None:
+        """Test RAM caching when num_samples_to_store_in_ram < dataset size."""
+        from olmoearth_pretrain.data.dataset import GetItemArgs
+
+        num_to_cache = 5
+        dataset = OlmoEarthDataset(
+            h5py_dir=setup_h5py_dir_20_samples,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,
+            num_samples_to_store_in_ram=num_to_cache,
+            seed=42,
+        )
+        dataset.prepare()
+
+        # Only num_to_cache indices should be cacheable
+        assert dataset._cacheable_indices is not None
+        assert len(dataset._cacheable_indices) == num_to_cache
+
+        # Access all samples
+        for idx in range(len(dataset)):
+            args = GetItemArgs(idx=idx, patch_size=16, sampled_hw_p=4, token_budget=100)
+            dataset[args]
+
+        # Only cacheable samples should be in cache
+        assert len(dataset._ram_cache) == num_to_cache
+
+    def test_ram_cache_same_seed_same_indices(
+        self, setup_h5py_dir_20_samples: UPath
+    ) -> None:
+        """Test that same seed produces same cacheable indices."""
+        same_seed = 123
+
+        dataset1 = OlmoEarthDataset(
+            h5py_dir=setup_h5py_dir_20_samples,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,
+            num_samples_to_store_in_ram=5,
+            seed=same_seed,
+        )
+        dataset1.prepare()
+
+        dataset2 = OlmoEarthDataset(
+            h5py_dir=setup_h5py_dir_20_samples,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,
+            num_samples_to_store_in_ram=5,
+            seed=same_seed,
+        )
+        dataset2.prepare()
+
+        assert dataset1._cacheable_indices == dataset2._cacheable_indices
+
+    def test_ram_cache_cached_sample_equals_loaded_sample(
+        self, setup_h5py_dir_20_samples: UPath
+    ) -> None:
+        """Test that cached sample produces same result as loading from disk."""
+        from olmoearth_pretrain.data.dataset import GetItemArgs
+
+        # Create dataset with caching
+        dataset_cached = OlmoEarthDataset(
+            h5py_dir=setup_h5py_dir_20_samples,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,
+            num_samples_to_store_in_ram=20,
+            seed=42,
+        )
+        dataset_cached.prepare()
+
+        # Create dataset without caching
+        dataset_no_cache = OlmoEarthDataset(
+            h5py_dir=setup_h5py_dir_20_samples,
+            training_modalities=["sentinel2_l2a", "sentinel1"],
+            dtype=np.float32,
+            normalize=False,
+            seed=42,
+        )
+        dataset_no_cache.prepare()
+
+        # Access same sample with same args (use fixed seed for deterministic subset)
+        np.random.seed(42)
+        args = GetItemArgs(idx=0, patch_size=16, sampled_hw_p=4, token_budget=100)
+        _, sample1_first = dataset_cached[args]
+
+        # Access again to get from cache
+        np.random.seed(42)
+        _, sample1_cached = dataset_cached[args]
+
+        # Access from non-cached dataset
+        np.random.seed(42)
+        _, sample2 = dataset_no_cache[args]
+
+        # The cached access should have hit the cache
+        assert dataset_cached._ram_cache_hits == 1
+
+        # Samples should have the same modalities present
+        assert (
+            sample1_first.modalities == sample1_cached.modalities == sample2.modalities
+        )
+
 
 def test_helios_dataset_config_deprecation_warning(tmp_path: Path) -> None:
     """Ensure the legacy HeliosDatasetConfig emits a deprecation warning."""

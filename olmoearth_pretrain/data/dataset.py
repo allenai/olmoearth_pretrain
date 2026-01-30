@@ -55,6 +55,16 @@ class GetItemArgs(NamedTuple):
     token_budget: int | None = None
 
 
+@dataclass
+class CachedSample:
+    """A cached sample stored in RAM before subsetting is applied."""
+
+    sample: OlmoEarthSample
+    missing_modalities: list[str]
+    current_length: int
+    missing_timesteps_masks: dict[str, Any]
+
+
 # TODO should training modalities be str or modality_spec
 class OlmoEarthDataset(Dataset):
     """OlmoEarth Pretrain dataset."""
@@ -72,6 +82,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        num_samples_to_store_in_ram: int | None = None,
     ):
         """Initialize the dataset.
 
@@ -97,6 +108,9 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            num_samples_to_store_in_ram: If set, cache this many samples in RAM (before
+                subsetting). If less than total samples, randomly selects which to cache.
+                Caching happens lazily during the first epoch.
 
         Returns:
             None
@@ -136,6 +150,13 @@ class OlmoEarthDataset(Dataset):
             )
         else:
             self.indices_to_filter = None
+
+        # RAM caching: stores samples before subsetting to skip H5 reads on cache hits
+        self.num_samples_to_store_in_ram = num_samples_to_store_in_ram
+        self._ram_cache: dict[int, CachedSample] = {}
+        self._cacheable_indices: set[int] | None = None
+        self._ram_cache_hits = 0
+        self._ram_cache_misses = 0
 
     @property
     def fingerprint_version(self) -> str:
@@ -280,6 +301,41 @@ class OlmoEarthDataset(Dataset):
         self._filter_sample_indices_for_training()
         self._filter_sample_indices_by_dataset_percentage()
         self.latlon_distribution = self.latlon_distribution[self.sample_indices]
+
+        # Set up RAM cache indices if enabled
+        self._setup_ram_cache_indices()
+
+    def _setup_ram_cache_indices(self) -> None:
+        """Select which sample indices should be cached in RAM."""
+        if (
+            self.num_samples_to_store_in_ram is None
+            or self.num_samples_to_store_in_ram <= 0
+        ):
+            self._cacheable_indices = None
+            return
+
+        assert self.sample_indices is not None, (
+            "Sample indices must be set before setting up RAM cache"
+        )
+
+        num_samples = len(self.sample_indices)
+        if self.num_samples_to_store_in_ram >= num_samples:
+            # Cache all samples
+            self._cacheable_indices = set(self.sample_indices.tolist())
+            logger.info(f"RAM cache enabled: will cache all {num_samples} samples")
+        else:
+            # Randomly select which samples to cache
+            rng = get_rng(self.seed)
+            selected = rng.choice(
+                self.sample_indices,
+                size=self.num_samples_to_store_in_ram,
+                replace=False,
+            )
+            self._cacheable_indices = set(selected.tolist())
+            logger.info(
+                f"RAM cache enabled: will cache {self.num_samples_to_store_in_ram} "
+                f"out of {num_samples} samples ({100 * self.num_samples_to_store_in_ram / num_samples:.1f}%)"
+            )
 
     def get_geographic_distribution(self) -> np.ndarray:
         """Get the geographic distribution of the dataset.
@@ -515,18 +571,48 @@ class OlmoEarthDataset(Dataset):
             index = self.sample_indices[args.idx]
         else:
             index = args.idx
-        h5_file_path = self._get_h5_file_path(index)
 
-        sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
-        timestamps, missing_timesteps_masks = self._crop_timestamps_and_masks(
-            sample_dict["timestamps"], missing_timesteps_masks
-        )
-        sample_dict["timestamps"] = timestamps
-        sample_dict, current_length = self._pad_timestamps(sample_dict)
-        # fill sample currently takes like .08 seconds which may bottleneck smaller models
-        sample, missing_modalities = self.fill_sample_with_missing_values(
-            sample_dict, missing_timesteps_masks
-        )
+        # Check RAM cache first
+        if index in self._ram_cache:
+            cached = self._ram_cache[index]
+            sample = cached.sample
+            missing_modalities = cached.missing_modalities
+            current_length = cached.current_length
+            missing_timesteps_masks = cached.missing_timesteps_masks
+            self._ram_cache_hits += 1
+        else:
+            # Load from disk
+            h5_file_path = self._get_h5_file_path(index)
+            sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
+            timestamps, missing_timesteps_masks = self._crop_timestamps_and_masks(
+                sample_dict["timestamps"], missing_timesteps_masks
+            )
+            sample_dict["timestamps"] = timestamps
+            sample_dict, current_length = self._pad_timestamps(sample_dict)
+            # fill sample currently takes like .08 seconds which may bottleneck smaller models
+            sample, missing_modalities = self.fill_sample_with_missing_values(
+                sample_dict, missing_timesteps_masks
+            )
+            self._ram_cache_misses += 1
+
+            # Cache if this index is cacheable
+            if self._cacheable_indices is not None and index in self._cacheable_indices:
+                self._ram_cache[index] = CachedSample(
+                    sample=sample,
+                    missing_modalities=missing_modalities,
+                    current_length=current_length,
+                    missing_timesteps_masks=missing_timesteps_masks,
+                )
+
+            # Log cache stats periodically
+            total_accesses = self._ram_cache_hits + self._ram_cache_misses
+            if total_accesses > 0 and total_accesses % 10000 == 0:
+                hit_rate = 100 * self._ram_cache_hits / total_accesses
+                logger.info(
+                    f"RAM cache stats: {len(self._ram_cache)} cached, "
+                    f"{self._ram_cache_hits} hits, {self._ram_cache_misses} misses "
+                    f"({hit_rate:.1f}% hit rate)"
+                )
 
         if self.apply_cutmix:
             subset_sample = sample.subset_cutmix(
@@ -585,6 +671,7 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    num_samples_to_store_in_ram: int | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
