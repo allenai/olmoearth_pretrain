@@ -193,14 +193,22 @@ def get_label_layer_info(dataset_config: DatasetConfig) -> tuple[str, list[str]]
 # =============================================================================
 
 
-def _extract_sizing(transforms: list[dict]) -> tuple[int | None, int | None]:
-    """Extract crop and pad sizes from a list of transform configs.
+def _extract_sizing(
+    transforms: list[dict],
+    default_config: dict | None = None,
+) -> tuple[int | None, int | None]:
+    """Extract crop and pad sizes from transforms or default_config.
 
     Scans the transforms for Crop and Pad transforms and extracts
-    their sizing parameters.
+    their sizing parameters. Falls back to default_config.patch_size
+    if no Crop transform is found.
+
+    NOTE: The rslearn API for patch_size in default_config is expected to change.
+    This extraction logic may need updates when rslearn updates their config schema.
 
     Args:
         transforms: List of transform config dicts with class_path and init_args.
+        default_config: Optional default_config dict from model.yaml data.init_args.
 
     Returns:
         Tuple of (crop_size, pad_size), each None if not found.
@@ -222,6 +230,11 @@ def _extract_sizing(transforms: list[dict]) -> tuple[int | None, int | None]:
             # Handle tuple case (min, max) - take the min for deterministic eval
             if isinstance(pad_size, (list, tuple)):
                 pad_size = pad_size[0]
+
+    # Fallback: use default_config.patch_size if no Crop transform found
+    # NOTE: This is rslearn's window/tile size for sampling data
+    if crop_size is None and default_config is not None:
+        crop_size = default_config.get("patch_size")
 
     return crop_size, pad_size
 
@@ -297,7 +310,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     # Get the modalities
     modalities = []
     modality_layer_names = []
-    num_timesteps_modalities = []
+    max_timesteps_modalities = []
     for layer_name, layer_config in dataset_config.layers.items():
         if layer_config.data_source is None:
             # This means it is some other layer like a label layer and not one of the modalities we are interested in
@@ -308,20 +321,14 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         olmoearth_modality = RSLEARN_TO_OLMOEARTH[layer_name]
         modalities.append(olmoearth_modality.name)  # store name string, not ModalitySpec
         modality_layer_names.append(layer_name)
-        # get the temporal range
+        # Get max timesteps from query config's max_matches
+        # This represents the maximum number of temporal samples per location
         query_config = layer_config.data_source.query_config
-        # For now we raise an error if min_matches and max_matches are not the same
-        # TODO: I am going to turn this off to see if it works
-        # if query_config.min_matches != query_config.max_matches:
-        #     raise ValueError(
-        #         f"Min matches and max matches are not the same for layer {layer_name}"
-        #     )
-        num_timesteps_modalities.append(query_config.min_matches)
+        max_timesteps_modalities.append(query_config.max_matches)
     print(modalities)
-    # assert all the num_timesteps_modalities are the same
-    if len(set(num_timesteps_modalities)) != 1:
-        raise ValueError("Num timesteps are not the same for all modalities")
-    num_timesteps = num_timesteps_modalities[0]
+    # Use the max across all modalities to ensure we can handle the largest temporal extent
+    num_timesteps = max(max_timesteps_modalities) if max_timesteps_modalities else 1
+    logger.info(f"Max timesteps from config: {num_timesteps} (per-modality: {max_timesteps_modalities})")
 
     # get the target property
     # I am pretty sure this is just the band name of the label layer
@@ -453,13 +460,13 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     logger.info(f"Extracted groups={groups}, split_tag_key={split_tag_key}")
 
     # Extract geometric sizing from transforms
-    # Train sizing comes from train_config transforms
+    # Train sizing comes from train_config transforms, with default_config as fallback
     train_transforms = train_config.get("transforms", [])
-    train_crop_size, train_pad_size = _extract_sizing(train_transforms)
+    train_crop_size, train_pad_size = _extract_sizing(train_transforms, default_config)
 
     # Eval sizing comes from val_config transforms, or default_config if val_config has none
     eval_transforms = val_config.get("transforms", []) or default_config.get("transforms", [])
-    eval_crop_size, eval_pad_size = _extract_sizing(eval_transforms)
+    eval_crop_size, eval_pad_size = _extract_sizing(eval_transforms, default_config)
 
     logger.info(
         f"Extracted sizing: train_crop={train_crop_size}, train_pad={train_pad_size}, "
@@ -487,16 +494,25 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
             break
 
     entry = EvalDatasetEntry(
+        # Core fields
         name=config.name,
         source_path=config.source_path,
+        model_config_path=config.olmoearth_run_config_path,  # Store path to model.yaml dir
         task_type=task_type,
-        target_property=target_property,
-        classes=label_values,
         num_classes=num_classes,
+        is_multilabel=is_multilabel,
+        classes=label_values,
+        modalities=modalities,
+        imputes=imputes,
+        window_size=train_crop_size or 64,  # Use train_crop_size as window_size
+        timeseries=timeseries,
+        norm_stats_path=norm_stats_cache_path,  # Store cached norm stats path
+        use_pretrain_norm=False,  # Default to dataset stats for new ingestions
+        # Legacy fields (still populated for backward compatibility)
+        target_property=target_property,
         target_layer_name=target_layer_name,
         target_data_type=target_data_type,
         target_bands=target_bands,
-        modalities=modalities,
         groups=groups,
         split_tag_key=split_tag_key,
         num_timesteps=num_timesteps,

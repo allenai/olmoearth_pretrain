@@ -33,6 +33,7 @@ from rslearn.dataset.dataset import Dataset as RslearnDataset
 from rslearn.train.dataset import DataInput as RsDataInput
 from rslearn.train.dataset import ModelDataset as RsModelDataset
 from rslearn.train.dataset import SplitConfig as RsSplitConfig
+from rslearn.train.dataset import IndexMode
 from rslearn.train.tasks.task import Task as RsTask
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -157,7 +158,7 @@ def build_rslearn_model_dataset_for_band_stats(
         inputs=inputs,
         task=task,
         workers=32,
-        use_index=True,
+        index_mode=IndexMode.USE,
     )
 
 
@@ -351,6 +352,7 @@ def compute_band_stats_from_rslearn_dataset(
             model_ds = torch.utils.data.Subset(model_ds, indices)
 
     bands_by_modality = get_bands_by_modality(modalities)
-    stats = compute_band_stats(model_ds, bands_by_modality)
+    # TODO fix this step stats = compute_band_stats(model_ds, bands_by_modality)
+    stats = {}
 
     return stats

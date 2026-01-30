@@ -283,7 +283,74 @@ class TokensAndMasks(NamedTuple):
         if not spatial_pooling:
             return self.pool_instance_wise(pooling_type)
         else:
+            # check if any of the masks have missing tokens if they do then we need to pool spatially masked
+            for attr_name in self.modalities:
+                if Modality.get(attr_name).is_spatial:
+                    mask_attr_name = self.get_masked_modality_name(attr_name)
+                    masked_attr = getattr(self, mask_attr_name)
+                    if masked_attr is None:
+                        continue
+                    if (masked_attr == MaskValue.MISSING.value).any():
+                        return self.pool_spatially_masked(pooling_type)
+            # if no missing tokens then we can pool spatially
             return self.pool_spatially(pooling_type)
+
+    def pool_spatially_masked(self, pooling_type: PoolingType = PoolingType.MEAN) -> Tensor:
+        """Pool spatially while properly respecting masks.
+
+        This function is designed for use with fast_pass=False, where mask values
+        are properly computed. It pools over valid (ONLINE_ENCODER) tokens only,
+        handling MISSING tokens from padding and any other masked tokens.
+
+        Returns:
+            Tensor of shape (B, H, W, D) with pooled features per spatial location.
+        """
+        spatial_features = []
+        for attr_name in self.modalities:
+            if Modality.get(attr_name).is_spatial:
+                mask_attr_name = self.get_masked_modality_name(attr_name)
+                masked_attr = getattr(self, mask_attr_name)
+                if masked_attr is None:
+                    continue
+
+                attr = getattr(self, attr_name)
+                # attr shape: (B, H, W, T, bandsets, D)
+                # masked_attr shape: (B, H, W, T, bandsets)
+
+                # Valid tokens are ONLINE_ENCODER (not MISSING, not other mask values)
+                valid_mask = masked_attr == MaskValue.ONLINE_ENCODER.value
+
+                if not valid_mask.any():
+                    continue
+
+                # Pool across time (T) and bandsets dimensions, respecting mask
+                # Expand mask to match attr dimensions
+                valid_mask_expanded = valid_mask.unsqueeze(-1).float()  # (B, H, W, T, bandsets, 1)
+
+                if pooling_type == PoolingType.MEAN:
+                    # Masked mean: sum valid / count valid
+                    # get shape of attr and valid_mask_expanded and print them
+                    print(f"attr shape: {attr.shape}")
+                    print(f"valid_mask_expanded shape: {valid_mask_expanded.shape}")
+                    masked_vals = attr * valid_mask_expanded
+                    valid_count = valid_mask.sum(dim=(-2, -1), keepdim=True).unsqueeze(-1).clamp(min=1)
+                    pooled = masked_vals.sum(dim=(-3, -2)) / valid_count.squeeze(-2).squeeze(-2)
+                else:
+                    # Max pooling: mask invalid with -inf
+                    masked_vals = attr.masked_fill(~valid_mask.unsqueeze(-1), float("-inf"))
+                    pooled = masked_vals.max(dim=-2).values.max(dim=-2).values
+
+                spatial_features.append(pooled)
+
+        if len(spatial_features) == 0:
+            raise ValueError("No valid spatial modalities found for masked pooling.")
+
+        # Average across modalities
+        stacked = torch.stack(spatial_features, dim=-1)
+        if pooling_type == PoolingType.MEAN:
+            return stacked.mean(dim=-1)
+        else:
+            return stacked.max(dim=-1).values
 
 
 class ProjectAndAggregate(nn.Module):

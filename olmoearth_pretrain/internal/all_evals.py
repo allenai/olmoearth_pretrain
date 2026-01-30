@@ -320,11 +320,12 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
-    "wildifire_canada_test": DownstreamTaskConfig(
-        dataset="wildifire_canada_test",
-        embedding_batch_size=32,
+    "wildfire_canada_test": DownstreamTaskConfig(
+        dataset="wildfire_canada_test",
+        embedding_batch_size=4,
         probe_batch_size=8,
-        num_workers=4,
+        patch_size=5, # TODO: This is changeable but we should know the valid sizes for inputs
+        num_workers=2,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=False,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,

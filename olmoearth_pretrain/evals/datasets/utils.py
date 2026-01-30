@@ -33,8 +33,10 @@ def eval_collate_fn_variable_time(
     Padded timesteps get MaskValue.MISSING in their mask tensors.
     """
     from olmoearth_pretrain.datatypes import MaskValue
-
     samples, targets = zip(*batch)
+    # print the types of the samples and targets
+    print(f"Sample types: {[type(s) for s in samples]}")
+    print(f"Target types: {[type(t) for t in targets]}")
 
     # Find max temporal length using sample.modalities property
     max_t = 0

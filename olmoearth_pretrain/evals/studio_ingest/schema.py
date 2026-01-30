@@ -251,137 +251,99 @@ class ModalityStats:
 class EvalDatasetEntry:
     """A single entry in the eval dataset registry.
 
-    This represents all metadata needed to load and use a dataset
-    for OlmoEarth evaluation. Entries are stored in registry.json
-    and also copied to each dataset's metadata.json.
+    This represents metadata needed to load and use a dataset for OlmoEarth
+    evaluation. Uses a hybrid approach where:
+    - Essential task info (num_classes, task_type) is stored here
+    - Runtime config (groups, transforms, etc.) is loaded from model.yaml
 
     Attributes:
         # === Identity ===
-        name: Unique identifier (e.g., "lfmc", "forest_loss_driver")
-              Used as the directory name on Weka and for loading.
+        name: Unique identifier (e.g., "lfmc", "tolbi_crops")
 
-        # === Task Configuration ===
+        # === Paths (source of truth) ===
+        source_path: Path to rslearn dataset (has config.json)
+        model_config_path: Path to model.yaml (rslearn training config)
+
+        # === Task Configuration (needed for EvalDatasetConfig) ===
         task_type: One of "classification", "regression", "segmentation"
-        classes: List of class names for classification tasks, None otherwise
-        num_classes: Number of classes, derived from len(classes) if applicable
-        target_property: The rslearn property name that contains the labels
-                        (e.g., "category", "lfmc_value")
+        num_classes: Number of output classes
+        is_multilabel: Whether task is multi-label classification
 
-        # === Data Configuration ===
+        # === Modality Configuration ===
         modalities: List of OlmoEarth modality names (e.g., ["sentinel2_l2a"])
-        temporal_range: Tuple of (start_date, end_date) as ISO strings
-        patch_size: Size of image patches in pixels (e.g., 64, 128)
+        imputes: List of (src_band, tgt_band) tuples for band imputation
 
-        # === Paths ===
-        source_path: Original rslearn dataset path (GCS) - for provenance
-        weka_path: Where the data lives on Weka after ingestion
-                   Note: For external users, OLMOEARTH_EVAL_DATASETS env var
-                   can override the base path to point to local downloads.
-
-        # === Split Information ===
-        splits: Dict mapping split name -> sample count
-               e.g., {"train": 5000, "val": 500, "test": 1000}
-        supports_cv: Whether k-fold cross-validation is supported
-        cv_folds: Number of pre-computed CV folds, if any
+        # === Sizing ===
+        window_size: Window/patch size (used as height_width for segmentation)
+        timeseries: Whether dataset has multiple timesteps
 
         # === Normalization ===
-        norm_stats_path: Path to norm_stats.json relative to weka_path
+        norm_stats_path: Path to cached norm stats JSON (relative or absolute)
         use_pretrain_norm: If True, use pretrain normalization stats
-                          instead of dataset-specific stats
 
         # === Metadata ===
-        created_at: ISO 8601 timestamp of when dataset was ingested
-        created_by: Username/identifier of who ran the ingestion
-        studio_task_id: Optional link back to Studio task ID
-        notes: Optional free-form notes about the dataset
+        created_at: ISO 8601 timestamp
+        notes: Optional notes
 
     Design Notes:
     -------------
-    - The `name` field is the primary key - must be unique across registry
-    - Paths are stored as strings for JSON compatibility
-    - We store both source_path (provenance) and weka_path (actual data)
-    - Normalization stats are separate from this entry (in norm_stats.json)
-      but we reference the path here
-
-    Example JSON:
-    -------------
-    {
-        "name": "lfmc",
-        "display_name": "Live Fuel Moisture Content",
-        "task_type": "regression",
-        "classes": null,
-        "num_classes": null,
-        "target_property": "lfmc_value",
-        "modalities": ["sentinel2_l2a", "sentinel1"],
-        "temporal_range": ["2022-09-01", "2023-09-01"],
-        "patch_size": 64,
-        "source_path": "gs://studio-bucket/datasets/lfmc",
-        "weka_path": "weka://dfive-default/olmoearth/eval_datasets/lfmc",
-        "splits": {"train": 5000, "val": 500, "test": 1000},
-        "supports_cv": true,
-        "cv_folds": 5,
-        "norm_stats_path": "norm_stats.json",
-        "use_pretrain_norm": false,
-        "created_at": "2024-01-15T10:30:00Z",
-        "created_by": "henryh",
-        "studio_task_id": "task_abc123",
-        "notes": "Initial ingestion from Studio"
-    }
+    - Fields that can be loaded from model.yaml at runtime are NOT stored here
+      (e.g., groups, split_tag_key, crop_size, target_layer_name)
+    - Use load_runtime_config() from rslearn_builder to get those values
+    - This reduces registry bloat and keeps model.yaml as source of truth
     """
 
     # Identity
     name: str
 
-    # Task configuration
-    task_type: str  # "classification", "regression", "segmentation"
-    target_property: str
+    # Paths (source of truth for runtime loading)
+    source_path: str = ""
+    model_config_path: str = ""  # Path to model.yaml
+
+    # Task configuration (needed for EvalDatasetConfig)
+    task_type: str = "classification"  # "classification", "regression", "segmentation"
     num_classes: int | None = None
+    is_multilabel: bool = False
+    classes: list[str] | None = None  # Optional class names
 
-    # Target/label layer configuration (from model.yaml inputs)
-    # These define how rslearn loads the target data
-    target_layer_name: str = "label"  # rslearn layer name, e.g., "label_raster"
-    target_data_type: str = "vector"  # "vector" for classification, "raster" for segmentation
-    target_bands: list[str] | None = None  # e.g., ["label"] for raster targets
-
-    # Data configuration
+    # Modality configuration
     modalities: list[str] = field(default_factory=list)
-    temporal_range: tuple[str, str] = ("", "")
-    window_size: int = 64
-    multilabel: bool = False
-    classes: list[str] | None = None  # num classes can be derived from this
-    label_target_property: str | None = None
-    band_order: list[str] = field(default_factory=list)
     imputes: list[tuple[str, str]] = field(default_factory=list)
-    timeseries: bool = False
-    num_timesteps: int = 12  # Number of timesteps per sample
 
-    # Geometric transform sizing (extracted from model.yaml transforms)
-    # train_* used when training a probe head, eval_* used when evaluating
+    # Sizing
+    window_size: int = 64
+    timeseries: bool = False
+
+    # Normalization
+    norm_stats_path: str = ""
+    use_pretrain_norm: bool = True
+
+    # Metadata
+    created_at: str = ""
+    notes: str | None = None
+
+    # === Legacy fields (kept for backward compatibility, loaded at runtime now) ===
+    # These are still stored but should be loaded from model.yaml via RuntimeConfig
+    target_property: str = "category"
+    target_layer_name: str = "label"
+    target_data_type: str = "vector"
+    target_bands: list[str] | None = None
+    temporal_range: tuple[str, str] = ("2022-09-01", "2023-09-01")
+    num_timesteps: int = 1
     train_crop_size: int | None = None
     train_pad_size: int | None = None
     eval_crop_size: int | None = None
     eval_pad_size: int | None = None
-
-    # Paths
-    source_path: str = ""
+    groups: list[str] = field(default_factory=list)
+    split_tag_key: str = "split"
     weka_path: str = ""
-
-    # Split information
     splits: dict[str, int] = field(default_factory=dict)
-    split_tag_key: str = "split"  # tag key used for splits (e.g., "split" or "helios_split")
-    groups: list[str] = field(default_factory=list)  # rslearn groups to filter by
     supports_cv: bool = False
     cv_folds: int | None = None
-
-    # Normalization
-    norm_stats_path: str = "norm_stats.json"
-    use_pretrain_norm: bool = False
-
-    # Metadata
-    created_at: str = ""
     created_by: str = ""
     studio_task_id: str | None = None
-    notes: str | None = None
+    band_order: list[str] = field(default_factory=list)
+    label_target_property: str | None = None
 
     def __post_init__(self) -> None:
         """Validate and normalize fields after initialization."""
@@ -415,40 +377,43 @@ class EvalDatasetEntry:
         and modalities are already strings. Only tuples need conversion.
         """
         return {
+            # Core fields
             "name": self.name,
+            "source_path": self.source_path,
+            "model_config_path": self.model_config_path,
             "task_type": self.task_type,
-            "target_property": self.target_property,
-            "classes": self.classes,
             "num_classes": self.num_classes,
+            "is_multilabel": self.is_multilabel,
+            "classes": self.classes,
+            "modalities": self.modalities,
+            "imputes": [list(t) for t in self.imputes],
+            "window_size": self.window_size,
+            "timeseries": self.timeseries,
+            "norm_stats_path": self.norm_stats_path,
+            "use_pretrain_norm": self.use_pretrain_norm,
+            "created_at": self.created_at,
+            "notes": self.notes,
+            # Legacy fields (for backward compatibility)
+            "target_property": self.target_property,
             "target_layer_name": self.target_layer_name,
             "target_data_type": self.target_data_type,
             "target_bands": self.target_bands,
-            "modalities": self.modalities,
             "temporal_range": list(self.temporal_range),
-            "window_size": self.window_size,
-            "multilabel": self.multilabel,
-            "label_target_property": self.label_target_property,
-            "band_order": self.band_order,
-            "imputes": [list(t) for t in self.imputes],
-            "timeseries": self.timeseries,
             "num_timesteps": self.num_timesteps,
             "train_crop_size": self.train_crop_size,
             "train_pad_size": self.train_pad_size,
             "eval_crop_size": self.eval_crop_size,
             "eval_pad_size": self.eval_pad_size,
-            "source_path": self.source_path,
+            "groups": self.groups,
+            "split_tag_key": self.split_tag_key,
             "weka_path": self.weka_path,
             "splits": self.splits,
-            "split_tag_key": self.split_tag_key,
-            "groups": self.groups,
             "supports_cv": self.supports_cv,
             "cv_folds": self.cv_folds,
-            "norm_stats_path": self.norm_stats_path,
-            "use_pretrain_norm": self.use_pretrain_norm,
-            "created_at": self.created_at,
             "created_by": self.created_by,
             "studio_task_id": self.studio_task_id,
-            "notes": self.notes,
+            "band_order": self.band_order,
+            "label_target_property": self.label_target_property,
         }
 
     @classmethod
@@ -460,48 +425,54 @@ class EvalDatasetEntry:
         - lists -> tuples (temporal_range, imputes)
         """
         # Handle temporal_range: list -> tuple
-        temporal_range = data.get("temporal_range", ("", ""))
+        temporal_range = data.get("temporal_range", ("2022-09-01", "2023-09-01"))
         if isinstance(temporal_range, list):
             temporal_range = tuple(temporal_range)
 
         # Handle imputes: list of lists -> list of tuples
         imputes = [tuple(x) for x in data.get("imputes", [])]
 
+        # Handle backward compatibility: multilabel -> is_multilabel
+        is_multilabel = data.get("is_multilabel", data.get("multilabel", False))
+
         return cls(
+            # Core fields
             name=data["name"],
-            task_type=data["task_type"],
-            target_property=data.get("target_property", "category"),
-            classes=data.get("classes"),
+            source_path=data.get("source_path", ""),
+            model_config_path=data.get("model_config_path", ""),
+            task_type=data.get("task_type", "classification"),
             num_classes=data.get("num_classes"),
+            is_multilabel=is_multilabel,
+            classes=data.get("classes"),
+            modalities=data.get("modalities", []),
+            imputes=imputes,
+            window_size=data.get("window_size", 64),
+            timeseries=data.get("timeseries", False),
+            norm_stats_path=data.get("norm_stats_path", ""),
+            use_pretrain_norm=data.get("use_pretrain_norm", True),
+            created_at=data.get("created_at", ""),
+            notes=data.get("notes"),
+            # Legacy fields
+            target_property=data.get("target_property", "category"),
             target_layer_name=data.get("target_layer_name", "label"),
             target_data_type=data.get("target_data_type", "vector"),
             target_bands=data.get("target_bands"),
-            modalities=data.get("modalities", []),
             temporal_range=temporal_range,
-            window_size=data.get("window_size", 64),
-            multilabel=data.get("multilabel", False),
-            label_target_property=data.get("label_target_property"),
-            band_order=data.get("band_order", []),
-            imputes=imputes,
-            timeseries=data.get("timeseries", False),
-            num_timesteps=data.get("num_timesteps", 12),
+            num_timesteps=data.get("num_timesteps", 1),
             train_crop_size=data.get("train_crop_size"),
             train_pad_size=data.get("train_pad_size"),
             eval_crop_size=data.get("eval_crop_size"),
             eval_pad_size=data.get("eval_pad_size"),
-            source_path=data.get("source_path", ""),
+            groups=data.get("groups", []),
+            split_tag_key=data.get("split_tag_key", "split"),
             weka_path=data.get("weka_path", ""),
             splits=data.get("splits", {}),
-            split_tag_key=data.get("split_tag_key", "split"),
-            groups=data.get("groups", []),
             supports_cv=data.get("supports_cv", False),
             cv_folds=data.get("cv_folds"),
-            norm_stats_path=data.get("norm_stats_path", "norm_stats.json"),
-            use_pretrain_norm=data.get("use_pretrain_norm", False),
-            created_at=data.get("created_at", ""),
             created_by=data.get("created_by", ""),
             studio_task_id=data.get("studio_task_id"),
-            notes=data.get("notes"),
+            band_order=data.get("band_order", []),
+            label_target_property=data.get("label_target_property"),
         )
 
     def to_json(self, indent: int | None = 2) -> str:
@@ -555,7 +526,7 @@ class EvalDatasetEntry:
             task_type=TaskType(self.task_type),
             imputes=self.imputes,
             num_classes=self.num_classes,
-            is_multilabel=self.multilabel,
+            is_multilabel=self.is_multilabel,
             supported_modalities=self.modalities,
             height_width=height_width,
             timeseries=self.timeseries,

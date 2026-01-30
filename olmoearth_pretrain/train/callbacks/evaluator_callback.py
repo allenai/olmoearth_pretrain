@@ -90,6 +90,8 @@ class DownstreamTaskConfig:
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
+    # Subsample train embeddings for faster probe training (None = use all)
+    max_train_samples: int | None = None
 
 
 class DownstreamEvaluator:
@@ -137,6 +139,7 @@ class DownstreamEvaluator:
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
+        self.max_train_samples = task.max_train_samples
         self.eval_interval = task.eval_interval
         self.eval_mode = task.eval_mode
         self.probe_type = task.probe_type
@@ -171,7 +174,7 @@ class DownstreamEvaluator:
                         "config.height_width cannot be none for segmentation tasks."
                     )
                 if self.config.height_width % self.patch_size != 0:
-                    raise ValueError("Image height / width indivisable by patch size.")
+                    raise ValueError(f"Image height / width indivisable by patch size. {self.config.height_width} % {self.patch_size} != 0")
 
         if self.eval_mode == EvalMode.FINETUNE:
             if self.ft_lr is None:
@@ -287,6 +290,16 @@ class DownstreamEvaluator:
         train_embeddings, train_labels = self._get_embeddings(
             train_loader, is_train=True
         )
+
+        # Subsample train embeddings if configured
+        if self.max_train_samples and train_embeddings.shape[0] > self.max_train_samples:
+            logger.info(
+                f"Subsampling train embeddings from {train_embeddings.shape[0]} to {self.max_train_samples}"
+            )
+            indices = torch.randperm(train_embeddings.shape[0])[:self.max_train_samples]
+            train_embeddings = train_embeddings[indices]
+            train_labels = train_labels[indices]
+
         logger.info(f"Getting val embeddings for {self.dataset}...")
         val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
         if self.run_on_test:

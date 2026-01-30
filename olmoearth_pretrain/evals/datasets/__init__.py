@@ -31,39 +31,6 @@ class EvalDatasetPartition(StrEnum):
     TRAIN_020X = "0.20x_train"
     TRAIN_050X = "0.50x_train"
 
-def get_eval_dataset_from_entry(
-    eval_dataset_entry: EvalDatasetEntry,
-    split: str,
-    norm_stats_from_pretrained: bool = False,
-    input_layers: list[str] | None = None,
-    input_modalities: list[str] | None = None,
-    partition: str = EvalDatasetPartition.TRAIN1X,
-    norm_method: str = NormMethod.NORM_NO_CLIP,
-) -> Dataset:
-    """Retrieve an eval dataset from the dataset entry.
-
-    Args:
-        eval_dataset_entry: Registry entry with dataset metadata.
-        split: Dataset split ("train", "val", "test").
-        norm_stats_from_pretrained: Whether to use pretrain normalization stats.
-        input_layers: Optional rslearn layer names. If None, derived from entry.
-        input_modalities: Optional modality override. If None, uses entry.modalities.
-        partition: Dataset partition.
-        norm_method: Normalization method.
-
-    Returns:
-        Dataset instance.
-    """
-    return from_registry_entry(
-        eval_dataset_entry,
-        split,
-        input_layers,
-        partition,
-        norm_method,
-        norm_stats_from_pretrained,
-        max_samples=1000, # Hardcoded for debugging
-        input_modalities_override=input_modalities,
-    )
 
 
 def get_eval_dataset(
@@ -188,12 +155,10 @@ def get_eval_dataset(
         )
     else:
         eval_dataset_entry = get_dataset_entry(eval_dataset)
-        return get_eval_dataset_from_entry(
-            eval_dataset_entry,
-            split,
-            norm_stats_from_pretrained,
-            input_layers if input_layers else None,
-            input_modalities if input_modalities else None,
-            partition,
-            norm_method,
+        return from_registry_entry(
+            entry=eval_dataset_entry,
+            split=split,
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+            input_modalities_override=input_modalities if input_modalities else None,
         )

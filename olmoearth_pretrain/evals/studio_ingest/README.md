@@ -113,7 +113,7 @@ Goal for today is tolbi and fire through both of these steps
 Do we really want to save all the information in the registry and then rebuild the rslearn dataset or just also save the config needed to build the model dataset and go based on that
 
 incompabilities
-- We probably dont want random cropping for evals
+- We should jsut do the task the same way here as much as possible
 - we definitely will need to make test splits aka new splits for all the data
 - dealing with different invalid data etc
 - scared of rslearn api changes
@@ -128,9 +128,16 @@ incompabilities
 
 Next steps
 - pass cropping through as a transform
-- create a new test split
+- create a new test split for tolbi
+- use the new tolbi
 
-
+Next steps
+- get wildfire small to work and import the new rslearn dataset index
+- Get the bigger wildfire split to work and the tolbi one fully working
+- Try adding bakc support for nandi and awf
+- mozambique support
+- yemen support
+- Ensuring that we can alll fidn discover and add these tasks
 
 Tasks to add
 - tolbi
@@ -140,7 +147,7 @@ Tasks to add
 - canada wildfire
 
 
-` python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name wildifire_canada_test     --source  gs://rslearn-eai/datasets/wildfire/canada_fire_sat_test     --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/wildfire_run_data/  --register     --overwrite `
+` python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name wildfire_canada_test     --source  gs://rslearn-eai/datasets/wildfire/canada_fire_sat_test     --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/wildfire_run_data/  --register     --overwrite `
 
 `python -m olmoearth_pretrain.internal.full_eval_sweep     --cluster=local     --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000     --module_path=scripts/official/tiny.py     --trainer.callbacks.downstream_evaluator.tasks_to_run="[wildfire_canada_test]"     --trainer.callbacks.downstream_evaluator.eval_on_startup=True     --trainer.callbacks.downstream_evaluator.cancel_after_first_eval=True     --trainer.callbacks.wandb.enabled=False --defaults_only `
 
