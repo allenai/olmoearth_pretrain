@@ -190,19 +190,18 @@ class OlmoEarthDataLoader(DataLoaderBase):
         """Build global indices."""
         assert len(self.dataset) < np.iinfo(np.uint32).max
 
-        rng: np.random.Generator | None = None
+        indices = np.arange(len(self.dataset), dtype=np.uint32)
         if self.shuffle:
             # Deterministically shuffle based on epoch and seed
             rng = get_rng(self.seed + self.epoch)  # type: ignore
-        indices_list = []
-        for _ in range(self.num_dataset_repeats_per_epoch):
-            indices = np.arange(len(self.dataset), dtype=np.uint32)
-            if rng is not None:
-                rng.shuffle(indices)
-            # Remove tail of data to make it evenly divisible
-            cropped_indices = indices[: self.total_unique_size]
-            indices_list.append(cropped_indices)
-        indices = np.concatenate(indices_list)
+            rng.shuffle(indices)
+        # Remove tail of data to make it evenly divisible
+        cropped_indices = indices[: self.total_unique_size]
+        # Repeat the SAME shuffled order for each repeat within the epoch.
+        # This ensures that with num_workers > 0 and persistent_workers=True,
+        # each worker sees the same samples across repeats, enabling effective
+        # RAM caching at the dataset level.
+        indices = np.tile(cropped_indices, self.num_dataset_repeats_per_epoch)
         return indices
 
     def build_and_save_global_indices(self, in_memory: bool = False) -> None:
