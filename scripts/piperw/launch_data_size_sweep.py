@@ -92,18 +92,6 @@ def launch_experiment(
         # Use max_training_samples instead of dataset_percentage
         cmd.append(f"--dataset.max_training_samples={data_size}")
     
-    # Add evaluation frequency override (evaluate more frequently)
-    # Default is 4000 steps for m-eurosat/mados, 20000 for m-so2sat/pastis
-    # We'll evaluate every 1000 steps for faster feedback
-    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.m-eurosat.eval_interval.value=1000")
-    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.m-eurosat.eval_interval.unit=steps")
-    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.mados.eval_interval.value=1000")
-    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.mados.eval_interval.unit=steps")
-    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.m_so2sat.eval_interval.value=5000")
-    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.m_so2sat.eval_interval.unit=steps")
-    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.pastis.eval_interval.value=5000")
-    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.pastis.eval_interval.unit=steps")
-    
     # Increase batch size (default is 512, we'll increase to 1024)
     cmd.append("--data_loader.global_batch_size=1024")
     
