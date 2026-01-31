@@ -6,8 +6,19 @@ Runs nano and tiny models with 500, 1000, 5000, and all data.
 Usage:
     python launch_data_size_sweep.py [CLUSTER] [PRIORITY] [NUM_GPUS]
 
-Example:
-    python launch_data_size_sweep.py ai2/ceres-cirrascale urgent 4
+Arguments:
+    CLUSTER: Cluster name (neptune, jupiter, ceres, or saturn)
+             Default: saturn
+    PRIORITY: Priority level (low, normal, high, urgent)
+              Default: high
+    NUM_GPUS: Number of GPUs per experiment
+              Default: 1
+
+Examples:
+    python launch_data_size_sweep.py
+    python launch_data_size_sweep.py ceres
+    python launch_data_size_sweep.py neptune urgent
+    python launch_data_size_sweep.py jupiter high 4
 """
 
 import subprocess
@@ -80,6 +91,25 @@ def launch_experiment(
     else:
         # Use max_training_samples instead of dataset_percentage
         cmd.append(f"--dataset.max_training_samples={data_size}")
+    
+    # Add evaluation frequency override (evaluate more frequently)
+    # Default is 4000 steps for m-eurosat/mados, 20000 for m-so2sat/pastis
+    # We'll evaluate every 1000 steps for faster feedback
+    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.m-eurosat.eval_interval.value=1000")
+    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.m-eurosat.eval_interval.unit=steps")
+    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.mados.eval_interval.value=1000")
+    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.mados.eval_interval.unit=steps")
+    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.m_so2sat.eval_interval.value=5000")
+    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.m_so2sat.eval_interval.unit=steps")
+    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.pastis.eval_interval.value=5000")
+    cmd.append("--trainer.callbacks.downstream_evaluator.tasks.pastis.eval_interval.unit=steps")
+    
+    # Increase batch size (default is 512, we'll increase to 1024)
+    cmd.append("--data_loader.global_batch_size=1024")
+    
+    # Set wandb entity and project
+    cmd.append("--trainer.callbacks.wandb.entity=prior-ai2")
+    cmd.append("--trainer.callbacks.wandb.project=olmoearth")
 
     # Run the command
     subprocess.run(cmd, check=True)
@@ -88,10 +118,22 @@ def launch_experiment(
 
 def main() -> None:
     """Main entry point."""
+    # Valid cluster options
+    VALID_CLUSTERS = ["neptune", "jupiter", "ceres", "saturn"]
+    
     # Parse command line arguments
-    cluster = sys.argv[1] if len(sys.argv) > 1 else "ai2/saturn-cirrascale"
+    cluster_name = sys.argv[1] if len(sys.argv) > 1 else "saturn"
     priority = sys.argv[2] if len(sys.argv) > 2 else "high"
     num_gpus = int(sys.argv[3]) if len(sys.argv) > 3 else 1
+    
+    # Validate cluster name
+    if cluster_name not in VALID_CLUSTERS:
+        print(f"Error: Invalid cluster '{cluster_name}'")
+        print(f"Valid clusters: {', '.join(VALID_CLUSTERS)}")
+        sys.exit(1)
+    
+    # Format cluster name for beaker (ai2/{cluster}-cirrascale)
+    cluster = f"ai2/{cluster_name}-cirrascale"
 
     print("=" * 50)
     print("Launching data size sweep experiments")
