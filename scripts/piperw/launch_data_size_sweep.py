@@ -27,31 +27,6 @@ NANO_SCRIPT = SCRIPT_DIR / "nano.py"
 TINY_SCRIPT = SCRIPT_DIR / "tiny.py"
 
 
-def calculate_dataset_percentage(num_samples: int | str) -> float:
-    """Calculate dataset_percentage from number of samples.
-    
-    Args:
-        num_samples: Number of samples (int) or "all" for full dataset
-        
-    Returns:
-        Dataset percentage (0.0 to 1.0)
-    """
-    if num_samples == "all":
-        return 1.0
-    elif isinstance(num_samples, int):
-        if num_samples <= 0:
-            raise ValueError(f"num_samples must be positive, got {num_samples}")
-        if num_samples > TOTAL_DATASET_SIZE:
-            print(
-                f"Warning: Requested {num_samples} samples but dataset only has "
-                f"{TOTAL_DATASET_SIZE}. Using full dataset (1.0)"
-            )
-            return 1.0
-        return num_samples / TOTAL_DATASET_SIZE
-    else:
-        raise ValueError(f"num_samples must be int or 'all', got {type(num_samples)}")
-
-
 def launch_experiment(
     model: str,
     data_size: int | str,
@@ -82,13 +57,9 @@ def launch_experiment(
     else:
         run_name = f"{model}_data_{data_size}"
 
-    # Calculate dataset percentage
-    dataset_percentage = calculate_dataset_percentage(data_size)
-
     print(f"Launching: {run_name}")
     print(f"  Model: {model}")
     print(f"  Data size: {data_size}")
-    print(f"  Dataset percentage: {dataset_percentage:.10f}")
 
     # Build command
     cmd = [
@@ -97,11 +68,18 @@ def launch_experiment(
         "launch",
         run_name,
         cluster,
-        f"--dataset.dataset_percentage={dataset_percentage}",
         f"--launch.clusters=[{cluster}]",
         f"--launch.priority={priority}",
         f"--launch.num_gpus={num_gpus}",
     ]
+    
+    # Add dataset size parameter
+    if data_size == "all":
+        # For "all", don't set max_training_samples (use full dataset)
+        pass
+    else:
+        # Use max_training_samples instead of dataset_percentage
+        cmd.append(f"--dataset.max_training_samples={data_size}")
 
     # Run the command
     subprocess.run(cmd, check=True)
