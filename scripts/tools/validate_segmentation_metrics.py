@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
 """Validate segmentation metrics by running LP and Finetune on PASTIS with the tiny model.
 
-This script runs:
-1. Linear Probe on pastis_sentinel2
-2. Finetune on pastis_sentinel2
+This script runs both tasks in a single job:
+1. Linear Probe on pastis_sentinel2 (pastis_lp)
+2. Finetune on pastis_sentinel2 (pastis_ft)
 
 Both should return dict metrics with: miou, overall_acc, macro_acc, micro_f1, macro_f1
 
 Usage:
     # Dry run (just print config):
-    python scripts/tools/validate_segmentation_metrics.py dry_run validate_seg_metrics local
+    python scripts/tools/validate_segmentation_metrics.py dry_run_evaluate validate_seg_metrics local
 
     # Run locally:
-    python scripts/tools/validate_segmentation_metrics.py evaluate validate_seg_metrics local
+    torchrun scripts/tools/validate_segmentation_metrics.py evaluate validate_seg_metrics local
 
     # Launch on Beaker:
-    python scripts/tools/validate_segmentation_metrics.py launch validate_seg_metrics ai2/saturn-cirrascale
+    python scripts/tools/validate_segmentation_metrics.py launch_evaluate validate_seg_metrics ai2/saturn-cirrascale
 """
 
 import logging
-import os
 
 from olmo_core.train.callbacks import (
     BeakerCallback,
@@ -100,9 +99,9 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     )
 
 
-# Only PASTIS tasks for validation
-PASTIS_LP_TASK = {
-    "pastis_sentinel2": DownstreamTaskConfig(
+# Both LP and Finetune tasks for validation
+PASTIS_TASKS = {
+    "pastis_lp": DownstreamTaskConfig(
         dataset="pastis",
         embedding_batch_size=32,
         probe_batch_size=8,
@@ -115,10 +114,7 @@ PASTIS_LP_TASK = {
         epochs=20,  # Reduced for faster validation
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
-}
-
-PASTIS_FT_TASK = {
-    "pastis_sentinel2": DownstreamTaskConfig(
+    "pastis_ft": DownstreamTaskConfig(
         dataset="pastis",
         ft_batch_size=16,
         num_workers=2,
@@ -147,10 +143,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     )
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
 
-    # Choose LP or FT based on environment variable
-    use_finetune = os.environ.get("FINETUNE", "0") == "1"
-    tasks = PASTIS_FT_TASK if use_finetune else PASTIS_LP_TASK
-    logger.info(f"Using {'FINETUNE' if use_finetune else 'LINEAR_PROBE'} mode")
+    logger.info("Running both LINEAR_PROBE and FINETUNE on PASTIS")
 
     trainer_config = (
         TrainerConfig(
@@ -169,7 +162,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         .with_callback(
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
-                tasks=tasks,
+                tasks=PASTIS_TASKS,
                 eval_on_startup=True,
                 cancel_after_first_eval=True,
                 run_on_test=True,
