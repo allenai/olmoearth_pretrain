@@ -801,7 +801,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         e.g in time masking, static in time data is randomly masked but we want that data to be either used to predict temporally masked data or
         predicted from temporal data.
         """
-        return False
+        return not modality_spec.is_spatial
 
     def apply_bandset_mask_rules(
         self,
