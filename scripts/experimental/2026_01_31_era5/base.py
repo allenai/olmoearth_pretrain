@@ -146,7 +146,7 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
 def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     """Build the dataset config for an experiment."""
     return OlmoEarthDatasetConfig(
-        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
+        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_era5_10_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/1138828",
         training_modalities=common.training_modalities,
     )
 
