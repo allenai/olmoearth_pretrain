@@ -357,11 +357,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 dtype=np.float32,
             )
             output_dict["wri_canopy_height_map"] = mock_wri_canopy_height_map
-        if Modality.ERA5_10.name in self.dataset.training_modalities:
-            mock_era5_10 = rng.random(
-                (12, Modality.ERA5_10.num_bands), dtype=np.float32
-            )
-            output_dict["era5_10"] = mock_era5_10
+        # if Modality.ERA5_10.name in self.dataset.training_modalities:
+        #     mock_era5_10 = rng.random(
+        #         (12, Modality.ERA5_10.num_bands), dtype=np.float32
+        #     )
+        #     output_dict["era5_10"] = mock_era5_10
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))
