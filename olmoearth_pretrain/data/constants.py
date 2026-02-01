@@ -427,9 +427,24 @@ class Modality:
                 [
                     "2m-temperature",
                     "2m-dewpoint-temperature",
+                ],
+                4096,
+            ),
+            BandSet(
+                [
                     "surface-pressure",
+                ],
+                4096,
+            ),
+            BandSet(
+                [
                     "10m-u-component-of-wind",
                     "10m-v-component-of-wind",
+                ],
+                4096,
+            ),
+            BandSet(
+                [
                     "total-precipitation",
                 ],
                 4096,
