@@ -768,6 +768,14 @@ class OlmoEarthDataset(Dataset):
         rng = get_rng(self.seed)
         num_samples = len(self.sample_indices)
         
+        # Check if we have any samples after filtering
+        if num_samples == 0:
+            raise ValueError(
+                "No samples available after filtering for spacetime-varying modalities. "
+                "This can happen if the dataset is too small or the filtering is too aggressive. "
+                "Try using a larger dataset or checking your training_modalities configuration."
+            )
+        
         # Determine target size
         if self.max_training_samples is not None:
             # Use max_training_samples if specified
@@ -820,6 +828,18 @@ class OlmoEarthDataset(Dataset):
         self.sample_indices = np.arange(num_samples)
         self._filter_sample_indices_for_training()
         self._filter_sample_indices_by_dataset_percentage()
+        
+        # Final safety check: ensure we have at least 1 sample
+        if len(self.sample_indices) == 0:
+            raise ValueError(
+                "Dataset has 0 samples after filtering. This can happen if:\n"
+                "1. All samples were filtered out by spacetime-varying modality filter\n"
+                "2. The dataset is too small for the requested max_training_samples\n"
+                "3. The training_modalities configuration is incompatible with the dataset\n"
+                f"Requested max_training_samples: {self.max_training_samples}\n"
+                f"Training modalities: {self.training_modalities}"
+            )
+        
         self.latlon_distribution = self.latlon_distribution[self.sample_indices]
 
     def get_geographic_distribution(self) -> np.ndarray:
