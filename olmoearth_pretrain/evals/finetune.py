@@ -20,7 +20,11 @@ from torch.utils.data import DataLoader
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
-from olmoearth_pretrain.evals.metrics import EvalResult, segmentation_metrics
+from olmoearth_pretrain.evals.metrics import (
+    EvalResult,
+    EvalTaskResult,
+    segmentation_metrics,
+)
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
@@ -125,16 +129,15 @@ def _eval_cls(
     labels = torch.cat(labels_all, 0)
     if is_multilabel:
         preds = torch.sigmoid(logits).gt(0.5).int()
-        score = f1_score(
-            labels.numpy().astype(int),
-            preds.numpy(),
-            average="micro",
-            zero_division=0,
-        )
+        labels_np = labels.numpy().astype(int)
+        preds_np = preds.numpy()
+        acc = accuracy_score(labels_np, preds_np)  # subset/exact match accuracy
+        f1 = f1_score(labels_np, preds_np, average="micro", zero_division=0)
+        return EvalResult.from_classification(acc, f1=f1)
     else:
         preds = torch.argmax(logits, dim=-1)
-        score = accuracy_score(labels.numpy(), preds.numpy())
-    return EvalResult.from_classification(score)
+        acc = accuracy_score(labels.numpy(), preds.numpy())
+        return EvalResult.from_classification(acc)
 
 
 @torch.no_grad()
@@ -221,15 +224,8 @@ def run_finetune_eval(
     test_loader: DataLoader | None,
     seed: int | None = None,
     best_checkpoint_path: str | None = None,
-) -> dict[str, EvalResult | dict | None]:
-    """Finetune the model on a downstream task and evaluate.
-
-    Returns:
-        Dictionary with keys:
-            - val_score: EvalResult for validation
-            - test_score: EvalResult for test, or None if no test set
-            - bootstrap_stats: Empty dict (bootstrap not supported for finetune)
-    """
+) -> EvalTaskResult:
+    """Finetune the model on a downstream task and evaluate."""
     if seed is not None:
         logger.info(f"Setting finetune random seed to {seed}")
         random.seed(seed)
@@ -415,8 +411,7 @@ def run_finetune_eval(
                 ft, test_loader, device, task_config.num_classes, patch_size
             )
 
-    return {
-        "val_score": best_val_result,
-        "test_score": test_result,
-        "bootstrap_stats": {},
-    }
+    return EvalTaskResult(
+        val_result=best_val_result,
+        test_result=test_result,
+    )

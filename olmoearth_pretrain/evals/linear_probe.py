@@ -18,7 +18,11 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
-from olmoearth_pretrain.evals.metrics import EvalResult, segmentation_metrics
+from olmoearth_pretrain.evals.metrics import (
+    EvalResult,
+    EvalTaskResult,
+    segmentation_metrics,
+)
 from olmoearth_pretrain.evals.utils import adjust_learning_rate
 
 logger = getLogger(__name__)
@@ -131,7 +135,7 @@ def train_and_eval_probe(
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
-) -> dict[str, EvalResult | dict | None]:
+) -> EvalTaskResult:
     """Run a linear probe on the OlmoEarth Pretrain model.
 
     Returns:
@@ -344,11 +348,11 @@ def train_and_eval_probe(
         if n_bootstrap == 0:
             logger.info(f"Test result: {test_result}")
 
-    return {
-        "val_score": final_val_result,
-        "test_score": test_result,
-        "bootstrap_stats": bootstrap_stats,
-    }
+    return EvalTaskResult(
+        val_result=final_val_result,
+        test_result=test_result,
+        bootstrap_stats=bootstrap_stats,
+    )
 
 
 def train_probe(

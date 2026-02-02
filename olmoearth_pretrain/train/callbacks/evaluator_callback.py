@@ -39,7 +39,7 @@ from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
 from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
-from olmoearth_pretrain.evals.metrics import EvalResult
+from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
 from olmoearth_pretrain.nn.flexi_vit import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
@@ -289,7 +289,7 @@ class DownstreamEvaluator:
             quantize=self.quantize_embeddings,
         )
 
-    def _val_embed_probe(self) -> dict[str, Any]:
+    def _val_embed_probe(self) -> EvalTaskResult:
         """Validate the model using embeddings and probe (knn or linear probe)."""
         logger.info(f"Validating {self.dataset} with {self.eval_mode}")
         train_loader = self._get_data_loader("train", self.embedding_batch_size)
@@ -382,7 +382,7 @@ class DownstreamEvaluator:
         )
         return best_checkpoint_path
 
-    def _val_finetune(self) -> dict[str, Any]:
+    def _val_finetune(self) -> EvalTaskResult:
         """Validate the model using finetuning."""
         logger.info(f"Validating {self.dataset} with finetune")
 
@@ -424,44 +424,37 @@ class DownstreamEvaluator:
         best_checkpoint_path = self._get_best_checkpoint_path()
         if os.path.exists(best_checkpoint_path):
             logger.info("Best checkpoint already exists, skipping finetuning")
-            return {"val_score": None, "test_score": None, "bootstrap_stats": {}}
-        else:
-            logger.info("Best checkpoint does not exist, running finetuning")
-            result = run_finetune_eval(
-                task_name=self.evaluation_name,
-                task_config=self.config,
-                trainer=self.trainer,
-                model=model,
-                device=self.device or self.trainer.device,
-                lr=self.ft_lr,  # type: ignore
-                epochs=self.epochs,
-                patch_size=self.patch_size,
-                pooling_type=self.pooling_type,
-                use_pooled_tokens=self.use_pooled_tokens,
-                train_loader=train_loader,
-                val_loader=val_loader,
-                test_loader=test_loader,
-                seed=self.finetune_seed,
-                best_checkpoint_path=best_checkpoint_path,
-            )
-            logger.info(
-                f"Downstream evaluator {self.evaluation_name} val score: {result['val_score']}, test score: {result['test_score']}"
-            )
-            model.load_state_dict(original_state)
+            return EvalTaskResult(val_result=None, test_result=None)
 
-            torch.cuda.empty_cache()
-            gc.collect()
-            return result
+        logger.info("Best checkpoint does not exist, running finetuning")
+        result = run_finetune_eval(
+            task_name=self.evaluation_name,
+            task_config=self.config,
+            trainer=self.trainer,
+            model=model,
+            device=self.device or self.trainer.device,
+            lr=self.ft_lr,  # type: ignore
+            epochs=self.epochs,
+            patch_size=self.patch_size,
+            pooling_type=self.pooling_type,
+            use_pooled_tokens=self.use_pooled_tokens,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            test_loader=test_loader,
+            seed=self.finetune_seed,
+            best_checkpoint_path=best_checkpoint_path,
+        )
+        logger.info(
+            f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
+        )
+        model.load_state_dict(original_state)
 
-    def val(self) -> dict[str, Any]:
-        """Validate the model on the downstream task.
+        torch.cuda.empty_cache()
+        gc.collect()
+        return result
 
-        Returns:
-            Dictionary with keys:
-                - val_score: EvalResult for validation
-                - test_score: EvalResult for test, or None if no test set
-                - bootstrap_stats: Bootstrap statistics dict (empty dict if not available)
-        """
+    def val(self) -> EvalTaskResult:
+        """Validate the model on the downstream task."""
         if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
             return self._val_embed_probe()
         elif self.eval_mode == EvalMode.FINETUNE:
@@ -555,12 +548,12 @@ class DownstreamEvaluatorCallback(Callback):
         return required_modalities_present and has_timeseries
 
     def _log_eval_results_to_logger_pretrain(
-        self, evaluator: DownstreamEvaluator, result: dict[str, Any]
+        self, evaluator: DownstreamEvaluator, result: EvalTaskResult
     ) -> None:
         """Log the evaluation results."""
-        val_result: EvalResult | None = result["val_score"]
-        test_result: EvalResult | None = result["test_score"]
-        bootstrap_stats = result["bootstrap_stats"]
+        val_result = result.val_result
+        test_result = result.test_result
+        bootstrap_stats = result.bootstrap_stats
 
         # Log bootstrap statistics if available
         if bootstrap_stats:
@@ -582,7 +575,7 @@ class DownstreamEvaluatorCallback(Callback):
             )
 
     def _log_eval_results_to_wandb_pretrain(
-        self, evaluator: DownstreamEvaluator, result: dict[str, Any]
+        self, evaluator: DownstreamEvaluator, result: EvalTaskResult
     ) -> None:
         """Log the evaluation results to wandb."""
         wandb_callback = next(
@@ -590,10 +583,10 @@ class DownstreamEvaluatorCallback(Callback):
             for callback in self.trainer._iter_callbacks()
             if isinstance(callback, OlmoEarthWandBCallback)
         )
-        val_result: EvalResult | None = result["val_score"]
-        test_result: EvalResult | None = result["test_score"]
-        eval_time = result["eval_time"]
-        bootstrap_stats = result["bootstrap_stats"]
+        val_result = result.val_result
+        test_result = result.test_result
+        eval_time = result.eval_time
+        bootstrap_stats = result.bootstrap_stats
 
         if wandb_callback.enabled:
             # Log validation results
@@ -684,22 +677,14 @@ class DownstreamEvaluatorCallback(Callback):
                 continue
             self._perform_eval(evaluator)
 
-    def _perform_eval(self, evaluator: DownstreamEvaluator) -> dict[str, Any]:
-        """Run the evaluator.
-
-        Returns:
-            Dictionary with keys:
-                - val_score: EvalResult for validation
-                - test_score: EvalResult for test, or None if no test set
-                - eval_time: Evaluation time in seconds
-                - bootstrap_stats: Bootstrap statistics dict (empty dict if not available)
-        """
+    def _perform_eval(self, evaluator: DownstreamEvaluator) -> EvalTaskResult:
+        """Run the evaluator."""
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
         start_time = time.monotonic()
         result = evaluator.val()
-        val_result: EvalResult | None = result["val_score"]
-        test_result: EvalResult | None = result["test_score"]
-        bootstrap_stats = result["bootstrap_stats"]
+        val_result = result.val_result
+        test_result = result.test_result
+        bootstrap_stats = result.bootstrap_stats
 
         # Record validation metrics
         if val_result is not None:
@@ -735,7 +720,7 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(
             f"Finished {evaluator.evaluation_name} evaluations in {eval_time:.1f} seconds."
         )
-        result["eval_time"] = eval_time
+        result.eval_time = eval_time
         return result
 
 

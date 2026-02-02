@@ -19,6 +19,12 @@ class TestEvalResult:
         assert result.primary == 0.95
         assert result.metrics == {"accuracy": 0.95}
 
+    def test_from_classification_with_f1(self) -> None:
+        """Test creating EvalResult from multilabel classification with accuracy and F1."""
+        result = EvalResult.from_classification(0.80, f1=0.85)
+        assert result.primary == 0.80
+        assert result.metrics == {"accuracy": 0.80, "f1": 0.85}
+
     def test_from_segmentation(self) -> None:
         """Test creating EvalResult from segmentation metrics."""
         result = EvalResult.from_segmentation(

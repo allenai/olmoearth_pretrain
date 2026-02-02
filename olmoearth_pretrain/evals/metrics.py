@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import torch
+
+
+@dataclass
+class EvalTaskResult:
+    """Result from an evaluation task (knn, linear probe, finetune)."""
+
+    val_result: EvalResult | None
+    test_result: EvalResult | None
+    bootstrap_stats: dict[str, Any] = field(default_factory=dict)
+    eval_time: float | None = None
 
 
 @dataclass
@@ -18,9 +29,19 @@ class EvalResult:
     metrics: dict[str, float]
 
     @classmethod
-    def from_classification(cls, accuracy: float) -> EvalResult:
-        """Create EvalResult from classification accuracy."""
-        return cls(primary=accuracy, metrics={"accuracy": accuracy})
+    def from_classification(
+        cls, accuracy: float, f1: float | None = None
+    ) -> EvalResult:
+        """Create EvalResult from classification metrics.
+
+        Args:
+            accuracy: Classification accuracy (exact match for multilabel)
+            f1: Optional F1 score (micro-averaged, typically for multilabel tasks)
+        """
+        metrics = {"accuracy": accuracy}
+        if f1 is not None:
+            metrics["f1"] = f1
+        return cls(primary=accuracy, metrics=metrics)
 
     @classmethod
     def from_segmentation(
