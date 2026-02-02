@@ -5,7 +5,7 @@ This script runs both tasks in a single job:
 1. Linear Probe on pastis_sentinel2 (pastis_lp)
 2. Finetune on pastis_sentinel2 (pastis_ft)
 
-Both should return dict metrics with: miou, overall_acc, macro_acc, micro_f1, macro_f1
+Both should return dict metrics with: miou, overall_acc, macro_acc, macro_f1
 
 Usage:
     # Dry run (just print config):

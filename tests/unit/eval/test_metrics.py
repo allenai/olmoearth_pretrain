@@ -1,14 +1,11 @@
 """Unit tests for segmentation metrics."""
 
-import warnings
-
 import pytest
 import torch
 
 from olmoearth_pretrain.evals.metrics import (
     EvalResult,
     _build_confusion_matrix,
-    mean_iou,
     segmentation_metrics,
 )
 
@@ -225,68 +222,45 @@ class TestSegmentationMetrics:
             assert 0.0 <= result.metrics[key] <= 1.0
 
 
-class TestMeanIou:
-    """Tests for mean_iou function (legacy interface)."""
+class TestMiouFromSegmentationMetrics:
+    """Tests for miou extracted from segmentation_metrics."""
 
     def test_perfect_prediction(self) -> None:
         """Perfect predictions should give mIoU = 1.0."""
         preds = torch.tensor([[[0, 1], [0, 1]]], dtype=torch.long)
         labels = torch.tensor([[[0, 1], [0, 1]]], dtype=torch.long)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            result = mean_iou(preds, labels, num_classes=2)
+        result = segmentation_metrics(preds, labels, num_classes=2)
 
-        assert result == pytest.approx(1.0)
+        assert result.metrics["miou"] == pytest.approx(1.0)
 
     def test_all_wrong(self) -> None:
         """All wrong predictions should give mIoU = 0."""
         preds = torch.tensor([[[1, 0], [1, 0]]], dtype=torch.long)
         labels = torch.tensor([[[0, 1], [0, 1]]], dtype=torch.long)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            result = mean_iou(preds, labels, num_classes=2)
+        result = segmentation_metrics(preds, labels, num_classes=2)
 
-        assert result == pytest.approx(0.0, abs=1e-6)
+        assert result.metrics["miou"] == pytest.approx(0.0, abs=1e-6)
 
     def test_ignore_label(self) -> None:
         """Ignored pixels should not affect mIoU."""
         preds = torch.tensor([[[0, 1, 0]]], dtype=torch.long)
         labels = torch.tensor([[[0, 1, -1]]], dtype=torch.long)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            result = mean_iou(preds, labels, num_classes=2, ignore_label=-1)
+        result = segmentation_metrics(preds, labels, num_classes=2, ignore_label=-1)
 
-        assert result == pytest.approx(1.0)
+        assert result.metrics["miou"] == pytest.approx(1.0)
 
-    def test_returns_float(self) -> None:
-        """Verify return type is float."""
+    def test_miou_is_float(self) -> None:
+        """Verify miou is a float."""
         preds = torch.tensor([[[0, 1]]], dtype=torch.long)
         labels = torch.tensor([[[0, 1]]], dtype=torch.long)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            result = mean_iou(preds, labels, num_classes=2)
+        result = segmentation_metrics(preds, labels, num_classes=2)
 
-        assert isinstance(result, float)
+        assert isinstance(result.metrics["miou"], float)
 
-    def test_deprecation_warning(self) -> None:
-        """mean_iou should emit DeprecationWarning."""
+    def test_miou_is_primary(self) -> None:
+        """Verify miou is the primary metric for segmentation."""
         preds = torch.tensor([[[0, 1]]], dtype=torch.long)
         labels = torch.tensor([[[0, 1]]], dtype=torch.long)
-        with pytest.warns(DeprecationWarning, match="mean_iou is deprecated"):
-            mean_iou(preds, labels, num_classes=2)
+        result = segmentation_metrics(preds, labels, num_classes=2)
 
-
-class TestMetricsConsistency:
-    """Tests verifying consistency between different metric functions."""
-
-    def test_miou_matches_segmentation_metrics(self) -> None:
-        """mean_iou should match segmentation_metrics miou."""
-        preds = torch.randint(0, 3, (4, 16, 16))
-        labels = torch.randint(0, 3, (4, 16, 16))
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            miou_standalone = mean_iou(preds, labels, num_classes=3)
-        metrics = segmentation_metrics(preds, labels, num_classes=3)
-
-        assert miou_standalone == pytest.approx(metrics.metrics["miou"], abs=1e-6)
+        assert result.primary == result.metrics["miou"]

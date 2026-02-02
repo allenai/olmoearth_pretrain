@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass
 
 import torch
@@ -147,33 +146,3 @@ def segmentation_metrics(
         macro_acc=macro_acc,
         macro_f1=macro_f1,
     )
-
-
-def mean_iou(
-    predictions: torch.Tensor,
-    labels: torch.Tensor,
-    num_classes: int,
-    ignore_label: int = -1,
-) -> float:
-    """Calculate mean IoU given prediction and label tensors.
-
-    .. deprecated::
-        Use `segmentation_metrics()` instead, which returns an EvalResult
-        with miou and additional metrics.
-
-    Args:
-        predictions: Predicted segmentation masks of shape (N, H, W)
-        labels: Ground truth segmentation masks of shape (N, H, W)
-        num_classes: Number of classes in the segmentation task
-        ignore_label: Label value to ignore in IoU calculation (default: -1)
-
-    Returns:
-        float: Mean IoU across all classes
-    """
-    warnings.warn(
-        "mean_iou is deprecated, use segmentation_metrics() instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    result = segmentation_metrics(predictions, labels, num_classes, ignore_label)
-    return result.metrics["miou"]

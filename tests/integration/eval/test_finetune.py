@@ -121,13 +121,3 @@ def test_segmentation_eval_with_ignore_labels() -> None:
     # Metrics should still be valid
     for key in ["miou", "overall_acc", "macro_acc", "macro_f1"]:
         assert 0.0 <= result.metrics[key] <= 1.0
-
-
-def test_empty_test_result_none() -> None:
-    """Test that when there's no test loader, finetune returns None for test_score.
-
-    This verifies the structure of the "no test set" return value.
-    """
-    # finetune.py now returns None when test_loader is None
-    test_score = None
-    assert test_score is None

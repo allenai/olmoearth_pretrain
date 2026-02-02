@@ -202,8 +202,7 @@ class DownstreamEvaluator:
             if self.eval_mode == EvalMode.KNN
             else (
                 partial(
-                    # TODO: THis is updated dynamically in the get_embeddings function
-                    train_and_eval_probe,  # type: ignore[arg-type]
+                    train_and_eval_probe,
                     batch_size=self.probe_batch_size,
                     epochs=self.epochs,
                     eval_interval=self.linear_probe_eval_interval,
@@ -616,8 +615,8 @@ class DownstreamEvaluatorCallback(Callback):
                 wandb_callback.wandb.log({f"{evaluator.evaluation_name}_step": 0})
 
         # Check if results are valid
-        val_valid = val_result is not None and val_result.primary > 0
-        test_valid = test_result is not None and test_result.primary > 0
+        val_valid = val_result is not None and val_result.primary >= 0
+        test_valid = test_result is not None and test_result.primary >= 0
 
         # Only logging valid results to wandb
         if val_valid and test_valid:
