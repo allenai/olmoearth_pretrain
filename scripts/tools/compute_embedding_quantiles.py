@@ -4,7 +4,7 @@ This script extracts embeddings from a subset of pretraining samples and compute
 percentile boundaries for 8-bit, 4-bit, 2-bit, and 1-bit quantization.
 
 Usage:
-    python scripts/archived/2026-01-28_percentile_quant_experiment/compute_embedding_quantiles.py \
+    python scripts/tools/compute_embedding_quantiles.py \
         --checkpoint_path=/path/to/checkpoint \
         --h5py_dir=/path/to/pretrain/h5py \
         --output=quantiles.h5 \

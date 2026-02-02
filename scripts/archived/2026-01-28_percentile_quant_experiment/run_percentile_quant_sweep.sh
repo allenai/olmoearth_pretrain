@@ -6,11 +6,11 @@
 #
 # Prerequisites:
 #   1. Compute quantiles first (run from repo root):
-#      python scripts/archived/2026-01-28_percentile_quant_experiment/compute_embedding_quantiles.py \
+#      python scripts/tools/compute_embedding_quantiles.py \
 #          --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200 \
 #          --h5py_dir=/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828 \
 #          --output=scripts/archived/2026-01-28_percentile_quant_experiment/quantiles.h5 \
-#          --num_samples=10000
+#          --num_samples=10000 \
 #          --batch_size=32
 #
 # Usage:
