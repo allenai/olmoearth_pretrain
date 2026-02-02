@@ -17,7 +17,7 @@ echo "Launching segmentation metrics validation on $CLUSTER..."
 echo "Tasks: pastis_lp (Linear Probe), pastis_ft (Finetune)"
 echo ""
 
-python "$SCRIPT_PATH" launch_evaluate validate_seg_metrics "$CLUSTER"
+python "$SCRIPT_PATH" launch_evaluate validate_seg_metrics_with_class "$CLUSTER"
 
 echo ""
 echo "Done! Check wandb project: 2025_01_30_validate_seg_metrics"
