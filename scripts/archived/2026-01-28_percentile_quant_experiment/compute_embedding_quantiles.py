@@ -39,6 +39,7 @@ def extract_embeddings(
     batch_size: int,
     device: torch.device,
     patch_size: int = 4,
+    pooling_type: PoolingType = PoolingType.MEAN,
 ) -> torch.Tensor:
     """Extract embeddings from a subset of pretrain samples.
 
@@ -49,6 +50,7 @@ def extract_embeddings(
         batch_size: Batch size for extraction
         device: Device to run model on
         patch_size: Patch size for the model
+        pooling_type: Pooling type for aggregating tokens (MEAN or MAX)
 
     Returns:
         Tensor of shape (num_samples, embedding_dim) with pooled embeddings
@@ -87,7 +89,6 @@ def extract_embeddings(
                 # Create masks for all modalities
                 masked_dict = {}
                 for key, val in sample_dict.items():
-                    print(key, val.shape)
                     if key == "timestamps":
                         masked_dict[key] = torch.from_numpy(val).unsqueeze(0).to(device)
                         continue
@@ -137,10 +138,10 @@ def extract_embeddings(
                 tokens_and_masks = output["tokens_and_masks"]
 
                 # Use pool_unmasked_tokens with spatial_pooling=True to keep H/W dims
-                # This pools over T (time) and S (band sets), then averages across modalities
+                # This pools over T (time) and S (band sets), then aggregates across modalities
                 # Result shape: (B, H', W', D)
                 pooled_embedding = tokens_and_masks.pool_unmasked_tokens(
-                    pooling_type=PoolingType.MEAN,
+                    pooling_type=pooling_type,
                     spatial_pooling=True,
                     concat_features=False,
                 )
@@ -280,8 +281,16 @@ def main() -> None:
         default=["sentinel2_l2a"],
         help="Training modalities to use from the dataset",
     )
+    parser.add_argument(
+        "--pooling_type",
+        type=str,
+        choices=["mean", "max"],
+        default="mean",
+        help="Pooling type for aggregating tokens (default: mean)",
+    )
 
     args = parser.parse_args()
+    pooling_type = PoolingType(args.pooling_type)
 
     # Set random seed
     np.random.seed(args.seed)
@@ -315,6 +324,7 @@ def main() -> None:
     logger.info(f"Dataset has {len(dataset)} samples")
 
     # Extract embeddings
+    logger.info(f"Using pooling type: {pooling_type}")
     embeddings = extract_embeddings(
         model=model,
         dataset=dataset,
@@ -322,6 +332,7 @@ def main() -> None:
         batch_size=args.batch_size,
         device=device,
         patch_size=args.patch_size,
+        pooling_type=pooling_type,
     )
 
     # Compute quantiles
