@@ -35,7 +35,6 @@ from __future__ import annotations
 import importlib
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -47,7 +46,7 @@ from rslearn.train.tasks.classification import (
 from rslearn.train.tasks.segmentation import SegmentationTask as RsSegmentationTask
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.evals.datasets.configs import TaskType
+from olmoearth_pretrain.evals.task_types import TaskType
 
 DEFAULT_TARGET_PROPERTY = "category"
 
@@ -300,6 +299,8 @@ class EvalDatasetEntry:
     source_path: str = ""
     model_config_path: str = ""  # Path to model.yaml
 
+    custom_groups: list[str] = field(default_factory=list)
+
     # Task configuration (needed for EvalDatasetConfig)
     task_type: str = "classification"  # "classification", "regression", "segmentation"
     num_classes: int | None = None
@@ -318,32 +319,8 @@ class EvalDatasetEntry:
     norm_stats_path: str = ""
     use_pretrain_norm: bool = True
 
-    # Metadata
-    created_at: str = ""
-    notes: str | None = None
-
-    # === Legacy fields (kept for backward compatibility, loaded at runtime now) ===
-    # These are still stored but should be loaded from model.yaml via RuntimeConfig
-    target_property: str = "category"
-    target_layer_name: str = "label"
-    target_data_type: str = "vector"
-    target_bands: list[str] | None = None
-    temporal_range: tuple[str, str] = ("2022-09-01", "2023-09-01")
     num_timesteps: int = 1
-    train_crop_size: int | None = None
-    train_pad_size: int | None = None
-    eval_crop_size: int | None = None
-    eval_pad_size: int | None = None
-    groups: list[str] = field(default_factory=list)
-    split_tag_key: str = "split"
-    weka_path: str = ""
-    splits: dict[str, int] = field(default_factory=dict)
-    supports_cv: bool = False
-    cv_folds: int | None = None
-    created_by: str = ""
-    studio_task_id: str | None = None
-    band_order: list[str] = field(default_factory=list)
-    label_target_property: str | None = None
+
 
     def __post_init__(self) -> None:
         """Validate and normalize fields after initialization."""
@@ -366,21 +343,13 @@ class EvalDatasetEntry:
         if self.classes is not None and self.num_classes is None:
             self.num_classes = len(self.classes)
 
-        # Set created_at if not provided
-        if not self.created_at:
-            self.created_at = datetime.now().isoformat()
-
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization.
-
-        Note: __post_init__ normalizes enums to strings, so task_type
-        and modalities are already strings. Only tuples need conversion.
-        """
+        """Convert to dictionary for JSON serialization."""
         return {
-            # Core fields
             "name": self.name,
             "source_path": self.source_path,
             "model_config_path": self.model_config_path,
+            "custom_groups": self.custom_groups,
             "task_type": self.task_type,
             "num_classes": self.num_classes,
             "is_multilabel": self.is_multilabel,
@@ -391,44 +360,12 @@ class EvalDatasetEntry:
             "timeseries": self.timeseries,
             "norm_stats_path": self.norm_stats_path,
             "use_pretrain_norm": self.use_pretrain_norm,
-            "created_at": self.created_at,
-            "notes": self.notes,
-            # Legacy fields (for backward compatibility)
-            "target_property": self.target_property,
-            "target_layer_name": self.target_layer_name,
-            "target_data_type": self.target_data_type,
-            "target_bands": self.target_bands,
-            "temporal_range": list(self.temporal_range),
             "num_timesteps": self.num_timesteps,
-            "train_crop_size": self.train_crop_size,
-            "train_pad_size": self.train_pad_size,
-            "eval_crop_size": self.eval_crop_size,
-            "eval_pad_size": self.eval_pad_size,
-            "groups": self.groups,
-            "split_tag_key": self.split_tag_key,
-            "weka_path": self.weka_path,
-            "splits": self.splits,
-            "supports_cv": self.supports_cv,
-            "cv_folds": self.cv_folds,
-            "created_by": self.created_by,
-            "studio_task_id": self.studio_task_id,
-            "band_order": self.band_order,
-            "label_target_property": self.label_target_property,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EvalDatasetEntry":
-        """Create from dictionary.
-
-        Handles conversion of:
-        - string -> kept as string (TaskType validated in __post_init__)
-        - lists -> tuples (temporal_range, imputes)
-        """
-        # Handle temporal_range: list -> tuple
-        temporal_range = data.get("temporal_range", ("2022-09-01", "2023-09-01"))
-        if isinstance(temporal_range, list):
-            temporal_range = tuple(temporal_range)
-
+        """Create from dictionary."""
         # Handle imputes: list of lists -> list of tuples
         imputes = [tuple(x) for x in data.get("imputes", [])]
 
@@ -436,10 +373,10 @@ class EvalDatasetEntry:
         is_multilabel = data.get("is_multilabel", data.get("multilabel", False))
 
         return cls(
-            # Core fields
             name=data["name"],
             source_path=data.get("source_path", ""),
             model_config_path=data.get("model_config_path", ""),
+            custom_groups=data.get("custom_groups", []),
             task_type=data.get("task_type", "classification"),
             num_classes=data.get("num_classes"),
             is_multilabel=is_multilabel,
@@ -450,29 +387,7 @@ class EvalDatasetEntry:
             timeseries=data.get("timeseries", False),
             norm_stats_path=data.get("norm_stats_path", ""),
             use_pretrain_norm=data.get("use_pretrain_norm", True),
-            created_at=data.get("created_at", ""),
-            notes=data.get("notes"),
-            # Legacy fields
-            target_property=data.get("target_property", "category"),
-            target_layer_name=data.get("target_layer_name", "label"),
-            target_data_type=data.get("target_data_type", "vector"),
-            target_bands=data.get("target_bands"),
-            temporal_range=temporal_range,
             num_timesteps=data.get("num_timesteps", 1),
-            train_crop_size=data.get("train_crop_size"),
-            train_pad_size=data.get("train_pad_size"),
-            eval_crop_size=data.get("eval_crop_size"),
-            eval_pad_size=data.get("eval_pad_size"),
-            groups=data.get("groups", []),
-            split_tag_key=data.get("split_tag_key", "split"),
-            weka_path=data.get("weka_path", ""),
-            splits=data.get("splits", {}),
-            supports_cv=data.get("supports_cv", False),
-            cv_folds=data.get("cv_folds"),
-            created_by=data.get("created_by", ""),
-            studio_task_id=data.get("studio_task_id"),
-            band_order=data.get("band_order", []),
-            label_target_property=data.get("label_target_property"),
         )
 
     def to_json(self, indent: int | None = 2) -> str:
@@ -484,25 +399,6 @@ class EvalDatasetEntry:
         """Deserialize from JSON string."""
         return cls.from_dict(json.loads(json_str))
 
-    def get_weka_data_path(self, split: str) -> str:
-        """Get the full path to a specific split's data on Weka.
-
-        Args:
-            split: One of "train", "val", "test"
-
-        Returns:
-            Full Weka path to the split directory
-        """
-        if split not in self.splits:
-            raise ValueError(
-                f"Unknown split '{split}'. Available: {list(self.splits.keys())}"
-            )
-        return f"{self.weka_path}/{split}"
-
-    def get_norm_stats_full_path(self) -> str:
-        """Get the full path to the normalization stats JSON."""
-        return f"{self.weka_path}/{self.norm_stats_path}"
-
     def to_eval_config(self) -> EvalDatasetConfig:
         """Convert to EvalDatasetConfig for use with eval functions.
 
@@ -511,7 +407,6 @@ class EvalDatasetEntry:
         """
         from olmoearth_pretrain.evals.datasets.configs import (
             EvalDatasetConfig,
-            TaskType,
         )
 
         if self.num_classes is None:

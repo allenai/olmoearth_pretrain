@@ -62,7 +62,6 @@ from olmoearth_pretrain.evals.studio_ingest.band_stats import (
     compute_band_stats_from_rslearn_dataset,
 )
 from olmoearth_pretrain.evals.studio_ingest.schema import (
-    DEFAULT_TARGET_PROPERTY,
     RSLEARN_TO_OLMOEARTH,
     EvalDatasetEntry,
     instantiate_from_config,
@@ -277,79 +276,34 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     logger.info(f"Starting ingestion of dataset: {config.name}")
     logger.info(f"Source: {config.source_path}")
 
-    # What information will need to run the task?
-    # What modalities are supported? - config.json
-    # is it time series? - config.json
-    # is it multilabel? - config.json
-    # Any imputes or missing data - config.json
-    # label target property - config.json
-
-    # Derived elsewhere
-    # How many classes are there? - I think this is only possible by reading and summarizing all the labels in the dataset
-    # hw if it is segmentation?
-    # what is the task type? - I think we would probably need some sort of finetuning config associated with this task
-    # what data belongs to which split? (in the individual metadata.json files)
 
     config_upath = UPath(config.source_path) / "config.json"
     with config_upath.open() as f:
         dataset_dict = json.load(f)
-        # TODO: Potentiually validate witht the rsleanr class
-    # would be nice to not have to check windows here at all
+
     dataset_config = DatasetConfig.model_validate(dataset_dict)
 
-    # Load the olmoearth configs starting with the model config
-    # I can either parse the config as needed or fully create the whole thing and then parse it
-    # probably best to just parse the config as needed
-    # AND THEN I CAN VALIDATE CERTAIN INFORMATION IS PRESENT AGAINST THAT
 
     model_config_path = UPath(config.olmoearth_run_config_path) / "model.yaml"
     with model_config_path.open() as f:
         model_config = yaml.safe_load(f)
-    # TODO: Validate the model config
-    print(model_config)
-    # Get the modalities
+
+    # Extract modalities from dataset config
     modalities = []
     modality_layer_names = []
     max_timesteps_modalities = []
     for layer_name, layer_config in dataset_config.layers.items():
         if layer_config.data_source is None:
-            # This means it is some other layer like a label layer and not one of the modalities we are interested in
             continue
-        # Get the modality
-        print(layer_name)
-        print(layer_config)
         olmoearth_modality = RSLEARN_TO_OLMOEARTH[layer_name]
-        modalities.append(olmoearth_modality.name)  # store name string, not ModalitySpec
+        modalities.append(olmoearth_modality.name)
         modality_layer_names.append(layer_name)
-        # Get max timesteps from query config's max_matches
-        # This represents the maximum number of temporal samples per location
         query_config = layer_config.data_source.query_config
         max_timesteps_modalities.append(query_config.max_matches)
-    print(modalities)
-    # Use the max across all modalities to ensure we can handle the largest temporal extent
+
     num_timesteps = max(max_timesteps_modalities) if max_timesteps_modalities else 1
-    logger.info(f"Max timesteps from config: {num_timesteps} (per-modality: {max_timesteps_modalities})")
-
-    # get the target property
-    # I am pretty sure this is just the band name of the label layer
-    target_property = DEFAULT_TARGET_PROPERTY
-    # for layer_name, layer_config in dataset_config.layers.items():
-    #     if layer_config.data_source is not None:
-    #         # This means it is a modality layer
-    #         continue
-    #     # Assuming that no data source means it is a label layer, this could be potentially wrong
-    #     band_sets = layer_config.band_sets
-    #     if len(band_sets) != 1:
-    #         raise ValueError(f"Expected only one band set for label layer {layer_name}, multiple label bandsets are not supported yet")
-    #     band_set = band_sets[0]
-    #     # May need to revise target properyty var name later
-    #     label_layer_name = band_set.bands[0]
-    #     # the target property is used in the metadata.json inside each windows but is not easily available
-    #     # check the metadata.json of the first window to see if the target property is the default one
-    #     # TODO: Support a target property specified by the config.json
-
-    #     # Assume that there is only one label layer
-    #     break
+    timeseries = num_timesteps > 1
+    logger.info(f"Modalities: {modalities}, timeseries: {timeseries}")
 
     # Extract and instantiate the rslearn task from model config
     # model.yaml structure: data.init_args.task.init_args.tasks.{task_name}
@@ -388,20 +342,9 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
     # Assume 0-indexed consecutive labels (0 to num_classes-1)
     label_values = [str(i) for i in range(num_classes)]
-    logger.info(f"Got {num_classes} classes from model config: {sorted(label_values)}")
+    logger.info(f"Got {num_classes} classes from model config")
 
-    # get the NODATA value -> This would be in the olmoearth_run.yaml config
-    nodata_value = 0 # TODO: This could be very problematic as well because we are sending the label values as zero indexed but could be that zero is nodata vlaue
-    zero_is_invalid = 0 == nodata_value
-
-    # get the multilabel -> assume false for now
-    is_multilabel = False
-    # get the imputes -> assume no imputes for now
-    imputes: list[tuple[str, str]] = []
-    # determine if timeseries from num_timesteps
-    timeseries = num_timesteps > 1
-
-    # norm stats: cache so we don't recompute every time for the same data + task
+    # Compute and cache normalization stats
     import hashlib
     import os
     import pickle
@@ -439,86 +382,26 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         with open(norm_stats_cache_path, "wb") as f:
             pickle.dump(norm_stats, f)
         logger.info(f"Computed and cached norm stats at {norm_stats_cache_path}")
-    print(norm_stats)
 
-    # get the created at
-    created_at = datetime.now().isoformat()
-    # TODO: get the studio task id
-    # TODO: class names but that may not be easy to get as of right now
-    # Map rslearn task type to olmoearth task type
-    # Apply the mapping here
     task_type = rslearn_task_type_to_olmoearth_task_type(rslearn_task)
 
-    # Extract groups and split_tag_key from data module config
+    # Extract window_size from default_config
     data_init_args = model_config["data"]["init_args"]
-    train_config = data_init_args.get("train_config", {})
-    val_config = data_init_args.get("val_config", {})
     default_config = data_init_args.get("default_config", {})
-    groups = train_config.get("groups", [])
-    train_tags = train_config.get("tags", {})
-    split_tag_key = list(train_tags.keys())[0] if train_tags else "split"
-    logger.info(f"Extracted groups={groups}, split_tag_key={split_tag_key}")
-
-    # Extract geometric sizing from transforms
-    # Train sizing comes from train_config transforms, with default_config as fallback
-    train_transforms = train_config.get("transforms", [])
-    train_crop_size, train_pad_size = _extract_sizing(train_transforms, default_config)
-
-    # Eval sizing comes from val_config transforms, or default_config if val_config has none
-    eval_transforms = val_config.get("transforms", []) or default_config.get("transforms", [])
-    eval_crop_size, eval_pad_size = _extract_sizing(eval_transforms, default_config)
-
-    logger.info(
-        f"Extracted sizing: train_crop={train_crop_size}, train_pad={train_pad_size}, "
-        f"eval_crop={eval_crop_size}, eval_pad={eval_pad_size}"
-    )
-
-    # Extract target layer configuration from model.yaml inputs
-    # Find the input with is_target=True
-    inputs_config = data_init_args.get("inputs", {})
-    target_layer_name = "label"  # default
-    target_data_type = "vector"  # default
-    target_bands: list[str] | None = None
-
-    for input_key, input_cfg in inputs_config.items():
-        if input_cfg.get("is_target"):
-            # Found the target input
-            layers = input_cfg.get("layers", [])
-            target_layer_name = layers[0] if layers else "label"
-            target_data_type = input_cfg.get("data_type", "vector")
-            target_bands = input_cfg.get("bands")
-            logger.info(
-                f"Extracted target config: layer={target_layer_name}, "
-                f"data_type={target_data_type}, bands={target_bands}"
-            )
-            break
+    window_size = default_config.get("patch_size", 64)
 
     entry = EvalDatasetEntry(
-        # Core fields
         name=config.name,
         source_path=config.source_path,
-        model_config_path=config.olmoearth_run_config_path,  # Store path to model.yaml dir
+        model_config_path=config.olmoearth_run_config_path,
         task_type=task_type,
         num_classes=num_classes,
-        is_multilabel=is_multilabel,
         classes=label_values,
         modalities=modalities,
-        imputes=imputes,
-        window_size=train_crop_size or 64,  # Use train_crop_size as window_size
+        window_size=window_size,
         timeseries=timeseries,
-        norm_stats_path=norm_stats_cache_path,  # Store cached norm stats path
-        use_pretrain_norm=False,  # Default to dataset stats for new ingestions
-        # Legacy fields (still populated for backward compatibility)
-        target_property=target_property,
-        target_layer_name=target_layer_name,
-        target_data_type=target_data_type,
-        target_bands=target_bands,
-        groups=groups,
-        split_tag_key=split_tag_key,
+        norm_stats_path=norm_stats_cache_path,
+        custom_groups=config.groups or [],
         num_timesteps=num_timesteps,
-        train_crop_size=train_crop_size,
-        train_pad_size=train_pad_size,
-        eval_crop_size=eval_crop_size,
-        eval_pad_size=eval_pad_size,
     )
     return entry

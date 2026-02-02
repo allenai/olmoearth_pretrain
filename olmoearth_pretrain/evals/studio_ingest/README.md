@@ -116,9 +116,6 @@ incompabilities
 - We should jsut do the task the same way here as much as possible
 - we definitely will need to make test splits aka new splits for all the data
 - dealing with different invalid data etc
-- scared of rslearn api changes
-"m_legacy() L242  BandSet.format uses legacy format; support will be removed after 2026-03-01."
-    - would just be another dependency to work off of as well if something stops being supported
 - how do we pick and appropriate workers and batch size for the task
 - What if the dataset is too big
 - Need to auto generate images
@@ -132,12 +129,33 @@ Next steps
 - use the new tolbi
 
 Next steps
-- get wildfire small to work and import the new rslearn dataset index
-- Get the bigger wildfire split to work and the tolbi one fully working
+- Get the bigger wildfire split to work
+    - use the right split
+
+From the Cli you should be able to configure what split to use which we will turn into train val test or to create that split ourselves
+/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_fire_sat_full
+Also we should be able to use tags but I am not sure how those need to be used yet
+test_config:
+      groups: ["val"]
+      tags:
+        oep_eval:
+
+
+
+
+    - bandstat calculation actually works
+    - clear flow for this
+
+
+
+- and the tolbi one fully working
+    - dataset copying
+    - band stats
+    - train test split
 - Try adding bakc support for nandi and awf
 - mozambique support
 - yemen support
-- Ensuring that we can alll fidn discover and add these tasks
+- Ensuring that we can alll find discover and add these tasks
 
 Tasks to add
 - tolbi

@@ -5,13 +5,7 @@ from enum import Enum
 from typing import Any
 
 from olmoearth_pretrain.data.constants import Modality
-
-
-class TaskType(Enum):
-    """Possible task types."""
-
-    CLASSIFICATION = "classification"
-    SEGMENTATION = "segmentation"
+from olmoearth_pretrain.evals.task_types import TaskType
 
 
 def get_eval_mode(task_type: TaskType) -> str:

@@ -324,6 +324,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             print(f"x shape: {x.shape} for modality {modality} after normalization")
             sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
 
+        # TODO: WE should be reading this from the metadata.json of each window/is there a way to enable in rslearn
         # Generate timestamps for this sample's actual number of timesteps
         sample_timesteps = sample_timesteps or self.max_timesteps
         timestamps = get_timestamps(self.start_time, self.end_time, num_timesteps=sample_timesteps)
@@ -456,11 +457,7 @@ def from_registry_entry(
         ds_norm_stats_json = entry.norm_stats_path
 
     # Get temporal range from entry
-    start_time, end_time = entry.temporal_range
-    if not start_time:
-        start_time = "2022-09-01"
-    if not end_time:
-        end_time = "2023-09-01"
+
 
     # Load runtime config and build dataset
     from olmoearth_pretrain.evals.datasets.rslearn_builder import load_runtime_config
@@ -484,8 +481,6 @@ def from_registry_entry(
         norm_stats_from_pretrained=use_pretrain_norm,
         norm_method=norm_method,
         ds_norm_stats_json=ds_norm_stats_json,
-        start_time=start_time,
-        end_time=end_time,
         max_samples=max_samples,
         num_timesteps=entry.num_timesteps,
     )

@@ -80,8 +80,6 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
     entry = ingest_dataset(config)
     print(f"\n✓ Successfully ingested dataset: {entry.name}")
-    print(f"  Location: {entry.weka_path}")
-    print(f"  Splits: {entry.splits}")
 
     if args.register:
         registry = Registry.load()
