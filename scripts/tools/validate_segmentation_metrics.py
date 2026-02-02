@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""Validate segmentation metrics by running LP and Finetune on PASTIS with the tiny model.
-
-This script runs both tasks in a single job:
-1. Linear Probe on pastis_sentinel2 (pastis_lp)
-2. Finetune on pastis_sentinel2 (pastis_ft)
-
-Both should return dict metrics with: miou, overall_acc, macro_acc, macro_f1
-
-Usage:
-    # Dry run (just print config):
-    python scripts/tools/validate_segmentation_metrics.py dry_run_evaluate validate_seg_metrics local
-
-    # Run locally:
-    torchrun scripts/tools/validate_segmentation_metrics.py evaluate validate_seg_metrics local
-
-    # Launch on Beaker:
-    python scripts/tools/validate_segmentation_metrics.py launch_evaluate validate_seg_metrics ai2/saturn-cirrascale
-"""
+"""Validate segmentation metrics by running LP and Finetune on PASTIS and classification on m-eurosat with the tiny model."""
 
 import logging
 
