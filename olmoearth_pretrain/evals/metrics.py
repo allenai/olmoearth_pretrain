@@ -1,6 +1,46 @@
 """Eval metrics."""
 
+from __future__ import annotations
+
+import warnings
+from dataclasses import dataclass
+
 import torch
+
+
+@dataclass
+class EvalResult:
+    """Result from evaluation - handles both classification and segmentation."""
+
+    # Primary metric (used for model selection, backward compat logging)
+    primary: float
+
+    # All metrics as dict (superset including primary)
+    metrics: dict[str, float]
+
+    @classmethod
+    def from_classification(cls, accuracy: float) -> EvalResult:
+        """Create EvalResult from classification accuracy."""
+        return cls(primary=accuracy, metrics={"accuracy": accuracy})
+
+    @classmethod
+    def from_segmentation(
+        cls,
+        miou: float,
+        overall_acc: float,
+        macro_acc: float,
+        macro_f1: float,
+    ) -> EvalResult:
+        """Create EvalResult from segmentation metrics."""
+        return cls(
+            primary=miou,
+            metrics={
+                "miou": miou,
+                "overall_acc": overall_acc,
+                "macro_acc": macro_acc,
+                "macro_f1": macro_f1,
+            },
+        )
 
 
 def _build_confusion_matrix(
@@ -12,14 +52,25 @@ def _build_confusion_matrix(
     """Build confusion matrix from predictions and labels.
 
     Args:
-        predictions: Predicted segmentation masks of shape (N, H, W)
-        labels: Ground truth segmentation masks of shape (N, H, W)
+        predictions: Predicted segmentation masks of shape (N, H, W), integer class indices
+        labels: Ground truth segmentation masks of shape (N, H, W), integer class indices
         num_classes: Number of classes in the segmentation task
         ignore_label: Label value to ignore (default: -1)
 
     Returns:
         Confusion matrix of shape (num_classes, num_classes)
+
+    Raises:
+        TypeError: If predictions or labels are not integer tensors
     """
+    # Validate tensor dtypes
+    if predictions.dtype not in (torch.int32, torch.int64, torch.long):
+        raise TypeError(
+            f"predictions must be integer class indices, got {predictions.dtype}"
+        )
+    if labels.dtype not in (torch.int32, torch.int64, torch.long):
+        raise TypeError(f"labels must be integer class indices, got {labels.dtype}")
+
     device = predictions.device
     labels = labels.to(device)
 
@@ -40,22 +91,17 @@ def segmentation_metrics(
     labels: torch.Tensor,
     num_classes: int,
     ignore_label: int = -1,
-) -> dict[str, float]:
+) -> EvalResult:
     """Compute all segmentation metrics from predictions and labels.
 
     Args:
-        predictions: Predicted segmentation masks of shape (N, H, W)
-        labels: Ground truth segmentation masks of shape (N, H, W)
+        predictions: Predicted segmentation masks of shape (N, H, W), integer class indices
+        labels: Ground truth segmentation masks of shape (N, H, W), integer class indices
         num_classes: Number of classes in the segmentation task
         ignore_label: Label value to ignore (default: -1)
 
     Returns:
-        Dictionary containing:
-            - miou: Mean Intersection over Union
-            - overall_acc: Overall pixel accuracy (correct pixels / total pixels)
-            - macro_acc: Mean of per-class accuracies (recall per class)
-            - micro_f1: F1 computed from global TP/FP/FN
-            - macro_f1: Mean of per-class F1 scores
+        EvalResult with metrics: miou, overall_acc, macro_acc, macro_f1
     """
     confusion = _build_confusion_matrix(predictions, labels, num_classes, ignore_label)
 
@@ -82,16 +128,6 @@ def segmentation_metrics(
     valid_acc_classes = class_totals > 0
     macro_acc = per_class_acc[valid_acc_classes].mean().item()
 
-    # Micro F1: global precision and recall
-    total_tp = tp.sum()
-    total_fp = fp.sum()
-    total_fn = fn.sum()
-    micro_precision = total_tp / (total_tp + total_fp + 1e-8)
-    micro_recall = total_tp / (total_tp + total_fn + 1e-8)
-    micro_f1 = (
-        2 * micro_precision * micro_recall / (micro_precision + micro_recall + 1e-8)
-    ).item()
-
     # Macro F1: mean of per-class F1 scores
     per_class_precision = tp / (tp + fp + 1e-8)
     per_class_recall = tp / (tp + fn + 1e-8)
@@ -105,13 +141,12 @@ def segmentation_metrics(
     valid_f1_classes = class_totals > 0
     macro_f1 = per_class_f1[valid_f1_classes].mean().item()
 
-    return {
-        "miou": miou,
-        "overall_acc": overall_acc,
-        "macro_acc": macro_acc,
-        "micro_f1": micro_f1,
-        "macro_f1": macro_f1,
-    }
+    return EvalResult.from_segmentation(
+        miou=miou,
+        overall_acc=overall_acc,
+        macro_acc=macro_acc,
+        macro_f1=macro_f1,
+    )
 
 
 def mean_iou(
@@ -120,39 +155,25 @@ def mean_iou(
     num_classes: int,
     ignore_label: int = -1,
 ) -> float:
-    """Calculate mean IoU given prediction and label tensors, ignoring pixels with a specific label.
+    """Calculate mean IoU given prediction and label tensors.
+
+    .. deprecated::
+        Use `segmentation_metrics()` instead, which returns an EvalResult
+        with miou and additional metrics.
 
     Args:
-    predictions (torch.Tensor): Predicted segmentation masks of shape (N, H, W)
-    labels (torch.Tensor): Ground truth segmentation masks of shape (N, H, W)
-    num_classes (int): Number of classes in the segmentation task
-    ignore_label (int): Label value to ignore in IoU calculation (default: -1)
+        predictions: Predicted segmentation masks of shape (N, H, W)
+        labels: Ground truth segmentation masks of shape (N, H, W)
+        num_classes: Number of classes in the segmentation task
+        ignore_label: Label value to ignore in IoU calculation (default: -1)
 
     Returns:
-    float: Mean IoU across all classes
+        float: Mean IoU across all classes
     """
-    device = predictions.device
-    labels = labels.to(device)
-
-    valid_mask = labels != ignore_label
-
-    predictions_valid = predictions[valid_mask]
-    labels_valid = labels[valid_mask]
-
-    n = num_classes
-    confusion = torch.bincount(
-        n * labels_valid + predictions_valid, minlength=n**2
-    ).reshape(n, n)
-
-    # Calculate intersection (diagonal) and union
-    intersection = confusion.diagonal()
-    union = confusion.sum(dim=1) + confusion.sum(dim=0) - intersection
-
-    # Calculate IoU for each class
-    iou = intersection.float() / (union.float() + 1e-8)
-
-    # Calculate mean IoU (excluding classes with zero union)
-    valid_classes = union > 0
-    mean_iou_value = iou[valid_classes].mean()
-
-    return mean_iou_value.item()
+    warnings.warn(
+        "mean_iou is deprecated, use segmentation_metrics() instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    result = segmentation_metrics(predictions, labels, num_classes, ignore_label)
+    return result.metrics["miou"]

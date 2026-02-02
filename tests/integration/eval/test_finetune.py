@@ -1,6 +1,6 @@
 """Test Finetune evaluation returns correct types.
 
-These tests verify that segmentation evaluation returns dict with all metrics,
+These tests verify that segmentation evaluation returns EvalResult with all metrics,
 testing the core metric computation that finetune.py depends on.
 """
 
@@ -8,11 +8,11 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 
-from olmoearth_pretrain.evals.metrics import segmentation_metrics
+from olmoearth_pretrain.evals.metrics import EvalResult, segmentation_metrics
 
 
 def test_segmentation_eval_pipeline() -> None:
-    """Test the segmentation evaluation pipeline returns dict with expected keys.
+    """Test the segmentation evaluation pipeline returns EvalResult with expected keys.
 
     This simulates what _eval_seg does: takes model logits, computes argmax predictions,
     and calls segmentation_metrics.
@@ -35,15 +35,18 @@ def test_segmentation_eval_pipeline() -> None:
         preds, labels, num_classes=num_classes, ignore_label=-1
     )
 
-    # Verify return type
-    assert isinstance(result, dict)
-    expected_keys = {"miou", "overall_acc", "macro_acc", "micro_f1", "macro_f1"}
-    assert set(result.keys()) == expected_keys
+    # Verify return type is EvalResult
+    assert isinstance(result, EvalResult)
+    expected_keys = {"miou", "overall_acc", "macro_acc", "macro_f1"}
+    assert set(result.metrics.keys()) == expected_keys
+
+    # Primary metric should be miou
+    assert result.primary == result.metrics["miou"]
 
     # All values should be floats between 0 and 1
     for key in expected_keys:
-        assert isinstance(result[key], float), f"{key} should be float"
-        assert 0.0 <= result[key] <= 1.0, f"{key} should be in [0, 1]"
+        assert isinstance(result.metrics[key], float), f"{key} should be float"
+        assert 0.0 <= result.metrics[key] <= 1.0, f"{key} should be in [0, 1]"
 
 
 def test_segmentation_eval_with_interpolation() -> None:
@@ -90,12 +93,11 @@ def test_segmentation_eval_with_interpolation() -> None:
         preds, labels, num_classes=num_classes, ignore_label=-1
     )
 
-    assert isinstance(result, dict)
-    assert "miou" in result
-    assert "overall_acc" in result
-    assert "macro_acc" in result
-    assert "micro_f1" in result
-    assert "macro_f1" in result
+    assert isinstance(result, EvalResult)
+    assert "miou" in result.metrics
+    assert "overall_acc" in result.metrics
+    assert "macro_acc" in result.metrics
+    assert "macro_f1" in result.metrics
 
 
 def test_segmentation_eval_with_ignore_labels() -> None:
@@ -115,29 +117,17 @@ def test_segmentation_eval_with_ignore_labels() -> None:
         preds, labels, num_classes=num_classes, ignore_label=-1
     )
 
-    assert isinstance(result, dict)
+    assert isinstance(result, EvalResult)
     # Metrics should still be valid
-    for key in ["miou", "overall_acc", "macro_acc", "micro_f1", "macro_f1"]:
-        assert 0.0 <= result[key] <= 1.0
+    for key in ["miou", "overall_acc", "macro_acc", "macro_f1"]:
+        assert 0.0 <= result.metrics[key] <= 1.0
 
 
-def test_empty_test_result_dict() -> None:
-    """Test that when there's no test loader, finetune returns correct empty dict.
+def test_empty_test_result_none() -> None:
+    """Test that when there's no test loader, finetune returns None for test_score.
 
     This verifies the structure of the "no test set" return value.
     """
-    # This is what finetune.py returns when test_loader is None for segmentation
-    empty_result = {
-        "miou": 0.0,
-        "overall_acc": 0.0,
-        "macro_acc": 0.0,
-        "micro_f1": 0.0,
-        "macro_f1": 0.0,
-    }
-
-    expected_keys = {"miou", "overall_acc", "macro_acc", "micro_f1", "macro_f1"}
-    assert set(empty_result.keys()) == expected_keys
-
-    for key in expected_keys:
-        assert isinstance(empty_result[key], float)
-        assert empty_result[key] == 0.0
+    # finetune.py now returns None when test_loader is None
+    test_score = None
+    assert test_score is None

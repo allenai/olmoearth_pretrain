@@ -5,6 +5,7 @@ import torch
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.linear_probe import train_and_eval_probe
+from olmoearth_pretrain.evals.metrics import EvalResult
 
 
 def test_probe_cls() -> None:
@@ -45,9 +46,12 @@ def test_probe_cls() -> None:
     assert "val_score" in result
     assert "test_score" in result
     assert "bootstrap_stats" in result
-    # Classification returns floats
-    assert isinstance(result["val_score"], float)
-    assert isinstance(result["test_score"], float)
+
+    # Classification returns EvalResult with accuracy
+    assert isinstance(result["val_score"], EvalResult)
+    assert isinstance(result["test_score"], EvalResult)
+    assert "accuracy" in result["val_score"].metrics
+    assert "accuracy" in result["test_score"].metrics
 
 
 def test_probe_seg() -> None:
@@ -102,16 +106,16 @@ def test_probe_seg() -> None:
     assert "test_score" in result
     assert "bootstrap_stats" in result
 
-    # Segmentation returns dicts with all metrics
-    expected_metrics = {"miou", "overall_acc", "macro_acc", "micro_f1", "macro_f1"}
-    assert isinstance(result["val_score"], dict)
-    assert isinstance(result["test_score"], dict)
-    assert set(result["val_score"].keys()) == expected_metrics
-    assert set(result["test_score"].keys()) == expected_metrics
+    # Segmentation returns EvalResult with segmentation metrics
+    expected_metrics = {"miou", "overall_acc", "macro_acc", "macro_f1"}
+    assert isinstance(result["val_score"], EvalResult)
+    assert isinstance(result["test_score"], EvalResult)
+    assert set(result["val_score"].metrics.keys()) == expected_metrics
+    assert set(result["test_score"].metrics.keys()) == expected_metrics
 
     # All metric values should be floats between 0 and 1
     for metric_name in expected_metrics:
-        assert isinstance(result["val_score"][metric_name], float)
-        assert isinstance(result["test_score"][metric_name], float)
-        assert 0.0 <= result["val_score"][metric_name] <= 1.0
-        assert 0.0 <= result["test_score"][metric_name] <= 1.0
+        assert isinstance(result["val_score"].metrics[metric_name], float)
+        assert isinstance(result["test_score"].metrics[metric_name], float)
+        assert 0.0 <= result["val_score"].metrics[metric_name] <= 1.0
+        assert 0.0 <= result["test_score"].metrics[metric_name] <= 1.0
