@@ -204,6 +204,7 @@ PASTIS_TASKS = {
         num_workers=2,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
+        ft_lr=0.0001,
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=10,  # Reduced for faster validation
         eval_mode=EvalMode.FINETUNE,
