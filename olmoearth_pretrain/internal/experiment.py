@@ -148,6 +148,7 @@ class BenchmarkExperimentConfig(Config):
     """Configuration for a throughput benchmarking run."""
 
     benchmark: ThroughputBenchmarkRunnerConfig
+    model: Config | None = None
     launch: OlmoEarthBeakerLaunchConfig | None = None
 
 
@@ -241,15 +242,23 @@ def build_evaluate_config(
 def build_benchmark_config(
     common: CommonComponents,
     inference_benchmarking_config_builder: Callable[
-        [], ThroughputBenchmarkRunnerConfig
+        [CommonComponents], ThroughputBenchmarkRunnerConfig
     ],
     overrides: list[str],
+    benchmark_model_config_builder: Callable[[CommonComponents], Config] | None = None,
 ) -> BenchmarkExperimentConfig:
     """Build a throughput benchmarking configuration."""
-    inference_benchmarking_config = inference_benchmarking_config_builder()
+    inference_benchmarking_config = inference_benchmarking_config_builder(common)
+
+    # Build model config if builder is provided
+    model_config = None
+    if benchmark_model_config_builder is not None:
+        model_config = benchmark_model_config_builder(common)
+
     config = BenchmarkExperimentConfig(
         launch=common.launch,
         benchmark=inference_benchmarking_config,
+        model=model_config,
     )
     config = config.merge(overrides)
     logger.info("Benchmark config: %s", config)
@@ -258,7 +267,7 @@ def build_benchmark_config(
 
 def benchmark(config: BenchmarkExperimentConfig) -> None:
     """Benchmark an experiment."""
-    runner = config.benchmark.build()
+    runner = config.benchmark.build(model_config=config.model)
     runner.run()
 
 
@@ -493,8 +502,9 @@ def main(
         Callable[[CommonComponents], OlmoEarthVisualizeConfig] | None
     ) = None,
     inference_benchmarking_config_builder: (
-        Callable[[], ThroughputBenchmarkRunnerConfig] | None
+        Callable[[CommonComponents], ThroughputBenchmarkRunnerConfig] | None
     ) = None,
+    benchmark_model_config_builder: Callable[[CommonComponents], Config] | None = None,
 ) -> None:
     """Main entry point for OlmoEarth Pretrain experiments.
 
@@ -540,6 +550,7 @@ If running command on a local machine ie from a session, you can use the [b]loca
             common=common,
             inference_benchmarking_config_builder=inference_benchmarking_config_builder,
             overrides=overrides,
+            benchmark_model_config_builder=benchmark_model_config_builder,
         )
     elif (
         cmd == SubCmd.evaluate

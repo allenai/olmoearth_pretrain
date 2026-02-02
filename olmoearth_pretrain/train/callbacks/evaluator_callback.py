@@ -30,6 +30,10 @@ from olmoearth_pretrain.evals.datasets.configs import (
 )
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn
+from olmoearth_pretrain.evals.embedding_transforms import (
+    dequantize_embeddings,
+    reduce_embedding_dim,
+)
 from olmoearth_pretrain.evals.embeddings import get_embeddings
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
@@ -91,6 +95,10 @@ class DownstreamTaskConfig:
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
+    # Quantize embeddings to int8 for storage efficiency evaluation
+    quantize_embeddings: bool = False
+    # Reduce embedding dimensionality via PCA (None = no reduction)
+    embedding_dim: int | None = None
 
 
 class DownstreamEvaluator:
@@ -147,6 +155,8 @@ class DownstreamEvaluator:
         self.select_final_test_miou_based_on_epoch_of_max_val_miou = (
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
+        self.quantize_embeddings = task.quantize_embeddings
+        self.embedding_dim = task.embedding_dim
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -273,7 +283,12 @@ class DownstreamEvaluator:
             "use_pooled_tokens": self.use_pooled_tokens,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
-        return get_embeddings(data_loader=data_loader, model=model, is_train=is_train)
+        return get_embeddings(
+            data_loader=data_loader,
+            model=model,
+            is_train=is_train,
+            quantize=self.quantize_embeddings,
+        )
 
     def _val_embed_probe(self) -> dict[str, Any]:
         """Validate the model using embeddings and probe (knn or linear probe)."""
@@ -312,6 +327,30 @@ class DownstreamEvaluator:
         logger.info(f"val labels shape for {self.dataset}: {val_labels.shape}")
         if test_labels is not None:
             logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
+
+        # Dequantize if embeddings were quantized
+        if self.quantize_embeddings:
+            logger.info(f"Dequantizing embeddings for {self.dataset}")
+            train_embeddings = dequantize_embeddings(train_embeddings)
+            val_embeddings = dequantize_embeddings(val_embeddings)
+            if test_embeddings is not None:
+                test_embeddings = dequantize_embeddings(test_embeddings)
+
+        # Reduce embedding dimensionality via PCA if specified
+        if self.embedding_dim is not None:
+            original_dim = train_embeddings.shape[-1]
+            logger.info(
+                f"Reducing embeddings from {original_dim} to {self.embedding_dim} dims for {self.dataset}"
+            )
+            train_embeddings, val_embeddings, test_embeddings, variance_retained = (
+                reduce_embedding_dim(
+                    train_embeddings,
+                    val_embeddings,
+                    test_embeddings,
+                    self.embedding_dim,
+                )
+            )
+            logger.info(f"PCA variance retained: {variance_retained:.4f}")
 
         kwargs = {
             "config": self.config,

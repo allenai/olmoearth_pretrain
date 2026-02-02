@@ -1,0 +1,19 @@
+task                      , fp32, int8, diff , pct_change
+awf_landsat               , 0.7 , 0.71, 0.01 , 0.74
+awf_sentinel1             , 0.75, 0.7 , -0.04, -5.56
+awf_sentinel2             , 0.72, 0.73, 0.01 , 0.72
+m_bigearthnet             , 0.62, 0.62, 0.0  , 0.17
+m_brick_kiln              , 0.95, 0.93, -0.02, -2.2
+m_cashew_plant            , 0.33, 0.33, -0.0 , -0.06
+m_eurosat                 , 0.94, 0.94, 0.0  , 0.21
+m_forestnet               , 0.46, 0.45, -0.01, -2.21
+m_sa_crop_type            , 0.31, 0.31, -0.0 , -0.29
+m_so2sat                  , 0.66, 0.67, 0.0  , 0.61
+mados                     , 0.72, 0.72, 0.0  , 0.13
+nandi_landsat             , 0.63, 0.65, 0.02 , 3.14
+nandi_sentinel1           , 0.31, 0.32, 0.02 , 5.28
+nandi_sentinel2           , 0.68, 0.69, 0.01 , 1.27
+pastis_sentinel1          , 0.29, 0.29, -0.0 , -0.85
+pastis_sentinel1_sentinel2, 0.51, 0.51, -0.0 , -0.11
+pastis_sentinel2          , 0.52, 0.52, -0.0 , -0.11
+sen1floods11              , 0.8 , 0.8 , -0.0 , -0.04

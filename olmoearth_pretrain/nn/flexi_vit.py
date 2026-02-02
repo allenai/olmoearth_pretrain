@@ -29,6 +29,7 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
 logger = logging.getLogger(__name__)
@@ -371,6 +372,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         supported_modality_names: list[str],
         max_patch_size: int,
         embedding_size: int,
+        tokenization_config: TokenizationConfig | None = None,
     ):
         """Initialize the patch embeddings.
 
@@ -379,11 +381,13 @@ class MultiModalPatchEmbeddings(nn.Module):
                 instantiation supports
             max_patch_size: Maximum size of patches
             embedding_size: Size of embeddings
+            tokenization_config: Optional config for custom band groupings
         """
         super().__init__()
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
         self.supported_modality_names = supported_modality_names
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -392,10 +396,11 @@ class MultiModalPatchEmbeddings(nn.Module):
                 self._get_patch_embedding_module_for_modality(modality)
             )
 
-        # For every patch embedding module we want to create a unique
+        # For every patch embedding module we want to create a unique buffer
+        # for selecting the correct band indices from the data tensor
         for modality in self.supported_modality_names:
             for idx, bandset_indices in enumerate(
-                Modality.get(modality).bandsets_as_indices()
+                self.tokenization_config.get_bandset_indices(modality)
             ):
                 buffer_name = self._get_buffer_name(modality, idx)
                 banset_indices_tensor = torch.tensor(bandset_indices, dtype=torch.long)
@@ -421,8 +426,10 @@ class MultiModalPatchEmbeddings(nn.Module):
     def _get_patch_embedding_module_for_modality(self, modality: str) -> nn.Module:
         """Get the patch embedding module for a modality."""
         modality_spec = Modality.get(modality)
-        # Based on the modality name we choose the way to embed the data
+        # Get bandset indices from tokenization config (may be overridden)
+        bandset_indices = self.tokenization_config.get_bandset_indices(modality)
 
+        # Based on the modality name we choose the way to embed the data
         # I likely will need to know about what the embedding strategy is in the forward as well
         # Static modality
         if not modality_spec.is_spatial:
@@ -432,9 +439,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                     self._get_embedding_module_name(modality, idx): nn.Linear(
                         len(channel_set_idxs), self.embedding_size
                     )
-                    for idx, channel_set_idxs in enumerate(
-                        modality_spec.bandsets_as_indices()
-                    )
+                    for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
             )
         else:
@@ -446,9 +451,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                         patch_size_at_16=self.max_patch_size,
                         modality_spec=modality_spec,
                     )
-                    for idx, channel_set_idxs in enumerate(
-                        modality_spec.bandsets_as_indices()
-                    )
+                    for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
             )
 
@@ -466,9 +469,10 @@ class MultiModalPatchEmbeddings(nn.Module):
         modality_data = getattr(input_data, modality)
 
         modality_spec = Modality.get(modality)
+        num_band_sets = self.tokenization_config.get_num_bandsets(modality)
 
         modality_tokens, modality_masks = [], []
-        for idx in range(modality_spec.num_band_sets):
+        for idx in range(num_band_sets):
             modality_specific_kwargs = {}
             if not modality_spec.is_spatial:
                 # static in time
@@ -553,6 +557,7 @@ class Reconstructor(nn.Module):
         decoder: nn.Module,
         supported_modalities: list[ModalitySpec],
         max_patch_size: int,
+        tokenization_config: TokenizationConfig | None = None,
     ):
         """Initialize the patch embeddings.
 
@@ -561,11 +566,13 @@ class Reconstructor(nn.Module):
             supported_modalities: Which modalities from Modality this model
                 instantiation supports
             max_patch_size: Maximum size of patches
+            tokenization_config: Optional config for custom band groupings
         """
         super().__init__()
         self.max_patch_size = max_patch_size
         self.embedding_size = decoder.output_embedding_size
         self.supported_modalities = supported_modalities
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         self.decoder = decoder
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_reconstructions = nn.ModuleDict({})
@@ -594,8 +601,10 @@ class Reconstructor(nn.Module):
         self, modality: ModalitySpec
     ) -> nn.Module:
         """Get the patch reconstruction module for a modality."""
-        # Based on the modality name we choose the way to embed the data
+        # Get bandset indices from tokenization config (may be overridden)
+        bandset_indices = self.tokenization_config.get_bandset_indices(modality.name)
 
+        # Based on the modality name we choose the way to embed the data
         # I likely will need to know about what the embedding strategy is in the forward as well
         # Static modality
         if modality.get_tile_resolution() == 0:
@@ -605,9 +614,7 @@ class Reconstructor(nn.Module):
                     self._get_reconstruction_module_name(modality.name, idx): nn.Linear(
                         self.embedding_size, len(channel_set_idxs)
                     )
-                    for idx, channel_set_idxs in enumerate(
-                        modality.bandsets_as_indices()
-                    )
+                    for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
             )
         else:
@@ -620,9 +627,7 @@ class Reconstructor(nn.Module):
                         embedding_size=self.embedding_size,
                         max_patch_size=self.max_patch_size,
                     )
-                    for idx, channel_set_idxs in enumerate(
-                        modality.bandsets_as_indices()
-                    )
+                    for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
             )
 
@@ -636,10 +641,11 @@ class Reconstructor(nn.Module):
         modality_data = getattr(input_data, modality)
 
         modality_spec = Modality.get(modality)
+        bandset_indices = self.tokenization_config.get_bandset_indices(modality)
 
         # x: Input tensor with shape [b, h, w, (t), b_s, d]
         modality_tokens, modality_masks = [], []
-        for idx, channel_set_indices in enumerate(modality_spec.bandsets_as_indices()):
+        for idx, channel_set_indices in enumerate(bandset_indices):
             data = modality_data[..., idx, :]
             masks = modality_mask[..., idx]
             r_model = self.per_modality_reconstructions[modality][
@@ -698,6 +704,7 @@ class ReconstructorConfig(Config):
     decoder_config: "Config"
     supported_modality_names: list[str]
     max_patch_size: int = 8
+    tokenization_config: TokenizationConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -707,6 +714,8 @@ class ReconstructorConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+        if self.tokenization_config is not None:
+            self.tokenization_config.validate()
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -735,6 +744,7 @@ class CompositeEncodings(nn.Module):
         max_sequence_length: int,
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
+        tokenization_config: TokenizationConfig | None = None,
     ):
         """Initialize the composite encodings.
 
@@ -745,6 +755,7 @@ class CompositeEncodings(nn.Module):
             max_sequence_length: Maximum sequence length
             learnable_channel_embeddings: Whether to use learnable channel embeddings
             random_channel_embeddings: Initialize channel embeddings randomly (zeros if False)
+            tokenization_config: Optional config for custom band groupings
         """
         super().__init__()
         self.embedding_size = embedding_size
@@ -752,6 +763,7 @@ class CompositeEncodings(nn.Module):
         self.supported_modality_names = [
             modality.name for modality in supported_modalities
         ]
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         self.embedding_size = embedding_size
         self.max_sequence_length = (
             max_sequence_length  # This max sequence length is a time dim thing
@@ -775,7 +787,8 @@ class CompositeEncodings(nn.Module):
         if not learnable_channel_embeddings and not random_channel_embeddings:
             self.per_modality_channel_embeddings = nn.ParameterDict()
             for modality in self.supported_modalities:
-                shape = (len(modality.band_sets), self.embedding_dim_per_embedding_type)
+                num_bandsets = self.tokenization_config.get_num_bandsets(modality.name)
+                shape = (num_bandsets, self.embedding_dim_per_embedding_type)
                 channel_embeddings = nn.Parameter(
                     torch.zeros(shape), requires_grad=False
                 )
@@ -789,7 +802,8 @@ class CompositeEncodings(nn.Module):
 
             self.per_modality_channel_embeddings = nn.ParameterDict()
             for modality in self.supported_modalities:
-                shape = (len(modality.band_sets), self.embedding_dim_per_embedding_type)
+                num_bandsets = self.tokenization_config.get_num_bandsets(modality.name)
+                shape = (num_bandsets, self.embedding_dim_per_embedding_type)
                 if random_channel_embeddings:
                     channel_embeddings = nn.Parameter(torch.rand(shape), **args)
                 else:
@@ -882,10 +896,18 @@ class CompositeEncodings(nn.Module):
         device = modality_tokens.device
         modality_embed = torch.zeros(modality_tokens.shape, device=device)
         n = self.embedding_dim_per_embedding_type
+        actual_bandsets = modality_tokens.shape[-2]
 
         # Channel embeddings
         if use_modality_encodings:
             channel_embed = self.per_modality_channel_embeddings[modality.name]
+            if channel_embed.shape[0] != actual_bandsets:
+                raise ValueError(
+                    f"Channel embeddings for {modality.name} expect "
+                    f"{channel_embed.shape[0]} bandsets but tokens have "
+                    f"{actual_bandsets}. Ensure tokenization_config is "
+                    "consistently passed to the encoder/decoder and masking strategy."
+                )
             channel_embed = repeat(
                 channel_embed, f"b_s d -> {ein_string}", **ein_dict
             ).to(device)
@@ -972,6 +994,7 @@ class FlexiVitBase(nn.Module):
         random_channel_embeddings: bool = False,
         use_flash_attn: bool = False,
         qk_norm: bool = False,
+        tokenization_config: TokenizationConfig | None = None,
     ) -> None:
         """Initialize the FlexiVitBase class."""
         super().__init__()
@@ -982,6 +1005,7 @@ class FlexiVitBase(nn.Module):
         logger.info(f"modalities being used by model: {self.supported_modality_names}")
 
         self.max_sequence_length = max_sequence_length
+        self._base_tokenization_config = tokenization_config or TokenizationConfig()
 
         self.use_flash_attn = use_flash_attn
         self.learnable_channel_embeddings = learnable_channel_embeddings
@@ -1009,6 +1033,7 @@ class FlexiVitBase(nn.Module):
             max_sequence_length,
             learnable_channel_embeddings,
             random_channel_embeddings,
+            tokenization_config=self._base_tokenization_config,
         )
         self.apply(self._init_weights)
 
@@ -1197,6 +1222,7 @@ class Encoder(FlexiVitBase):
         frozen_patch_embeddings: bool = False,
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
+        tokenization_config: TokenizationConfig | None = None,
     ):
         """Initialize the encoder.
 
@@ -1222,7 +1248,9 @@ class Encoder(FlexiVitBase):
                 https://arxiv.org/pdf/2104.02057, Section 4.2
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
+            tokenization_config: Optional config for custom band groupings
         """
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
             embedding_size=embedding_size,
             depth=depth,
@@ -1235,6 +1263,7 @@ class Encoder(FlexiVitBase):
             use_flash_attn=use_flash_attn,
             random_channel_embeddings=random_channel_embeddings,
             qk_norm=qk_norm,
+            tokenization_config=self.tokenization_config,
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
@@ -1250,6 +1279,7 @@ class Encoder(FlexiVitBase):
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
+            tokenization_config=self.tokenization_config,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -1721,6 +1751,7 @@ class PredictorBase(FlexiVitBase):
         output_embedding_size: int | None = None,
         use_flash_attn: bool = False,
         qk_norm: bool = False,
+        tokenization_config: TokenizationConfig | None = None,
     ):
         """Initialize the predictor.
 
@@ -1738,7 +1769,9 @@ class PredictorBase(FlexiVitBase):
             output_embedding_size: Size of output embeddings
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
+            tokenization_config: Optional config for custom band groupings
         """
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
             embedding_size=decoder_embedding_size,
             depth=depth,
@@ -1751,6 +1784,7 @@ class PredictorBase(FlexiVitBase):
             supported_modalities=supported_modalities,
             use_flash_attn=use_flash_attn,
             qk_norm=qk_norm,
+            tokenization_config=self.tokenization_config,
         )
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
@@ -2076,8 +2110,8 @@ class Predictor(PredictorBase):
             per_modality_output_tokens = []
             modality_data = tokens_and_masks[modality]
 
-            band_sets = Modality.get(modality).band_sets
-            for idx in range(len(band_sets)):
+            num_band_sets = self.tokenization_config.get_num_bandsets(modality)
+            for idx in range(num_band_sets):
                 per_channel_modality_data = modality_data[..., idx, :]
                 output_data = self.to_output_embed(self.norm(per_channel_modality_data))
                 per_modality_output_tokens.append(output_data)
@@ -2110,6 +2144,7 @@ class EncoderConfig(Config):
     frozen_patch_embeddings: bool = False
     qk_norm: bool = False
     log_token_norm_stats: bool = False
+    tokenization_config: TokenizationConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -2119,6 +2154,8 @@ class EncoderConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+        if self.tokenization_config is not None:
+            self.tokenization_config.validate()
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
@@ -2153,6 +2190,7 @@ class PredictorConfig(Config):
     output_embedding_size: int | None = None
     use_flash_attn: bool = False
     qk_norm: bool = False
+    tokenization_config: TokenizationConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -2162,6 +2200,8 @@ class PredictorConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+        if self.tokenization_config is not None:
+            self.tokenization_config.validate()
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
