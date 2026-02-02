@@ -1,5 +1,7 @@
 """Train and evaluate a linear probe."""
 
+from __future__ import annotations
+
 import copy
 import math
 from enum import StrEnum
@@ -15,9 +17,12 @@ from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
-from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
-from olmoearth_pretrain.evals.task_types import TaskType
-from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL, mean_iou
+from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
+from olmoearth_pretrain.evals.metrics import (
+    SEGMENTATION_IGNORE_LABEL,
+    EvalResult,
+    segmentation_metrics,
+)
 from olmoearth_pretrain.evals.utils import adjust_learning_rate
 
 logger = getLogger(__name__)
@@ -130,13 +135,13 @@ def train_and_eval_probe(
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
-) -> dict[str, float | dict]:
+) -> dict[str, EvalResult | dict | None]:
     """Run a linear probe on the OlmoEarth Pretrain model.
 
     Returns:
         Dictionary with keys:
-            - val_score: Validation score
-            - test_score: Test score (0.0 if no test set)
+            - val_score: EvalResult for validation
+            - test_score: EvalResult for test, or None if no test set
             - bootstrap_stats: Bootstrap statistics dict (empty dict if n_bootstrap == 0)
     """
     logger.info(f"Probe type {probe_type}")
@@ -180,9 +185,9 @@ def train_and_eval_probe(
             )
 
     num_times_to_run_eval = math.ceil(epochs / eval_interval)
-    val_mious = []
+    val_results: list[EvalResult] = []
     best_probe_state = None
-    best_val_miou = float("-inf")
+    best_val_score = float("-inf")
     best_epoch = 0
 
     data_loader = DataLoader(
@@ -207,7 +212,7 @@ def train_and_eval_probe(
             num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
             device=device,
         )
-        val_miou = evaluate_probe(
+        val_result = evaluate_probe(
             data_loader=DataLoader(
                 TensorDataset(val_embeddings, val_labels),
                 batch_size=batch_size,
@@ -220,32 +225,41 @@ def train_and_eval_probe(
             task_type=config.task_type,
             probe_type=probe_type,
         )
-        logger.info(f"Epoch {end_epoch}, Val MIoU: {val_miou}")
-        val_mious.append(val_miou)
+        logger.info(f"Epoch {end_epoch}, Val Score: {val_result.primary}")
+        val_results.append(val_result)
 
-        # Save best probe state
-        if val_miou > best_val_miou:
-            best_val_miou = val_miou
+        # Save best probe state based on primary metric
+        if val_result.primary > best_val_score:
+            best_val_score = val_result.primary
             best_epoch = end_epoch
             best_probe_state = copy.deepcopy(probe.state_dict())
 
     # Log all validation results
-    for i, val_miou in enumerate(val_mious):
-        logger.debug(f"Epoch {(i + 1) * eval_interval}, Val MIoU: {val_miou}")
-    logger.debug(f"Best Val MIoU: {best_val_miou} at epoch {best_epoch}")
+    for i, val_result in enumerate(val_results):
+        logger.debug(
+            f"Epoch {(i + 1) * eval_interval}, Val Score: {val_result.primary}"
+        )
+    logger.debug(f"Best Val Score: {best_val_score} at epoch {best_epoch}")
 
-    # Determine final validation MIoU
+    # Determine final validation result
     if select_final_test_miou_based_on_epoch_of_max_val_miou:
-        val_miou = best_val_miou
+        # Find the result corresponding to best epoch
+        best_idx = (best_epoch // eval_interval) - 1
+        if best_idx < 0:
+            best_idx = 0
+        final_val_result = val_results[best_idx]
     else:
-        val_miou = val_mious[-1]
-        if val_miou < best_val_miou:
+        final_val_result = val_results[-1]
+        if final_val_result.primary < best_val_score:
             logger.warning(
-                f"Final Val MIoU: {val_miou} at epoch {epochs} is less than best Val MIoU: "
-                f"{best_val_miou} at epoch {best_epoch}"
+                f"Final Val Score: {final_val_result.primary} at epoch {epochs} is less than best Val Score: "
+                f"{best_val_score} at epoch {best_epoch}"
             )
 
     # Evaluate test set only once with the best probe
+    test_result: EvalResult | None = None
+    bootstrap_stats: dict = {}
+
     if test_embeddings is not None:
         if test_labels is None:
             raise ValueError("Can't have test embeddings without test labels")
@@ -274,12 +288,11 @@ def train_and_eval_probe(
             num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
         )
 
-        bootstrap_stats = None
         if n_bootstrap > 0:
             # Bootstrap resample the predictions (very fast!)
             rng = get_rng(bootstrap_seed)
             n_test_samples = all_preds.shape[0]
-            bootstrap_scores = []
+            bootstrap_scores: list[float] = []
 
             logger.info(
                 f"Running {n_bootstrap} bootstrap iterations on precomputed predictions..."
@@ -295,13 +308,13 @@ def train_and_eval_probe(
                 bootstrap_labels = all_labels[bootstrap_indices]
 
                 # Compute metric on resampled predictions
-                score = compute_metric(
+                result = compute_metric(
                     bootstrap_preds,
                     bootstrap_labels,
                     num_classes=config.num_classes,
                     task_type=config.task_type,
                 )
-                bootstrap_scores.append(score)
+                bootstrap_scores.append(result.primary)
 
                 if (i + 1) % 100 == 0:
                     logger.debug(
@@ -309,38 +322,35 @@ def train_and_eval_probe(
                     )
 
             bootstrap_scores_array = np.array(bootstrap_scores)
-            test_miou = float(np.mean(bootstrap_scores_array))
+            bootstrap_mean = float(np.mean(bootstrap_scores_array))
             std_metric = float(np.std(bootstrap_scores_array))
             ci_lower = float(np.percentile(bootstrap_scores_array, 2.5))
             ci_upper = float(np.percentile(bootstrap_scores_array, 97.5))
             bootstrap_stats = {
                 "bootstrap_scores": bootstrap_scores_array.tolist(),
-                "mean": test_miou,
+                "mean": bootstrap_mean,
                 "std": std_metric,
                 "ci_lower": ci_lower,
                 "ci_upper": ci_upper,
             }
             logger.info(
-                f"Bootstrap test MIoU: {test_miou:.4f} ± {std_metric:.4f} "
+                f"Bootstrap test score: {bootstrap_mean:.4f} ± {std_metric:.4f} "
                 f"[{ci_lower:.4f}, {ci_upper:.4f}]"
             )
-        else:
-            # No bootstrap - just compute metric from predictions
-            test_miou = compute_metric(
-                all_preds,
-                all_labels,
-                num_classes=config.num_classes,
-                task_type=config.task_type,
-            )
-            bootstrap_stats = {}
-            logger.info(f"Test MIoU: {test_miou}")
-    else:
-        test_miou = 0.0
-        bootstrap_stats = {}
+
+        # Compute full metrics for the actual test result
+        test_result = compute_metric(
+            all_preds,
+            all_labels,
+            num_classes=config.num_classes,
+            task_type=config.task_type,
+        )
+        if n_bootstrap == 0:
+            logger.info(f"Test result: {test_result}")
 
     return {
-        "val_score": val_miou,
-        "test_score": test_miou,
+        "val_score": final_val_result,
+        "test_score": test_result,
         "bootstrap_stats": bootstrap_stats,
     }
 
@@ -489,7 +499,7 @@ def compute_metric(
     labels: torch.Tensor,
     num_classes: int,
     task_type: TaskType,
-) -> float:
+) -> EvalResult:
     """Compute metric from predictions and labels.
 
     Args:
@@ -499,13 +509,15 @@ def compute_metric(
         task_type: Type of task (classification or segmentation)
 
     Returns:
-        float: Computed metric (accuracy for classification, mIoU for segmentation)
+        EvalResult with computed metrics
     """
     if task_type == TaskType.SEGMENTATION:
-        metric = mean_iou(preds, labels, num_classes=num_classes, ignore_label=SEGMENTATION_IGNORE_LABEL)
+        return segmentation_metrics(
+            preds, labels, num_classes=num_classes, ignore_label=SEGMENTATION_IGNORE_LABEL
+        )
     else:
-        metric = accuracy_score(labels.numpy(), preds.numpy())
-    return metric
+        acc = accuracy_score(labels.numpy(), preds.numpy())
+        return EvalResult.from_classification(acc)
 
 
 def evaluate_probe(
@@ -516,8 +528,12 @@ def evaluate_probe(
     task_type: TaskType,
     probe_type: ProbeType,
     num_output_pixels_per_side_of_patch: int | None = None,
-) -> float:
-    """Evaluate a trained linear probe on a segmentation or classification task."""
+) -> EvalResult:
+    """Evaluate a trained linear probe on a segmentation or classification task.
+
+    Returns:
+        EvalResult with computed metrics
+    """
     preds, labels = get_probe_predictions(
         data_loader=data_loader,
         probe=probe,

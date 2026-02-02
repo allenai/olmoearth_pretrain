@@ -47,7 +47,7 @@ from rslearn.train.tasks.classification import (
 from rslearn.train.tasks.segmentation import SegmentationTask as RsSegmentationTask
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.evals.task_types import TaskType
+from olmoearth_pretrain.evals.datasets.configs import TaskType
 
 DEFAULT_TARGET_PROPERTY = "category"
 

@@ -39,6 +39,7 @@ from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
 from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
+from olmoearth_pretrain.evals.metrics import EvalResult
 from olmoearth_pretrain.nn.flexi_vit import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
@@ -204,7 +205,6 @@ class DownstreamEvaluator:
             if self.eval_mode == EvalMode.KNN
             else (
                 partial(
-                    # TODO: THis is updated dynamically in the get_embeddings function
                     train_and_eval_probe,
                     batch_size=self.probe_batch_size,
                     epochs=self.epochs,
@@ -292,7 +292,7 @@ class DownstreamEvaluator:
             quantize=self.quantize_embeddings,
         )
 
-    def _val_embed_probe(self) -> dict[str, float | dict]:
+    def _val_embed_probe(self) -> dict[str, Any]:
         """Validate the model using embeddings and probe (knn or linear probe)."""
         logger.info(f"Validating {self.dataset} with {self.eval_mode}")
         logger.info(f"Getting train loader for {self.dataset}...")
@@ -440,7 +440,7 @@ class DownstreamEvaluator:
         best_checkpoint_path = self._get_best_checkpoint_path()
         if os.path.exists(best_checkpoint_path):
             logger.info("Best checkpoint already exists, skipping finetuning")
-            return {"val_score": 0.0, "test_score": 0.0, "bootstrap_stats": {}}
+            return {"val_score": None, "test_score": None, "bootstrap_stats": {}}
         else:
             logger.info("Best checkpoint does not exist, running finetuning")
             result = run_finetune_eval(
@@ -474,8 +474,8 @@ class DownstreamEvaluator:
 
         Returns:
             Dictionary with keys:
-                - val_score: Validation score
-                - test_score: Test score
+                - val_score: EvalResult for validation
+                - test_score: EvalResult for test, or None if no test set
                 - bootstrap_stats: Bootstrap statistics dict (empty dict if not available)
         """
         if self.eval_mode in (EvalMode.KNN, EvalMode.LINEAR_PROBE):
@@ -484,6 +484,27 @@ class DownstreamEvaluator:
             return self._val_finetune()
         else:
             raise ValueError(f"Unsupported eval_mode: {self.eval_mode}")
+
+
+def _log_eval_result_to_wandb(
+    wandb_callback: Any, prefix: str, name: str, result: EvalResult
+) -> None:
+    """Log an EvalResult to wandb."""
+    # Log all metrics
+    for metric_name, metric_value in result.metrics.items():
+        wandb_callback.wandb.log({f"{prefix}/{name}/{metric_name}": metric_value})
+    # Also log primary metric for backward compatibility
+    wandb_callback.wandb.log({f"{prefix}/{name}": result.primary})
+
+
+def _record_eval_result(
+    trainer: Trainer, prefix: str, name: str, result: EvalResult
+) -> None:
+    """Record an EvalResult to trainer metrics."""
+    for metric_name, metric_value in result.metrics.items():
+        trainer.record_metric(f"{prefix}/{name}/{metric_name}", metric_value)
+    # Also record primary metric for backward compatibility
+    trainer.record_metric(f"{prefix}/{name}", result.primary)
 
 
 @dataclass
@@ -553,9 +574,8 @@ class DownstreamEvaluatorCallback(Callback):
         self, evaluator: DownstreamEvaluator, result: dict[str, Any]
     ) -> None:
         """Log the evaluation results."""
-        # Extract from dict
-        val_result = result["val_score"]
-        test_result = result["test_score"]
+        val_result: EvalResult | None = result["val_score"]
+        test_result: EvalResult | None = result["test_score"]
         bootstrap_stats = result["bootstrap_stats"]
 
         # Log bootstrap statistics if available
@@ -568,32 +588,35 @@ class DownstreamEvaluatorCallback(Callback):
                 f"{bootstrap_stats.get('ci_upper', 'N/A'):.4f}]"
             )
 
-        logger.info(
-            f"Downstream evaluator {evaluator.evaluation_name} score: {val_result}"
-        )
-        if self.run_on_test:
+        if val_result is not None:
             logger.info(
-                f"Downstream evaluator {evaluator.evaluation_name} test score: {test_result}"
+                f"Downstream evaluator {evaluator.evaluation_name} score: {val_result.primary} (metrics: {val_result.metrics})"
+            )
+        if self.run_on_test and test_result is not None:
+            logger.info(
+                f"Downstream evaluator {evaluator.evaluation_name} test score: {test_result.primary} (metrics: {test_result.metrics})"
             )
 
     def _log_eval_results_to_wandb_pretrain(
         self, evaluator: DownstreamEvaluator, result: dict[str, Any]
     ) -> None:
         """Log the evaluation results to wandb."""
-        # self.trainer.record_metric() is not logging to wandb at this point
-        # therefore we log to wandb manually
         wandb_callback = next(
             callback
             for callback in self.trainer._iter_callbacks()
             if isinstance(callback, OlmoEarthWandBCallback)
         )
-        val_result = result["val_score"]
-        test_result = result["test_score"]
+        val_result: EvalResult | None = result["val_score"]
+        test_result: EvalResult | None = result["test_score"]
         eval_time = result["eval_time"]
         bootstrap_stats = result["bootstrap_stats"]
 
         if wandb_callback.enabled:
-            wandb_callback.wandb.log({"eval/" + evaluator.evaluation_name: val_result})
+            # Log validation results
+            if val_result is not None:
+                _log_eval_result_to_wandb(
+                    wandb_callback, "eval", evaluator.evaluation_name, val_result
+                )
             wandb_callback.wandb.log(
                 {"eval_time/" + evaluator.evaluation_name: eval_time}
             )
@@ -607,8 +630,12 @@ class DownstreamEvaluatorCallback(Callback):
                 )
                 wandb_callback.wandb.log({f"{evaluator.evaluation_name}_step": 0})
 
+        # Check if results are valid
+        val_valid = val_result is not None and val_result.primary >= 0
+        test_valid = test_result is not None and test_result.primary >= 0
+
         # Only logging valid results to wandb
-        if val_result > 0 and test_result > 0:
+        if val_valid and test_valid:
             # Log bootstrap statistics if available
             if bootstrap_stats:
                 wandb_callback.wandb.log(
@@ -627,9 +654,9 @@ class DownstreamEvaluatorCallback(Callback):
                         ),
                     }
                 )
-            if self.run_on_test:
-                wandb_callback.wandb.log(
-                    {"eval/test/" + evaluator.evaluation_name: test_result}
+            if self.run_on_test and test_result is not None:
+                _log_eval_result_to_wandb(
+                    wandb_callback, "eval/test", evaluator.evaluation_name, test_result
                 )
 
     def pre_train(self) -> None:
@@ -673,28 +700,34 @@ class DownstreamEvaluatorCallback(Callback):
                 continue
             self._perform_eval(evaluator)
 
-    def _perform_eval(self, evaluator: DownstreamEvaluator) -> dict[str, float | dict]:
+    def _perform_eval(self, evaluator: DownstreamEvaluator) -> dict[str, Any]:
         """Run the evaluator.
 
         Returns:
             Dictionary with keys:
-                - val_score: Validation score
-                - test_score: Test score
+                - val_score: EvalResult for validation
+                - test_score: EvalResult for test, or None if no test set
                 - eval_time: Evaluation time in seconds
                 - bootstrap_stats: Bootstrap statistics dict (empty dict if not available)
         """
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
         start_time = time.monotonic()
         result = evaluator.val()
-        val_result = result["val_score"]
-        test_result = result["test_score"]
+        val_result: EvalResult | None = result["val_score"]
+        test_result: EvalResult | None = result["test_score"]
         bootstrap_stats = result["bootstrap_stats"]
 
-        self.trainer.record_metric(f"eval/{evaluator.evaluation_name}", val_result)
-        if self.run_on_test:
-            self.trainer.record_metric(
-                f"eval/test/{evaluator.evaluation_name}", test_result
+        # Record validation metrics
+        if val_result is not None:
+            _record_eval_result(
+                self.trainer, "eval", evaluator.evaluation_name, val_result
             )
+
+        if self.run_on_test and test_result is not None:
+            _record_eval_result(
+                self.trainer, "eval/test", evaluator.evaluation_name, test_result
+            )
+
         # Log bootstrap statistics if available
         if bootstrap_stats:
             self.trainer.record_metric(
