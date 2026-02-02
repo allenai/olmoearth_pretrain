@@ -184,7 +184,7 @@ def build_train_module_config(
 
 
 # Both LP and Finetune tasks for validation
-PASTIS_TASKS = {
+TASKS = {
     "pastis_lp": DownstreamTaskConfig(
         dataset="pastis",
         embedding_batch_size=32,
@@ -208,6 +208,14 @@ PASTIS_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=10,  # Reduced for faster validation
         eval_mode=EvalMode.FINETUNE,
+    ),
+    "m-eurosat": DownstreamTaskConfig(
+        dataset="m-eurosat",
+        embedding_batch_size=128,
+        num_workers=0,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        eval_interval=Duration.steps(4000),
     ),
 }
 
@@ -247,7 +255,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         .with_callback(
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
-                tasks=PASTIS_TASKS,
+                tasks=TASKS,
                 eval_on_startup=True,
                 cancel_after_first_eval=True,
                 run_on_test=True,
