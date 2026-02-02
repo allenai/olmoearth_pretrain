@@ -247,8 +247,10 @@ class _StandaloneConfig:
 # === The unified export ===
 # Use olmo-core Config if available, otherwise use standalone
 if OLMO_CORE_AVAILABLE:
+    print("olmo-core is available")
     Config = _OlmoCoreConfig  # type: ignore[assignment,misc]
 else:
+    print("olmo-core is not available")
     Config = _StandaloneConfig
     # Emit warning once when module is first imported
     warnings.warn(
