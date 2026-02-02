@@ -34,6 +34,7 @@ from olmoearth_pretrain.internal.experiment import (
 from olmoearth_pretrain.nn.flexi_vit import (
     PoolingType,
 )
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthSpeedMonitorCallback,
@@ -71,8 +72,16 @@ def build_common_components(
     return config
 
 
-def get_masking_config() -> MaskingConfig:
-    """Get the masking configuration for the experiment."""
+def get_masking_config(
+    tokenization_config: TokenizationConfig | None = None,
+) -> MaskingConfig:
+    """Get the masking configuration for the experiment.
+
+    Args:
+        tokenization_config: Optional tokenization config for custom band groupings.
+            If provided, propagated to the masking strategy so mask shapes match
+            the model's band-grouping configuration.
+    """
     return MaskingConfig(
         strategy_config={
             # "type": "modality_cross_random",
@@ -88,20 +97,27 @@ def get_masking_config() -> MaskingConfig:
                 Modality.CDL.name,
                 Modality.WORLDCEREAL.name,
             ],
-        }
+        },
+        tokenization_config=tokenization_config,
     )
 
 
 def build_train_module_config(
     common: CommonComponents,
+    tokenization_config: TokenizationConfig | None = None,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build the train module config for an experiment."""
+    """Build the train module config for an experiment.
+
+    Args:
+        common: Common experiment components.
+        tokenization_config: Optional tokenization config for custom band groupings.
+    """
     # The train module still needs the masking_config for reference (e.g., for metric
     # naming), but the actual masking happens in the dataloader workers.
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
         rank_microbatch_size=32,
-        masking_config=get_masking_config(),
+        masking_config=get_masking_config(tokenization_config),
         loss_config=LossConfig(
             loss_config={
                 "type": "modality_patch_discrimination_new",
@@ -128,12 +144,17 @@ def build_train_module_config(
 
 def build_dataloader_config(
     common: CommonComponents,
+    tokenization_config: TokenizationConfig | None = None,
 ) -> OlmoEarthDataLoaderConfig:
     """Build the dataloader config for an experiment.
 
     Masking is performed in the dataloader workers (CPU) instead of in the train module
     (GPU). This improves throughput by offloading CPU-bound masking operations to
     dataloader workers.
+
+    Args:
+        common: Common experiment components.
+        tokenization_config: Optional tokenization config for custom band groupings.
     """
     return OlmoEarthDataLoaderConfig(
         num_workers=12,
@@ -146,7 +167,7 @@ def build_dataloader_config(
         work_dir=common.save_folder,
         seed=3622,
         num_masked_views=2,  # ContrastiveLatentMIM needs 2 views
-        masking_config=get_masking_config(),
+        masking_config=get_masking_config(tokenization_config),
         # masking_config_b is not set, so both views use the same strategy
     )
 

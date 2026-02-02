@@ -1777,6 +1777,37 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
         return MaskedOlmoEarthSample(**output_dict)
 
 
+def propagate_tokenization_config(
+    masking_strategy: MaskingStrategy,
+    tokenization_config: "TokenizationConfig",
+) -> None:
+    """Attach the tokenization config to a masking strategy (recursively).
+
+    Some masking strategies wrap other strategies (e.g., FixedModalityMaskingStrategy).
+    We need the tokenization config on every strategy instance so that mask shapes
+    match the model's band-grouping configuration.
+
+    Args:
+        masking_strategy: The masking strategy to configure.
+        tokenization_config: The tokenization config to propagate.
+    """
+    visited: set[int] = set()
+
+    def _set_config(strategy: MaskingStrategy) -> None:
+        strategy_id = id(strategy)
+        if strategy_id in visited:
+            return
+        visited.add(strategy_id)
+
+        strategy.tokenization_config = tokenization_config
+
+        for child in vars(strategy).values():
+            if isinstance(child, MaskingStrategy):
+                _set_config(child)
+
+    _set_config(masking_strategy)
+
+
 @dataclass
 class MaskingConfig(Config):
     """Configuration for masking strategies.
@@ -1787,13 +1818,23 @@ class MaskingConfig(Config):
             "type": "random", # registry key
             # rest of init kwargs
         }
+        tokenization_config: Optional tokenization config for custom band groupings.
+            If provided, propagated to the masking strategy so mask shapes match
+            the model's band-grouping configuration.
     """
 
     strategy_config: dict[str, Any]
+    tokenization_config: "TokenizationConfig | None" = None
 
     def build(self) -> MaskingStrategy:
         """Build a MaskingStrategy from the config."""
-        mask_strategy_key = self.strategy_config.pop("type")
-        return MASKING_STRATEGY_REGISTRY.get_class(mask_strategy_key)(
-            **self.strategy_config
-        )
+        # Copy strategy_config since we pop from it
+        config = dict(self.strategy_config)
+        mask_strategy_key = config.pop("type")
+        strategy = MASKING_STRATEGY_REGISTRY.get_class(mask_strategy_key)(**config)
+
+        # Propagate tokenization config if provided
+        if self.tokenization_config is not None:
+            propagate_tokenization_config(strategy, self.tokenization_config)
+
+        return strategy
