@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 import os
 import random
+import shutil
+import tempfile
 from logging import getLogger
 from typing import Any, cast
 
@@ -208,6 +210,93 @@ def _set_backbone_trainable(backbone: nn.Module, requires_grad: bool) -> None:
         param.requires_grad = requires_grad
 
 
+def _get_rng_state() -> dict:
+    """Capture current RNG states for reproducibility."""
+    state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _set_rng_state(state: dict) -> None:
+    """Restore RNG states."""
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"])
+    if torch.cuda.is_available() and "cuda" in state:
+        torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def _save_training_checkpoint(
+    path: str,
+    epoch: int,
+    model_state: dict[str, torch.Tensor],
+    optimizer_state: dict,
+    scheduler_state: dict,
+    best_state: dict[str, torch.Tensor],
+    best_val_metric: float,
+    backbone_unfrozen: bool,
+    rng_state: dict,
+) -> None:
+    """Save a resumable training checkpoint atomically."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    checkpoint = {
+        "epoch": epoch,
+        "model_state": model_state,
+        "optimizer_state": optimizer_state,
+        "scheduler_state": scheduler_state,
+        "best_state": best_state,
+        "best_val_metric": best_val_metric,
+        "backbone_unfrozen": backbone_unfrozen,
+        "rng_state": rng_state,
+    }
+
+    # Write to temp file first, then atomic rename
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path))
+    try:
+        torch.save(checkpoint, tmp_path)
+        os.close(tmp_fd)
+        shutil.move(tmp_path, path)  # Atomic on POSIX
+        logger.info(f"Saved training checkpoint to {path} at epoch {epoch}")
+    except Exception:
+        os.close(tmp_fd)
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
+def _load_training_checkpoint(path: str, device: torch.device) -> dict | None:
+    """Load a training checkpoint if it exists and is valid."""
+    if not os.path.exists(path):
+        return None
+    try:
+        ckpt = torch.load(path, map_location=device, weights_only=False)
+        # Validate required keys
+        required = [
+            "epoch",
+            "model_state",
+            "optimizer_state",
+            "scheduler_state",
+            "best_state",
+            "best_val_metric",
+            "backbone_unfrozen",
+            "rng_state",
+        ]
+        if not all(k in ckpt for k in required):
+            logger.warning(f"Checkpoint {path} missing keys, ignoring")
+            return None
+        logger.info(f"Loading training checkpoint from {path}")
+        return ckpt
+    except Exception as e:
+        logger.warning(f"Failed to load checkpoint {path}: {e}, starting fresh")
+        return None
+
+
 def run_finetune_eval(
     task_name: str,
     task_config: EvalDatasetConfig,
@@ -224,6 +313,7 @@ def run_finetune_eval(
     test_loader: DataLoader | None,
     seed: int | None = None,
     best_checkpoint_path: str | None = None,
+    resume_checkpoint_path: str | None = None,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     if seed is not None:
@@ -287,12 +377,32 @@ def run_finetune_eval(
     best_state = _snapshot_state_dict(ft)
     best_val_metric = float("-inf")
     best_val_result: EvalResult | None = None
+    start_epoch = 0
+
+    # Try to resume from checkpoint
+    if resume_checkpoint_path:
+        ckpt = _load_training_checkpoint(resume_checkpoint_path, device)
+        if ckpt is not None:
+            start_epoch = ckpt["epoch"] + 1
+            ft.load_state_dict(ckpt["model_state"])
+            opt.load_state_dict(ckpt["optimizer_state"])
+            scheduler.load_state_dict(ckpt["scheduler_state"])
+            best_state = ckpt["best_state"]
+            best_val_metric = ckpt["best_val_metric"]
+            backbone_unfrozen = ckpt["backbone_unfrozen"]
+            _set_rng_state(ckpt["rng_state"])
+            # Handle backbone freeze state on resume
+            _set_backbone_trainable(ft.backbone, backbone_unfrozen)
+            logger.info(
+                f"Resumed from epoch {start_epoch}, best_val_metric={best_val_metric:.4f}, "
+                f"backbone_unfrozen={backbone_unfrozen}"
+            )
 
     ft.train()
     wandb_logger = _get_wandb_logger(trainer)
     num_batches = len(train_loader)
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         # Reset epoch and global step
         trainer.global_step = epoch * len(train_loader)
         trainer.epoch = epoch + 1
@@ -376,6 +486,21 @@ def run_finetune_eval(
             logger.info(
                 f"New best validation metric {best_val_metric:.4f} at epoch {epoch + 1}"
             )
+
+        # Save resumable checkpoint at end of each epoch
+        if resume_checkpoint_path:
+            _save_training_checkpoint(
+                path=resume_checkpoint_path,
+                epoch=epoch,
+                model_state=_snapshot_state_dict(ft),
+                optimizer_state=opt.state_dict(),
+                scheduler_state=scheduler.state_dict(),
+                best_state=best_state,
+                best_val_metric=best_val_metric,
+                backbone_unfrozen=backbone_unfrozen,
+                rng_state=_get_rng_state(),
+            )
+
         ft.train()
 
     # If no training happened (epochs=0), evaluate once
@@ -400,6 +525,11 @@ def run_finetune_eval(
         logger.info(f"Saved best checkpoint to {best_checkpoint_path}")
     else:
         logger.info("No best checkpoint path provided, skipping saving best checkpoint")
+
+    # Clean up resume checkpoint after successful completion
+    if resume_checkpoint_path and os.path.exists(resume_checkpoint_path):
+        os.remove(resume_checkpoint_path)
+        logger.info(f"Removed resume checkpoint {resume_checkpoint_path}")
 
     # Evaluate test set
     test_result: EvalResult | None = None
