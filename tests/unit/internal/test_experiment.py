@@ -97,6 +97,8 @@ def minimal_dataloader_config_builder(
         max_patch_size=1,
         sampled_hw_p_list=[256],
         token_budget=1000000,
+        num_masked_views=1,
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
     )
     return dataloader_config
 

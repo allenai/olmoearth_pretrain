@@ -1,28 +1,23 @@
-"""Single-band tokenization for Sentinel-2.
+"""Base model with collapsed S2 and Landsat band sets.
 
-Hypothesis: Each band as its own token allows the model to learn more fine-grained
-band-specific representations, potentially improving downstream task performance
-where specific spectral bands are important.
+This experiment collapses all Sentinel-2 L2A and Landsat bands into single tokens
+per spatial location, instead of the default resolution-based band groupings.
 
 Change from baseline:
-- Sentinel-2 L2A: 12 tokens (one per band) instead of 3 bandset tokens
+- Sentinel-2 L2A: 1 token containing all 12 bands instead of 3 resolution-based tokens
+- Landsat: 1 token containing all 11 bands instead of 2 resolution-based tokens
 - All other modalities: unchanged (use default tokenization)
 
-Expected outcome: Better band-level representations at the cost of more tokens
-per spatial location.
+This forces the model to learn joint representations across all spectral bands
+within each modality.
 """
 
 import logging
-import sys
-from pathlib import Path
 
-# Add official directory to path for script imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "official"))
-
-from script import (
+from new_masking_script import (
     build_common_components as build_common_components_base,
 )
-from script import (
+from new_masking_script import (
     build_dataloader_config,
     build_dataset_config,
     build_train_module_config,
@@ -47,43 +42,54 @@ logger = logging.getLogger(__name__)
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
-# Sentinel-2 L2A bands in order: each becomes its own token
-SENTINEL2_SINGLE_BAND_TOKENIZATION = ModalityTokenization(
-    band_groups=[
-        ["B02"],
-        ["B03"],
-        ["B04"],
-        ["B08"],
-        ["B05"],
-        ["B06"],
-        ["B07"],
-        ["B8A"],
-        ["B11"],
-        ["B12"],
-        ["B01"],
-        ["B09"],
-    ]
-)
-
-# Tokenization config used by model, masking, and dataloader
-TOKENIZATION_CONFIG = TokenizationConfig(
-    overrides={
-        "sentinel2_l2a": SENTINEL2_SINGLE_BAND_TOKENIZATION,
-    }
-)
-
 
 def build_common_components(
     script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
 ) -> CommonComponents:
-    """Build common components with single-band S2 tokenization."""
+    """Build common components with collapsed S2/Landsat tokenization."""
+    # All Sentinel-2 L2A bands collapsed into a single token
+    # Default has 3 tokens: 10m (B02,B03,B04,B08), 20m (B05,B06,B07,B8A,B11,B12), 60m (B01,B09)
+    sentinel2_collapsed = ModalityTokenization(
+        band_groups=[
+            [
+                "B02",
+                "B03",
+                "B04",
+                "B08",
+                "B05",
+                "B06",
+                "B07",
+                "B8A",
+                "B11",
+                "B12",
+                "B01",
+                "B09",
+            ],
+        ]
+    )
+
+    # All Landsat bands collapsed into a single token
+    # Default has 2 tokens: 15m (B8), 30m (B1,B2,B3,B4,B5,B6,B7,B9,B10,B11)
+    landsat_collapsed = ModalityTokenization(
+        band_groups=[
+            ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
+        ]
+    )
+
+    tokenization_config = TokenizationConfig(
+        overrides={
+            "sentinel2_l2a": sentinel2_collapsed,
+            "landsat": landsat_collapsed,
+        }
+    )
+
     common = build_common_components_base(script, cmd, run_name, cluster, overrides)
-    common.tokenization_config = TOKENIZATION_CONFIG
+    common.tokenization_config = tokenization_config
     return common
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """Build the model config with single-band tokenization for Sentinel-2."""
+    """Build the model config with collapsed S2 and Landsat band sets."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
     encoder_config = EncoderConfig(

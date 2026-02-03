@@ -129,7 +129,7 @@ def main():
     parser.add_argument("--run-id", required=True, help="Source run ID")
     parser.add_argument("--dest-entity", required=True, help="Destination entity/team")
     parser.add_argument(
-        "--dest-project", requiredls=True, help="Destination project name"
+        "--dest-project", required=True, help="Destination project name"
     )
     parser.add_argument(
         "--run-name", help="Name for the new run (default: original name + ' (copied)')"

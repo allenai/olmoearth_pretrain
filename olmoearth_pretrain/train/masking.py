@@ -548,7 +548,6 @@ class SpaceTimeMaskingStrategy(MaskingStrategy):
         """Initialize the masking strategy."""
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
-        self.generator = np.random.default_rng(0)
 
         self.space_strategy = SpaceMaskingStrategy(encode_ratio, decode_ratio)
         self.time_strategy = TimeMaskingStrategy(encode_ratio, decode_ratio)
@@ -562,7 +561,7 @@ class SpaceTimeMaskingStrategy(MaskingStrategy):
 
         if not has_enough_timesteps:
             logger.debug(f"Valid time: {batch.valid_time}, Time: {batch.time}")
-        if (self.generator.random() < 0.5) or (not has_enough_timesteps):
+        if (np.random.random() < 0.5) or (not has_enough_timesteps):
             logger.info("Applying space masking")
             return self.space_strategy.apply_mask(batch, patch_size, **kwargs)
         else:
@@ -582,7 +581,6 @@ class RandomSpaceMaskingStrategy(MaskingStrategy):
         """Initialize the masking strategy."""
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
-        self.generator = np.random.default_rng(0)
 
         self.random_strategy = RandomMaskingStrategy(encode_ratio, decode_ratio)
         self.space_strategy = SpaceMaskingStrategy(encode_ratio, decode_ratio)
@@ -591,7 +589,7 @@ class RandomSpaceMaskingStrategy(MaskingStrategy):
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
     ) -> MaskedOlmoEarthSample:
         """Apply space or time masking to the input data."""
-        if self.generator.random() < 0.5:
+        if np.random.random() < 0.5:
             logger.info("Applying space masking")
             return self.space_strategy.apply_mask(batch, patch_size, **kwargs)
         else:
@@ -1119,14 +1117,13 @@ class ModalityCrossSpaceTimeMaskingStrategy(MaskingStrategy):
             max_decoded_bandsets=max_decoded_bandsets,
             only_decode_modalities=only_decode_modalities,
         )
-        self.generator = np.random.default_rng(0)
 
     def apply_mask(
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
     ) -> MaskedOlmoEarthSample:
         """Apply space and time cross modality masking to the input data."""
         has_enough_timesteps = batch.valid_time >= 3
-        if (self.generator.random() < 0.5) or (not has_enough_timesteps):
+        if (np.random.random() < 0.5) or (not has_enough_timesteps):
             logger.info("Applying space masking")
             return self.space_strategy.apply_mask(batch, patch_size, **kwargs)
         else:
@@ -1310,8 +1307,6 @@ class RandomRangeMaskingStrategy(MaskingStrategy):
         else:
             self._decode_ratio = 1 - self._encode_ratio
 
-        self.generator = np.random.default_rng(0)
-
     def apply_mask(
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
     ) -> MaskedOlmoEarthSample:
@@ -1364,11 +1359,11 @@ class RandomRangeMaskingStrategy(MaskingStrategy):
                     # while also ensuring each example can have its own encode and decode
                     # ratios.
                     batch_size = instance.shape[0]
-                    example_encode_ratios = self.generator.uniform(
+                    example_encode_ratios = np.random.uniform(
                         self.min_encode_ratio, self.max_encode_ratio, (batch_size,)
                     )
                     if self.min_decode_ratio is not None:
-                        example_decode_ratios = self.generator.uniform(
+                        example_decode_ratios = np.random.uniform(
                             self.min_decode_ratio, self.max_decode_ratio, (batch_size,)
                         )
                     else:
@@ -1423,7 +1418,6 @@ class SelectableModalityMaskingStrategy(MaskingStrategy):
         self.max_to_mask = max_to_mask
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
-        self.generator = np.random.default_rng(0)
         self.random_strategy = RandomMaskingStrategy(encode_ratio, decode_ratio)
 
     def apply_mask(
@@ -1437,8 +1431,8 @@ class SelectableModalityMaskingStrategy(MaskingStrategy):
         # MISSING).
         all_modalities = self.decodable_modalities + self.fully_mask_modalities
         modality_indices = np.arange(len(all_modalities))
-        self.generator.shuffle(modality_indices)
-        num_to_mask = self.generator.integers(self.max_to_mask + 1)
+        np.random.shuffle(modality_indices)
+        num_to_mask = np.random.randint(self.max_to_mask + 1)
         cur_mask_modalities = [
             all_modalities[idx] for idx in modality_indices[0:num_to_mask]
         ]
@@ -1478,7 +1472,6 @@ class SelectableRandomRangeModalityMaskingStrategy(MaskingStrategy):
         self.decodable_modalities = decodable_modalities
         self.fully_mask_modalities = fully_mask_modalities
         self.max_to_mask = max_to_mask
-        self.generator = np.random.default_rng(0)
         self.random_strategy = RandomRangeMaskingStrategy(
             min_encode_ratio, max_encode_ratio, min_decode_ratio, max_decode_ratio
         )
@@ -1500,8 +1493,8 @@ class SelectableRandomRangeModalityMaskingStrategy(MaskingStrategy):
             # Choose additional modalities to mask entirely (either set DECODER or
             # MISSING).
             modality_indices = np.arange(len(all_modalities))
-            self.generator.shuffle(modality_indices)
-            num_to_mask = self.generator.integers(self.max_to_mask + 1)
+            np.random.shuffle(modality_indices)
+            num_to_mask = np.random.randint(self.max_to_mask + 1)
             cur_mask_modalities = [
                 all_modalities[idx] for idx in modality_indices[0:num_to_mask]
             ]
@@ -1536,7 +1529,6 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
         self.strategy = strategy
         self.decoded_modalities = decoded_modalities
         self.randomize_missing_modalities = randomize_missing_modalities
-        self.generator = np.random.default_rng(0)
 
     def apply_mask(
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
@@ -1554,7 +1546,7 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
                 continue
             instance = getattr(masked_sample, modality)
             mask[:] = MaskValue.DECODER.value
-            mask = self.fill_mask_with_missing_values(
+            mask[:] = self.fill_mask_with_missing_values(
                 instance, mask, Modality.get(modality)
             )
 
@@ -1582,8 +1574,8 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
 
                 # Pick a subset to actually mask. We leave at least one unmasked.
                 modality_indices = np.arange(len(cur_available_modalities))
-                self.generator.shuffle(modality_indices)
-                num_to_mask = self.generator.integers(len(cur_available_modalities))
+                np.random.shuffle(modality_indices)
+                num_to_mask = np.random.randint(len(cur_available_modalities))
                 cur_mask_modalities = [
                     cur_available_modalities[idx]
                     for idx in modality_indices[0:num_to_mask]
@@ -1647,7 +1639,6 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
         self.only_decode_modalities = only_decode_modalities
-        self.generator = np.random.default_rng(0)
 
     def apply_mask(
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
@@ -1691,7 +1682,9 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
                     device = None
                 modality = Modality.get(modality_name)
 
-                mask_shape = instance.shape[:-1] + (len(modality.band_sets),)
+                mask_shape = instance.shape[:-1] + (
+                    self._get_num_bandsets(modality_name),
+                )
                 mask = torch.full(
                     mask_shape, fill_value=MaskValue.DECODER.value, device=device
                 )
@@ -1747,7 +1740,7 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
                 )
             else:
                 # for now, lets assume encode_ratio + decode_ratio = 1
-                self.generator.shuffle(encode_decode_bandsets)
+                np.random.shuffle(encode_decode_bandsets)
                 num_encode = math.ceil(len(encode_decode_bandsets) * self.encode_ratio)
                 encode_bandsets = encode_decode_bandsets[:num_encode]
                 decode_bandsets = encode_decode_bandsets[num_encode:]
@@ -1786,6 +1779,37 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
         return MaskedOlmoEarthSample(**output_dict)
 
 
+def propagate_tokenization_config(
+    masking_strategy: MaskingStrategy,
+    tokenization_config: "TokenizationConfig",
+) -> None:
+    """Attach the tokenization config to a masking strategy (recursively).
+
+    Some masking strategies wrap other strategies (e.g., FixedModalityMaskingStrategy).
+    We need the tokenization config on every strategy instance so that mask shapes
+    match the model's band-grouping configuration.
+
+    Args:
+        masking_strategy: The masking strategy to configure.
+        tokenization_config: The tokenization config to propagate.
+    """
+    visited: set[int] = set()
+
+    def _set_config(strategy: MaskingStrategy) -> None:
+        strategy_id = id(strategy)
+        if strategy_id in visited:
+            return
+        visited.add(strategy_id)
+
+        strategy.tokenization_config = tokenization_config
+
+        for child in vars(strategy).values():
+            if isinstance(child, MaskingStrategy):
+                _set_config(child)
+
+    _set_config(masking_strategy)
+
+
 @dataclass
 class MaskingConfig(Config):
     """Configuration for masking strategies.
@@ -1796,13 +1820,23 @@ class MaskingConfig(Config):
             "type": "random", # registry key
             # rest of init kwargs
         }
+        tokenization_config: Optional tokenization config for custom band groupings.
+            If provided, propagated to the masking strategy so mask shapes match
+            the model's band-grouping configuration.
     """
 
     strategy_config: dict[str, Any]
+    tokenization_config: "TokenizationConfig | None" = None
 
     def build(self) -> MaskingStrategy:
         """Build a MaskingStrategy from the config."""
-        mask_strategy_key = self.strategy_config.pop("type")
-        return MASKING_STRATEGY_REGISTRY.get_class(mask_strategy_key)(
-            **self.strategy_config
-        )
+        # Copy strategy_config since we pop from it
+        config = dict(self.strategy_config)
+        mask_strategy_key = config.pop("type")
+        strategy = MASKING_STRATEGY_REGISTRY.get_class(mask_strategy_key)(**config)
+
+        # Propagate tokenization config if provided
+        if self.tokenization_config is not None:
+            propagate_tokenization_config(strategy, self.tokenization_config)
+
+        return strategy
