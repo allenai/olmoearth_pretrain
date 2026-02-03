@@ -1,12 +1,14 @@
-"""Script for training models with configurable model size, dataset size, and batch size.
+"""Script for training models with configurable model size, dataset size, batch size, and wandb settings.
 
 This script allows you to specify:
 - model_type: one of 'nano', 'tiny', 'base', 'large'
 - num_train_samples: number of training samples to use
 - global_batch_size: global batch size for training
+- wandb_project: wandb project name (default: '2025_10_02_phase2')
+- wandb_entity: wandb entity/username (default: 'eai-ai2')
 
 Usage:
-    python scripts/piperw/datasize.py launch RUN_NAME CLUSTER --model_type=nano --num_train_samples=500 --global_batch_size=256
+    python scripts/piperw/datasize.py launch RUN_NAME CLUSTER --model_type=nano --num_train_samples=500 --global_batch_size=256 --wandb_project=my_project --wandb_entity=my_entity
     python scripts/piperw/datasize.py train RUN_NAME CLUSTER --model_type=base --num_train_samples=1000 --global_batch_size=1024
 """
 
@@ -69,10 +71,12 @@ MIN_PATCH_SIZE = 1
 _model_type: str | None = None
 _num_train_samples: int | None = None
 _global_batch_size: int | None = None
+_wandb_project: str | None = None
+_wandb_entity: str | None = None
 
 
-def parse_args() -> tuple[str | None, int | None, int | None]:
-    """Parse model_type, num_train_samples, and global_batch_size from sys.argv.
+def parse_args() -> tuple[str | None, int | None, int | None, str | None, str | None]:
+    """Parse model_type, num_train_samples, global_batch_size, wandb_project, and wandb_entity from sys.argv.
     
     Also removes these arguments from sys.argv so they don't get passed to the
     experiment system's override mechanism.
@@ -80,6 +84,8 @@ def parse_args() -> tuple[str | None, int | None, int | None]:
     model_type = None
     num_train_samples = None
     global_batch_size = None
+    wandb_project = None
+    wandb_entity = None
     
     # Track indices to remove from sys.argv
     indices_to_remove = []
@@ -103,6 +109,18 @@ def parse_args() -> tuple[str | None, int | None, int | None]:
         elif arg.startswith("--global_batch_size="):
             global_batch_size = int(arg.split("=", 1)[1])
             indices_to_remove.append(i)
+        elif arg == "--wandb_project" and i + 1 < len(sys.argv):
+            wandb_project = sys.argv[i + 1]
+            indices_to_remove.extend([i, i + 1])
+        elif arg.startswith("--wandb_project="):
+            wandb_project = arg.split("=", 1)[1]
+            indices_to_remove.append(i)
+        elif arg == "--wandb_entity" and i + 1 < len(sys.argv):
+            wandb_entity = sys.argv[i + 1]
+            indices_to_remove.extend([i, i + 1])
+        elif arg.startswith("--wandb_entity="):
+            wandb_entity = arg.split("=", 1)[1]
+            indices_to_remove.append(i)
     
     # Validate model_type if provided
     if model_type is not None and model_type not in ["nano", "tiny", "base", "large"]:
@@ -120,7 +138,7 @@ def parse_args() -> tuple[str | None, int | None, int | None]:
     for idx in sorted(indices_to_remove, reverse=True):
         sys.argv.pop(idx)
     
-    return model_type, num_train_samples, global_batch_size
+    return model_type, num_train_samples, global_batch_size, wandb_project, wandb_entity
 
 
 def get_model_size_key(model_type: str) -> str:
@@ -284,19 +302,31 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
+    global _wandb_project, _wandb_entity
+    
     MAX_DURATION = Duration.epochs(300)
     METRICS_COLLECT_INTERVAL = 10
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
     WANDB_PROJECT = "2025_10_02_phase2"
+    
+    # Use provided wandb_project and wandb_entity or defaults
+    wandb_project = _wandb_project if _wandb_project is not None else WANDB_PROJECT
+    wandb_entity = _wandb_entity if _wandb_entity is not None else WANDB_USERNAME
+    
+    if _wandb_project is not None:
+        logger.info(f"Using wandb_project: {wandb_project}")
+    if _wandb_entity is not None:
+        logger.info(f"Using wandb_entity: {wandb_entity}")
+    
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = OlmoEarthWandBCallback(
         name=common.run_name,
-        project=WANDB_PROJECT,
-        entity=WANDB_USERNAME,
+        project=wandb_project,
+        entity=wandb_entity,
         enabled=True,  # set to False to avoid wandb errors
     )
     # Safe to collect every step for now
@@ -381,7 +411,7 @@ if __name__ == "__main__":
     from olmoearth_pretrain.internal.experiment import main
     
     # Parse arguments before calling main
-    _model_type, _num_train_samples, _global_batch_size = parse_args()
+    _model_type, _num_train_samples, _global_batch_size, _wandb_project, _wandb_entity = parse_args()
     
     if _model_type is None:
         logger.warning("--model_type not specified, defaulting to 'nano'")
@@ -389,6 +419,10 @@ if __name__ == "__main__":
         logger.warning("--num_train_samples not specified, using full dataset")
     if _global_batch_size is None:
         logger.info("--global_batch_size not specified, using default: 512")
+    if _wandb_project is None:
+        logger.info("--wandb_project not specified, using default: '2025_10_02_phase2'")
+    if _wandb_entity is None:
+        logger.info("--wandb_entity not specified, using default: 'eai-ai2'")
     
     main(
         common_components_builder=build_common_components,
