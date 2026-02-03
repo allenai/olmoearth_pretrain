@@ -580,6 +580,7 @@ class OlmoEarthDataset(Dataset):
         cache_dir: UPath | None = None,
         samples_per_sec: float | None = None,
         dataset_percentage: float = 1.0,
+        max_training_samples: int | None = None,
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
@@ -604,8 +605,9 @@ class OlmoEarthDataset(Dataset):
             samples_per_sec: throttle to reading this many samples per second. This
                 throttling only applies when reading from the h5py_dir, not the
                 cache_dir (if set).
-            dataset_percentage: The percentage of the dataset to use.
-            seed: For selecting the dataset percentage.
+            dataset_percentage: The percentage of the dataset to use (ignored if max_training_samples is set).
+            max_training_samples: Maximum number of training samples to use. If set, this takes precedence over dataset_percentage.
+            seed: For selecting the dataset samples.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
 
@@ -624,6 +626,7 @@ class OlmoEarthDataset(Dataset):
         self.dtype = dtype
         self.normalize = normalize
         self.dataset_percentage = dataset_percentage
+        self.max_training_samples = max_training_samples
         self.seed = seed
         if self.normalize:
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
@@ -758,16 +761,51 @@ class OlmoEarthDataset(Dataset):
             )
 
     def _filter_sample_indices_by_dataset_percentage(self) -> None:
-        """Filter the sample indices for dataset percentage."""
+        """Filter the sample indices for dataset percentage or max training samples."""
         assert self.sample_indices is not None, (
             "Sample indices must be set before filtering by dataset percentage"
         )
-        if self.dataset_percentage < 1.0:
-            rng = get_rng(self.seed)
-            num_samples = len(self.sample_indices)
+        rng = get_rng(self.seed)
+        num_samples = len(self.sample_indices)
+        
+        # Check if we have any samples after filtering
+        if num_samples == 0:
+            raise ValueError(
+                "No samples available after filtering for spacetime-varying modalities. "
+                "This can happen if the dataset is too small or the filtering is too aggressive. "
+                "Try using a larger dataset or checking your training_modalities configuration."
+            )
+        
+        # Determine target size
+        if self.max_training_samples is not None:
+            # Use max_training_samples if specified
+            target_size = min(self.max_training_samples, num_samples)
+            logger.info(
+                f"Limiting to {target_size} training samples (requested {self.max_training_samples}, "
+                f"available {num_samples})"
+            )
+        elif self.dataset_percentage < 1.0:
+            # Use percentage if specified and less than 1.0
+            target_size = int(num_samples * self.dataset_percentage)
+            logger.info(
+                f"Using {self.dataset_percentage:.10f} of dataset ({target_size} samples from {num_samples})"
+            )
+        else:
+            # No filtering needed
+            return
+        
+        # Ensure we get at least 1 sample if there are any samples available
+        # This prevents the "cannot mmap an empty file" error
+        if target_size == 0 and num_samples > 0:
+            target_size = 1
+            logger.warning(
+                f"Target size would be 0. Using 1 sample instead to avoid empty dataset error."
+            )
+        
+        if target_size < num_samples:
             self.sample_indices = rng.choice(
                 self.sample_indices,
-                size=int(len(self.sample_indices) * self.dataset_percentage),
+                size=target_size,
                 replace=False,
             )
             logger.info(
@@ -1074,6 +1112,7 @@ class OlmoEarthDatasetConfig(Config):
     cache_dir: str | None = None
     samples_per_sec: float | None = None
     dataset_percentage: float = 1.0
+    max_training_samples: int | None = None
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
@@ -1099,6 +1138,13 @@ class OlmoEarthDatasetConfig(Config):
         # Validate supported_modalities
         if not isinstance(self.training_modalities, list):
             raise ValueError("training_modalities must be a list")
+        
+        # Validate max_training_samples
+        if self.max_training_samples is not None:
+            if self.max_training_samples <= 0:
+                raise ValueError(
+                    f"max_training_samples must be positive, got {self.max_training_samples}"
+                )
 
     @property
     def h5py_dir_upath(self) -> UPath:
