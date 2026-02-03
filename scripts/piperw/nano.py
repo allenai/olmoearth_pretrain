@@ -2,13 +2,23 @@
 
 import logging
 
-from script import (
-    build_common_components,
-    build_dataloader_config,
-    build_dataset_config as build_dataset_config_default,
-    build_train_module_config,
-    build_trainer_config,
-)
+try:
+    from .script import (
+        build_common_components,
+        build_dataloader_config,
+        build_dataset_config as build_dataset_config_default,
+        build_train_module_config,
+        build_trainer_config,
+    )
+except ImportError:
+    # Fallback for when running directly (not as a module)
+    from script import (
+        build_common_components,
+        build_dataloader_config,
+        build_dataset_config as build_dataset_config_default,
+        build_train_module_config,
+        build_trainer_config,
+    )
 
 from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
 from olmoearth_pretrain.internal.experiment import CommonComponents, main
