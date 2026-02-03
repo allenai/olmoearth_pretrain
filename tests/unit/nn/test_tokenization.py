@@ -196,9 +196,9 @@ class TestTokenizationWithMasking:
 
     def test_tokenization_config_propagates_to_nested_masking_strategies(self) -> None:
         """Tokenization config should propagate to nested masking strategies."""
-        from olmoearth_pretrain.train.masking import RandomFixedModalityMaskingStrategy
-        from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
-            _propagate_tokenization_config,
+        from olmoearth_pretrain.train.masking import (
+            RandomFixedModalityMaskingStrategy,
+            propagate_tokenization_config,
         )
 
         tokenization_config = TokenizationConfig(
@@ -213,7 +213,7 @@ class TestTokenizationWithMasking:
             decoded_modalities=[Modality.SENTINEL2_L2A.name]
         )
 
-        _propagate_tokenization_config(strategy, tokenization_config)
+        propagate_tokenization_config(strategy, tokenization_config)
 
         assert strategy.tokenization_config is tokenization_config
         # Wrapped strategy should also receive the config

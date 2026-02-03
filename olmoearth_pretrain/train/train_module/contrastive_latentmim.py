@@ -31,9 +31,6 @@ from olmoearth_pretrain.train.utils import split_masked_batch
 
 logger = getLogger(__name__)
 
-# Backward compatibility alias
-_propagate_tokenization_config = propagate_tokenization_config
-
 
 @dataclass
 class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
@@ -159,7 +156,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.masking_strategy = masking_config.build()
         tokenization_config = getattr(self.model.encoder, "tokenization_config", None)
         if tokenization_config is not None:
-            _propagate_tokenization_config(self.masking_strategy, tokenization_config)
+            propagate_tokenization_config(self.masking_strategy, tokenization_config)
         self.regularizer = (
             regularizer_config.build() if regularizer_config is not None else None
         )
