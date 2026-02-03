@@ -2,7 +2,7 @@
 
 import logging
 
-from script import (
+from scripts.official.script import (
     build_common_components,
     build_dataloader_config,
     build_dataset_config as build_dataset_config_default,
