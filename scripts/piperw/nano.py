@@ -1,4 +1,4 @@
-"""Nano model training script with 500 training sample limit."""
+"""Nano model training script with 1000 training sample limit."""
 
 import logging
 import sys
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
-MAX_TRAINING_SAMPLES = 500
+MAX_TRAINING_SAMPLES = 1000
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
