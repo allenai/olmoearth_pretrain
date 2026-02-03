@@ -22,15 +22,7 @@ from upath import UPath
 from olmoearth_pretrain._compat import (
     deprecated_class_alias as _deprecated_class_alias,
 )
-from olmoearth_pretrain._compat import (
-    deprecated_function_alias as _deprecated_function_alias,
-)
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.collate import (  # noqa: F401
-    collate_double_masked_batched,
-    collate_olmoearth_pretrain,
-    collate_single_masked_batched,
-)
 from olmoearth_pretrain.data.constants import (
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
@@ -639,7 +631,4 @@ HeliosDataset = _deprecated_class_alias(
 )
 HeliosDatasetConfig = _deprecated_class_alias(
     OlmoEarthDatasetConfig, "helios.data.dataset.HeliosDatasetConfig"
-)
-collate_helios = _deprecated_function_alias(
-    collate_olmoearth_pretrain, "helios.data.dataset.collate_helios"
 )
