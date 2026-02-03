@@ -210,37 +210,6 @@ def _set_backbone_trainable(backbone: nn.Module, requires_grad: bool) -> None:
         param.requires_grad = requires_grad
 
 
-def _get_rng_state() -> dict:
-    """Capture current RNG states for reproducibility."""
-    state = {
-        "python": random.getstate(),
-        "numpy": np.random.get_state(),
-        "torch": torch.get_rng_state(),
-    }
-    if torch.cuda.is_available():
-        state["cuda"] = torch.cuda.get_rng_state_all()
-    return state
-
-
-def _set_rng_state(state: dict) -> None:
-    """Restore RNG states."""
-    random.setstate(state["python"])
-    np.random.set_state(state["numpy"])
-    # Ensure torch state is ByteTensor (required by set_rng_state)
-    torch_state = state["torch"]
-    if not isinstance(torch_state, torch.ByteTensor):
-        torch_state = torch_state.to(dtype=torch.uint8)
-    torch.set_rng_state(torch_state)
-    if torch.cuda.is_available() and "cuda" in state:
-        cuda_states = state["cuda"]
-        # Ensure each CUDA state is ByteTensor
-        cuda_states = [
-            s if isinstance(s, torch.ByteTensor) else s.to(dtype=torch.uint8)
-            for s in cuda_states
-        ]
-        torch.cuda.set_rng_state_all(cuda_states)
-
-
 def _save_training_checkpoint(
     path: str,
     epoch: int,
@@ -250,7 +219,6 @@ def _save_training_checkpoint(
     best_state: dict[str, torch.Tensor],
     best_val_metric: float,
     backbone_unfrozen: bool,
-    rng_state: dict,
 ) -> None:
     """Save a resumable training checkpoint atomically."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -263,7 +231,6 @@ def _save_training_checkpoint(
         "best_state": best_state,
         "best_val_metric": best_val_metric,
         "backbone_unfrozen": backbone_unfrozen,
-        "rng_state": rng_state,
     }
 
     # Write to temp file first, then atomic rename
@@ -295,7 +262,6 @@ def _load_training_checkpoint(path: str, device: torch.device) -> dict | None:
             "best_state",
             "best_val_metric",
             "backbone_unfrozen",
-            "rng_state",
         ]
         if not all(k in ckpt for k in required):
             logger.warning(f"Checkpoint {path} missing keys, ignoring")
@@ -400,7 +366,6 @@ def run_finetune_eval(
             best_state = ckpt["best_state"]
             best_val_metric = ckpt["best_val_metric"]
             backbone_unfrozen = ckpt["backbone_unfrozen"]
-            _set_rng_state(ckpt["rng_state"])
             # Handle backbone freeze state on resume
             _set_backbone_trainable(ft.backbone, backbone_unfrozen)
             logger.info(
@@ -508,7 +473,6 @@ def run_finetune_eval(
                 best_state=best_state,
                 best_val_metric=best_val_metric,
                 backbone_unfrozen=backbone_unfrozen,
-                rng_state=_get_rng_state(),
             )
 
         ft.train()
