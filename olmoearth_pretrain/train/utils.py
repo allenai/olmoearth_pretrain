@@ -36,7 +36,6 @@ def split_masked_batch(
     split_sizes = [microbatch_size] * (num_microbatches - 1)
     split_sizes.append(batch_size - microbatch_size * (num_microbatches - 1))
 
-    # Split all non-None fields at once using torch.split
     splits: dict[str, tuple] = {}
     for field in batch._fields:
         data = getattr(batch, field)

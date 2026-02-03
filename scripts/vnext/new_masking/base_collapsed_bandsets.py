@@ -14,10 +14,10 @@ within each modality.
 
 import logging
 
-from script import (
+from new_masking_script import (
     build_common_components as build_common_components_base,
 )
-from script import (
+from new_masking_script import (
     build_dataloader_config,
     build_dataset_config,
     build_train_module_config,
