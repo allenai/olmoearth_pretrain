@@ -80,6 +80,10 @@ class CommonComponents(Config):
     training_modalities: list[str]
     launch: OlmoEarthBeakerLaunchConfig | None = None
     nccl_debug: bool = False
+    eval_interval: int = 500
+    """How often (in steps) to run evaluations. Default is 500 steps."""
+    max_training_samples: int | None = None
+    """Maximum number of training samples to use. If None, uses all available samples."""
     # callbacks: dict[str, Callback]
 
     def validate(self) -> None:

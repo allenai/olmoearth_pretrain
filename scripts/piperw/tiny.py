@@ -1,12 +1,6 @@
 """Tiny model training script with 500 training sample limit."""
 
 import logging
-import sys
-from pathlib import Path
-
-# Add the official scripts directory to the path so we can import from script
-_scripts_dir = Path(__file__).parent.parent / "official"
-sys.path.insert(0, str(_scripts_dir))
 
 from script import (
     build_common_components,
@@ -65,10 +59,11 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     """Build the dataset config for an experiment with limited training samples."""
     config = build_dataset_config_default(common)
-    # Override to limit training samples
-    config.max_training_samples = MAX_TRAINING_SAMPLES
+    # Override to limit training samples - use command line arg if provided, otherwise use default
+    max_samples = common.max_training_samples if common.max_training_samples is not None else MAX_TRAINING_SAMPLES
+    config.max_training_samples = max_samples
     config.seed = 3622  # For reproducible random sampling
-    logger.info(f"Limiting dataset to {MAX_TRAINING_SAMPLES} training samples")
+    logger.info(f"Limiting dataset to {max_samples} training samples")
     return config
 
 
