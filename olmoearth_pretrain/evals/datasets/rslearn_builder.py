@@ -381,6 +381,8 @@ def build_model_dataset_from_config(
     source_path: str,
     split: str = "val",
     max_samples: int | None = None,
+    groups_override: list[str] | None = None,
+    tags_override: dict[str, list[str]] | None = None,
 ) -> Any:
     """Build rslearn ModelDataset directly from RuntimeConfig.
 
@@ -392,6 +394,8 @@ def build_model_dataset_from_config(
         source_path: Path to rslearn dataset.
         split: Dataset split ("train", "val", "test").
         max_samples: Optional limit on number of samples.
+        groups_override: Optional list of groups to use instead of model.yaml groups.
+        tags_override: Optional dict of tags to filter windows (e.g., {"split": ["val"]}).
 
     Returns:
         Instantiated ModelDataset.
@@ -411,6 +415,16 @@ def build_model_dataset_from_config(
         raise ValueError("No task found in runtime config")
     if split_config is None:
         raise ValueError(f"No split config found for split '{split}'")
+
+    # Apply groups override if provided
+    if groups_override:
+        split_config.groups = groups_override
+        logger.info(f"Using custom groups override: {groups_override}")
+
+    # Apply tags override if provided
+    if tags_override:
+        split_config.tags = tags_override
+        logger.info(f"Using custom tags override: {tags_override}")
 
     # Apply max_samples override if provided
     if max_samples is not None and hasattr(split_config, 'num_samples'):

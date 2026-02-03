@@ -277,7 +277,7 @@ class EvalDatasetEntry:
         timeseries: Whether dataset has multiple timesteps
 
         # === Normalization ===
-        norm_stats_path: Path to cached norm stats JSON (relative or absolute)
+        norm_stats: Per-band normalization statistics dict
         use_pretrain_norm: If True, use pretrain normalization stats
 
         # === Metadata ===
@@ -300,6 +300,7 @@ class EvalDatasetEntry:
     model_config_path: str = ""  # Path to model.yaml
 
     custom_groups: list[str] = field(default_factory=list)
+    custom_tags: dict[str, list[str]] = field(default_factory=dict)  # Filter windows by tags
 
     # Task configuration (needed for EvalDatasetConfig)
     task_type: str = "classification"  # "classification", "regression", "segmentation"
@@ -316,7 +317,7 @@ class EvalDatasetEntry:
     timeseries: bool = False
 
     # Normalization
-    norm_stats_path: str = ""
+    norm_stats: dict[str, Any] = field(default_factory=dict)
     use_pretrain_norm: bool = True
 
     num_timesteps: int = 1
@@ -350,6 +351,7 @@ class EvalDatasetEntry:
             "source_path": self.source_path,
             "model_config_path": self.model_config_path,
             "custom_groups": self.custom_groups,
+            "custom_tags": self.custom_tags,
             "task_type": self.task_type,
             "num_classes": self.num_classes,
             "is_multilabel": self.is_multilabel,
@@ -358,7 +360,7 @@ class EvalDatasetEntry:
             "imputes": [list(t) for t in self.imputes],
             "window_size": self.window_size,
             "timeseries": self.timeseries,
-            "norm_stats_path": self.norm_stats_path,
+            "norm_stats": self.norm_stats,
             "use_pretrain_norm": self.use_pretrain_norm,
             "num_timesteps": self.num_timesteps,
         }
@@ -377,6 +379,7 @@ class EvalDatasetEntry:
             source_path=data.get("source_path", ""),
             model_config_path=data.get("model_config_path", ""),
             custom_groups=data.get("custom_groups", []),
+            custom_tags=data.get("custom_tags", {}),
             task_type=data.get("task_type", "classification"),
             num_classes=data.get("num_classes"),
             is_multilabel=is_multilabel,
@@ -385,7 +388,7 @@ class EvalDatasetEntry:
             imputes=imputes,
             window_size=data.get("window_size", 64),
             timeseries=data.get("timeseries", False),
-            norm_stats_path=data.get("norm_stats_path", ""),
+            norm_stats=data.get("norm_stats", {}),
             use_pretrain_norm=data.get("use_pretrain_norm", True),
             num_timesteps=data.get("num_timesteps", 1),
         )

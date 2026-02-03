@@ -134,25 +134,27 @@ Next steps
 
 From the Cli you should be able to configure what split to use which we will turn into train val test or to create that split ourselves
 /weka/dfive-default/rslearn-eai/datasets/wildfire/canada_fire_sat_full
+
+We want to default to using train val and splitting test when that exists
+Otherwise do that within a specified subset or tag
+
+
 Also we should be able to use tags but I am not sure how those need to be used yet
 test_config:
       groups: ["val"]
       tags:
         oep_eval:
 
-
+Need to figure out how we are splitting for train val and test without specifying tag
 
 
     - bandstat calculation actually works
-    - clear flow for this
+    - dataset copying
 
 
 
 - and the tolbi one fully working
-    - dataset copying
-    - band stats
-    - train test split
-- Try adding bakc support for nandi and awf
+- Try adding back support for nandi and awf
 - mozambique support
 - yemen support
 - Ensuring that we can alll find discover and add these tasks

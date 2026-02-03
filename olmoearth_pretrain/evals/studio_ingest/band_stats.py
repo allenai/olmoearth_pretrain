@@ -1,205 +1,91 @@
 """Compute band stats from rslearn dataset.
 
-Moved from scripts/tools/compute_rslearn_dataset_band_stats.py.
-
 This module computes per-band normalization statistics (mean, std, min, max)
 for rslearn datasets. These stats are used for dataset-specific normalization
 during evaluation.
 
-Usage as CLI:
-    uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.band_stats \\
-        --ds_path gs://bucket/dataset \\
-        --input_layers sentinel2 sentinel1 \\
-        --output_json /path/to/stats.json
+Key features:
+- Uses the same dataset builder as eval (rslearn_builder.py)
+- Handles variable timesteps (infers from data shape)
+- GPU acceleration when available
+- Optional sampling for large datasets
 
 Usage as library:
-    from olmoearth_pretrain.evals.studio_ingest.band_stats import compute_band_stats
+    from olmoearth_pretrain.evals.studio_ingest.band_stats import (
+        compute_band_stats_from_model_config,
+    )
 
-    stats = compute_band_stats(model_ds, bands_by_modality)
-
-Todo:
------
-- [ ] Add percentile computation (p1, p99) for robust normalization
-- [ ] Add sampling support for large datasets (currently processes all data)
-- [ ] Integrate with ingestion workflow
+    stats = compute_band_stats_from_model_config(
+        model_config_path="/path/to/model.yaml",
+        source_path="/path/to/dataset",
+    )
 """
 
 import os
-from collections import defaultdict
+import random
 
 import torch
 from einops import rearrange
-from rslearn.dataset.dataset import Dataset as RslearnDataset
-from rslearn.train.dataset import DataInput as RsDataInput
-from rslearn.train.dataset import ModelDataset as RsModelDataset
-from rslearn.train.dataset import SplitConfig as RsSplitConfig
-from rslearn.train.dataset import IndexMode
-from rslearn.train.tasks.task import Task as RsTask
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from upath import UPath
 
-# NOTE: These imports use olmoearth_pretrain paths (was helios.* in original script)
-from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS
 from olmoearth_pretrain.data.constants import Modality as DataModality
 from olmoearth_pretrain.data.utils import convert_to_db
-from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
-    RSLEARN_TO_OLMOEARTH,
+from olmoearth_pretrain.evals.datasets.rslearn_builder import (
+    build_model_dataset_from_config,
+    load_runtime_config,
 )
+from olmoearth_pretrain.evals.datasets.rslearn_dataset import RSLEARN_TO_OLMOEARTH
 
 # Default to 0 (no multiprocessing), but allow override via env var
 _default_workers = 0
 NUM_WORKERS = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", _default_workers))
 
-# Optional sampling limits via env vars
-MAX_SAMPLES = (
-    int(os.environ["OLMOEARTH_MAX_SAMPLES"])
-    if "OLMOEARTH_MAX_SAMPLES" in os.environ
-    else None
-)
-SAMPLE_FRACTION = (
-    float(os.environ["OLMOEARTH_SAMPLE_FRACTION"])
-    if "OLMOEARTH_SAMPLE_FRACTION" in os.environ
-    else None
-)
 
-# TODO: THis is too hardcoded and should use the new improved build_rslearn_model_dataset function and is currently broken tolbi too big to test on
-def build_rslearn_model_dataset_for_band_stats(
-    rslearn_dataset: RslearnDataset,
-    layers: list[str],
-    task: RsTask,
-    rslearn_dataset_groups: list[str] | None = None,
-    input_size: int | None = None,
-    split: str = "train",
-    skip_targets: bool = True,
-) -> RsModelDataset:
-    """Build an rslearn ModelDataset for computing band statistics.
+def _collate_inputs_only(batch):
+    """Collate function that returns samples as-is (no stacking).
 
-    Args:
-        rslearn_dataset: The source RslearnDataset.
-        layers: List of rslearn layer names to use as model inputs.
-            Example: "sentinel2". Only provide the base name, do not include
-            layer names such as "sentinel2.1" or "sentinel2.n".
-        task: The rslearn Task instance (e.g., SegmentationTask, ClassificationTask).
-            Instantiated directly from model config.
-        rslearn_dataset_groups: Optional list of dataset group names to include.
-        input_size: Optional input patch size (pixels) to crop/resize samples to.
-        split: Dataset split to use (e.g., "train", "val", "test").
-        skip_targets: Whether or not to skip the target, if True the task is only
-            used to satisfy the RsModelDataset interface.
-
-    Returns:
-        RsModelDataset: A dataset object ready for training or evaluation.
+    This handles variable-shaped tensors by not attempting to stack them.
     """
-    if not layers:
-        raise ValueError(
-            "`layers` must be a non-empty list of rslearn layer names, "
-            f"allowed: {list(RSLEARN_TO_OLMOEARTH.keys())}"
-        )
-    if split not in ("train", "val", "test"):
-        raise ValueError(f"Invalid split {split}, must be one of train/val/test")
-
-    # Validate input layers
-    unknown = [m for m in layers if m not in RSLEARN_TO_OLMOEARTH]
-    if unknown:
-        raise ValueError(
-            f"Unknown rslearn layer(s): {unknown}. "
-            f"Allowed: {list(RSLEARN_TO_OLMOEARTH.keys())}"
-        )
-
-    # Group rslearn layers by their OlmoEarth Pretrain modality key
-    layers_by_olmoearth: dict[str, list[str]] = defaultdict(list)
-    bands_by_olmoearth: dict[str, list[str]] = {}
-
-    for rslearn_layer in layers:
-        olmoearth_key, band_order = RSLEARN_TO_OLMOEARTH[rslearn_layer]
-        layers_by_olmoearth[olmoearth_key].append(rslearn_layer)
-        bands_by_olmoearth[olmoearth_key] = band_order
-
-    transforms = []
-    if input_size is not None:
-        raise NotImplementedError("Input size is not supported for band stats")
-        # transforms.append(
-        #     RsPad(
-        #         size=input_size,
-        #         mode="center",
-        #         image_selectors=list(layers_by_olmoearth.keys()),
-        #     )
-        # )
-
-    inputs: dict[str, RsDataInput] = {}
-    # NOTE: Some datasets use layer suffixes for timesteps, others use load_all_item_groups.
-    # For band stats, we just need one timestep, so keep it simple.
-    # Don't use passthrough=True - we want tensors, not RasterImage objects.
-    for olmoearth_key, per_key_layers in layers_by_olmoearth.items():
-        inputs[olmoearth_key] = RsDataInput(
-            data_type="raster",
-            layers=per_key_layers,
-            bands=bands_by_olmoearth[olmoearth_key],
-            passthrough=False,  # Get tensors, not RasterImage
-            load_all_layers=True,
-            load_all_item_groups=True,
-            required=False,  # Filter out windows missing this layer
-        )
-
-    split_config = RsSplitConfig(
-        transforms=transforms,
-        groups=rslearn_dataset_groups,
-        skip_targets=skip_targets,
-        # TODO: Either we need a canonical tag or a way to get the split from the dataset
-        # tags={"helios_split": split}
-        # if split
-        # else {},  # must stay as helios because it is tagged that way in the dataset
-    )
-
-    return RsModelDataset(
-        dataset=rslearn_dataset,
-        split_config=split_config,
-        inputs=inputs,
-        task=task,
-        workers=32,
-        index_mode=IndexMode.USE,
-    )
+    return batch
 
 
-def get_bands_by_modality(input_layers: list[str]) -> dict[str, list[str]]:
-    """Collect Helios band order for each requested modality.
+def _get_bands_by_modality_from_runtime_config(runtime_config) -> dict[str, list[str]]:
+    """Extract bands by modality from runtime config.
 
     Args:
-        input_layers: List of rslearn layer names (e.g., ["sentinel2", "sentinel1"])
+        runtime_config: RuntimeConfig with parsed model.yaml.
 
     Returns:
-        Dict mapping modality name -> list of band names
-
-    Raises:
-        ValueError: If an unknown layer is provided
+        Dict mapping OlmoEarth modality name -> list of band names
     """
     bands_by_modality = {}
-    for layer in input_layers:
-        if layer not in RSLEARN_TO_OLMOEARTH:
-            raise ValueError(
-                f"Unknown input layer '{layer}'. Allowed: {list(RSLEARN_TO_OLMOEARTH)}"
-            )
-        modality, band_order = RSLEARN_TO_OLMOEARTH[layer]
-        bands_by_modality[modality] = band_order
+    modality_layers = runtime_config.get_modality_layers()
+
+    for layer in modality_layers:
+        if layer in RSLEARN_TO_OLMOEARTH:
+            olmoearth_name, band_order = RSLEARN_TO_OLMOEARTH[layer]
+            bands_by_modality[olmoearth_name] = band_order
+
     return bands_by_modality
 
 
-def collate_inputs_only(batch):
-    """Collate only the input dicts (ignore targets)."""
-    return [item[0] for item in batch]
-
-
-# TODO: Maybe broken
-def compute_band_stats(model_ds, bands_by_modality: dict[str, list[str]]) -> dict:
+def compute_band_stats(
+    model_ds,
+    bands_by_modality: dict[str, list[str]],
+    batch_size: int = 8,
+) -> dict:
     """Compute mean/std/min/max for each band in each modality.
 
-    Uses Welford-style online accumulation for numerical stability.
-    Processes all samples via DataLoader with multiprocessing.
+    Key features:
+    - Infers timesteps from actual data shape (handles variable timesteps)
+    - Handles variable-shaped samples (no stacking failures)
+    - GPU acceleration when available
 
     Args:
         model_ds: A torch Dataset that yields (inputs_dict, target) tuples
         bands_by_modality: Dict mapping modality name -> list of band names
+        batch_size: Batch size for DataLoader
 
     Returns:
         Nested dict: {modality: {band: {"mean": ..., "std": ..., "min": ..., "max": ...}}}
@@ -208,11 +94,12 @@ def compute_band_stats(model_ds, bands_by_modality: dict[str, list[str]]) -> dic
         {
             "sentinel2_l2a": {
                 "B02": {"mean": 1234.5, "std": 456.7, "min": 0, "max": 10000},
-                "B03": {"mean": 2345.6, "std": 567.8, "min": 0, "max": 10000},
                 ...
             }
         }
     """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     # Initialize accumulators for online stats computation
     acc = {
         modality: {
@@ -228,55 +115,94 @@ def compute_band_stats(model_ds, bands_by_modality: dict[str, list[str]]) -> dic
         for modality, bands in bands_by_modality.items()
     }
 
+    num_workers = min(8, NUM_WORKERS) if NUM_WORKERS > 0 else 0
     loader = DataLoader(
         model_ds,
-        batch_size=128,
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=NUM_WORKERS,
-        collate_fn=collate_inputs_only,
+        num_workers=num_workers,
+        collate_fn=_collate_inputs_only,
     )
 
-    for batch_inputs in tqdm(loader, total=len(loader), desc="Computing stats"):
-        for modality, bands in bands_by_modality.items():
-            if modality not in batch_inputs[0]:
-                continue
+    for batch in tqdm(loader, total=len(loader), desc="Computing stats"):
+        for sample in batch:
+            # Handle both (inputs_dict, target) tuples and raw dicts
+            inputs_dict = sample[0] if isinstance(sample, tuple) else sample
 
-            # Stack batch into tensor: (B, T*C, H, W)
-            # check the lenght of the batch inputs to make sure non zero before stacking
-            samples = [inp[modality] for inp in batch_inputs]
-            if len(samples) == 0:
-                continue
-            cur = torch.stack(samples, dim=0)
-            if cur.ndim == 3:
-                cur = cur.unsqueeze(0)
-            B, TC, H, W = cur.shape
-            T, C = YEAR_NUM_TIMESTEPS, len(bands)
-
-            if TC != T * C:
-                raise ValueError(f"{modality}: expected T*C={T * C}, got {TC}")
-
-            # Convert Sentinel-1 to dB scale
-            if modality == DataModality.SENTINEL1.name:
-                cur = convert_to_db(cur)
-
-            # Reshape to (B*H*W*T, C) for per-band processing
-            cur = rearrange(cur, "b (t c) h w -> (b h w t) c", t=T, c=C)
-            finite = torch.isfinite(cur)
-
-            # Accumulate stats per band
-            for band_idx, band in enumerate(bands):
-                vals = cur[:, band_idx][finite[:, band_idx]]
-                if vals.numel() == 0:
+            for modality, bands in bands_by_modality.items():
+                if modality not in inputs_dict:
                     continue
-                s = acc[modality][band]
-                s["count"] += vals.numel()
-                s["sum"] += vals.sum().item()
-                s["sumsq"] += (vals * vals).sum().item()
-                vmin, vmax = vals.min().item(), vals.max().item()
-                s["min"] = min(s["min"], vmin)
-                s["max"] = max(s["max"], vmax)
 
-    # Finalize: compute mean and std from accumulated sums
+                x = inputs_dict[modality]
+
+                # Handle RasterImage objects (when passthrough=True in model.yaml)
+                if hasattr(x, 'image'):
+                    # RasterImage.image has shape (C, T, H, W)
+                    x = x.image
+
+                if not isinstance(x, torch.Tensor):
+                    continue
+
+                # Move to device for faster computation
+                x = x.to(device, non_blocking=True)
+
+                # Infer shape: expect (T*C, H, W) or (C, H, W) or (C, T, H, W)
+                C = len(bands)
+
+                if x.ndim == 4:
+                    # Shape: (C, T, H, W) - rearrange to (T*C, H, W)
+                    C_actual, T, H, W = x.shape
+                    if C_actual == C:
+                        x = rearrange(x, "c t h w -> (t c) h w")
+                    else:
+                        # Unexpected shape, skip
+                        continue
+
+                if x.ndim == 3:
+                    TC, H, W = x.shape
+                    # Infer T from channel count
+                    if TC % C == 0:
+                        T = TC // C
+                    else:
+                        # Can't determine structure, treat as single timestep
+                        T = 1
+                        C = TC
+                else:
+                    continue
+
+                # Convert Sentinel-1 to dB scale
+                if modality == DataModality.SENTINEL1.name:
+                    x = convert_to_db(x)
+
+                # Reshape to (T, C, H*W) for per-band processing
+                try:
+                    x = x.view(T, C, -1)  # (T, C, H*W)
+                except RuntimeError:
+                    # Shape mismatch, skip this sample
+                    continue
+
+                # Compute stats per band (vectorized across spatial dims)
+                for band_idx, band in enumerate(bands):
+                    if band_idx >= x.shape[1]:
+                        continue
+
+                    vals = x[:, band_idx, :].flatten()  # (T * H * W,)
+                    finite_mask = torch.isfinite(vals)
+                    vals = vals[finite_mask]
+
+                    if vals.numel() == 0:
+                        continue
+
+                    s = acc[modality][band]
+
+                    # Online accumulation
+                    s["count"] += vals.numel()
+                    s["sum"] += vals.sum().item()
+                    s["sumsq"] += (vals ** 2).sum().item()
+                    s["min"] = min(s["min"], vals.min().item())
+                    s["max"] = max(s["max"], vals.max().item())
+
+    # Finalize: compute mean and std from accumulated values
     out = {}
     for modality, bands in bands_by_modality.items():
         out[modality] = {}
@@ -294,65 +220,81 @@ def compute_band_stats(model_ds, bands_by_modality: dict[str, list[str]]) -> dic
                 var = max(0.0, s["sumsq"] / s["count"] - mean * mean)
                 out[modality][band] = {
                     "mean": mean,
-                    "std": var**0.5,
+                    "std": var ** 0.5,
                     "min": s["min"],
                     "max": s["max"],
                 }
+
     return out
 
-# TODO: Maybe broken
-def compute_band_stats_from_rslearn_dataset(
-    dataset_path: str,
-    modalities: list[str],
-    task: RsTask,
+
+def compute_band_stats_from_model_config(
+    model_config_path: str,
+    source_path: str,
     groups: list[str] | None = None,
-    max_samples: int | None = MAX_SAMPLES,
-    sample_fraction: float | None = SAMPLE_FRACTION,
+    tags: dict[str, list[str]] | None = None,
+    num_samples: int | None = None,
+    seed: int = 42,
 ) -> dict:
-    """Compute band statistics from an rslearn dataset.
+    """Compute band statistics using the same dataset builder as eval.
+
+    This uses build_model_dataset_from_config from rslearn_builder.py,
+    ensuring the dataset is built with the correct configuration from model.yaml.
 
     Args:
-        dataset_path: Path to the rslearn dataset.
-        modalities: List of rslearn layer names (e.g., ["sentinel2", "sentinel1"]).
-        task: The rslearn Task instance, instantiated from model config.
+        model_config_path: Path to model.yaml file.
+        source_path: Path to the rslearn dataset.
         groups: Optional list of dataset group names to filter by.
-        max_samples: Optional maximum number of samples to process.
-            Defaults to OLMOEARTH_MAX_SAMPLES env var if set.
-        sample_fraction: Optional fraction of samples to use (0.0-1.0).
-            Defaults to OLMOEARTH_SAMPLE_FRACTION env var if set.
-            If both max_samples and sample_fraction are set, the smaller limit is used.
+        tags: Optional dict of tag filters (e.g., {"split": ["val"]}).
+        num_samples: Number of samples to process. If None, processes all samples.
+        seed: Random seed for reproducible sampling.
 
     Returns:
         Nested dict of band statistics per modality.
     """
-    base_ds = RslearnDataset(UPath(dataset_path))
-    model_ds = build_rslearn_model_dataset_for_band_stats(
-        rslearn_dataset=base_ds,
-        layers=modalities,
-        task=task,
-        rslearn_dataset_groups=groups,
+    random.seed(seed)
+
+    # Load runtime config from model.yaml
+    runtime_config = load_runtime_config(model_config_path, source_path)
+
+    if not runtime_config.model_config:
+        raise ValueError(
+            f"Failed to load model.yaml from {model_config_path}. "
+            "Check that the file exists and is valid YAML."
+        )
+
+    # Build dataset using the same builder as eval
+    model_ds = build_model_dataset_from_config(
+        runtime_config=runtime_config,
+        source_path=source_path,
         split="train",
-        skip_targets=True,
+        groups_override=groups,
+        tags_override=tags,
     )
 
+    total_samples = len(model_ds)
+
     # Apply sampling if requested
-    if max_samples is not None or sample_fraction is not None:
-        import random
+    if num_samples is not None and num_samples < total_samples:
+        print(f"Sampling {num_samples} of {total_samples} samples for stats computation")
+        indices = random.sample(range(total_samples), num_samples)
+        model_ds = torch.utils.data.Subset(model_ds, indices)
+    else:
+        print(f"Processing all {total_samples} samples")
 
-        total_samples = len(model_ds)
-        target_samples = total_samples
+    # Get bands by modality from runtime config
+    bands_by_modality = _get_bands_by_modality_from_runtime_config(runtime_config)
 
-        if sample_fraction is not None:
-            target_samples = min(target_samples, int(total_samples * sample_fraction))
-        if max_samples is not None:
-            target_samples = min(target_samples, max_samples)
+    if not bands_by_modality:
+        raise ValueError("No modalities found in model config")
 
-        if target_samples < total_samples:
-            indices = random.sample(range(total_samples), target_samples)
-            model_ds = torch.utils.data.Subset(model_ds, indices)
+    band_stats = compute_band_stats(model_ds, bands_by_modality)
+    # make sure none of the stats are None
+    for modality, bands in band_stats.items():
+        for band, stats in bands.items():
+            if any(value is None for value in stats.values()):
+                raise ValueError(f"Stats for {modality} {band} are None {stats}")
 
-    bands_by_modality = get_bands_by_modality(modalities)
-    # TODO fix this step stats = compute_band_stats(model_ds, bands_by_modality)
-    stats = {}
-
-    return stats
+    # print the keys of the stats
+    print(band_stats.keys())
+    return band_stats

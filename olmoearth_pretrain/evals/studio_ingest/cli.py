@@ -57,6 +57,26 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+def parse_tags(tags_list: list[str] | None) -> dict[str, list[str]] | None:
+    """Parse tags from CLI format to dict.
+
+    Args:
+        tags_list: List of strings like ["split=val,test", "quality=high"]
+
+    Returns:
+        Dict like {"split": ["val", "test"], "quality": ["high"]} or None
+    """
+    if not tags_list:
+        return None
+    tags_dict = {}
+    for tag_str in tags_list:
+        if "=" not in tag_str:
+            raise ValueError(f"Invalid tag format '{tag_str}'. Expected 'key=val1,val2'")
+        key, values = tag_str.split("=", 1)
+        tags_dict[key] = [v.strip() for v in values.split(",")]
+    return tags_dict
+
+
 def cmd_ingest(args: argparse.Namespace) -> int:
     """Run the ingest command.
 
@@ -68,14 +88,17 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     """
     logger.info(f"Ingesting dataset: {args.name}")
 
+    # Parse tags from CLI format
+    tags = parse_tags(args.tags)
+
     # Build config from args
     config = IngestConfig(
         name=args.name,
         source_path=args.source,
         olmoearth_run_config_path=args.olmoearth_run_config_path,
-        max_samples=args.max_samples,
-        sample_fraction=args.sample_fraction,
+        num_samples=args.num_samples,
         groups=args.groups,
+        tags=tags,
     )
 
     entry = ingest_dataset(config)
@@ -113,22 +136,22 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
 
     # Optional sampling arguments
     parser.add_argument(
-        "--max-samples",
+        "--num-samples",
         type=int,
         default=None,
-        help="Maximum number of samples to process for stats computation",
-    )
-    parser.add_argument(
-        "--sample-fraction",
-        type=float,
-        default=None,
-        help="Fraction of samples to use (0.0-1.0) for stats computation",
+        help="Number of samples to process for stats computation (default: all)",
     )
     parser.add_argument(
         "--groups",
         nargs="+",
         default=None,
         help="Dataset groups to filter by (e.g., 'train_group')",
+    )
+    parser.add_argument(
+        "--tags",
+        nargs="+",
+        default=None,
+        help="Filter windows by tags. Format: key=val1,val2 (e.g., 'split=val quality=high,medium')",
     )
     parser.add_argument(
         "--register",

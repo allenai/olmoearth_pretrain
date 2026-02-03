@@ -59,7 +59,7 @@ from tqdm import tqdm
 from upath import UPath
 
 from olmoearth_pretrain.evals.studio_ingest.band_stats import (
-    compute_band_stats_from_rslearn_dataset,
+    compute_band_stats_from_model_config,
 )
 from olmoearth_pretrain.evals.studio_ingest.schema import (
     RSLEARN_TO_OLMOEARTH,
@@ -135,8 +135,7 @@ class IngestConfig:
 
         # Optional - Normalization
         compute_norm_stats: Whether to compute normalization statistics
-        sample_fraction: Fraction of data to sample for stats
-        max_samples: Maximum samples for stats computation
+        num_samples: Number of samples for stats computation (None = all)
 
         # Optional - Metadata
         studio_task_id: Optional link back to Studio
@@ -153,9 +152,9 @@ class IngestConfig:
     olmoearth_run_config_path: str
 
     # Optional - Sampling for stats computation
-    max_samples: int | None = None
-    sample_fraction: float | None = None
+    num_samples: int | None = None
     groups: list[str] | None = None
+    tags: dict[str, list[str]] | None = None  # Filter windows by tags (e.g., {"split": ["val"]})
 
 
 # =============================================================================
@@ -344,44 +343,17 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     label_values = [str(i) for i in range(num_classes)]
     logger.info(f"Got {num_classes} classes from model config")
 
-    # Compute and cache normalization stats
-    import hashlib
-    import os
-    import pickle
 
-    def _norm_stats_cache_path(source_path, modalities, task_config):
-        src_hash = hashlib.sha256(
-            (
-                str(source_path)
-                + str(sorted(modalities))
-                + str(task_config["class_path"])
-                + str(task_config.get("init_args", {}))
-            ).encode()
-        ).hexdigest()[:16]
-        cache_dir = "/tmp/olmoearth_norm_stats_cache"
-        os.makedirs(cache_dir, exist_ok=True)
-        return os.path.join(cache_dir, f"{src_hash}_norm_stats.pkl")
 
-    norm_stats_cache_path = _norm_stats_cache_path(
-        config.source_path, modality_layer_names, task_config
+    logger.info(f"Computing norm stats for {config.source_path}")
+    norm_stats = compute_band_stats_from_model_config(
+        model_config_path=str(model_config_path),
+        source_path=config.source_path,
+        groups=config.groups,
+        tags=config.tags,
+        num_samples=config.num_samples,
     )
-    if os.path.exists(norm_stats_cache_path):
-        with open(norm_stats_cache_path, "rb") as f:
-            norm_stats = pickle.load(f)
-        logger.info(f"Loaded cached norm stats from {norm_stats_cache_path}")
-    else:
-        logger.info(f"Computing norm stats for {config.source_path}")
-        norm_stats = compute_band_stats_from_rslearn_dataset(
-            dataset_path=config.source_path,
-            modalities=modality_layer_names,
-            task=rslearn_task,
-            groups=config.groups,
-            max_samples=config.max_samples,
-            sample_fraction=config.sample_fraction,
-        )
-        with open(norm_stats_cache_path, "wb") as f:
-            pickle.dump(norm_stats, f)
-        logger.info(f"Computed and cached norm stats at {norm_stats_cache_path}")
+
 
     task_type = rslearn_task_type_to_olmoearth_task_type(rslearn_task)
 
@@ -400,8 +372,9 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         modalities=modalities,
         window_size=window_size,
         timeseries=timeseries,
-        norm_stats_path=norm_stats_cache_path,
+        norm_stats=norm_stats,
         custom_groups=config.groups or [],
+        custom_tags=config.tags or {},
         num_timesteps=num_timesteps,
     )
     return entry

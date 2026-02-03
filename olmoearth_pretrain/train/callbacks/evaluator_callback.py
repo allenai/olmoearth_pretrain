@@ -285,12 +285,14 @@ class DownstreamEvaluator:
             "use_pooled_tokens": self.use_pooled_tokens,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
-        return get_embeddings(
+        embeddings = get_embeddings(
             data_loader=data_loader,
             model=model,
             is_train=is_train,
             quantize=self.quantize_embeddings,
         )
+        logger.info(f"Embeddings shape: {embeddings.shape}")
+        return embeddings
 
     def _val_embed_probe(self) -> dict[str, Any]:
         """Validate the model using embeddings and probe (knn or linear probe)."""

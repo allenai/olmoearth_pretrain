@@ -322,8 +322,8 @@ EVAL_TASKS = {
     ),
     "wildfire_canada_test": DownstreamTaskConfig(
         dataset="wildfire_canada_test",
-        embedding_batch_size=4,
-        probe_batch_size=8,
+        embedding_batch_size=32,
+        probe_batch_size=16,
         patch_size=5, # TODO: This is changeable but we should know the valid sizes for inputs
         num_workers=2,
         pooling_type=PoolingType.MEAN,
@@ -337,8 +337,8 @@ EVAL_TASKS = {
     ),
     "wildfire_canada_full": DownstreamTaskConfig(
         dataset="wildfire_canada_full",
-        embedding_batch_size=4,
-        probe_batch_size=8,
+        embedding_batch_size=32,
+        probe_batch_size=16,
         patch_size=5, # TODO: This is changeable but we should know the valid sizes for inputs
         num_workers=2,
         pooling_type=PoolingType.MEAN,

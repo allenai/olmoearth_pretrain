@@ -170,6 +170,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         end_time: str = "2023-09-01",
         max_samples: int | None = None,
         num_timesteps: int = 12,
+        groups_override: list[str] | None = None,
+        tags_override: dict[str, list[str]] | None = None,
     ) -> "RslearnToOlmoEarthDataset":
         """Build from RuntimeConfig using jsonargparse-instantiated objects.
 
@@ -188,6 +190,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             max_samples: Optional sample limit.
             num_timesteps: Max expected timesteps from config (actual per-sample
                 timesteps are derived from data).
+            groups_override: Optional list of groups to use instead of model.yaml groups.
+            tags_override: Optional dict of tags to filter windows (e.g., {"split": ["val"]}).
 
         Returns:
             RslearnToOlmoEarthDataset instance.
@@ -203,6 +207,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             source_path=source_path,
             split=split,
             max_samples=max_samples,
+            groups_override=groups_override,
+            tags_override=tags_override,
         )
 
         # Derive input modalities from runtime config if not provided
@@ -285,7 +291,7 @@ class RslearnToOlmoEarthDataset(Dataset):
                 raise ValueError(f"Modality {modality} not found in dataset inputs")
             num_bands = DataModality.get(modality).num_bands
             x = input_dict[modality]
-            print(f"x shape: {x.shape} for modality {modality} ")
+            # print(f"x shape: {x.shape} for modality {modality} ")
             # Extract tensor and rearrange to OlmoEarth format (H, W, T, C)
             if isinstance(x, RasterImage):
                 # RasterImage.image has shape (C, T, H, W)
@@ -321,7 +327,7 @@ class RslearnToOlmoEarthDataset(Dataset):
                     maxs=modality_stats["maxs"],
                     method=self.norm_method,
                 )
-            print(f"x shape: {x.shape} for modality {modality} after normalization")
+            # print(f"x shape: {x.shape} for modality {modality} after normalization")
             sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
 
         # TODO: WE should be reading this from the metadata.json of each window/is there a way to enable in rslearn
@@ -405,6 +411,8 @@ def from_registry_entry(
     norm_stats_from_pretrained: bool | None = None,
     max_samples: int | None = None,
     input_modalities_override: list[str] | None = None,
+    groups_override: list[str] | None = None,
+    tags_override: dict[str, list[str]] | None = None,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -419,6 +427,10 @@ def from_registry_entry(
         max_samples: Optional limit on number of samples.
         input_modalities_override: Override modalities from entry. For multi-modal datasets,
             allows using only a subset (e.g., just S1 or just S2).
+        groups_override: Override groups from entry. If None, uses entry.custom_groups
+            if set, otherwise uses model.yaml groups.
+        tags_override: Override tags from entry. If None, uses entry.custom_tags
+            if set, otherwise uses model.yaml tags.
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -456,8 +468,17 @@ def from_registry_entry(
     if not use_pretrain_norm and entry.norm_stats_path:
         ds_norm_stats_json = entry.norm_stats_path
 
-    # Get temporal range from entry
+    # Determine groups: use override, then entry.custom_groups, then model.yaml default
+    effective_groups = groups_override
+    if effective_groups is None and entry.custom_groups:
+        effective_groups = entry.custom_groups
+        log.info(f"Using custom_groups from registry entry: {effective_groups}")
 
+    # Determine tags: use override, then entry.custom_tags, then model.yaml default
+    effective_tags = tags_override
+    if effective_tags is None and entry.custom_tags:
+        effective_tags = entry.custom_tags
+        log.info(f"Using custom_tags from registry entry: {effective_tags}")
 
     # Load runtime config and build dataset
     from olmoearth_pretrain.evals.datasets.rslearn_builder import load_runtime_config
@@ -482,5 +503,6 @@ def from_registry_entry(
         norm_method=norm_method,
         ds_norm_stats_json=ds_norm_stats_json,
         max_samples=max_samples,
-        num_timesteps=entry.num_timesteps,
+        groups_override=effective_groups,
+        tags_override=effective_tags,
     )
