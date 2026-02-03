@@ -1546,8 +1546,12 @@ class FixedModalityMaskingStrategy(MaskingStrategy):
                 continue
             instance = getattr(masked_sample, modality)
             mask[:] = MaskValue.DECODER.value
-            mask = self.fill_mask_with_missing_values(
-                instance, mask, Modality.get(modality)
+            setattr(
+                masked_sample,
+                MaskedOlmoEarthSample.get_masked_modality_name(modality),
+                self.fill_mask_with_missing_values(
+                    instance, mask, Modality.get(modality)
+                ),
             )
 
         # Randomly decide whether to mark the randomize_missing_modalities as missing.
