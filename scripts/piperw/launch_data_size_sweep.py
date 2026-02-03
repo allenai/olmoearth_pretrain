@@ -82,9 +82,11 @@ def launch_experiment(
     print(f"  Model: {model}")
     print(f"  Data size: {data_size}")
 
-    # Build command
+    # Build command - use wrapper script to patch beaker import issue
+    wrapper_script = Path(__file__).parent / "run_with_beaker_patch.py"
     cmd = [
         sys.executable,
+        str(wrapper_script),
         str(script),
         "launch",
         run_name,
@@ -102,17 +104,6 @@ def launch_experiment(
         # Use max_training_samples instead of dataset_percentage
         cmd.append(f"--dataset.max_training_samples={data_size}")
     
-<<<<<<< HEAD
-    # Note: Evaluation frequency overrides are commented out due to config system limitations.
-    # Overriding nested task config fields creates incomplete configs. The defaults will be used:
-    # - m-eurosat/mados: 4000 steps
-    # - m_so2sat/pastis: 20000 steps
-    # To change eval frequency, modify script.py directly or use a different override approach.
-    # cmd.append("--trainer.callbacks.downstream_evaluator.tasks.m_eurosat.eval_interval.value=1000")
-    # cmd.append("--trainer.callbacks.downstream_evaluator.tasks.m_eurosat.eval_interval.unit=steps")
-    
-=======
->>>>>>> 913ee47416ff1aad7547575c1a2f5634b4263538
     # Increase batch size (default is 512, we'll increase to 1024)
     cmd.append("--data_loader.global_batch_size=1024")
     

@@ -2,6 +2,8 @@
 
 import logging
 import os
+import subprocess
+from pathlib import Path
 
 from olmo_core.internal.common import get_beaker_username
 from olmo_core.launch.beaker import (
@@ -12,6 +14,7 @@ from olmo_core.launch.beaker import (
     OLMoCoreBeakerImage,
     is_running_in_beaker,
 )
+from olmo_core.launch.utils import GitConfig
 from olmo_core.utils import generate_uuid
 from upath import UPath
 
@@ -138,6 +141,52 @@ def build_launch_config(
             weka_buckets = []
 
     beaker_user = get_beaker_username()
+    
+    # Get git information for the launch config
+    git_config = None
+    try:
+        # Find the project root (where .git directory is)
+        current_path = Path(__file__).resolve()
+        project_root = current_path.parent
+        # Go up until we find .git or reach filesystem root
+        while project_root != project_root.parent:
+            if (project_root / ".git").exists():
+                break
+            project_root = project_root.parent
+        else:
+            # Didn't find .git, try current working directory
+            project_root = Path.cwd()
+        
+        # Get repo URL
+        repo_url = subprocess.check_output(
+            ["git", "remote", "get-url", "origin"], 
+            cwd=project_root,
+            text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        # Get current commit ref
+        git_ref = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_root,
+            text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        # Get current branch (optional)
+        try:
+            git_branch = subprocess.check_output(
+                ["git", "branch", "--show-current"],
+                cwd=project_root,
+                text=True, stderr=subprocess.DEVNULL
+            ).strip() or None
+        except subprocess.CalledProcessError:
+            git_branch = None
+        
+        git_config = GitConfig(repo_url=repo_url, ref=git_ref, branch=git_branch)
+        logger.info(f"Git config: repo={repo_url}, ref={git_ref[:8]}, branch={git_branch}")
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        logger.warning(f"Failed to get git config: {e}")
+        # If git is not available or not in a git repo, this will cause an error later
+        # but we'll let olmo_core handle that validation
+        pass
+    
     # Propagate the train module path to the experiment if set
     env_vars = [
         BeakerEnvVar(
@@ -173,6 +222,7 @@ def build_launch_config(
         shared_filesystem=True,  # We only use Weka for now
         allow_dirty=False,
         priority=BeakerPriority.high,
+        git=git_config,
         env_vars=env_vars,
         env_secrets=[
             BeakerEnvSecret(name="BEAKER_TOKEN", secret=f"{beaker_user}_BEAKER_TOKEN"),

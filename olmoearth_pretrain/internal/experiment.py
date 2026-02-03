@@ -9,7 +9,7 @@ from typing import cast
 import numpy as np
 from olmo_core.config import StrEnum
 from olmo_core.distributed.utils import get_local_rank
-from olmo_core.launch.beaker import BeakerLaunchConfig, ExperimentSpec
+from olmo_core.launch.beaker import BeakerLaunchConfig, BeakerExperimentSpec as ExperimentSpec
 from olmo_core.train import (
     TrainerConfig,
     prepare_training_environment,
