@@ -72,24 +72,37 @@ _global_batch_size: int | None = None
 
 
 def parse_args() -> tuple[str | None, int | None, int | None]:
-    """Parse model_type, num_train_samples, and global_batch_size from sys.argv."""
+    """Parse model_type, num_train_samples, and global_batch_size from sys.argv.
+    
+    Also removes these arguments from sys.argv so they don't get passed to the
+    experiment system's override mechanism.
+    """
     model_type = None
     num_train_samples = None
     global_batch_size = None
     
+    # Track indices to remove from sys.argv
+    indices_to_remove = []
+    
     for i, arg in enumerate(sys.argv):
         if arg == "--model_type" and i + 1 < len(sys.argv):
             model_type = sys.argv[i + 1]
+            indices_to_remove.extend([i, i + 1])
         elif arg.startswith("--model_type="):
             model_type = arg.split("=", 1)[1]
+            indices_to_remove.append(i)
         elif arg == "--num_train_samples" and i + 1 < len(sys.argv):
             num_train_samples = int(sys.argv[i + 1])
+            indices_to_remove.extend([i, i + 1])
         elif arg.startswith("--num_train_samples="):
             num_train_samples = int(arg.split("=", 1)[1])
+            indices_to_remove.append(i)
         elif arg == "--global_batch_size" and i + 1 < len(sys.argv):
             global_batch_size = int(sys.argv[i + 1])
+            indices_to_remove.extend([i, i + 1])
         elif arg.startswith("--global_batch_size="):
             global_batch_size = int(arg.split("=", 1)[1])
+            indices_to_remove.append(i)
     
     # Validate model_type if provided
     if model_type is not None and model_type not in ["nano", "tiny", "base", "large"]:
@@ -102,6 +115,10 @@ def parse_args() -> tuple[str | None, int | None, int | None]:
         raise ValueError(
             f"Invalid global_batch_size: {global_batch_size}. Must be positive"
         )
+    
+    # Remove parsed arguments from sys.argv (in reverse order to preserve indices)
+    for idx in sorted(indices_to_remove, reverse=True):
+        sys.argv.pop(idx)
     
     return model_type, num_train_samples, global_batch_size
 
