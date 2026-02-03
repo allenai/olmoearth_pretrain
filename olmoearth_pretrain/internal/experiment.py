@@ -139,6 +139,7 @@ class OlmoEarthEvaluateConfig(Config):
     model: Config
     trainer: TrainerConfig
     launch: OlmoEarthBeakerLaunchConfig | None = None
+    train_module: OlmoEarthTrainModuleConfig | None = None
     init_seed: int = 12536
 
 
@@ -147,6 +148,7 @@ class BenchmarkExperimentConfig(Config):
     """Configuration for a throughput benchmarking run."""
 
     benchmark: ThroughputBenchmarkRunnerConfig
+    model: Config | None = None
     launch: OlmoEarthBeakerLaunchConfig | None = None
 
 
@@ -212,6 +214,9 @@ def build_evaluate_config(
     model_config_builder: Callable[[CommonComponents], Config],
     trainer_config_builder: Callable[[CommonComponents], TrainerConfig],
     overrides: list[str],
+    train_module_config_builder: (
+        Callable[[CommonComponents], OlmoEarthTrainModuleConfig] | None
+    ) = None,
 ) -> OlmoEarthEvaluateConfig:
     """Build a OlmoEarth Evaluate experiment configuration."""
     common_overrides, overrides = split_common_overrides(overrides)
@@ -220,11 +225,15 @@ def build_evaluate_config(
     logger.info("Common: %s", common)
     model_config = model_config_builder(common)
     trainer_config = trainer_config_builder(common)
+    train_module_config = (
+        train_module_config_builder(common) if train_module_config_builder else None
+    )
     config = OlmoEarthEvaluateConfig(
         run_name=common.run_name,
         model=model_config,
         trainer=trainer_config,
         launch=common.launch,
+        train_module=train_module_config,
     )
     config = config.merge(overrides)
     return config
@@ -233,15 +242,23 @@ def build_evaluate_config(
 def build_benchmark_config(
     common: CommonComponents,
     inference_benchmarking_config_builder: Callable[
-        [], ThroughputBenchmarkRunnerConfig
+        [CommonComponents], ThroughputBenchmarkRunnerConfig
     ],
     overrides: list[str],
+    benchmark_model_config_builder: Callable[[CommonComponents], Config] | None = None,
 ) -> BenchmarkExperimentConfig:
     """Build a throughput benchmarking configuration."""
-    inference_benchmarking_config = inference_benchmarking_config_builder()
+    inference_benchmarking_config = inference_benchmarking_config_builder(common)
+
+    # Build model config if builder is provided
+    model_config = None
+    if benchmark_model_config_builder is not None:
+        model_config = benchmark_model_config_builder(common)
+
     config = BenchmarkExperimentConfig(
         launch=common.launch,
         benchmark=inference_benchmarking_config,
+        model=model_config,
     )
     config = config.merge(overrides)
     logger.info("Benchmark config: %s", config)
@@ -250,7 +267,7 @@ def build_benchmark_config(
 
 def benchmark(config: BenchmarkExperimentConfig) -> None:
     """Benchmark an experiment."""
-    runner = config.benchmark.build()
+    runner = config.benchmark.build(model_config=config.model)
     runner.run()
 
 
@@ -287,7 +304,7 @@ def train(config: OlmoEarthExperimentConfig) -> None:
     trainer.fit()
 
 
-def evaluate(config: OlmoEarthExperimentConfig) -> None:
+def evaluate(config: OlmoEarthEvaluateConfig) -> None:
     """Evaluate a checkpoint or model on downstream tasks."""
     # Set RNG states on all devices. Also, done in prepare_training_environment
     seed_all(config.init_seed)
@@ -298,7 +315,18 @@ def evaluate(config: OlmoEarthExperimentConfig) -> None:
     device = get_default_device()
     model = model.to(device)
     data_loader = MockOlmoEarthDataLoader()
-    train_module = MockLatentMIMTrainModule()
+
+    # Handle case where we're loading OlmoEarth distributed checkpoint for eval
+    if config.trainer.load_path is not None:
+        if config.train_module is None:
+            raise ValueError("train_module is not set so we can't load the checkpoint")
+        train_module = config.train_module.build(model)
+        # Hack to satisfy init of a real train module
+        data_loader.min_patch_size = model.encoder.min_patch_size
+        data_loader.max_patch_size = model.encoder.max_patch_size
+    else:
+        train_module = MockLatentMIMTrainModule()
+
     train_module.model = model
     trainer = config.trainer.build(train_module, data_loader)
     # Record the config to W&B/Comet and each checkpoint dir.
@@ -474,8 +502,9 @@ def main(
         Callable[[CommonComponents], OlmoEarthVisualizeConfig] | None
     ) = None,
     inference_benchmarking_config_builder: (
-        Callable[[], ThroughputBenchmarkRunnerConfig] | None
+        Callable[[CommonComponents], ThroughputBenchmarkRunnerConfig] | None
     ) = None,
+    benchmark_model_config_builder: Callable[[CommonComponents], Config] | None = None,
 ) -> None:
     """Main entry point for OlmoEarth Pretrain experiments.
 
@@ -521,6 +550,7 @@ If running command on a local machine ie from a session, you can use the [b]loca
             common=common,
             inference_benchmarking_config_builder=inference_benchmarking_config_builder,
             overrides=overrides,
+            benchmark_model_config_builder=benchmark_model_config_builder,
         )
     elif (
         cmd == SubCmd.evaluate
@@ -535,6 +565,7 @@ If running command on a local machine ie from a session, you can use the [b]loca
             model_config_builder=model_config_builder,
             trainer_config_builder=trainer_config_builder,
             overrides=overrides,
+            train_module_config_builder=train_module_config_builder,
         )
     else:
         # Training mode

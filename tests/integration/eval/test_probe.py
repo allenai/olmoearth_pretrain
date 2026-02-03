@@ -5,6 +5,7 @@ import torch
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.linear_probe import train_and_eval_probe
+from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
 
 
 def test_probe_cls() -> None:
@@ -42,9 +43,13 @@ def test_probe_cls() -> None:
         batch_size=batch_size,
         lr=0.1,
     )
-    assert "val_score" in result
-    assert "test_score" in result
-    assert "bootstrap_stats" in result
+    assert isinstance(result, EvalTaskResult)
+    assert isinstance(result.val_result, EvalResult)
+    assert isinstance(result.test_result, EvalResult)
+
+    # Classification returns EvalResult with accuracy
+    assert "accuracy" in result.val_result.metrics
+    assert "accuracy" in result.test_result.metrics
 
 
 def test_probe_seg() -> None:
@@ -95,6 +100,18 @@ def test_probe_seg() -> None:
         batch_size=batch_size,
         lr=0.1,
     )
-    assert "val_score" in result
-    assert "test_score" in result
-    assert "bootstrap_stats" in result
+    assert isinstance(result, EvalTaskResult)
+    assert isinstance(result.val_result, EvalResult)
+    assert isinstance(result.test_result, EvalResult)
+
+    # Segmentation returns EvalResult with segmentation metrics
+    expected_metrics = {"miou", "overall_acc", "macro_acc", "macro_f1"}
+    assert set(result.val_result.metrics.keys()) == expected_metrics
+    assert set(result.test_result.metrics.keys()) == expected_metrics
+
+    # All metric values should be floats between 0 and 1
+    for metric_name in expected_metrics:
+        assert isinstance(result.val_result.metrics[metric_name], float)
+        assert isinstance(result.test_result.metrics[metric_name], float)
+        assert 0.0 <= result.val_result.metrics[metric_name] <= 1.0
+        assert 0.0 <= result.test_result.metrics[metric_name] <= 1.0

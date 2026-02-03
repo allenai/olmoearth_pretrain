@@ -1,0 +1,69 @@
+---
+description: Use when creating new pretraining experiments, modifying model architecture, launching training jobs, writing experiment scripts, or working with configs in scripts/official/
+---
+
+# Experiment Development
+
+## Key Files to Reference
+- **Canonical experiment script**: `scripts/official/base.py` - copy and modify `build_model_config()`
+- **Shared builders**: `scripts/official/script.py` - common configs for dataloader, trainer, etc.
+- **Main entrypoint**: `olmoearth_pretrain/internal/experiment.py` - handles `launch` → `train` flow
+- **Config pattern examples**: `olmoearth_pretrain/nn/flexi_vit.py` (see `EncoderConfig`, `PredictorConfig`)
+- **Model size presets**: `olmoearth_pretrain/internal/utils.py` → `MODEL_SIZE_ARGS`
+- **Modality enum**: `olmoearth_pretrain/data/constants.py` → `Modality`
+
+## Config Pattern
+All configurable components follow `Config` → `build()`. See `EncoderConfig` in `olmoearth_pretrain/nn/flexi_vit.py` for the canonical pattern.
+
+**Key rules:**
+- Configs are `@dataclass` subclasses of `Config`
+- `build()` validates then constructs the object
+- Use `as_dict(exclude_none=True, recurse=False)` for kwargs
+- **Always subclass, never modify base classes**
+
+## Experiment Script Structure
+Scripts in `scripts/official/` inject builder functions into `main()`. Write/modify the builder for the component you're changing (e.g., `build_model_config()` for architecture changes, `build_train_module_config()` for loss/optimizer changes). See `scripts/official/base.py` as the template.
+
+## Launch Configuration
+
+When you run with `launch`, it submits to Beaker which runs the same script with `train` subcommand.
+
+```bash
+# Dry run first - always test config generation
+python3 scripts/official/your_script.py dry_run run_name local
+
+# Launch to Beaker
+python3 scripts/official/your_script.py launch run_name ai2/jupiter \
+  --launch.num_gpus=8 \
+  --launch.clusters="[ai2/jupiter,ai2/ceres]" \
+  --trainer.callbacks.wandb.project=YYYY_MM_DD_experiment_name
+```
+
+### CLI Overrides
+Use dotlist notation: `--model.encoder_config.depth=24`
+
+---
+
+## Git Workflow
+
+**⚠️ CRITICAL: Always commit and push before launching Beaker jobs**
+
+Beaker pulls code from the repository, so uncommitted changes won't be included!
+
+---
+
+## Naming Conventions
+
+| What | Pattern | Example |
+|------|---------|---------|
+| Branch | `<username>/<descriptive-name>` | `henryh/per-modality-projection` |
+| W&B Project | `YYYY_MM_DD_experiment_description` | `2025_11_21_masking_ablations` |
+| Run Name | `<base>_<variant>` | `base_encoder_per_mod_proj` |
+| Script | `base_<component>_<modification>.py` | `base_mae.py` |
+
+
+## When submitting new experiments append a new incremented number if the experiment already exists
+- checkpoint exists errors can occur if we dont bump the number such as appending _1
+
+**Pretraining Guide:**
+See [Pretraining & Architecture Design Docs](https://github.com/allenai/geofm/blob/main/docs/pretraining.md) for strategy, config, and example scripts.

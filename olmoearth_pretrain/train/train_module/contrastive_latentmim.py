@@ -17,9 +17,14 @@ from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskingConfig
+from olmoearth_pretrain.train.masking import (
+    MaskedOlmoEarthSample,
+    MaskingConfig,
+    MaskingStrategy,
+)
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
@@ -27,6 +32,33 @@ from olmoearth_pretrain.train.train_module.train_module import (
 from olmoearth_pretrain.train.utils import split_batch
 
 logger = getLogger(__name__)
+
+
+def _propagate_tokenization_config(
+    masking_strategy: MaskingStrategy,
+    tokenization_config: TokenizationConfig,
+) -> None:
+    """Attach the tokenization config to a masking strategy (recursively).
+
+    Some masking strategies wrap other strategies (e.g., FixedModalityMaskingStrategy).
+    We need the tokenization config on every strategy instance so that mask shapes
+    match the model's band-grouping configuration.
+    """
+    visited: set[int] = set()
+
+    def _set_config(strategy: MaskingStrategy) -> None:
+        strategy_id = id(strategy)
+        if strategy_id in visited:
+            return
+        visited.add(strategy_id)
+
+        strategy.tokenization_config = tokenization_config
+
+        for child in vars(strategy).values():
+            if isinstance(child, MaskingStrategy):
+                _set_config(child)
+
+    _set_config(masking_strategy)
 
 
 @dataclass
@@ -151,6 +183,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.token_exit_cfg = token_exit_cfg
         self.base_loss = loss_config.build()
         self.masking_strategy = masking_config.build()
+        tokenization_config = getattr(self.model.encoder, "tokenization_config", None)
+        if tokenization_config is not None:
+            _propagate_tokenization_config(self.masking_strategy, tokenization_config)
         self.regularizer = (
             regularizer_config.build() if regularizer_config is not None else None
         )
