@@ -131,11 +131,28 @@ class LatentMIMConfig(Config):
 
     def validate(self) -> None:
         """Validate the configuration."""
-        if (
-            self.encoder_config.supported_modalities
-            != self.decoder_config.supported_modalities
-        ):
-            raise ValueError("Encoder and decoder must support the same modalities")
+        # Check if this is a per-modality predictor (has decode_modality_names attribute)
+        is_per_modality = hasattr(self.decoder_config, "decode_modality_names")
+
+        if is_per_modality:
+            # For PerModalityPredictorConfig: decode modalities must be subset of encoder
+            encoder_modality_names = {
+                m.name for m in self.encoder_config.supported_modalities
+            }
+            decoder_modality_names = set(self.decoder_config.decode_modality_names)
+            if not decoder_modality_names.issubset(encoder_modality_names):
+                missing = decoder_modality_names - encoder_modality_names
+                raise ValueError(
+                    f"Decode modalities {missing} not supported by encoder"
+                )
+        else:
+            # Standard validation: encoder and decoder support same modalities
+            if (
+                self.encoder_config.supported_modalities
+                != self.decoder_config.supported_modalities
+            ):
+                raise ValueError("Encoder and decoder must support the same modalities")
+
         if (
             self.encoder_config.max_sequence_length
             != self.decoder_config.max_sequence_length

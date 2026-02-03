@@ -2207,3 +2207,201 @@ class PredictorConfig(Config):
         kwargs["supported_modalities"] = self.supported_modalities
         logger.info(f"Predictor kwargs: {kwargs}")
         return Predictor(**kwargs)
+
+
+class PerModalityPredictor(nn.Module):
+    """Predictor wrapper that uses a separate predictor for each decode-only modality.
+
+    This class contains one Predictor instance per decode-only modality. Non-decode
+    modalities are passed through unchanged, allowing the loss function to work
+    without modification (it skips modalities with no DECODER tokens).
+    """
+
+    def __init__(
+        self,
+        decode_modality_names: list[str],
+        supported_modality_names: list[str],
+        encoder_embedding_size: int = 128,
+        decoder_embedding_size: int = 128,
+        depth: int = 2,
+        mlp_ratio: float = 2.0,
+        num_heads: int = 8,
+        max_sequence_length: int = 24,
+        drop_path: float = 0.0,
+        learnable_channel_embeddings: bool = True,
+        random_channel_embeddings: bool = False,
+        output_embedding_size: int | None = None,
+        use_flash_attn: bool = False,
+        qk_norm: bool = False,
+        tokenization_config: TokenizationConfig | None = None,
+    ):
+        """Initialize the per-modality predictor.
+
+        Args:
+            decode_modality_names: Modalities that get their own dedicated predictor.
+            supported_modality_names: All modalities the encoder supports.
+            encoder_embedding_size: Size of encoder embeddings.
+            decoder_embedding_size: Size of decoder embeddings.
+            depth: Number of transformer layers per predictor.
+            mlp_ratio: Ratio for MLP hidden dimension.
+            num_heads: Number of attention heads.
+            max_sequence_length: Maximum sequence length.
+            drop_path: Drop path rate.
+            learnable_channel_embeddings: Whether to use learnable channel embeddings.
+            random_channel_embeddings: Whether to randomly initialize channel embeddings.
+            output_embedding_size: Size of output embeddings.
+            use_flash_attn: Whether to use flash attention.
+            qk_norm: Whether to apply normalization to Q and K in attention.
+            tokenization_config: Optional config for custom band groupings.
+        """
+        super().__init__()
+        self.decode_modality_names = set(decode_modality_names)
+        self.supported_modality_names = supported_modality_names
+        self.tokenization_config = tokenization_config or TokenizationConfig()
+
+        # Store config for FSDP
+        self.encoder_embedding_size = encoder_embedding_size
+
+        # Create one predictor per decode-only modality
+        self.predictors = nn.ModuleDict()
+        for modality_name in decode_modality_names:
+            predictor = Predictor(
+                supported_modalities=get_modality_specs_from_names([modality_name]),
+                encoder_embedding_size=encoder_embedding_size,
+                decoder_embedding_size=decoder_embedding_size,
+                depth=depth,
+                mlp_ratio=mlp_ratio,
+                num_heads=num_heads,
+                max_sequence_length=max_sequence_length,
+                drop_path=drop_path,
+                learnable_channel_embeddings=learnable_channel_embeddings,
+                random_channel_embeddings=random_channel_embeddings,
+                output_embedding_size=output_embedding_size,
+                use_flash_attn=use_flash_attn,
+                qk_norm=qk_norm,
+                tokenization_config=tokenization_config,
+            )
+            self.predictors[modality_name] = predictor
+
+    def _extract_single_modality(
+        self, x: TokensAndMasks, modality_name: str
+    ) -> TokensAndMasks:
+        """Extract a single modality from TokensAndMasks for processing."""
+        modality_data = getattr(x, modality_name)
+        mask_name = TokensAndMasks.get_masked_modality_name(modality_name)
+        modality_mask = getattr(x, mask_name)
+
+        # Build kwargs for TokensAndMasks with only this modality
+        kwargs = {modality_name: modality_data, mask_name: modality_mask}
+        return TokensAndMasks(**kwargs)
+
+    def forward(
+        self,
+        x: TokensAndMasks,
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+    ) -> TokensAndMasks:
+        """Generate predictions using per-modality predictors.
+
+        For decode-only modalities: run through their dedicated predictor.
+        For other modalities: pass through unchanged (loss will skip them).
+
+        Args:
+            x: TokensAndMasks containing encoded tokens.
+            timestamps: Timestamps of the tokens.
+            patch_size: Patch size of the tokens.
+            input_res: Input resolution of the tokens.
+
+        Returns:
+            TokensAndMasks with predictions for decode modalities and
+            passthrough for encode-only modalities.
+        """
+        output_dict: dict[str, Tensor | None] = {}
+
+        for modality_name in x.modalities:
+            modality_data = getattr(x, modality_name)
+            mask_name = TokensAndMasks.get_masked_modality_name(modality_name)
+            modality_mask = getattr(x, mask_name)
+
+            if modality_name in self.decode_modality_names:
+                # Decode-only modality: run through its dedicated predictor
+                single_modality_input = self._extract_single_modality(x, modality_name)
+                predictor_output = self.predictors[modality_name](
+                    single_modality_input, timestamps, patch_size, input_res
+                )
+                output_dict[modality_name] = getattr(predictor_output, modality_name)
+                output_dict[mask_name] = getattr(predictor_output, mask_name)
+            else:
+                # Encode-only modality: pass through unchanged
+                # The loss will skip these since mask has no DECODER tokens
+                output_dict[modality_name] = modality_data
+                output_dict[mask_name] = modality_mask
+
+        return TokensAndMasks(**output_dict)
+
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP to the model."""
+        for predictor in self.predictors.values():
+            predictor.apply_fsdp(**fsdp_kwargs)
+        fully_shard(self, **fsdp_kwargs)
+
+    def apply_compile(self) -> None:
+        """Apply torch.compile to the model."""
+        for name, predictor in self.predictors.items():
+            logger.info(f"Applying torch.compile to predictor for {name}")
+            predictor.apply_compile()
+
+
+@dataclass
+class PerModalityPredictorConfig(Config):
+    """Configuration for the PerModalityPredictor.
+
+    This creates a separate predictor for each decode-only modality, allowing
+    each modality to have its own decoder weights.
+    """
+
+    decode_modality_names: list[str]
+    supported_modality_names: list[str]
+    encoder_embedding_size: int = 128
+    decoder_embedding_size: int = 128
+    depth: int = 2
+    mlp_ratio: float = 2.0
+    num_heads: int = 8
+    max_sequence_length: int = 24
+    drop_path: float = 0.0
+    learnable_channel_embeddings: bool = True
+    random_channel_embeddings: bool = False
+    output_embedding_size: int | None = None
+    use_flash_attn: bool = False
+    qk_norm: bool = False
+    tokenization_config: TokenizationConfig | None = None
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        if len(self.decode_modality_names) == 0:
+            raise ValueError("At least one decode modality must be specified!")
+
+        # Validate decode modalities are a subset of supported modalities
+        for modality in self.decode_modality_names:
+            if modality not in self.supported_modality_names:
+                raise ValueError(
+                    f"Decode modality {modality} not in supported modalities"
+                )
+
+        # Validate all modalities exist
+        for modality in self.decode_modality_names:
+            if modality not in Modality.names():
+                raise ValueError(f"Modality {modality} is not a valid modality")
+
+    @property
+    def supported_modalities(self) -> list[ModalitySpec]:
+        """Get the supported modalities (for compatibility with LatentMIMConfig)."""
+        return get_modality_specs_from_names(self.supported_modality_names)
+
+    def build(self) -> PerModalityPredictor:
+        """Build the per-modality predictor."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        logger.info(f"PerModalityPredictor kwargs: {kwargs}")
+        return PerModalityPredictor(**kwargs)

@@ -1694,3 +1694,139 @@ def test_random_decode_masking_with_missing_modality_mask_in_instance() -> None:
             assert total_encoded_bandsets >= 1, (
                 f"Instance {idx} has no encoded bandsets across all modalities"
             )
+
+
+def test_decode_only_modalities_masking() -> None:
+    """Test RandomWithDecodeMaskingStrategy with allow_decoding_other_modalities=False.
+
+    This strategy:
+    - Decodes only the specified decode_only modalities
+    - All other modalities are encode-only (no DECODER tokens)
+    """
+    b, h, w, t = 4, 16, 16, 8
+
+    days = torch.randint(1, 31, (b, t, 1), dtype=torch.long)
+    months = torch.randint(1, 13, (b, t, 1), dtype=torch.long)
+    years = torch.randint(2018, 2020, (b, t, 1), dtype=torch.long)
+    timestamps = torch.cat([days, months, years], dim=-1)  # Shape: (B, T, 3)
+
+    sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
+    sentinel1_num_bands = Modality.SENTINEL1.num_bands
+    worldcover_num_bands = Modality.WORLDCOVER.num_bands
+    srtm_num_bands = Modality.SRTM.num_bands
+    latlon_num_bands = Modality.LATLON.num_bands
+
+    batch = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, sentinel2_l2a_num_bands)),
+        sentinel1=torch.ones((b, h, w, t, sentinel1_num_bands)),
+        latlon=torch.ones((b, latlon_num_bands)),
+        timestamps=timestamps,
+        worldcover=torch.ones((b, h, w, worldcover_num_bands)),
+        srtm=torch.ones((b, h, w, srtm_num_bands)),
+    )
+
+    # Test RandomWithDecodeMaskingStrategy with allow_decoding_other_modalities=False
+    encode_ratio = 0.5
+    only_decode_modalities = ["worldcover", "srtm"]
+
+    strategy = RandomWithDecodeMaskingStrategy(
+        encode_ratio=encode_ratio,
+        decode_ratio=0.5,  # ignored when allow_decoding_other_modalities=False
+        only_decode_modalities=only_decode_modalities,
+        allow_decoding_other_modalities=False,
+    )
+
+    for patch_size in [1, 2, 4]:
+        # Apply masking
+        masked_sample = strategy.apply_mask(batch, patch_size=patch_size)
+
+        # Check decode-only modalities: should have DECODER tokens (not MISSING)
+        assert isinstance(masked_sample.worldcover_mask, torch.Tensor)
+        assert (masked_sample.worldcover_mask == MaskValue.DECODER.value).all(), (
+            "worldcover should be all DECODER tokens"
+        )
+
+        assert isinstance(masked_sample.srtm_mask, torch.Tensor)
+        assert (masked_sample.srtm_mask == MaskValue.DECODER.value).all(), (
+            "srtm should be all DECODER tokens"
+        )
+
+        # Check encode-only modalities: should have NO DECODER tokens
+        assert isinstance(masked_sample.sentinel2_l2a_mask, torch.Tensor)
+        assert (masked_sample.sentinel2_l2a_mask != MaskValue.DECODER.value).all(), (
+            "sentinel2_l2a should have no DECODER tokens (encode-only)"
+        )
+
+        assert isinstance(masked_sample.sentinel1_mask, torch.Tensor)
+        assert (masked_sample.sentinel1_mask != MaskValue.DECODER.value).all(), (
+            "sentinel1 should have no DECODER tokens (encode-only)"
+        )
+
+        assert isinstance(masked_sample.latlon_mask, torch.Tensor)
+        assert (masked_sample.latlon_mask != MaskValue.DECODER.value).all(), (
+            "latlon should have no DECODER tokens (encode-only)"
+        )
+
+        # Check that encode-only modalities have ONLINE_ENCODER tokens
+        # (some tokens may be MISSING due to random subsampling)
+        num_encoded_s2 = (
+            masked_sample.sentinel2_l2a_mask == MaskValue.ONLINE_ENCODER.value
+        ).sum()
+        assert num_encoded_s2 > 0, "sentinel2_l2a should have some encoded tokens"
+
+        num_encoded_s1 = (
+            masked_sample.sentinel1_mask == MaskValue.ONLINE_ENCODER.value
+        ).sum()
+        assert num_encoded_s1 > 0, "sentinel1 should have some encoded tokens"
+
+
+def test_decode_only_modalities_masking_with_missing_data() -> None:
+    """Test RandomWithDecodeMaskingStrategy with allow_decoding_other_modalities=False.
+
+    Missing data should be properly marked as MISSING.
+    """
+    b, h, w, t = 4, 16, 16, 8
+
+    days = torch.randint(1, 31, (b, t, 1), dtype=torch.long)
+    months = torch.randint(1, 13, (b, t, 1), dtype=torch.long)
+    years = torch.randint(2018, 2020, (b, t, 1), dtype=torch.long)
+    timestamps = torch.cat([days, months, years], dim=-1)
+
+    sentinel2_l2a_num_bands = Modality.SENTINEL2_L2A.num_bands
+    worldcover_num_bands = Modality.WORLDCOVER.num_bands
+
+    # Create sentinel2 with some missing timesteps
+    sentinel2 = torch.ones((b, h, w, t, sentinel2_l2a_num_bands))
+    sentinel2[:, :, :, t // 2 :] = MISSING_VALUE
+
+    # Create worldcover with some missing data
+    worldcover = torch.ones((b, h, w, worldcover_num_bands))
+    worldcover[b // 2 :] = MISSING_VALUE
+
+    batch = OlmoEarthSample(
+        sentinel2_l2a=sentinel2,
+        timestamps=timestamps,
+        worldcover=worldcover,
+    )
+
+    strategy = RandomWithDecodeMaskingStrategy(
+        encode_ratio=0.5,
+        decode_ratio=0.5,
+        only_decode_modalities=["worldcover"],
+        allow_decoding_other_modalities=False,
+    )
+
+    masked_sample = strategy.apply_mask(batch, patch_size=2)
+
+    # Check that missing values are properly marked
+    assert isinstance(masked_sample.sentinel2_l2a_mask, torch.Tensor)
+    # Later timesteps should be MISSING
+    assert (
+        masked_sample.sentinel2_l2a_mask[:, :, :, t // 2 :] == MaskValue.MISSING.value
+    ).all()
+
+    assert isinstance(masked_sample.worldcover_mask, torch.Tensor)
+    # First half of batch: should be DECODER
+    assert (masked_sample.worldcover_mask[: b // 2] == MaskValue.DECODER.value).all()
+    # Second half of batch: should be MISSING
+    assert (masked_sample.worldcover_mask[b // 2 :] == MaskValue.MISSING.value).all()

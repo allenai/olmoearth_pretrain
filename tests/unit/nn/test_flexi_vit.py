@@ -12,6 +12,8 @@ from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     EncoderConfig,
     FlexiVitBase,
+    PerModalityPredictor,
+    PerModalityPredictorConfig,
     PoolingType,
     Predictor,
     PredictorConfig,
@@ -798,3 +800,155 @@ class TestProjectionAndAggregation:
 
 
 # TODO: write a unit test for the FlexiPatchEmbeddings
+
+
+class TestPerModalityPredictor:
+    """Unit tests for the PerModalityPredictor class."""
+
+    @pytest.fixture
+    def per_modality_predictor(self) -> PerModalityPredictor:
+        """Create per-modality predictor fixture."""
+        decode_modalities = [Modality.WORLDCOVER.name, Modality.SRTM.name]
+        supported_modalities = [
+            Modality.SENTINEL2_L2A.name,
+            Modality.WORLDCOVER.name,
+            Modality.SRTM.name,
+        ]
+        return PerModalityPredictor(
+            decode_modality_names=decode_modalities,
+            supported_modality_names=supported_modalities,
+            encoder_embedding_size=32,
+            decoder_embedding_size=16,
+            depth=1,
+            mlp_ratio=2.0,
+            num_heads=2,
+            max_sequence_length=12,
+        )
+
+    def test_init_creates_predictors_per_modality(
+        self, per_modality_predictor: PerModalityPredictor
+    ) -> None:
+        """Test that initialization creates one predictor per decode modality."""
+        assert len(per_modality_predictor.predictors) == 2
+        assert Modality.WORLDCOVER.name in per_modality_predictor.predictors
+        assert Modality.SRTM.name in per_modality_predictor.predictors
+
+    def test_forward_outputs_all_modalities(
+        self, per_modality_predictor: PerModalityPredictor
+    ) -> None:
+        """Test forward pass outputs all modalities (decoded and passthrough)."""
+        b, h, w, t, d = 2, 4, 4, 3, 32
+
+        # Create input TokensAndMasks
+        s2_tokens = torch.randn(b, h, w, t, 3, d)  # 3 bandsets for S2
+        s2_mask = torch.full((b, h, w, t, 3), MaskValue.ONLINE_ENCODER.value)
+
+        wc_tokens = torch.randn(b, h, w, 1, d)  # 1 bandset for worldcover
+        wc_mask = torch.full((b, h, w, 1), MaskValue.DECODER.value)
+
+        srtm_tokens = torch.randn(b, h, w, 1, d)  # 1 bandset for srtm
+        srtm_mask = torch.full((b, h, w, 1), MaskValue.DECODER.value)
+
+        input_tokens = TokensAndMasks(
+            sentinel2_l2a=s2_tokens,
+            sentinel2_l2a_mask=s2_mask,
+            worldcover=wc_tokens,
+            worldcover_mask=wc_mask,
+            srtm=srtm_tokens,
+            srtm_mask=srtm_mask,
+        )
+
+        timestamps = torch.randint(1, 31, (b, t, 3))
+        patch_size = 2
+
+        output = per_modality_predictor(input_tokens, timestamps, patch_size)
+
+        # Check all modalities are in output
+        assert output.sentinel2_l2a is not None
+        assert output.sentinel2_l2a_mask is not None
+        assert output.worldcover is not None
+        assert output.worldcover_mask is not None
+        assert output.srtm is not None
+        assert output.srtm_mask is not None
+
+    def test_encode_only_modalities_pass_through(
+        self, per_modality_predictor: PerModalityPredictor
+    ) -> None:
+        """Test that encode-only modalities are passed through unchanged."""
+        b, h, w, t, d = 2, 4, 4, 3, 32
+
+        # Create input with encode-only modality (sentinel2)
+        s2_tokens = torch.randn(b, h, w, t, 3, d)
+        s2_mask = torch.full((b, h, w, t, 3), MaskValue.ONLINE_ENCODER.value)
+
+        wc_tokens = torch.randn(b, h, w, 1, d)
+        wc_mask = torch.full((b, h, w, 1), MaskValue.DECODER.value)
+
+        input_tokens = TokensAndMasks(
+            sentinel2_l2a=s2_tokens,
+            sentinel2_l2a_mask=s2_mask,
+            worldcover=wc_tokens,
+            worldcover_mask=wc_mask,
+        )
+
+        timestamps = torch.randint(1, 31, (b, t, 3))
+        patch_size = 2
+
+        output = per_modality_predictor(input_tokens, timestamps, patch_size)
+
+        # Sentinel2 should be passed through unchanged
+        assert torch.equal(output.sentinel2_l2a, s2_tokens)
+        assert torch.equal(output.sentinel2_l2a_mask, s2_mask)
+
+
+class TestPerModalityPredictorConfig:
+    """Unit tests for the PerModalityPredictorConfig class."""
+
+    def test_build_creates_per_modality_predictor(self) -> None:
+        """Test that build creates a PerModalityPredictor."""
+        config = PerModalityPredictorConfig(
+            decode_modality_names=[Modality.WORLDCOVER.name],
+            supported_modality_names=[
+                Modality.SENTINEL2_L2A.name,
+                Modality.WORLDCOVER.name,
+            ],
+            encoder_embedding_size=32,
+            decoder_embedding_size=16,
+            depth=1,
+            num_heads=2,
+            max_sequence_length=12,
+        )
+        predictor = config.build()
+        assert isinstance(predictor, PerModalityPredictor)
+        assert len(predictor.predictors) == 1
+
+    def test_validation_fails_for_invalid_modality(self) -> None:
+        """Test that validation fails if decode modality not in supported."""
+        config = PerModalityPredictorConfig(
+            decode_modality_names=["invalid_modality"],
+            supported_modality_names=[
+                Modality.SENTINEL2_L2A.name,
+                "invalid_modality",  # Include in supported so we can test the Modality check
+            ],
+            encoder_embedding_size=32,
+            decoder_embedding_size=16,
+            depth=1,
+            num_heads=2,
+            max_sequence_length=12,
+        )
+        with pytest.raises(ValueError, match="not a valid modality"):
+            config.validate()
+
+    def test_validation_fails_for_decode_not_in_supported(self) -> None:
+        """Test that validation fails if decode modality not in supported modalities."""
+        config = PerModalityPredictorConfig(
+            decode_modality_names=[Modality.WORLDCOVER.name],
+            supported_modality_names=[Modality.SENTINEL2_L2A.name],
+            encoder_embedding_size=32,
+            decoder_embedding_size=16,
+            depth=1,
+            num_heads=2,
+            max_sequence_length=12,
+        )
+        with pytest.raises(ValueError, match="not in supported modalities"):
+            config.validate()

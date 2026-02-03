@@ -1618,8 +1618,10 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
     This masking strategy does two things:
 
     1. For all only_decode_modalities, all non-missing tokens are assigned MaskValue.DECODE
-    2. For all other band sets, we randomly select which to encode and which to decode at
-       an instance level. Random masking is then applied per instance per bandset.
+    2. For all other band sets, behavior depends on allow_decoding_other_modalities:
+       - If True (default): randomly select which to encode and which to decode at
+         an instance level. Random masking is then applied per instance per bandset.
+       - If False: all other modalities are encode-only (no DECODER tokens).
 
     The ratio of encoded tokens will be < encode_ratio. For encode_ratio == 0.5,
     we'd encode between 7% and 26% of tokens, from 1000 simulated masks.
@@ -1634,11 +1636,21 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
         encode_ratio: float = 0.5,
         decode_ratio: float = 0.5,
         only_decode_modalities: list[str] = [],
+        allow_decoding_other_modalities: bool = True,
     ):
-        """Random masking strategy except for decode modalities, which only get decoded."""
+        """Random masking strategy except for decode modalities, which only get decoded.
+
+        Args:
+            encode_ratio: Ratio of tokens to encode for encode-decode modalities.
+            decode_ratio: Ratio of tokens to decode for encode-decode modalities.
+            only_decode_modalities: List of modality names that should always be decoded.
+            allow_decoding_other_modalities: If True, other modalities can be randomly
+                assigned to encode or decode. If False, other modalities are encode-only.
+        """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
         self.only_decode_modalities = only_decode_modalities
+        self.allow_decoding_other_modalities = allow_decoding_other_modalities
 
     def apply_mask(
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
@@ -1761,6 +1773,9 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
                         0,
                     )
                 for modality_name, bandset_idx in decode_bandsets:
+                    if not self.allow_decoding_other_modalities:
+                        # then we skip this step
+                        continue
                     masked_modality_name = (
                         MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                     )
