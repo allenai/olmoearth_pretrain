@@ -1,8 +1,14 @@
 """Nano model training script with 500 training sample limit."""
 
 import logging
+import sys
+from pathlib import Path
 
-from scripts.official.script import (
+# Add the official scripts directory to the path so we can import from script
+_scripts_dir = Path(__file__).parent.parent / "official"
+sys.path.insert(0, str(_scripts_dir))
+
+from script import (
     build_common_components,
     build_dataloader_config,
     build_dataset_config as build_dataset_config_default,
