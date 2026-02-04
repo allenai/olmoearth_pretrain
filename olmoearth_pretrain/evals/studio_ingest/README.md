@@ -150,7 +150,9 @@ Need to figure out how we are splitting for train val and test without specifyin
 ç
     - dataset copying
 
+Lets now make sure we can train on the write splits for test
 
+Then launch for full dataset
 
 - and the tolbi one fully working
 - Try adding back support for nandi and awf

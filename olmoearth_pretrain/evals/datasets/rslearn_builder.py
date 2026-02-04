@@ -382,7 +382,7 @@ def build_model_dataset_from_config(
     split: str = "val",
     max_samples: int | None = None,
     groups_override: list[str] | None = None,
-    tags_override: dict[str, list[str]] | None = None,
+    tags_override: dict[str, str] | None = None,
 ) -> Any:
     """Build rslearn ModelDataset directly from RuntimeConfig.
 
@@ -395,7 +395,7 @@ def build_model_dataset_from_config(
         split: Dataset split ("train", "val", "test").
         max_samples: Optional limit on number of samples.
         groups_override: Optional list of groups to use instead of model.yaml groups.
-        tags_override: Optional dict of tags to filter windows (e.g., {"split": ["val"]}).
+        tags_override: Optional dict of tags to filter windows (e.g., {"eval_split": "val"}).
 
     Returns:
         Instantiated ModelDataset.
@@ -452,11 +452,12 @@ def build_dataset_from_registry_entry(
     """Build rslearn ModelDataset from registry entry using jsonargparse.
 
     This is the main entry point for building datasets from registry entries
-    using the hybrid approach.
+    using the hybrid approach. Uses the split tags written during ingestion
+    to filter windows.
 
     Args:
         entry: EvalDatasetEntry from registry.
-        split: Dataset split.
+        split: Dataset split ("train", "val", "test").
         max_samples: Optional sample limit.
 
     Returns:
@@ -468,12 +469,36 @@ def build_dataset_from_registry_entry(
             "Cannot use jsonargparse builder without model.yaml path."
         )
 
+    # Use weka_path (copied dataset with split tags) if available, else source_path
+    dataset_path = entry.weka_path if entry.weka_path else entry.source_path
+    if not dataset_path:
+        raise ValueError(f"Entry '{entry.name}' has no weka_path or source_path.")
+
     model_yaml_path = f"{entry.model_config_path}/model.yaml"
-    runtime_config = load_runtime_config(model_yaml_path, entry.source_path)
+    runtime_config = load_runtime_config(model_yaml_path, dataset_path)
+
+    # Map split name to the entry's split value
+    # e.g., split="val" -> entry.val_split (usually "val")
+    split_value_map = {
+        "train": entry.train_split,
+        "val": entry.val_split,
+        "test": entry.test_split,
+    }
+    split_value = split_value_map.get(split, split)
+
+    # Build tags override using the split_tag_key from ingestion
+    # This filters to windows with e.g. {"eval_split": "val"}
+    tags_override = None
+    if entry.split_tag_key:
+        tags_override = {entry.split_tag_key: split_value}
+        logger.info(
+            f"Using split tags from ingestion: {entry.split_tag_key}={split_value}"
+        )
 
     return build_model_dataset_from_config(
         runtime_config=runtime_config,
-        source_path=entry.source_path,
+        source_path=dataset_path,
         split=split,
         max_samples=max_samples,
+        tags_override=tags_override,
     )

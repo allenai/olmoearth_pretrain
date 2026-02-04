@@ -171,7 +171,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         max_samples: int | None = None,
         num_timesteps: int = 12,
         groups_override: list[str] | None = None,
-        tags_override: dict[str, list[str]] | None = None,
+        tags_override: dict[str, str] | None = None,
     ) -> "RslearnToOlmoEarthDataset":
         """Build from RuntimeConfig using jsonargparse-instantiated objects.
 
@@ -191,7 +191,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             num_timesteps: Max expected timesteps from config (actual per-sample
                 timesteps are derived from data).
             groups_override: Optional list of groups to use instead of model.yaml groups.
-            tags_override: Optional dict of tags to filter windows (e.g., {"split": ["val"]}).
+            tags_override: Optional dict of tags to filter windows (e.g., {"eval_split": "val"}).
 
         Returns:
             RslearnToOlmoEarthDataset instance.
@@ -412,25 +412,26 @@ def from_registry_entry(
     max_samples: int | None = None,
     input_modalities_override: list[str] | None = None,
     groups_override: list[str] | None = None,
-    tags_override: dict[str, list[str]] | None = None,
+    tags_override: dict[str, str] | None = None,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
     Uses jsonargparse to build ModelDataset directly from model.yaml.
     Requires entry.model_config_path to be set.
 
+    Uses the split tags written during ingestion to filter windows by default.
+
     Args:
         entry: Registry entry containing dataset metadata.
-        split: Dataset split to load ("train", "val", "test").
+        split: Dataset split to load ("train", "val", "valid", "test").
         norm_method: Normalization method when not using pretrain stats.
         norm_stats_from_pretrained: Override for entry.use_pretrain_norm.
         max_samples: Optional limit on number of samples.
         input_modalities_override: Override modalities from entry. For multi-modal datasets,
             allows using only a subset (e.g., just S1 or just S2).
-        groups_override: Override groups from entry. If None, uses entry.custom_groups
-            if set, otherwise uses model.yaml groups.
-        tags_override: Override tags from entry. If None, uses entry.custom_tags
-            if set, otherwise uses model.yaml tags.
+        groups_override: Override groups. If None, no group filtering is applied.
+        tags_override: Override tags. If None, uses entry.split_tag_key with the
+            appropriate split value (e.g., {"eval_split": "val"}).
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -454,6 +455,11 @@ def from_registry_entry(
             "Re-ingest with olmoearth_run_config_path set."
         )
 
+    # Use weka_path (copied dataset with split tags) if available, else source_path
+    dataset_path = entry.weka_path if entry.weka_path else entry.source_path
+    if not dataset_path:
+        raise ValueError(f"Entry '{entry.name}' has no weka_path or source_path.")
+
     # Use override if provided, otherwise use modalities from entry
     if input_modalities_override:
         input_modalities = [m.lower() for m in input_modalities_override]
@@ -463,29 +469,28 @@ def from_registry_entry(
     # Use override if provided, otherwise use entry's setting
     use_pretrain_norm = norm_stats_from_pretrained if norm_stats_from_pretrained is not None else entry.use_pretrain_norm
 
-    # Determine norm stats path
-    ds_norm_stats_json = None
-    if not use_pretrain_norm and entry.norm_stats_path:
-        ds_norm_stats_json = entry.norm_stats_path
+    # Normalize split name: "valid" -> "val"
+    normalized_split = "val" if split == "valid" else split
 
-    # Determine groups: use override, then entry.custom_groups, then model.yaml default
-    effective_groups = groups_override
-    if effective_groups is None and entry.custom_groups:
-        effective_groups = entry.custom_groups
-        log.info(f"Using custom_groups from registry entry: {effective_groups}")
-
-    # Determine tags: use override, then entry.custom_tags, then model.yaml default
+    # Build tags for split filtering using the split_tag_key from ingestion
+    # Map split name to the entry's split value
     effective_tags = tags_override
-    if effective_tags is None and entry.custom_tags:
-        effective_tags = entry.custom_tags
-        log.info(f"Using custom_tags from registry entry: {effective_tags}")
+    if effective_tags is None and entry.split_tag_key:
+        split_value_map = {
+            "train": entry.train_split,
+            "val": entry.val_split,
+            "test": entry.test_split,
+        }
+        split_value = split_value_map.get(normalized_split, normalized_split)
+        effective_tags = {entry.split_tag_key: split_value}
+        log.info(f"Using split tags from ingestion: {entry.split_tag_key}={split_value}")
 
     # Load runtime config and build dataset
     from olmoearth_pretrain.evals.datasets.rslearn_builder import load_runtime_config
 
     model_yaml_path = f"{entry.model_config_path}/model.yaml"
     log.info(f"Loading RuntimeConfig from {model_yaml_path}")
-    runtime_config = load_runtime_config(model_yaml_path, entry.source_path)
+    runtime_config = load_runtime_config(model_yaml_path, dataset_path)
 
     if not runtime_config.model_config:
         raise ValueError(
@@ -493,16 +498,16 @@ def from_registry_entry(
             "Check that the file exists and is valid YAML."
         )
 
-    log.info(f"Building dataset from RuntimeConfig for {entry.name}")
+    log.info(f"Building dataset from RuntimeConfig for {entry.name} (path: {dataset_path})")
     return RslearnToOlmoEarthDataset.from_runtime_config(
         runtime_config=runtime_config,
-        source_path=entry.source_path,
-        split="val" if split == "valid" else split,
+        source_path=dataset_path,
+        split=normalized_split,
         input_modalities=input_modalities,
         norm_stats_from_pretrained=use_pretrain_norm,
         norm_method=norm_method,
-        ds_norm_stats_json=ds_norm_stats_json,
+        ds_norm_stats_json=None,  # Not currently used
         max_samples=max_samples,
-        groups_override=effective_groups,
+        groups_override=groups_override,
         tags_override=effective_tags,
     )

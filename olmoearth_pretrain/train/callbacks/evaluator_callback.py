@@ -285,14 +285,13 @@ class DownstreamEvaluator:
             "use_pooled_tokens": self.use_pooled_tokens,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
-        embeddings = get_embeddings(
+        return get_embeddings(
             data_loader=data_loader,
             model=model,
             is_train=is_train,
             quantize=self.quantize_embeddings,
         )
-        logger.info(f"Embeddings shape: {embeddings.shape}")
-        return embeddings
+
 
     def _val_embed_probe(self) -> dict[str, Any]:
         """Validate the model using embeddings and probe (knn or linear probe)."""
@@ -307,6 +306,8 @@ class DownstreamEvaluator:
         train_embeddings, train_labels = self._get_embeddings(
             train_loader, is_train=True
         )
+        # log shape of train embeddings
+        logger.info(f"Train embeddings shape: {train_embeddings.shape}")
 
         # Subsample train embeddings if configured
         if self.max_train_samples and train_embeddings.shape[0] > self.max_train_samples:
@@ -319,6 +320,7 @@ class DownstreamEvaluator:
 
         logger.info(f"Getting val embeddings for {self.dataset}...")
         val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
+        logger.info(f"Val embeddings shape: {val_embeddings.shape}")
         if self.run_on_test:
             logger.info(f"Getting test loader for {self.dataset}...")
             test_loader = self._get_data_loader("test", self.embedding_batch_size)
@@ -326,6 +328,7 @@ class DownstreamEvaluator:
             test_embeddings, test_labels = self._get_embeddings(
                 test_loader, is_train=False
             )
+            logger.info(f"Test embeddings shape: {test_embeddings.shape}")
         else:
             test_embeddings, test_labels = None, None
         logger.info(
