@@ -462,7 +462,6 @@ class MultiModalPatchEmbeddings(nn.Module):
         modality: str,
         input_data: MaskedOlmoEarthSample,
         patch_size: int,
-        fast_pass: bool = False,
     ) -> tuple[Tensor, Tensor]:
         """Apply embedding to a modality."""
         logger.debug(f"applying embedding to modality:{modality}")
@@ -488,23 +487,17 @@ class MultiModalPatchEmbeddings(nn.Module):
                     idx,
                 ]
                 modality_specific_kwargs = {"patch_size": patch_size}
-            # In the fast pass we want to the sync that comes with checking for online encoder
-            if fast_pass or (token_mask == MaskValue.ONLINE_ENCODER.value).any():
-                buffer_name = self._get_buffer_name(modality, idx)
-                patchified_data = torch.index_select(
-                    modality_data, -1, getattr(self, buffer_name)
-                )
-                embedding_module = self.per_modality_embeddings[modality][
-                    self._get_embedding_module_name(modality, idx)
-                ]
-                patchified_data = embedding_module(
-                    patchified_data, **modality_specific_kwargs
-                )
-            else:
-                mask_shape = token_mask.shape + (self.embedding_size,)
-                patchified_data = torch.zeros(
-                    mask_shape, dtype=modality_data.dtype, device=token_mask.device
-                )
+
+            buffer_name = self._get_buffer_name(modality, idx)
+            patchified_data = torch.index_select(
+                modality_data, -1, getattr(self, buffer_name)
+            )
+            embedding_module = self.per_modality_embeddings[modality][
+                self._get_embedding_module_name(modality, idx)
+            ]
+            patchified_data = embedding_module(
+                patchified_data, **modality_specific_kwargs
+            )
 
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
@@ -523,7 +516,6 @@ class MultiModalPatchEmbeddings(nn.Module):
         self,
         input_data: MaskedOlmoEarthSample,
         patch_size: int,
-        fast_pass: bool = False,
     ) -> dict[str, Tensor]:
         """Return flexibly patchified embeddings for each modality of the input data.
 
@@ -543,7 +535,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         )
         for modality in modalities_to_process:
             modality_tokens, modality_masks = self.apply_embedding_to_modality(
-                modality, input_data, patch_size, fast_pass
+                modality, input_data, patch_size
             )
             output_dict[modality] = modality_tokens
             modality_mask_name = input_data.get_masked_modality_name(modality)
@@ -1685,9 +1677,7 @@ class Encoder(FlexiVitBase):
         if fast_pass and token_exit_cfg is not None:
             raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
 
-        patchified_tokens_and_masks = self.patch_embeddings.forward(
-            x, patch_size, fast_pass=fast_pass
-        )
+        patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):

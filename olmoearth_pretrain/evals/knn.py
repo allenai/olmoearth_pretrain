@@ -1,5 +1,7 @@
 """KNN evals of OlmoEarth Pretrain models."""
 
+from __future__ import annotations
+
 import logging
 
 import numpy as np
@@ -9,6 +11,7 @@ from olmo_core.data.utils import get_rng
 from sklearn.metrics import accuracy_score, f1_score
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
+from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +29,7 @@ def run_knn(
     skip_idx: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
-) -> dict[str, float | dict]:
+) -> EvalTaskResult:
     """Run KNN on the OlmoEarth Pretrain model.
 
     Args:
@@ -45,10 +48,13 @@ def run_knn(
 
     Returns:
         Dictionary with keys:
-            - val_score: Validation score
-            - test_score: Test score (0.0 if no test set)
+            - val_score: EvalResult for validation
+            - test_score: EvalResult for test, or None if no test set
             - bootstrap_stats: Bootstrap statistics dict (empty dict if n_bootstrap == 0)
     """
+    test_result: EvalResult | None = None
+    bootstrap_stats: dict = {}
+
     if not config.is_multilabel:
         val_predictions = _run_knn_for_k(
             train_embeddings=train_embeddings,
@@ -74,6 +80,7 @@ def run_knn(
                 skip_idx=skip_idx,
             )
             test_score = accuracy_score(y_true=test_labels, y_pred=test_predictions)
+            test_result = EvalResult.from_classification(test_score)
 
             # Perform bootstrap sampling if requested
             if n_bootstrap > 0:
@@ -89,17 +96,12 @@ def run_knn(
                     n_bootstrap=n_bootstrap,
                     seed=bootstrap_seed,
                 )
-            else:
-                bootstrap_stats = {}
-        else:
-            test_score = 0.0
-            bootstrap_stats = {}
 
-        return {
-            "val_score": val_score,
-            "test_score": test_score,
-            "bootstrap_stats": bootstrap_stats,
-        }
+        return EvalTaskResult(
+            val_result=EvalResult.from_classification(val_score),
+            test_result=test_result,
+            bootstrap_stats=bootstrap_stats,
+        )
     else:
         # multilabel dataset, e.g., BigEarthNet
         # we will run KNN or K-Means once per class to compute predictions
@@ -141,6 +143,7 @@ def run_knn(
             val_predictions, dim=1
         )  # (num_samples, num_classes)
         val_score = f1_score(y_true=val_labels, y_pred=val_predictions, average="micro")
+
         if len(test_predictions) > 0:
             test_predictions = torch.stack(
                 test_predictions, dim=1
@@ -148,6 +151,7 @@ def run_knn(
             test_score = f1_score(
                 y_true=test_labels, y_pred=test_predictions, average="micro"
             )
+            test_result = EvalResult.from_classification(test_score)
 
             # Perform bootstrap sampling if requested
             if n_bootstrap > 0:
@@ -163,17 +167,12 @@ def run_knn(
                     n_bootstrap=n_bootstrap,
                     seed=bootstrap_seed,
                 )
-            else:
-                bootstrap_stats = {}
-        else:
-            test_score = 0.0
-            bootstrap_stats = {}
 
-        return {
-            "val_score": val_score,
-            "test_score": test_score,
-            "bootstrap_stats": bootstrap_stats,
-        }
+        return EvalTaskResult(
+            val_result=EvalResult.from_classification(val_score),
+            test_result=test_result,
+            bootstrap_stats=bootstrap_stats,
+        )
 
 
 def _bootstrap_knn_test(
