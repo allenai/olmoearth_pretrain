@@ -858,7 +858,13 @@ class TestPerModalityPredictor:
             srtm_mask=srtm_mask,
         )
 
-        timestamps = torch.randint(1, 31, (b, t, 3))
+        # Timestamps format: (B, T, 3) where 3 = [day, month, year]
+        days = torch.randint(1, 28, (b, t, 1), dtype=torch.long)
+        months = torch.randint(
+            0, 12, (b, t, 1), dtype=torch.long
+        )  # months are 0-indexed
+        years = torch.randint(2018, 2022, (b, t, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)
         patch_size = 2
 
         output = per_modality_predictor(input_tokens, timestamps, patch_size)
@@ -891,7 +897,13 @@ class TestPerModalityPredictor:
             worldcover_mask=wc_mask,
         )
 
-        timestamps = torch.randint(1, 31, (b, t, 3))
+        # Timestamps format: (B, T, 3) where 3 = [day, month, year]
+        days = torch.randint(1, 28, (b, t, 1), dtype=torch.long)
+        months = torch.randint(
+            0, 12, (b, t, 1), dtype=torch.long
+        )  # months are 0-indexed
+        years = torch.randint(2018, 2022, (b, t, 1), dtype=torch.long)
+        timestamps = torch.cat([days, months, years], dim=-1)
         patch_size = 2
 
         output = per_modality_predictor(input_tokens, timestamps, patch_size)
@@ -899,6 +911,60 @@ class TestPerModalityPredictor:
         # Sentinel2 should be passed through unchanged
         assert torch.equal(output.sentinel2_l2a, s2_tokens)
         assert torch.equal(output.sentinel2_l2a_mask, s2_mask)
+
+    def test_filter_input_for_modality(
+        self, per_modality_predictor: PerModalityPredictor
+    ) -> None:
+        """Test that _filter_input_for_modality excludes non-target decode modalities."""
+        b, h, w, t, d = 2, 4, 4, 3, 32
+
+        # Create input with two decode modalities (worldcover and srtm)
+        s2_tokens = torch.randn(b, h, w, t, 3, d)
+        s2_mask = torch.full((b, h, w, t, 3), MaskValue.ONLINE_ENCODER.value)
+
+        wc_tokens = torch.randn(b, h, w, 1, d)
+        wc_mask = torch.full((b, h, w, 1), MaskValue.DECODER.value)
+
+        srtm_tokens = torch.randn(b, h, w, 1, d)
+        srtm_mask = torch.full((b, h, w, 1), MaskValue.DECODER.value)
+
+        input_tokens = TokensAndMasks(
+            sentinel2_l2a=s2_tokens,
+            sentinel2_l2a_mask=s2_mask,
+            worldcover=wc_tokens,
+            worldcover_mask=wc_mask,
+            srtm=srtm_tokens,
+            srtm_mask=srtm_mask,
+        )
+
+        # Filter for worldcover - srtm should be excluded
+        filtered_for_wc = per_modality_predictor._filter_input_for_modality(
+            input_tokens, Modality.WORLDCOVER.name
+        )
+
+        # Worldcover should be present with DECODER mask
+        assert filtered_for_wc.worldcover is not None
+        assert filtered_for_wc.worldcover_mask is not None
+        assert (filtered_for_wc.worldcover_mask == MaskValue.DECODER.value).all()
+        # SRTM should be excluded entirely
+        assert filtered_for_wc.srtm is None
+        assert filtered_for_wc.srtm_mask is None
+        # Sentinel2 (non-decode) should be unchanged
+        assert torch.equal(filtered_for_wc.sentinel2_l2a, s2_tokens)
+        assert torch.equal(filtered_for_wc.sentinel2_l2a_mask, s2_mask)
+
+        # Filter for srtm - worldcover should be excluded
+        filtered_for_srtm = per_modality_predictor._filter_input_for_modality(
+            input_tokens, Modality.SRTM.name
+        )
+
+        # SRTM should be present with DECODER mask
+        assert filtered_for_srtm.srtm is not None
+        assert filtered_for_srtm.srtm_mask is not None
+        assert (filtered_for_srtm.srtm_mask == MaskValue.DECODER.value).all()
+        # Worldcover should be excluded entirely
+        assert filtered_for_srtm.worldcover is None
+        assert filtered_for_srtm.worldcover_mask is None
 
 
 class TestPerModalityPredictorConfig:

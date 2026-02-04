@@ -2263,10 +2263,15 @@ class PerModalityPredictor(nn.Module):
         self.encoder_embedding_size = encoder_embedding_size
 
         # Create one predictor per decode-only modality
+        # Each predictor supports ALL modalities so it can use encoder tokens as context,
+        # but only outputs predictions for its specific decode modality.
         self.predictors = nn.ModuleDict()
         for modality_name in decode_modality_names:
             predictor = Predictor(
-                supported_modalities=get_modality_specs_from_names([modality_name]),
+                # Support all modalities so encoder tokens can be used as context
+                supported_modalities=get_modality_specs_from_names(
+                    supported_modality_names
+                ),
                 encoder_embedding_size=encoder_embedding_size,
                 decoder_embedding_size=decoder_embedding_size,
                 depth=depth,
@@ -2283,17 +2288,39 @@ class PerModalityPredictor(nn.Module):
             )
             self.predictors[modality_name] = predictor
 
-    def _extract_single_modality(
-        self, x: TokensAndMasks, modality_name: str
+    def _filter_input_for_modality(
+        self, x: TokensAndMasks, target_modality: str
     ) -> TokensAndMasks:
-        """Extract a single modality from TokensAndMasks for processing."""
-        modality_data = getattr(x, modality_name)
-        mask_name = TokensAndMasks.get_masked_modality_name(modality_name)
-        modality_mask = getattr(x, mask_name)
+        """Create filtered input where only target_modality is included for decoding.
 
-        # Build kwargs for TokensAndMasks with only this modality
-        kwargs = {modality_name: modality_data, mask_name: modality_mask}
-        return TokensAndMasks(**kwargs)
+        Non-target decode modalities are excluded entirely from the output,
+        so the predictor only decodes the target modality.
+
+        Args:
+            x: Original TokensAndMasks with all modalities.
+            target_modality: The modality this predictor should decode.
+
+        Returns:
+            Filtered TokensAndMasks with non-target decode modalities excluded.
+        """
+        filtered_dict: dict[str, Tensor | None] = {}
+
+        for modality_name in x.modalities:
+            # Skip non-target decode modalities entirely
+            if (
+                modality_name in self.decode_modality_names
+                and modality_name != target_modality
+            ):
+                continue
+
+            modality_data = getattr(x, modality_name)
+            mask_name = TokensAndMasks.get_masked_modality_name(modality_name)
+            modality_mask = getattr(x, mask_name)
+
+            filtered_dict[modality_name] = modality_data
+            filtered_dict[mask_name] = modality_mask
+
+        return TokensAndMasks(**filtered_dict)
 
     def forward(
         self,
@@ -2304,11 +2331,14 @@ class PerModalityPredictor(nn.Module):
     ) -> TokensAndMasks:
         """Generate predictions using per-modality predictors.
 
+        Each decode-only modality has its own predictor that receives ALL encoder
+        tokens as context (for cross-attention) but only decodes its specific modality.
+
         For decode-only modalities: run through their dedicated predictor.
         For other modalities: pass through unchanged (loss will skip them).
 
         Args:
-            x: TokensAndMasks containing encoded tokens.
+            x: TokensAndMasks containing encoded tokens from all modalities.
             timestamps: Timestamps of the tokens.
             patch_size: Patch size of the tokens.
             input_res: Input resolution of the tokens.
@@ -2319,24 +2349,32 @@ class PerModalityPredictor(nn.Module):
         """
         output_dict: dict[str, Tensor | None] = {}
 
+        # First, pass through encode-only modalities unchanged
         for modality_name in x.modalities:
-            modality_data = getattr(x, modality_name)
-            mask_name = TokensAndMasks.get_masked_modality_name(modality_name)
-            modality_mask = getattr(x, mask_name)
-
-            if modality_name in self.decode_modality_names:
-                # Decode-only modality: run through its dedicated predictor
-                single_modality_input = self._extract_single_modality(x, modality_name)
-                predictor_output = self.predictors[modality_name](
-                    single_modality_input, timestamps, patch_size, input_res
-                )
-                output_dict[modality_name] = getattr(predictor_output, modality_name)
-                output_dict[mask_name] = getattr(predictor_output, mask_name)
-            else:
-                # Encode-only modality: pass through unchanged
-                # The loss will skip these since mask has no DECODER tokens
+            if modality_name not in self.decode_modality_names:
+                modality_data = getattr(x, modality_name)
+                mask_name = TokensAndMasks.get_masked_modality_name(modality_name)
+                modality_mask = getattr(x, mask_name)
                 output_dict[modality_name] = modality_data
                 output_dict[mask_name] = modality_mask
+
+        # For each decode modality, run through its dedicated predictor
+        for modality_name in self.decode_modality_names:
+            if modality_name not in x.modalities:
+                continue  # Skip if modality not present in input
+
+            # Filter input so predictor only sees DECODER tokens for this modality
+            # (other decode modalities' DECODER tokens are masked as MISSING)
+            filtered_input = self._filter_input_for_modality(x, modality_name)
+
+            predictor_output = self.predictors[modality_name](
+                filtered_input, timestamps, patch_size, input_res
+            )
+
+            # Extract this modality's output from the predictor
+            mask_name = TokensAndMasks.get_masked_modality_name(modality_name)
+            output_dict[modality_name] = getattr(predictor_output, modality_name)
+            output_dict[mask_name] = getattr(predictor_output, mask_name)
 
         return TokensAndMasks(**output_dict)
 
