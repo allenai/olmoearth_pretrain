@@ -922,7 +922,7 @@ class CompositeEncodings(nn.Module):
             assert patch_size is not None
             gsd_ratio = self.calculate_gsd_ratio(input_res, patch_size)
             spatial_embed = get_2d_sincos_pos_encoding_with_resolution(
-                grid_size=h,
+                grid_size=(h, w),
                 res=torch.ones(b, device=device) * gsd_ratio,
                 encoding_dim=self.embedding_dim_per_embedding_type,
                 device=device,
