@@ -99,7 +99,7 @@ def _to_device(
     masked: MaskedOlmoEarthSample, device: torch.device
 ) -> MaskedOlmoEarthSample:
     """Move a MaskedOlmoEarthSample to a device with appropriate dtypes."""
-    d = masked.as_dict(return_none=False)
+    d = masked.as_dict()
     for k, v in d.items():
         if k == "timestamps":
             d[k] = v.to(device=device)

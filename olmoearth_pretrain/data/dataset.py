@@ -34,8 +34,230 @@ from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
 from olmoearth_pretrain.datatypes import (
     OlmoEarthSample,
 )
+from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Subsetting Functions
+# =============================================================================
+
+
+def _get_max_t_within_token_budget(
+    sample: OlmoEarthSample, h_w_p: int, max_tokens_per_instance: int
+) -> int:
+    """Find max t possible when subsetting.
+
+    Given a sampled h_w_p (the number of tokens along the h and w dimensions)
+    return the maximum t allowed within the max_tokens budget so that the
+    patchified OlmoEarthSample will have fewer than max_tokens tokens.
+
+    This function assumes we apply (H, W, T=1 patchifying)
+    """
+    from math import floor
+
+    used_tokens = 0
+    time_multiply_tokens = 0
+    for attribute in sample.as_dict().keys():
+        if attribute in ("timestamps", "latlon"):
+            continue
+        modality_spec = Modality.get(attribute)
+        if modality_spec.is_spacetime_varying:
+            time_multiply_tokens += (h_w_p**2) * modality_spec.num_band_sets
+        elif modality_spec.is_space_only_varying:
+            used_tokens += (h_w_p**2) * modality_spec.num_band_sets
+        elif modality_spec.is_time_only_varying:
+            time_multiply_tokens += modality_spec.num_band_sets
+        elif modality_spec.is_static_in_space_and_time:
+            used_tokens += modality_spec.num_band_sets
+    if time_multiply_tokens == 0:
+        return 1
+    remaining_tokens = max_tokens_per_instance - used_tokens
+    max_t_within_budget = remaining_tokens / time_multiply_tokens
+    if max_t_within_budget < 1:
+        raise ValueError(
+            f"patch_size too small for this sample and budget, h_w_p: {h_w_p}, max_tokens: {max_tokens_per_instance}"
+        )
+
+    return min(floor(max_t_within_budget), sample.time)
+
+
+def get_valid_start_ts(
+    missing_timesteps: dict[str, Any], max_t: int, current_length: int
+) -> list[int]:
+    """Get valid starting timesteps."""
+    if current_length > max_t:
+        if not missing_timesteps:
+            valid_start_ts = list(range(current_length - max_t + 1))
+        else:
+            start_ts = set()
+            for modality in missing_timesteps:
+                valid_timesteps = np.flatnonzero(missing_timesteps[modality])
+                valid_timesteps = valid_timesteps[
+                    valid_timesteps + max_t <= current_length
+                ]
+                start_ts.update(valid_timesteps)
+            valid_start_ts = list(start_ts)
+    else:
+        valid_start_ts = [0]
+    if len(valid_start_ts) == 0:
+        logger.warning(
+            f"No valid start timesteps found for {missing_timesteps} with max_t {max_t} and current_length {current_length}"
+        )
+        raise ValueError(
+            f"No valid start timesteps found for {missing_timesteps} with max_t {max_t} and current_length {current_length}"
+        )
+    return sorted(valid_start_ts)
+
+
+def subset_sample_default(
+    sample: OlmoEarthSample,
+    patch_size: int,
+    max_tokens_per_instance: int | None,
+    sampled_hw_p: int,
+    current_length: int,
+    missing_timesteps_masks: dict[str, Any] | None = None,
+) -> OlmoEarthSample:
+    """Subset a OlmoEarthSample using default rectangular cropping.
+
+    Args:
+        sample: The sample to subset.
+        patch_size: The patch size being applied to this sample.
+        max_tokens_per_instance: The token budget when subsetting. This is used
+            to determine the maximum number of timesteps possible for a given
+            height and width. If None, this operation is a no-op.
+        sampled_hw_p: The number of tokens in the height and width dimensions.
+        current_length: The current maximum sequence length of the sample.
+        missing_timesteps_masks: A dictionary of missing timesteps masks.
+
+    Returns:
+        A subsetted OlmoEarthSample with rectangular cropping applied.
+    """
+    if max_tokens_per_instance is None:
+        return sample
+    if missing_timesteps_masks is None:
+        missing_timesteps_masks = {}
+
+    max_t = _get_max_t_within_token_budget(
+        sample, sampled_hw_p, max_tokens_per_instance
+    )
+    valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
+    start_t = np.random.choice(valid_start_ts)
+    new_data_dict: dict[str, ArrayTensor] = {}
+
+    sampled_hw = sampled_hw_p * patch_size
+    start_h = np.random.choice(sample.height - sampled_hw + 1)
+    start_w = np.random.choice(sample.width - sampled_hw + 1)
+
+    for attribute, modality in sample.as_dict().items():
+        assert modality is not None
+        if attribute == "timestamps":
+            new_data_dict[attribute] = modality[start_t : start_t + max_t]
+            continue
+        if attribute == "latlon":
+            new_data_dict[attribute] = modality
+            continue
+        modality_spec = Modality.get(attribute)
+        if modality_spec.is_spacetime_varying:
+            new_data_dict[attribute] = modality[
+                start_h * modality_spec.image_tile_size_factor : (start_h + sampled_hw)
+                * modality_spec.image_tile_size_factor,
+                start_w * modality_spec.image_tile_size_factor : (start_w + sampled_hw)
+                * modality_spec.image_tile_size_factor,
+                start_t : start_t + max_t,
+            ]
+        elif modality_spec.is_space_only_varying:
+            new_data_dict[attribute] = modality[
+                start_h * modality_spec.image_tile_size_factor : (start_h + sampled_hw)
+                * modality_spec.image_tile_size_factor,
+                start_w * modality_spec.image_tile_size_factor : (start_w + sampled_hw)
+                * modality_spec.image_tile_size_factor,
+            ]
+        elif modality_spec.is_time_only_varying:
+            new_data_dict[attribute] = modality[start_t : start_t + max_t]
+        elif modality_spec.is_static_in_space_and_time:
+            new_data_dict[attribute] = modality
+
+    return OlmoEarthSample(**new_data_dict)
+
+
+def subset_sample_cutmix(
+    sample: OlmoEarthSample,
+    patch_size: int,
+    max_tokens_per_instance: int | None,
+    sampled_hw_p: int,
+    current_length: int,
+    missing_timesteps_masks: dict[str, Any] | None = None,
+) -> OlmoEarthSample:
+    """Subset a OlmoEarthSample using CutMix patch sampling.
+
+    Args:
+        sample: The sample to subset.
+        patch_size: The patch size being applied to this sample.
+        max_tokens_per_instance: The token budget when subsetting. This is used
+            to determine the maximum number of timesteps possible for a given
+            height and width. If None, this operation is a no-op.
+        sampled_hw_p: The number of tokens in the height and width dimensions.
+        current_length: The current maximum sequence length of the sample.
+        missing_timesteps_masks: A dictionary of missing timesteps masks.
+
+    Returns:
+        A subsetted OlmoEarthSample with CutMix patch sampling applied.
+    """
+    if max_tokens_per_instance is None:
+        return sample
+    if missing_timesteps_masks is None:
+        missing_timesteps_masks = {}
+
+    max_t = _get_max_t_within_token_budget(
+        sample, sampled_hw_p, max_tokens_per_instance
+    )
+    valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
+    start_t = np.random.choice(valid_start_ts)
+    new_data_dict: dict[str, ArrayTensor] = {}
+
+    height_p, width_p = sample.height // patch_size, sample.width // patch_size
+    h_p_indices = np.random.choice(height_p, size=sampled_hw_p, replace=False)
+    w_p_indices = np.random.choice(width_p, size=sampled_hw_p, replace=False)
+    h_indices = [
+        i
+        for h_p in h_p_indices
+        for i in range(h_p * patch_size, (h_p + 1) * patch_size)
+    ]
+    w_indices = [
+        i
+        for w_p in w_p_indices
+        for i in range(w_p * patch_size, (w_p + 1) * patch_size)
+    ]
+    hh, ww = np.meshgrid(h_indices, w_indices, indexing="ij")
+
+    for attribute, modality in sample.as_dict().items():
+        assert modality is not None
+        if attribute == "timestamps":
+            new_data_dict[attribute] = modality[start_t : start_t + max_t]
+            continue
+        if attribute == "latlon":
+            new_data_dict[attribute] = modality
+            continue
+        modality_spec = Modality.get(attribute)
+        if modality_spec.is_spacetime_varying:
+            new_data_dict[attribute] = modality[
+                hh * modality_spec.image_tile_size_factor,
+                ww * modality_spec.image_tile_size_factor,
+                start_t : start_t + max_t,
+            ]
+        elif modality_spec.is_space_only_varying:
+            new_data_dict[attribute] = modality[
+                hh * modality_spec.image_tile_size_factor,
+                ww * modality_spec.image_tile_size_factor,
+            ]
+        elif modality_spec.is_time_only_varying:
+            new_data_dict[attribute] = modality[start_t : start_t + max_t]
+        elif modality_spec.is_static_in_space_and_time:
+            new_data_dict[attribute] = modality
+
+    return OlmoEarthSample(**new_data_dict)
 
 
 class GetItemArgs(NamedTuple):
@@ -527,7 +749,8 @@ class OlmoEarthDataset(Dataset):
         )
 
         if self.apply_cutmix:
-            subset_sample = sample.subset_cutmix(
+            subset_sample = subset_sample_cutmix(
+                sample,
                 patch_size=args.patch_size,
                 max_tokens_per_instance=args.token_budget,
                 sampled_hw_p=args.sampled_hw_p,
@@ -535,7 +758,8 @@ class OlmoEarthDataset(Dataset):
                 missing_timesteps_masks=missing_timesteps_masks,
             )
         else:
-            subset_sample = sample.subset_default(
+            subset_sample = subset_sample_default(
+                sample,
                 patch_size=args.patch_size,
                 max_tokens_per_instance=args.token_budget,
                 sampled_hw_p=args.sampled_hw_p,
@@ -543,7 +767,7 @@ class OlmoEarthDataset(Dataset):
                 missing_timesteps_masks=missing_timesteps_masks,
             )
 
-        sample_dict = subset_sample.as_dict(ignore_nones=True)
+        sample_dict = subset_sample.as_dict()
 
         if self.normalize:
             for modality_name in sample_dict.keys():

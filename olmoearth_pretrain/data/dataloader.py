@@ -36,6 +36,7 @@ from olmoearth_pretrain.data.dataset import (
     GetItemArgs,
     OlmoEarthDataset,
     OlmoEarthSample,
+    subset_sample_default,
 )
 from olmoearth_pretrain.data.transform import Transform, TransformConfig
 from olmoearth_pretrain.train.masking import MaskingConfig, MaskingStrategy
@@ -439,8 +440,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
 
         # Generate mock samples
         mock_samples = [
-            self._get_mock_sample(rng).subset_default(
-                patch_size,
+            subset_sample_default(
+                self._get_mock_sample(rng),
+                patch_size=patch_size,
                 max_tokens_per_instance=1500,
                 sampled_hw_p=6,
                 current_length=12,

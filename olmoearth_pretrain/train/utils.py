@@ -2,6 +2,7 @@
 
 import logging
 import os
+from dataclasses import fields
 
 import psutil
 
@@ -25,7 +26,7 @@ def split_masked_batch(
     Returns:
         list[MaskedOlmoEarthSample]: List of MaskedOlmoEarthSample objects.
     """
-    batch_size = batch.timestamps.shape[0]
+    batch_size = batch.batch_size
 
     if batch_size <= microbatch_size:
         return [batch]
@@ -37,7 +38,7 @@ def split_masked_batch(
     split_sizes.append(batch_size - microbatch_size * (num_microbatches - 1))
 
     splits: dict[str, tuple] = {}
-    for field in batch._fields:
+    for field in (f.name for f in fields(MaskedOlmoEarthSample)):
         data = getattr(batch, field)
         if data is not None:
             splits[field] = data.split(split_sizes, dim=0)

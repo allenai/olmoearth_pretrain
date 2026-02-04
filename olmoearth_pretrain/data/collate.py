@@ -29,7 +29,8 @@ def collate_olmoearth_pretrain(
         return stacked_tensor
 
     patch_size, batch_zero = batch[0]
-    sample_fields = batch_zero.modalities
+    # Get all fields including timestamps
+    sample_fields = batch_zero.modalities_with_timestamps
 
     # Create a dictionary of stacked tensors for each field
     collated_dict = {field: stack_or_none(field) for field in sample_fields}
