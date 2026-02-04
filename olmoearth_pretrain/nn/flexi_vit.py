@@ -29,6 +29,12 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
+from olmoearth_pretrain.nn.token_merging import (
+    ToMeConfig,
+    ToMeMergeInfo,
+    bipartite_soft_matching,
+    unmerge_tokens,
+)
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
@@ -1538,6 +1544,7 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        tome_config: ToMeConfig | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -1588,6 +1595,11 @@ class Encoder(FlexiVitBase):
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
 
+        # ToMe: Initialize tracking for token merging
+        tome_enabled = tome_config is not None and tome_config.enabled
+        tome_merge_stack: list[ToMeMergeInfo] = []
+        tome_protected = self.num_register_tokens if self.has_register_tokens else 0
+
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
@@ -1613,6 +1625,40 @@ class Encoder(FlexiVitBase):
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
             )
+
+            # ToMe: Merge tokens after specified layers
+            if tome_enabled and i_blk in tome_config.merge_layers:
+                # Skip ToMe when using flash attention (requires special cu_seqlens handling)
+                if not self.use_flash_attn:
+                    current_token_count = tokens.shape[1] - tome_protected
+                    r = tome_config.get_r(current_token_count, i_blk)
+
+                    tokens, merge_info = bipartite_soft_matching(
+                        tokens,
+                        r=r,
+                        protected=tome_protected,
+                    )
+                    if merge_info is not None:
+                        tome_merge_stack.append(merge_info)
+
+                        # Update attention mask if present
+                        if attn_mask is not None:
+                            # Keep protected tokens, reduce rest to match new token count
+                            if tome_protected > 0:
+                                protected_mask = attn_mask[:, :tome_protected]
+                                rest_mask = attn_mask[:, tome_protected:]
+                            else:
+                                protected_mask = None
+                                rest_mask = attn_mask
+                            # Truncate mask to new token count
+                            new_rest_len = tokens.shape[1] - tome_protected
+                            rest_mask = rest_mask[:, :new_rest_len]
+                            if protected_mask is not None:
+                                attn_mask = torch.cat(
+                                    [protected_mask, rest_mask], dim=1
+                                )
+                            else:
+                                attn_mask = rest_mask
 
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
@@ -1641,6 +1687,14 @@ class Encoder(FlexiVitBase):
         # we apply the norm before we add the removed tokens,
         # so that the norm is only computed against "real" tokens
         tokens = self.norm(tokens)
+
+        # ToMe: Unmerge tokens before restoring to per-modality structure
+        if tome_enabled and len(tome_merge_stack) > 0:
+            # Unmerge in reverse order to restore original token count
+            # protected=0 here because register tokens were already popped
+            for merge_info in reversed(tome_merge_stack):
+                tokens = unmerge_tokens(tokens, merge_info, protected=0)
+
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
         tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
@@ -1659,6 +1713,7 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        tome_config: ToMeConfig | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -1668,6 +1723,7 @@ class Encoder(FlexiVitBase):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            tome_config: Configuration for Token Merging (ToMe)
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -1686,6 +1742,7 @@ class Encoder(FlexiVitBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                tome_config=tome_config,
             )
         else:
             token_norm_stats = {}

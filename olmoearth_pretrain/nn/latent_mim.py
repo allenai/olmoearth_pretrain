@@ -17,6 +17,7 @@ from torch.distributed.fsdp import (
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.token_merging import ToMeConfig
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,10 @@ class LatentMIM(nn.Module, DistributedMixins):
             p.requires_grad = False
 
     def forward(
-        self, x: MaskedOlmoEarthSample, patch_size: int
+        self,
+        x: MaskedOlmoEarthSample,
+        patch_size: int,
+        tome_config: ToMeConfig | None = None,
     ) -> tuple[
         TokensAndMasks,
         TokensAndMasks,
@@ -59,6 +63,11 @@ class LatentMIM(nn.Module, DistributedMixins):
     ]:
         """Forward pass for the Latent MIM Style.
 
+        Args:
+            x: Masked input sample
+            patch_size: Size of patches
+            tome_config: Configuration for Token Merging (ToMe)
+
         Returns:
             latent: embeddings from encoder
             decoded: predictions from decoder for masked tokens
@@ -66,7 +75,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        output_dict = self.encoder(x, patch_size=patch_size)
+        output_dict = self.encoder(x, patch_size=patch_size, tome_config=tome_config)
         token_norm_stats = output_dict.pop("token_norm_stats", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict

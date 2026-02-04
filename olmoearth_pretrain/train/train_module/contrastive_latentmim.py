@@ -17,6 +17,7 @@ from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
+from olmoearth_pretrain.nn.token_merging import ToMeConfig
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import (
@@ -56,6 +57,7 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
     reinit_targets: bool = False
+    tome_config: ToMeConfig | None = None
 
     def build(
         self,
@@ -106,6 +108,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
+        tome_config: ToMeConfig | None = None,
     ):
         """Initialize the training module.
 
@@ -133,6 +136,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
+            tome_config: Configuration for Token Merging (ToMe) to speed up encoder.
         """
         super().__init__(
             model=model,
@@ -152,6 +156,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg = token_exit_cfg
+        self.tome_config = tome_config
         self.base_loss = loss_config.build()
         self.masking_strategy = masking_config.build()
         tokenization_config = getattr(self.model.encoder, "tokenization_config", None)
@@ -308,7 +313,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 latent_projected_and_pooled,
                 reconstructed,
                 extra_metrics,
-            ) = self.model(batch, patch_size)
+            ) = self.model(batch, patch_size, tome_config=self.tome_config)
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
@@ -317,6 +322,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
+                    tome_config=self.tome_config,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
             loss = self.loss_fn(decoded, target_output)
