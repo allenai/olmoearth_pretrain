@@ -1,6 +1,6 @@
 [project]
 name = "olmoearth-pretrain"
-version = "0.0.2"
+version = "0.1.0"
 description = "A library for developing earth system foundation models"
 authors = [
     { name = "OlmoEarth Team" },
