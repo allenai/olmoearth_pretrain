@@ -72,6 +72,32 @@ def build_common_components(
     return config
 
 
+def get_masking_config(common: CommonComponents) -> MaskingConfig:
+    """Get the masking configuration for the experiment.
+
+    Args:
+        common: Common experiment components containing optional tokenization_config.
+    """
+    return MaskingConfig(
+        strategy_config={
+            "type": "modality_cross_random",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "allow_encoding_decoding_same_bandset": True,
+            "only_decode_modalities": [
+                Modality.WORLDCOVER.name,
+                Modality.SRTM.name,
+                Modality.OPENSTREETMAP_RASTER.name,
+                Modality.WRI_CANOPY_HEIGHT_MAP.name,
+                Modality.CDL.name,
+                Modality.WORLDCEREAL.name,
+                Modality.EUROCROPS.name,
+            ],
+        },
+        tokenization_config=common.tokenization_config,
+    )
+
+
 def build_train_module_config(
     common: CommonComponents,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
@@ -79,23 +105,7 @@ def build_train_module_config(
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
         rank_microbatch_size=32,
-        masking_config=MaskingConfig(
-            strategy_config={
-                "type": "modality_cross_random",
-                "encode_ratio": 0.5,
-                "decode_ratio": 0.5,
-                "allow_encoding_decoding_same_bandset": True,
-                "only_decode_modalities": [
-                    Modality.WORLDCOVER.name,
-                    Modality.SRTM.name,
-                    Modality.OPENSTREETMAP_RASTER.name,
-                    Modality.WRI_CANOPY_HEIGHT_MAP.name,
-                    Modality.CDL.name,
-                    Modality.WORLDCEREAL.name,
-                    Modality.EUROCROPS.name,
-                ],
-            }
-        ),
+        masking_config=get_masking_config(common),
         loss_config=LossConfig(
             loss_config={
                 "type": "modality_patch_discrimination_new",
@@ -134,6 +144,8 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
+        num_masked_views=2,
+        masking_config=get_masking_config(common),
     )
 
 
