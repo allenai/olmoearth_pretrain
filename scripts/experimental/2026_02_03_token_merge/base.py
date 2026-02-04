@@ -135,8 +135,6 @@ def build_train_module_config(
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
     """Build the dataloader config for an experiment."""
-    # things should be set during building
-
     return OlmoEarthDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
@@ -147,6 +145,23 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
+        num_masked_views=2,  # ContrastiveLatentMIM needs 2 views
+        masking_config=MaskingConfig(
+            strategy_config={
+                "type": "modality_cross_random",
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
+                "allow_encoding_decoding_same_bandset": True,
+                "only_decode_modalities": [
+                    Modality.WORLDCOVER.name,
+                    Modality.SRTM.name,
+                    Modality.OPENSTREETMAP_RASTER.name,
+                    Modality.WRI_CANOPY_HEIGHT_MAP.name,
+                    Modality.CDL.name,
+                    Modality.WORLDCEREAL.name,
+                ],
+            }
+        ),
     )
 
 
