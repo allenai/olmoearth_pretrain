@@ -147,8 +147,7 @@ test_config:
 
 Need to figure out how we are splitting for train val and test without specifying tag
 
-
-    - bandstat calculation actually works
+ç
     - dataset copying
 
 

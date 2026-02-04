@@ -46,7 +46,7 @@ from rslearn.train.tasks.classification import (
 from rslearn.train.tasks.segmentation import SegmentationTask as RsSegmentationTask
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.evals.task_types import TaskType
+from olmoearth_pretrain.evals.task_types import SplitName, SplitType, TaskType
 
 DEFAULT_TARGET_PROPERTY = "category"
 
@@ -296,11 +296,17 @@ class EvalDatasetEntry:
     name: str
 
     # Paths (source of truth for runtime loading)
-    source_path: str = ""
+    source_path: str = ""  # Original source path (e.g., GCS)
+    weka_path: str = ""  # Copied dataset path on Weka
     model_config_path: str = ""  # Path to model.yaml
 
-    custom_groups: list[str] = field(default_factory=list)
-    custom_tags: dict[str, list[str]] = field(default_factory=dict)  # Filter windows by tags
+    # Split configuration
+    train_split: str = "train"
+    val_split: str = "val"
+    test_split: str = "test"
+    split_type: str = "tags"  # "groups" or "tags"
+    split_tag_key: str = "eval_split"  # Tag key used for split filtering
+    split_stats: dict[str, dict[str, Any]] = field(default_factory=dict)  # Per-split sample counts
 
     # Task configuration (needed for EvalDatasetConfig)
     task_type: str = "classification"  # "classification", "regression", "segmentation"
@@ -336,9 +342,23 @@ class EvalDatasetEntry:
                 f"Must be one of: {valid_task_types}"
             )
 
+        # Normalize split_type
+        if isinstance(self.split_type, SplitType):
+            self.split_type = self.split_type.value
+
+        # Normalize split names
+        if isinstance(self.train_split, SplitName):
+            self.train_split = self.train_split.value
+        if isinstance(self.val_split, SplitName):
+            self.val_split = self.val_split.value
+        if isinstance(self.test_split, SplitName):
+            self.test_split = self.test_split.value
+
         # Normalize modalities: convert ModalitySpec to lowercase name strings
-        #TODO: Can simplify this
-        self.modalities = [m.name if isinstance(m, ModalitySpec) else m.lower() if isinstance(m, str) else m for m in self.modalities]
+        self.modalities = [
+            m.name if isinstance(m, ModalitySpec) else m.lower() if isinstance(m, str) else m
+            for m in self.modalities
+        ]
 
         # Set num_classes from classes if not provided
         if self.classes is not None and self.num_classes is None:
@@ -349,9 +369,8 @@ class EvalDatasetEntry:
         return {
             "name": self.name,
             "source_path": self.source_path,
+            "weka_path": self.weka_path,
             "model_config_path": self.model_config_path,
-            "custom_groups": self.custom_groups,
-            "custom_tags": self.custom_tags,
             "task_type": self.task_type,
             "num_classes": self.num_classes,
             "is_multilabel": self.is_multilabel,
@@ -360,9 +379,15 @@ class EvalDatasetEntry:
             "imputes": [list(t) for t in self.imputes],
             "window_size": self.window_size,
             "timeseries": self.timeseries,
+            "num_timesteps": self.num_timesteps,
+            "train_split": self.train_split,
+            "val_split": self.val_split,
+            "test_split": self.test_split,
+            "split_type": self.split_type,
+            "split_tag_key": self.split_tag_key,
+            "split_stats": self.split_stats,
             "norm_stats": self.norm_stats,
             "use_pretrain_norm": self.use_pretrain_norm,
-            "num_timesteps": self.num_timesteps,
         }
 
     @classmethod
@@ -377,10 +402,9 @@ class EvalDatasetEntry:
         return cls(
             name=data["name"],
             source_path=data.get("source_path", ""),
+            weka_path=data.get("weka_path", ""),
             model_config_path=data.get("model_config_path", ""),
-            custom_groups=data.get("custom_groups", []),
-            custom_tags=data.get("custom_tags", {}),
-            task_type=data.get("task_type", "classification"),
+            task_type=data.get("task_type", TaskType.CLASSIFICATION),
             num_classes=data.get("num_classes"),
             is_multilabel=is_multilabel,
             classes=data.get("classes"),
@@ -388,9 +412,15 @@ class EvalDatasetEntry:
             imputes=imputes,
             window_size=data.get("window_size", 64),
             timeseries=data.get("timeseries", False),
+            num_timesteps=data.get("num_timesteps", 1),
+            train_split=data.get("train_split", SplitName.TRAIN),
+            val_split=data.get("val_split", SplitName.VAL),
+            test_split=data.get("test_split", SplitName.TEST),
+            split_type=data.get("split_type", SplitType.GROUPS),
+            split_tag_key=data.get("split_tag_key", "split"),
+            split_stats=data.get("split_stats", {}),
             norm_stats=data.get("norm_stats", {}),
             use_pretrain_norm=data.get("use_pretrain_norm", True),
-            num_timesteps=data.get("num_timesteps", 1),
         )
 
     def to_json(self, indent: int | None = 2) -> str:

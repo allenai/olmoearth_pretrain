@@ -46,6 +46,31 @@ import json
 import logging
 import sys
 
+# =============================================================================
+# Configure logging BEFORE importing other modules
+# This ensures all loggers (including rslearn) have a handler
+# =============================================================================
+def _setup_logging() -> None:
+    """Configure logging for CLI usage."""
+    # Create handler that writes to stderr
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%H:%M:%S"
+    ))
+
+    # Configure root logger
+    root = logging.getLogger()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+    # Explicitly enable our loggers and rslearn
+    logging.getLogger("olmoearth_pretrain").setLevel(logging.INFO)
+    logging.getLogger("rslearn").setLevel(logging.INFO)
+
+_setup_logging()
+
+# Now import the rest (their loggers will inherit from root)
 from olmoearth_pretrain.evals.studio_ingest.ingest import IngestConfig, ingest_dataset
 from olmoearth_pretrain.evals.studio_ingest.registry import Registry
 
@@ -88,17 +113,20 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     """
     logger.info(f"Ingesting dataset: {args.name}")
 
-    # Parse tags from CLI format
-    tags = parse_tags(args.tags)
+    # Parse source tags from CLI format
+    source_tags = parse_tags(args.source_tags)
 
     # Build config from args
     config = IngestConfig(
         name=args.name,
         source_path=args.source,
         olmoearth_run_config_path=args.olmoearth_run_config_path,
+        source_groups=args.source_groups,
+        source_tags=source_tags,
+        val_test_split_ratio=args.val_test_split_ratio,
+        train_val_split_ratio=args.train_val_split_ratio,
+        split_seed=args.split_seed,
         num_samples=args.num_samples,
-        groups=args.groups,
-        tags=tags,
     )
 
     entry = ingest_dataset(config)
@@ -134,25 +162,49 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
         help="Path to olmoearth run config (e.g., 'path/to/olmoearth_run.yaml')",
     )
 
-    # Optional sampling arguments
+    # Source filtering arguments
+    parser.add_argument(
+        "--source-groups",
+        nargs="+",
+        default=None,
+        help="Source dataset groups to pull from (e.g., 'train val')",
+    )
+    parser.add_argument(
+        "--source-tags",
+        nargs="+",
+        default=None,
+        help="Filter source windows by tags. Format: key=val1,val2",
+    )
+
+    # Split configuration arguments
+    parser.add_argument(
+        "--val-test-split-ratio",
+        type=float,
+        default=0.5,
+        help="Ratio of val to keep when splitting val into val+test (default: 0.5)",
+    )
+    parser.add_argument(
+        "--train-val-split-ratio",
+        type=float,
+        default=0.8,
+        help="Ratio of train to keep when splitting train into train+val (default: 0.8)",
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=42,
+        help="Random seed for split generation (default: 42)",
+    )
+
+    # Normalization arguments
     parser.add_argument(
         "--num-samples",
         type=int,
         default=None,
-        help="Number of samples to process for stats computation (default: all)",
+        help="Number of samples for stats computation (default: all)",
     )
-    parser.add_argument(
-        "--groups",
-        nargs="+",
-        default=None,
-        help="Dataset groups to filter by (e.g., 'train_group')",
-    )
-    parser.add_argument(
-        "--tags",
-        nargs="+",
-        default=None,
-        help="Filter windows by tags. Format: key=val1,val2 (e.g., 'split=val quality=high,medium')",
-    )
+
+    # Registry arguments
     parser.add_argument(
         "--register",
         action="store_true",

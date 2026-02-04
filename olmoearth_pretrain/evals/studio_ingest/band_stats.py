@@ -296,5 +296,5 @@ def compute_band_stats_from_model_config(
                 raise ValueError(f"Stats for {modality} {band} are None {stats}")
 
     # print the keys of the stats
-    print(band_stats.keys())
+
     return band_stats
