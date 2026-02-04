@@ -69,6 +69,7 @@ class OlmoEarthSample(NamedTuple):
     wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
     # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
+    eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:

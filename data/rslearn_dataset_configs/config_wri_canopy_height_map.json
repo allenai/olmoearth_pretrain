@@ -13,11 +13,13 @@
         }
       ],
       "data_source": {
-        "name": "rslearn.data_sources.local_files.LocalFiles",
+        "class_path": "rslearn.data_sources.local_files.LocalFiles",
+        "init_args": {
+          "src_dir": "source_data/meta_chm/"
+        },
         "query_config": {
           "max_matches": 16
-        },
-        "src_dir": "source_data/meta_chm/"
+        }
       },
       "type": "raster"
     }
