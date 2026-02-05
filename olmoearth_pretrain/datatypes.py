@@ -81,13 +81,18 @@ class ModalityMethodsMixin:
     @property
     def modalities_with_timestamps(self) -> list[str]:
         """Get all modalities including timestamps if present (excludes masks)."""
-        if TIMESTAMPS_FIELD not in fields(self):
-            raise ValueError("Class does not have a timestamps field")
-        return [
-            f.name
-            for f in fields(self)  # type: ignore[arg-type]
-            if not f.name.endswith("_mask") and getattr(self, f.name) is not None
-        ]
+        has_timestamps = False
+        result = []
+        for f in fields(self):  # type: ignore[arg-type]
+            if f.name == TIMESTAMPS_FIELD:
+                has_timestamps = True
+            if not f.name.endswith("_mask") and getattr(self, f.name) is not None:
+                result.append(f.name)
+        if not has_timestamps:
+            raise ValueError(
+                f"{type(self).__name__} does not have a timestamps field"
+            )
+        return result
 
     @property
     def batch_size(self) -> int:
