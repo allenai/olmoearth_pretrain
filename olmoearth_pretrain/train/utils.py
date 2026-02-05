@@ -68,7 +68,18 @@ def compute_histogram(
     valid_mask = flat_values != MISSING_VALUE
     if mask is not None:
         flat_mask = mask.reshape(batch_size, -1)
-        valid_mask = valid_mask & (flat_mask != MaskValue.MISSING.value)
+        # Mask shape may differ from values shape (mask is per-bandset, values per-channel)
+        # Only use mask if shapes are compatible, otherwise rely on MISSING_VALUE check
+        if flat_mask.shape == flat_values.shape:
+            valid_mask = valid_mask & (flat_mask != MaskValue.MISSING.value)
+        elif flat_mask.shape[1] < flat_values.shape[1]:
+            # Mask has fewer elements (bandsets < channels)
+            # Expand mask to match values by repeating along the channel dimension
+            # This assumes channels are grouped into bandsets
+            repeat_factor = flat_values.shape[1] // flat_mask.shape[1]
+            if flat_mask.shape[1] * repeat_factor == flat_values.shape[1]:
+                expanded_mask = flat_mask.repeat_interleave(repeat_factor, dim=1)
+                valid_mask = valid_mask & (expanded_mask != MaskValue.MISSING.value)
 
     # Initialize output histogram
     histograms = torch.zeros(batch_size, num_bins, device=device, dtype=torch.float32)
