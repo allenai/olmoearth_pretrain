@@ -1215,6 +1215,7 @@ class Encoder(FlexiVitBase):
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        histogram_config: dict[str, int] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1241,6 +1242,9 @@ class Encoder(FlexiVitBase):
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
             tokenization_config: Optional config for custom band groupings
+            histogram_config: Optional dict mapping modality names to number of histogram bins.
+                If provided, adds linear heads to predict histograms for each specified modality
+                from the pooled encoder representation.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1279,6 +1283,19 @@ class Encoder(FlexiVitBase):
             aggregate_then_project=aggregate_then_project,
         )
         self.norm = nn.LayerNorm(self.embedding_size)
+
+        # Initialize histogram prediction heads if configured
+        self.histogram_config = histogram_config
+        if histogram_config:
+            self.histogram_heads = nn.ModuleDict(
+                {
+                    modality: nn.Linear(embedding_size, num_bins)
+                    for modality, num_bins in histogram_config.items()
+                }
+            )
+        else:
+            self.histogram_heads = None
+
         self.apply(self._init_weights)
 
         if frozen_patch_embeddings:
@@ -1697,7 +1714,15 @@ class Encoder(FlexiVitBase):
             output_dict["token_norm_stats"] = token_norm_stats
 
         if not fast_pass:
-            output_dict["project_aggregated"] = self.project_and_aggregate(output)
+            pooled = self.project_and_aggregate(output)
+            output_dict["project_aggregated"] = pooled
+
+            # Compute histogram predictions if heads are configured
+            if self.histogram_heads is not None:
+                output_dict["histogram_predictions"] = {
+                    modality: self.histogram_heads[modality](pooled)
+                    for modality in self.histogram_heads
+                }
         return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
@@ -2135,6 +2160,7 @@ class EncoderConfig(Config):
     qk_norm: bool = False
     log_token_norm_stats: bool = False
     tokenization_config: TokenizationConfig | None = None
+    histogram_config: dict[str, int] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""

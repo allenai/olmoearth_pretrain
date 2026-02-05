@@ -331,6 +331,48 @@ class TestEncoder:
         config = EncoderConfig(supported_modality_names)
         _ = config.build()
 
+    def test_encoder_with_histogram_heads(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Test encoder with histogram prediction heads."""
+        histogram_config = {
+            "worldcover": 11,
+            "sentinel2_l2a": 5,
+        }
+        encoder = Encoder(
+            embedding_size=8,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=4.0,
+            depth=2,
+            drop_path=0.1,
+            supported_modalities=supported_modalities,
+            max_sequence_length=12,
+            histogram_config=histogram_config,
+        )
+
+        # Verify histogram heads are created
+        assert encoder.histogram_heads is not None
+        assert "worldcover" in encoder.histogram_heads
+        assert "sentinel2_l2a" in encoder.histogram_heads
+        assert encoder.histogram_heads["worldcover"].out_features == 11
+        assert encoder.histogram_heads["sentinel2_l2a"].out_features == 5
+
+    def test_encoder_config_with_histogram(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Test EncoderConfig with histogram_config."""
+        supported_modality_names = [m.name for m in supported_modalities]
+        histogram_config = {"worldcover": 11}
+        config = EncoderConfig(
+            supported_modality_names=supported_modality_names,
+            histogram_config=histogram_config,
+        )
+        encoder = config.build()
+        assert encoder.histogram_heads is not None
+        assert "worldcover" in encoder.histogram_heads
+
 
 class TestPredictor:
     """Unit tests for the Predictor class."""

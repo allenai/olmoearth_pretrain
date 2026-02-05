@@ -27,7 +27,11 @@ from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
 )
-from olmoearth_pretrain.train.utils import split_masked_batch
+from olmoearth_pretrain.train.utils import (
+    HistogramConfig,
+    compute_histograms_for_batch,
+    split_masked_batch,
+)
 
 logger = getLogger(__name__)
 
@@ -56,6 +60,8 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
     reinit_targets: bool = False
+    histogram_loss_config: LossConfig | None = None
+    histogram_modalities: dict[str, dict] | None = None
 
     def build(
         self,
@@ -106,6 +112,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
+        histogram_loss_config: LossConfig | None = None,
+        histogram_modalities: dict[str, dict] | None = None,
     ):
         """Initialize the training module.
 
@@ -133,6 +141,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
+            histogram_loss_config: Optional loss config for histogram reconstruction.
+            histogram_modalities: Dict mapping modality names to histogram config dicts.
+                Each dict should have keys: num_bins, categorical (bool), min_val, max_val.
         """
         super().__init__(
             model=model,
@@ -170,6 +181,22 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
+
+        # Histogram reconstruction loss
+        self.histogram_loss = (
+            histogram_loss_config.build() if histogram_loss_config is not None else None
+        )
+        if self.histogram_loss is not None:
+            self.total_loss_name = f"{self.total_loss_name}+{self.histogram_loss.name}"
+
+        # Convert histogram modalities dict to HistogramConfig objects
+        self.histogram_configs: dict[str, HistogramConfig] | None = None
+        if histogram_modalities is not None:
+            self.histogram_configs = {
+                modality: HistogramConfig(**config)
+                for modality, config in histogram_modalities.items()
+            }
+
         if reinit_targets:
             if ema_decay != (0.0, 0.0):
                 logger.warning(
@@ -209,6 +236,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.tensor(0.0, device=self.device)
+        total_batch_hist = torch.tensor(0.0, device=self.device)
 
         # Unpack batch
         patch_size = batch[0]
@@ -230,13 +258,21 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 masked_batch_b = microbatch_b.to_device(self.device)
 
                 # Run Encoder and decoder on the augmented input
-                loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
+                loss_a, latent_a, decoded_a, target_output_a, pooled_a, hist_loss_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
                 )
-                loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
+                loss_b, latent_b, decoded_b, target_output_b, pooled_b, hist_loss_b = (
                     self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 )
                 loss = (loss_a + loss_b) / 2
+
+                # Add histogram loss if configured
+                if hist_loss_a is not None and hist_loss_b is not None:
+                    hist_loss = (hist_loss_a + hist_loss_b) / 2
+                    loss = loss + hist_loss
+                    total_batch_hist += (
+                        get_local_tensor(hist_loss.detach()) / num_microbatches
+                    )
 
                 # Scale loss by number of microbatches
                 reg_term_a = self.compute_regularization(pooled_a)
@@ -287,6 +323,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 total_batch_con,
                 ReduceType.mean,
             )
+        if self.histogram_loss is not None:
+            self.trainer.record_metric(
+                f"train/{self.histogram_loss.name}",
+                total_batch_hist,
+                ReduceType.mean,
+            )
         self.log_regularization(total_batch_reg)
 
         del batch  # In case this helps with memory utilization.
@@ -298,9 +340,23 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         patch_size: int,
         token_exit_cfg: dict[str, int],
     ) -> tuple[
-        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        torch.Tensor,
+        torch.Tensor | None,
     ]:
-        """Run a forward pass."""
+        """Run a forward pass.
+
+        Returns:
+            loss: The computed loss
+            latent: Encoder latent representations
+            decoded: Decoder predictions
+            target_output: Target encoder output
+            latent_projected_and_pooled: Pooled encoder representations
+            histogram_loss: Histogram reconstruction loss (or None if not configured)
+        """
         with self._model_forward_context():
             (
                 latent,
@@ -309,8 +365,13 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 reconstructed,
                 extra_metrics,
             ) = self.model(batch, patch_size)
+
+            # Extract histogram predictions before logging
+            histogram_predictions = None
             if extra_metrics is not None:
+                histogram_predictions = extra_metrics.pop("histogram_predictions", None)
                 self.log_extra_metrics(extra_metrics)
+
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(
@@ -319,7 +380,31 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                     token_exit_cfg=token_exit_cfg,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
+
             loss = self.loss_fn(decoded, target_output)
             if self.mae_loss is not None and reconstructed is not None:
                 loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output, latent_projected_and_pooled
+
+            # Compute histogram reconstruction loss
+            histogram_loss = None
+            if (
+                self.histogram_loss is not None
+                and self.histogram_configs is not None
+                and histogram_predictions is not None
+            ):
+                # Compute histogram targets from batch
+                histogram_targets = compute_histograms_for_batch(
+                    batch, self.histogram_configs
+                )
+                histogram_loss = self.histogram_loss.compute(
+                    histogram_predictions, histogram_targets
+                )
+
+            return (
+                loss,
+                latent,
+                decoded,
+                target_output,
+                latent_projected_and_pooled,
+                histogram_loss,
+            )

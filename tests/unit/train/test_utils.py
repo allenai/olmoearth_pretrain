@@ -3,9 +3,14 @@
 import pytest
 import torch
 
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.train.masking import MaskValue
-from olmoearth_pretrain.train.utils import split_masked_batch
+from olmoearth_pretrain.data.constants import MISSING_VALUE
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.train.utils import (
+    HistogramConfig,
+    compute_histogram,
+    compute_histograms_for_batch,
+    split_masked_batch,
+)
 
 
 @pytest.mark.parametrize("microbatch_size", [1, 2, 5, 10, 15])
@@ -75,3 +80,139 @@ def test_split_masked_batch_no_split_needed() -> None:
     micro_batches = split_masked_batch(batch, microbatch_size=10)
     assert len(micro_batches) == 1
     assert micro_batches[0] is batch  # Should return same object
+
+
+class TestComputeHistogram:
+    """Tests for the compute_histogram function."""
+
+    def test_basic_categorical_histogram(self) -> None:
+        """Test basic categorical histogram computation."""
+        # Create a batch with known class distribution
+        # Sample 0: all class 0, Sample 1: all class 1
+        B, H, W = 2, 4, 4
+        values = torch.zeros(B, H, W, 1, 1)
+        values[0] = 0  # All class 0
+        values[1] = 1  # All class 1
+
+        hist = compute_histogram(values, num_bins=3, categorical=True)
+
+        assert hist.shape == (2, 3)
+        # Sample 0 should have all mass in bin 0
+        assert hist[0, 0] == 1.0
+        assert hist[0, 1] == 0.0
+        assert hist[0, 2] == 0.0
+        # Sample 1 should have all mass in bin 1
+        assert hist[1, 0] == 0.0
+        assert hist[1, 1] == 1.0
+        assert hist[1, 2] == 0.0
+
+    def test_histogram_with_missing_values(self) -> None:
+        """Test histogram computation excludes missing values."""
+        B, H, W = 1, 4, 4
+        values = torch.zeros(B, H, W, 1, 1)
+        # Set half the values to class 0, half to MISSING_VALUE
+        values[0, :2, :, :, :] = 0
+        values[0, 2:, :, :, :] = MISSING_VALUE
+
+        hist = compute_histogram(values, num_bins=3, categorical=True)
+
+        # Should only count non-missing values
+        assert hist.shape == (1, 3)
+        assert hist[0, 0] == 1.0  # All valid values are class 0
+        assert hist[0, 1] == 0.0
+        assert hist[0, 2] == 0.0
+
+    def test_histogram_with_mask(self) -> None:
+        """Test histogram computation respects mask tensor."""
+        B, H, W = 1, 4, 4
+        values = torch.zeros(B, H, W, 1, 1)
+        values[0, :2, :, :, :] = 0
+        values[0, 2:, :, :, :] = 1
+
+        # Mask out the class 1 values
+        mask = torch.ones(B, H, W, 1, 1) * MaskValue.ONLINE_ENCODER.value
+        mask[0, 2:, :, :, :] = MaskValue.MISSING.value
+
+        hist = compute_histogram(values, num_bins=3, mask=mask, categorical=True)
+
+        # Should only count unmasked values (class 0)
+        assert hist[0, 0] == 1.0
+        assert hist[0, 1] == 0.0
+
+    def test_histogram_all_missing_returns_uniform(self) -> None:
+        """Test that all-missing samples return uniform distribution."""
+        B, H, W = 1, 4, 4
+        values = torch.full((B, H, W, 1, 1), MISSING_VALUE)
+
+        hist = compute_histogram(values, num_bins=4, categorical=True)
+
+        # Should return uniform distribution
+        expected = torch.tensor([[0.25, 0.25, 0.25, 0.25]])
+        assert torch.allclose(hist, expected)
+
+    def test_histogram_mixed_classes(self) -> None:
+        """Test histogram with mixed class distribution."""
+        # Shape [1, 2, 2, 1, 1] = 4 pixels: 2x class 0, 1x class 1, 1x class 2
+        values = torch.tensor([[[[[0]], [[1]]], [[[2]], [[0]]]]]).float()
+
+        hist = compute_histogram(values, num_bins=3, categorical=True)
+
+        assert hist.shape == (1, 3)
+        assert torch.allclose(hist[0], torch.tensor([0.5, 0.25, 0.25]))
+
+    def test_histogram_normalization(self) -> None:
+        """Test that histograms sum to 1."""
+        B, H, W = 3, 8, 8
+        values = torch.randint(0, 10, (B, H, W, 1, 1)).float()
+
+        hist = compute_histogram(values, num_bins=10, categorical=True)
+
+        # Each histogram should sum to 1
+        assert torch.allclose(hist.sum(dim=1), torch.ones(B))
+
+
+class TestComputeHistogramsForBatch:
+    """Tests for compute_histograms_for_batch function."""
+
+    def test_compute_histograms_for_batch(self) -> None:
+        """Test computing histograms for multiple modalities in a batch."""
+        B, H, W, T = 2, 4, 4, 1
+        timestamps = torch.ones(B, T, 3).long()
+        worldcover = torch.randint(0, 11, (B, H, W, T, 1)).float()
+        worldcover_mask = torch.ones(B, H, W, T, 1).long() * MaskValue.DECODER.value
+
+        batch = MaskedOlmoEarthSample(
+            timestamps=timestamps,
+            worldcover=worldcover,
+            worldcover_mask=worldcover_mask,
+        )
+
+        histogram_configs = {
+            "worldcover": HistogramConfig(num_bins=11, categorical=True),
+        }
+
+        histograms = compute_histograms_for_batch(batch, histogram_configs)
+
+        assert "worldcover" in histograms
+        assert histograms["worldcover"].shape == (B, 11)
+        # Each histogram should sum to 1
+        assert torch.allclose(histograms["worldcover"].sum(dim=1), torch.ones(B))
+
+    def test_compute_histograms_missing_modality(self) -> None:
+        """Test that missing modalities are skipped."""
+        B, T = 2, 1
+        timestamps = torch.ones(B, T, 3).long()
+
+        batch = MaskedOlmoEarthSample(
+            timestamps=timestamps,
+            # No worldcover data
+        )
+
+        histogram_configs = {
+            "worldcover": HistogramConfig(num_bins=11, categorical=True),
+        }
+
+        histograms = compute_histograms_for_batch(batch, histogram_configs)
+
+        # worldcover should not be in output since it's not in batch
+        assert "worldcover" not in histograms

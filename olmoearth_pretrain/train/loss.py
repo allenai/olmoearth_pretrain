@@ -854,6 +854,92 @@ class KoLeoLoss(Loss):
         return self.weight * -torch.log(distances_to_nn + self.eps).mean()
 
 
+@LOSS_REGISTRY.register("histogram_reconstruction")
+class HistogramReconstructionLoss(Loss):
+    """Loss function for histogram reconstruction.
+
+    Predicts aggregated value distributions (histograms) for modalities
+    from the encoder's pooled representation.
+    """
+
+    name = "HistogramRecon"
+
+    def __init__(
+        self,
+        loss_type: str = "cross_entropy",
+        weight: float = 1.0,
+    ):
+        """Initialize the histogram reconstruction loss.
+
+        Args:
+            loss_type: Type of loss to use. Options:
+                - "cross_entropy": Treat as classification per sample
+                - "mse": Mean squared error between distributions
+                - "kl_divergence": KL divergence between distributions
+            weight: Weight for this loss term.
+        """
+        if loss_type not in ("cross_entropy", "mse", "kl_divergence"):
+            raise ValueError(
+                f"loss_type must be one of 'cross_entropy', 'mse', 'kl_divergence', "
+                f"got {loss_type}"
+            )
+        self.loss_type = loss_type
+        self.weight = weight
+
+    def compute(
+        self,
+        predictions: dict[str, Tensor],
+        targets: dict[str, Tensor],
+        **kwargs: Any,
+    ) -> Tensor:
+        """Compute histogram reconstruction loss.
+
+        Args:
+            predictions: Dict mapping modality names to predicted histograms [B, H].
+            targets: Dict mapping modality names to target histograms [B, H].
+            **kwargs: Additional keyword arguments (unused).
+
+        Returns:
+            The computed loss value.
+        """
+        total_loss = torch.tensor(0.0, device=next(iter(predictions.values())).device)
+        num_modalities = 0
+
+        for modality in predictions:
+            if modality not in targets:
+                continue
+
+            pred = predictions[modality]  # [B, H]
+            target = targets[modality]  # [B, H]
+
+            if self.loss_type == "cross_entropy":
+                # Treat target histogram as soft labels
+                # Apply log_softmax to predictions, then compute cross entropy
+                log_pred = F.log_softmax(pred, dim=-1)
+                loss = -(target * log_pred).sum(dim=-1).mean()
+            elif self.loss_type == "mse":
+                # Normalize predictions to sum to 1 for fair comparison
+                pred_normalized = F.softmax(pred, dim=-1)
+                loss = F.mse_loss(pred_normalized, target)
+            elif self.loss_type == "kl_divergence":
+                # KL(target || pred) = sum(target * log(target / pred))
+                # Use log_softmax for numerical stability
+                log_pred = F.log_softmax(pred, dim=-1)
+                # Add small epsilon to target to avoid log(0)
+                target_safe = target.clamp(min=1e-8)
+                loss = F.kl_div(log_pred, target_safe, reduction="batchmean")
+            else:
+                raise ValueError(f"Unknown loss_type: {self.loss_type}")
+
+            total_loss = total_loss + loss
+            num_modalities += 1
+
+        if num_modalities > 0:
+            total_loss = total_loss / num_modalities
+
+        return self.weight * total_loss
+
+
 @dataclass
 class LossConfig(Config):
     """Configuration for loss functions.
