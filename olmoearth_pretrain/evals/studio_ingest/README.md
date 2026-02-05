@@ -122,12 +122,6 @@ incompabilities
 - Variable time lengths means we would potentially want to do use flash attn for inference
 
 
-
-Next steps
-- pass cropping through as a transform
-- create a new test split for tolbi
-- use the new tolbi
-
 Next steps
 - Get the bigger wildfire split to work
     - use the right split
@@ -153,10 +147,13 @@ Need to figure out how we are splitting for train val and test without specifyin
 Lets now make sure we can train on the write splits for test
 
 Then launch for full dataset
-
-- and the tolbi one fully working
+- full wildfire one on the specified set
+- tolbi one fully working
+- ecosystem
+- yemen crop
+- worldcover
+- forest loss driver
 - Try adding back support for nandi and awf
-- mozambique support
 - yemen support
 - Ensuring that we can alll find discover and add these tasks
 

@@ -46,7 +46,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -83,11 +87,9 @@ DEFAULT_WEKA_BASE_PATH = "weka://dfive-default/olmoearth/eval_datasets"
 
 # Environment variable for number of workers
 # Defaults to cpu_count - 1, capped at 32 for thread pools
-import os as _os
-
-_default_workers = (_os.cpu_count() or 1) - 1
-NUM_WORKERS = int(_os.environ.get("OLMOEARTH_INGEST_WORKERS", _default_workers))
-MAX_THREAD_WORKERS = int(_os.environ.get("OLMOEARTH_INGEST_MAX_THREADS", 32))
+_default_workers = (os.cpu_count() or 1) - 1
+NUM_WORKERS = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", _default_workers))
+MAX_THREAD_WORKERS = int(os.environ.get("OLMOEARTH_INGEST_MAX_THREADS", 32))
 
 
 def get_eval_datasets_base_path() -> str:
@@ -142,7 +144,7 @@ class IngestConfig:
 
     # Source filtering
     source_groups: list[str] | None = None
-    source_tags: dict[str, list[str]] | None = None
+    source_tags: dict[str, str] | None = None
 
     # Split configuration
     val_test_split_ratio: float = 0.5
@@ -164,33 +166,149 @@ EVAL_DATASETS_BASE_PATH = "/weka/dfive-default/olmoearth/eval_datasets"
 EVAL_SPLIT_TAG_KEY = "eval_split"
 
 
-def copy_dataset(source_path: str, name: str) -> str:
-    """Copy an rslearn dataset to our Weka location.
-
-    Args:
-        source_path: Path to source rslearn dataset
-        name: Name for the copied dataset
+def _check_weka_exists() -> bool:
+    """Check if Weka filesystem path exists.
 
     Returns:
-        Path to the copied dataset on Weka
+        True if /weka exists.
     """
-    source = UPath(source_path)
-    dest_path = f"{EVAL_DATASETS_BASE_PATH}/{name}"
-    dest = UPath(dest_path)
+    return Path("/weka").exists()
 
-    logger.info(f"=== Dataset Copy ===")
-    logger.info(f"  Source: {source_path}")
-    logger.info(f"  Destination: {dest_path}")
 
-    if dest.exists():
-        logger.warning(f"  Destination already exists, skipping copy...")
-        return dest_path
-        # logger.info(f"  Destination already exists, removing...")
-        # shutil.rmtree(str(dest))
+def _copy_from_gcs(
+    source_path: str,
+    dest_path: str,
+    source_groups: list[str] | None = None,
+) -> str:
+    """Copy dataset from GCS using gsutil with parallel transfers.
 
-    logger.info(f"  Copying dataset...")
+    Uses gsutil -m for multi-threaded/multi-processing transfers.
+    Streams output directly to console for progress visibility.
+
+    Args:
+        source_path: GCS path (gs://bucket/path)
+        dest_path: Local destination path
+        source_groups: If specified, only copy these groups (subdirs under windows/)
+
+    Returns:
+        Destination path
+    """
+    logger.info(f"  Copy method: gsutil (parallel GCS transfer)")
 
     # Create destination directory
+    Path(dest_path).mkdir(parents=True, exist_ok=True)
+
+    # Always copy config.json first
+    config_src = f"{source_path}/config.json"
+    config_dst = f"{dest_path}/config.json"
+    logger.info(f"  Copying config.json...")
+    subprocess.run(["gsutil", "cp", config_src, config_dst], check=True)
+
+    if source_groups:
+        # Copy only specified groups
+        logger.info(f"  Copying only groups: {source_groups}")
+        for group in source_groups:
+            group_src = f"{source_path}/windows/{group}"
+            group_dst = f"{dest_path}/windows/{group}"
+            logger.info(f"  Running: gsutil -m cp -r {group_src} {group_dst}")
+            subprocess.run(["gsutil", "-m", "cp", "-r", group_src, group_dst], check=True)
+    else:
+        # Copy entire windows directory
+        windows_src = f"{source_path}/windows"
+        windows_dst = f"{dest_path}/windows"
+        logger.info(f"  Running: gsutil -m cp -r {windows_src} {windows_dst}")
+        subprocess.run(["gsutil", "-m", "cp", "-r", windows_src, windows_dst], check=True)
+
+    logger.info(f"  gsutil copy complete")
+    return dest_path
+
+
+def _copy_local(
+    source_path: str,
+    dest_path: str,
+    source_groups: list[str] | None = None,
+) -> str:
+    """Copy dataset locally using parallel find + xargs + cp.
+
+    Uses find to discover files and xargs -P for parallel copying.
+    Much faster than sequential copy for large datasets.
+
+    Args:
+        source_path: Local source path
+        dest_path: Local destination path
+        source_groups: If specified, only copy these groups (subdirs under windows/)
+
+    Returns:
+        Destination path
+
+    Raises:
+        RuntimeError: If destination is on Weka but Weka path doesn't exist.
+    """
+    # Verify Weka path exists if destination is on Weka
+    if dest_path.startswith("/weka") and not _check_weka_exists():
+        raise RuntimeError(
+            "Weka filesystem path /weka does not exist. "
+            "Cannot copy dataset. Ensure Weka is available before running ingestion."
+        )
+
+    # Create destination directory
+    Path(dest_path).mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"  Copy method: find + xargs -P {NUM_WORKERS} (parallel local copy)")
+
+    # Always copy config.json first
+    config_src = Path(source_path) / "config.json"
+    if config_src.exists():
+        shutil.copy2(config_src, Path(dest_path) / "config.json")
+        logger.info(f"  Copied config.json")
+
+    if source_groups:
+        # Copy only specified groups under windows/
+        logger.info(f"  Copying only groups: {source_groups}")
+        for group in source_groups:
+            group_src = f"{source_path}/windows/{group}"
+            group_dst_parent = f"{dest_path}/windows"
+            Path(group_dst_parent).mkdir(parents=True, exist_ok=True)
+
+            # Use rsync for reliable parallel-safe copying
+            # -a = archive mode (preserves permissions, timestamps, etc.)
+            # --info=progress2 = show overall progress
+            cmd = f"rsync -a --info=progress2 {group_src}/ {group_dst_parent}/{group}/"
+            logger.info(f"  Running: {cmd}")
+            result = subprocess.run(cmd, shell=True, check=True)
+            logger.info(f"  Copied group '{group}' (exit code: {result.returncode})")
+    else:
+        # Copy entire windows directory using rsync
+        cmd = f"rsync -a --info=progress2 {source_path}/ {dest_path}/"
+        logger.info(f"  Running: {cmd}")
+        result = subprocess.run(cmd, shell=True, check=True)
+        logger.info(f"  Copy complete (exit code: {result.returncode})")
+
+    return dest_path
+
+
+def _copy_generic(
+    source_path: str,
+    dest_path: str,
+    source_groups: list[str] | None = None,
+) -> str:
+    """Fallback copy using UPath for unknown storage backends.
+
+    Sequential file-by-file copy. Slower but works for any storage.
+
+    Args:
+        source_path: Source path (any UPath-compatible)
+        dest_path: Destination path
+        source_groups: If specified, only copy these groups (subdirs under windows/)
+
+    Returns:
+        Destination path
+    """
+    logger.info(f"  Copy method: UPath (generic, sequential)")
+
+    source = UPath(source_path)
+    dest = UPath(dest_path)
+
     dest.mkdir(parents=True, exist_ok=True)
 
     # Copy config.json
@@ -200,30 +318,87 @@ def copy_dataset(source_path: str, name: str) -> str:
             config_data = f.read()
         with (dest / "config.json").open("w") as f:
             f.write(config_data)
-        logger.info(f"  Copied config.json")
+        logger.info(f"    Copied config.json")
 
-    # Copy windows directory
+    # Copy windows directory (filtered by groups if specified)
     windows_src = source / "windows"
+    windows_dst = dest / "windows"
     if windows_src.exists():
-        _copy_directory(windows_src, dest / "windows")
-        logger.info(f"  Copied windows directory")
+        if source_groups:
+            logger.info(f"    Copying only groups: {source_groups}")
+            for group in source_groups:
+                group_src = windows_src / group
+                group_dst = windows_dst / group
+                if group_src.exists():
+                    _copy_directory_recursive(group_src, group_dst)
+                    logger.info(f"    Copied group '{group}'")
+        else:
+            _copy_directory_recursive(windows_src, windows_dst)
+            logger.info(f"    Copied windows directory")
 
-    logger.info(f"  Dataset copy complete: {dest_path}")
     return dest_path
 
 
-def _copy_directory(src: UPath, dst: UPath) -> None:
-    """Recursively copy a directory."""
+def _copy_directory_recursive(src: UPath, dst: UPath) -> None:
+    """Recursively copy a directory using UPath (fallback method)."""
     dst.mkdir(parents=True, exist_ok=True)
 
     for item in src.iterdir():
         if item.is_dir():
-            _copy_directory(item, dst / item.name)
+            _copy_directory_recursive(item, dst / item.name)
         else:
             with item.open("rb") as f:
                 data = f.read()
             with (dst / item.name).open("wb") as f:
                 f.write(data)
+
+
+def copy_dataset(
+    source_path: str,
+    name: str,
+    source_groups: list[str] | None = None,
+) -> str:
+    """Copy an rslearn dataset to our Weka location.
+
+    Dispatches to the fastest available copy method based on source path:
+    - GCS (gs://) -> gsutil -m cp -r (parallel transfers)
+    - Local/Weka (/weka, /) -> find + xargs -P (parallel local copy)
+    - Other -> UPath generic copy (fallback)
+
+    Args:
+        source_path: Path to source rslearn dataset
+        name: Name for the copied dataset
+        source_groups: If specified, only copy these groups (subdirs under windows/).
+            If None, copies everything.
+
+    Returns:
+        Path to the copied dataset on Weka
+    """
+    dest_path = f"{EVAL_DATASETS_BASE_PATH}/{name}"
+
+    logger.info(f"=== Dataset Copy ===")
+    logger.info(f"  Source: {source_path}")
+    logger.info(f"  Destination: {dest_path}")
+    if source_groups:
+        logger.info(f"  Filtering to groups: {source_groups}")
+    else:
+        logger.info(f"  Copying all groups")
+
+    # Check if destination already exists
+    if Path(dest_path).exists():
+        logger.warning(f"  Destination already exists, skipping copy...")
+        return dest_path
+
+    # Dispatch to appropriate copy method based on source
+    if source_path.startswith("gs://"):
+        _copy_from_gcs(source_path, dest_path, source_groups)
+    elif source_path.startswith("/weka") or source_path.startswith("/"):
+        _copy_local(source_path, dest_path, source_groups)
+    else:
+        _copy_generic(source_path, dest_path, source_groups)
+
+    logger.info(f"  Dataset copy complete: {dest_path}")
+    return dest_path
 
 
 # =============================================================================
@@ -234,12 +409,15 @@ def _copy_directory(src: UPath, dst: UPath) -> None:
 def scan_windows_and_splits(
     dataset_path: str,
     source_groups: list[str] | None = None,
+    source_tags: dict[str, str] | None = None,
 ) -> dict[str, list[tuple[str, str]]]:
     """Scan windows using rslearn's native load_windows and determine splits.
 
     Args:
         dataset_path: Path to rslearn dataset
         source_groups: Filter to these groups only
+        source_tags: Filter windows by tags. Dict of {key: value}.
+            Empty string value means "key exists" (any value).
 
     Returns:
         Dict mapping split name -> list of (group, window_name) tuples
@@ -252,6 +430,26 @@ def scan_windows_and_splits(
     logger.info(f"  Loading windows (groups={source_groups}, workers={NUM_WORKERS})...")
     windows = dataset.load_windows(groups=source_groups, workers=NUM_WORKERS)
     logger.info(f"  Loaded {len(windows)} windows from dataset")
+
+    # Filter by tags if specified
+    if source_tags:
+        filtered_windows = []
+        for window in windows:
+            if not window.options:
+                continue
+            match = True
+            for key, value in source_tags.items():
+                if key not in window.options:
+                    match = False
+                    break
+                # Empty value means "key exists" (any value is ok)
+                if value and window.options[key] != value:
+                    match = False
+                    break
+            if match:
+                filtered_windows.append(window)
+        logger.info(f"  Filtered to {len(filtered_windows)} windows matching tags {source_tags}")
+        windows = filtered_windows
 
     # Use string keys for consistency
     splits: dict[str, list[tuple[str, str]]] = {
@@ -624,7 +822,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
     # Step 1: Copy dataset to Weka
     logger.info(f"[Step 1/6] Copying dataset to Weka...")
-    weka_path = copy_dataset(config.source_path, config.name)
+    weka_path = copy_dataset(config.source_path, config.name, config.source_groups)
     logger.info(f"[Step 1/6] Copy complete")
 
     # Step 2: Scan windows and determine existing splits
@@ -632,6 +830,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     splits = scan_windows_and_splits(
         weka_path,
         source_groups=config.source_groups,
+        source_tags=config.source_tags,
     )
     logger.info(f"[Step 2/6] Scan complete: train={len(splits['train'])}, "
                 f"val={len(splits['val'])}, test={len(splits['test'])}")

@@ -82,23 +82,28 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-def parse_tags(tags_list: list[str] | None) -> dict[str, list[str]] | None:
+def parse_tags(tags_list: list[str] | None) -> dict[str, str] | None:
     """Parse tags from CLI format to dict.
 
     Args:
-        tags_list: List of strings like ["split=val,test", "quality=high"]
+        tags_list: List of strings like ["split=val", "quality=high"] or just ["oep_eval"]
+            - "key=value" filters windows where tag key equals value
+            - "key" (no value) filters windows where tag key exists (any value)
 
     Returns:
-        Dict like {"split": ["val", "test"], "quality": ["high"]} or None
+        Dict like {"split": "val", "quality": "high", "oep_eval": ""} or None
+        Empty string value means "key exists" (rslearn skips value comparison for empty/falsy values)
     """
     if not tags_list:
         return None
     tags_dict = {}
     for tag_str in tags_list:
-        if "=" not in tag_str:
-            raise ValueError(f"Invalid tag format '{tag_str}'. Expected 'key=val1,val2'")
-        key, values = tag_str.split("=", 1)
-        tags_dict[key] = [v.strip() for v in values.split(",")]
+        if "=" in tag_str:
+            key, value = tag_str.split("=", 1)
+            tags_dict[key] = value.strip()
+        else:
+            # Key without value: filter by existence (empty string)
+            tags_dict[tag_str] = ""
     return tags_dict
 
 
@@ -173,7 +178,7 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
         "--source-tags",
         nargs="+",
         default=None,
-        help="Filter source windows by tags. Format: key=val1,val2",
+        help="Filter source windows by tags. Format: 'key=value' or 'key' (exists check)",
     )
 
     # Split configuration arguments
