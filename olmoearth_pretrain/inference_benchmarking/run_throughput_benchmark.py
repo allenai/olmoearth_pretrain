@@ -98,6 +98,41 @@ class OlmoEarth(torch.nn.Module):
         )["tokens_and_masks"]
 
 
+def build_default_model_config(
+    run_params: RunParams, training_modalities: list[str]
+) -> LatentMIMConfig:
+    """Default model config builder based on model_size.
+
+    Args:
+        run_params: The run parameters containing model_size.
+        training_modalities: List of modality names to support.
+
+    Returns:
+        A LatentMIMConfig for building the model.
+    """
+    model_size = MODEL_SIZE_ARGS[run_params.model_size]
+    encoder_config = EncoderConfig(
+        embedding_size=int(model_size["encoder_embedding_size"]),
+        num_heads=int(model_size["encoder_num_heads"]),
+        depth=int(model_size["encoder_depth"]),
+        mlp_ratio=float(model_size["mlp_ratio"]),
+        supported_modality_names=training_modalities,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=int(model_size["encoder_embedding_size"]),
+        decoder_embedding_size=int(model_size["decoder_embedding_size"]),
+        depth=int(model_size["decoder_depth"]),
+        mlp_ratio=float(model_size["mlp_ratio"]),
+        num_heads=int(model_size["decoder_num_heads"]),
+        supported_modality_names=training_modalities,
+        max_sequence_length=12,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
+
+
 @dataclass
 class ThroughputBenchmarkRunnerConfig(Config):
     """Defines the configuration for a throughput benchmarking run."""
@@ -117,8 +152,17 @@ class ThroughputBenchmarkRunnerConfig(Config):
     save_folder: Path | None = None
     cross_product_sweep: bool = False
 
-    def build(self) -> "ThroughputBenchmarkRunner":
-        """Builds a throughput benchmarking runner."""
+    def build(
+        self,
+        model_config: Any | None = None,
+    ) -> "ThroughputBenchmarkRunner":
+        """Builds a throughput benchmarking runner.
+
+        Args:
+            model_config: Optional pre-built model config. If provided, this config
+                will be used for all benchmark runs instead of building one from
+                default parameters.
+        """
         if self.default_run_params is None:
             self.default_run_params = RunParams()
 
@@ -126,11 +170,15 @@ class ThroughputBenchmarkRunnerConfig(Config):
             raise ValueError("Either sweep_dict or sweep_keys must be set")
         if self.sweep_dict is not None and self.sweep_keys is not None:
             raise ValueError("Only one of sweep_dict or sweep_keys can be set")
-        if self.sweep_dict is None and self.sweep_keys is not None:
-            sweep_dict: dict[str, Any] = {}
+
+        # Build sweep_dict from sweep_keys if needed
+        if self.sweep_dict is not None:
+            sweep_dict = self.sweep_dict
+        else:
+            assert self.sweep_keys is not None  # validated above
+            sweep_dict = {}
             for sweep_key in self.sweep_keys:
                 sweep_dict[sweep_key] = constants.SWEEPS[sweep_key]
-            sweep_dict = sweep_dict
 
         return ThroughputBenchmarkRunner(
             default_run_params=self.default_run_params,
@@ -140,6 +188,7 @@ class ThroughputBenchmarkRunnerConfig(Config):
             save_folder=self.save_folder,
             sweep_dict=sweep_dict,
             cross_product_sweep=self.cross_product_sweep,
+            model_config=model_config,
         )
 
 
@@ -164,8 +213,22 @@ class ThroughputBenchmarkRunner:
         save_folder: Path | None = None,
         sweep_dict: dict[str, Any] = {},
         cross_product_sweep: bool = False,
+        model_config: Any | None = None,
     ):
-        """Initializes the throughput benchmarking runner."""
+        """Initializes the throughput benchmarking runner.
+
+        Args:
+            default_run_params: Default parameters for benchmark runs.
+            sweep_group_name: Name for the sweep group (used for logging).
+            training_modalities: List of modality names to use.
+            work_dir: Working directory for benchmark outputs.
+            save_folder: Optional folder to save results.
+            sweep_dict: Dictionary mapping parameter names to values to sweep.
+            cross_product_sweep: If True, sweep all combinations of parameters.
+            model_config: Optional pre-built model config. If provided, this config
+                will be used for all benchmark runs instead of building one from
+                run parameters.
+        """
         self.default_run_params = default_run_params
         self.sweep_group_name = sweep_group_name
         self.training_modalities = training_modalities
@@ -174,35 +237,23 @@ class ThroughputBenchmarkRunner:
         self.save_folder = save_folder
         self.sweep_dict = sweep_dict
         self.cross_product_sweep = cross_product_sweep
+        self.model_config = model_config
         uuid_str = str(uuid.uuid4())[:6]
         self.sweep_name = "_".join(self.sweep_dict.keys()) + "-" + uuid_str
 
     def build_model(self, run_params: RunParams) -> OlmoEarth:
-        """Builds a model based on the run parameters."""
-        model_size = MODEL_SIZE_ARGS[run_params.model_size]
-        training_modalities = self.training_modalities
-        encoder_config = EncoderConfig(
-            embedding_size=int(model_size["encoder_embedding_size"]),
-            num_heads=int(model_size["encoder_num_heads"]),
-            depth=int(model_size["encoder_depth"]),
-            mlp_ratio=float(model_size["mlp_ratio"]),
-            supported_modality_names=training_modalities,
-        )
-        decoder_config = PredictorConfig(
-            encoder_embedding_size=int(model_size["encoder_embedding_size"]),
-            decoder_embedding_size=int(model_size["decoder_embedding_size"]),
-            depth=int(model_size["decoder_depth"]),
-            mlp_ratio=float(model_size["mlp_ratio"]),
-            num_heads=int(model_size["decoder_num_heads"]),
-            supported_modality_names=training_modalities,
-            max_sequence_length=12,
-        )
-        model_config = LatentMIMConfig(
-            encoder_config=encoder_config,
-            decoder_config=decoder_config,
-        )
-        model = OlmoEarth(model_config=model_config)
-        return model
+        """Builds a model based on the run parameters.
+
+        Uses the pre-built model_config if provided, otherwise uses
+        build_default_model_config() to create the model config.
+        """
+        if self.model_config is not None:
+            model_config = self.model_config
+        else:
+            model_config = build_default_model_config(
+                run_params, self.training_modalities
+            )
+        return OlmoEarth(model_config=model_config)
 
     def build_sweep_run_params(self) -> list[RunParams]:
         """Builds a list of run parameters based on the sweep dictionary."""

@@ -15,18 +15,18 @@ from olmo_core.train.common import ReduceType
 from olmoearth_pretrain.data.constants import (
     Modality,
 )
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.data.transform import TransformConfig
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.galileo import Galileo
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskingConfig
+from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
 )
-from olmoearth_pretrain.train.utils import split_batch
+from olmoearth_pretrain.train.utils import split_masked_batch
 
 logger = getLogger(__name__)
 
@@ -210,7 +210,9 @@ class GalileoTrainModule(OlmoEarthTrainModule):
         return self.base_loss_b.compute(pred, targets)
 
     def train_batch(
-        self, batch: tuple[int, OlmoEarthSample], dry_run: bool = False
+        self,
+        batch: tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample],
+        dry_run: bool = False,
     ) -> None:
         """Train a batch.
 
@@ -223,6 +225,10 @@ class GalileoTrainModule(OlmoEarthTrainModule):
         like l1 and l2 weight microbatches with less tokens relatively more.
 
         NOTE: For contrastive losses, the loss is invariant to the global batch size across GPUS as well
+
+        Args:
+            batch: A (patch_size, MaskedOlmoEarthSample_a, MaskedOlmoEarthSample_b) tuple from the dataloader.
+            dry_run: If True, skip metric recording and just run forward/backward.
         """
         if not dry_run:
             self.update_target_encoder()
@@ -235,25 +241,26 @@ class GalileoTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.tensor(0.0, device=self.device)
         total_batch_reg = torch.tensor(0.0, device=self.device)
         total_batch_con = torch.tensor(0.0, device=self.device)
-        # Split into micro-batches.
-        patch_size, batch_data = batch
-        microbatches = split_batch(batch_data, self.rank_microbatch_size)
-        num_microbatches = len(microbatches)
-        for microbatch_idx, microbatch in enumerate(microbatches):
+
+        # Unpack batch
+        patch_size = batch[0]
+        batch_data_a = batch[1]
+        batch_data_b = batch[2]
+        microbatches_a = split_masked_batch(batch_data_a, self.rank_microbatch_size)
+        microbatches_b = split_masked_batch(batch_data_b, self.rank_microbatch_size)
+        num_microbatches = len(microbatches_a)
+
+        for microbatch_idx in range(num_microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
+                microbatch_a = microbatches_a[microbatch_idx]
+                microbatch_b = microbatches_b[microbatch_idx]
                 logger.info(
-                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size}"
+                    f"Training microbatch {microbatch_idx} of {num_microbatches} "
+                    f"with batch size {microbatch_a.timestamps.shape[0]}"
                 )
+                masked_batch_a = microbatch_a.to_device(self.device)
+                masked_batch_b = microbatch_b.to_device(self.device)
 
-                microbatch = self.transform.apply(microbatch).to_device(self.device)
-
-                masked_batch_a = self.masking_strategy_a.apply_mask(
-                    microbatch, patch_size
-                )
-
-                masked_batch_b = self.masking_strategy_b.apply_mask(
-                    microbatch, patch_size
-                )
                 loss_a, latent_a, pooled_a, loss_b, latent_b, pooled_b = (
                     self.model_forward(
                         masked_batch_a,
@@ -310,6 +317,7 @@ class GalileoTrainModule(OlmoEarthTrainModule):
             total_batch_loss,
             ReduceType.mean,
         )
+
         self.trainer.record_metric(
             f"{self.masking_strategy_a.name}_masking_{self.base_loss_a.name}",
             total_mask_a_loss,
@@ -322,6 +330,7 @@ class GalileoTrainModule(OlmoEarthTrainModule):
             ReduceType.mean,
             namespace="train",
         )
+
         self.trainer.record_metric("train/epoch", self.trainer.epoch)
         self.log_regularization(total_batch_reg)
 
@@ -331,7 +340,8 @@ class GalileoTrainModule(OlmoEarthTrainModule):
                 total_batch_con,
                 ReduceType.mean,
             )
-        del batch, microbatch, batch_data
+        del batch
+        del masked_batch_a, masked_batch_b
 
     def model_forward(
         self,

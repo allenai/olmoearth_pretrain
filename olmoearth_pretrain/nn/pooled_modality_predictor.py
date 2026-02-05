@@ -882,8 +882,8 @@ class PooledModalityPredictor(PredictorBase):
             per_modality_output_tokens = []
             modality_data = tokens_and_masks[modality]
 
-            band_sets = Modality.get(modality).band_sets
-            for idx in range(len(band_sets)):
+            num_band_sets = self.tokenization_config.get_num_bandsets(modality)
+            for idx in range(num_band_sets):
                 per_channel_modality_data = modality_data[..., idx, :]
                 output_data = self.to_output_embed(self.norm(per_channel_modality_data))
                 per_modality_output_tokens.append(output_data)

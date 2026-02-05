@@ -26,6 +26,7 @@ build-backend = "setuptools.build_meta"
 include = ["olmoearth_pretrain*", "helios*"]
 
 [tool.setuptools.package-data]
+"olmoearth_pretrain" = ["py.typed"]
 "olmoearth_pretrain.data.norm_configs" = ["*.json"]
 "olmoearth_pretrain.evals.datasets.config" = ["*.json"]
 

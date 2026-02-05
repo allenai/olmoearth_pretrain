@@ -29,6 +29,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
     get_modalities_to_process,
     return_modalities_from_dict,
 )
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ class STBase(nn.Module):
         learnable_channel_embeddings: bool = True,
         random_channel_embeddings: bool = False,
         last_layer_cross_attn: bool = False,
+        tokenization_config: TokenizationConfig | None = None,
     ) -> None:
         """Initialize the STBase class."""
         super().__init__()
@@ -74,6 +76,7 @@ class STBase(nn.Module):
         self.windowed_attention_size = windowed_attention_size
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
+        self._base_tokenization_config = tokenization_config or TokenizationConfig()
 
         self.blocks = nn.ModuleList(
             [
@@ -97,6 +100,7 @@ class STBase(nn.Module):
             max_sequence_length,
             learnable_channel_embeddings,
             random_channel_embeddings,
+            tokenization_config=self._base_tokenization_config,
         )
         self.apply(self._init_weights)
 
@@ -745,6 +749,7 @@ class STEncoder(STBase):
         fuse_layers: int | None = None,
         layer_attention_modes: list[AttentionMode] | None = None,
         fuse_using_cross_attn: bool = True,
+        tokenization_config: TokenizationConfig | None = None,
     ):
         """Initialize the encoder.
 
@@ -770,7 +775,9 @@ class STEncoder(STBase):
             fuse_using_cross_attn: fuse using cross attention. If disabled, we perform self-attention and then
                 arbitrarily pick one unmasked token at each spatial patch to copy to all the other tokens at
                 that patch.
+            tokenization_config: Optional config for custom band groupings
         """
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
             embedding_size=embedding_size,
             depth=depth,
@@ -783,6 +790,7 @@ class STEncoder(STBase):
             windowed_attention_size=windowed_attention_size,
             random_channel_embeddings=random_channel_embeddings,
             last_layer_cross_attn=fuse_layers is not None and fuse_using_cross_attn,
+            tokenization_config=self.tokenization_config,
         )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
@@ -794,6 +802,7 @@ class STEncoder(STBase):
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
+            tokenization_config=self.tokenization_config,
         )
         # TODO: add backwards compatibility without the project and aggregate module
         self.project_and_aggregate = ProjectAndAggregate(
@@ -1160,6 +1169,7 @@ class STPredictor(STBase):
         output_embedding_size: int | None = None,
         windowed_attention_size: int | None = None,
         layer_attention_modes: list[AttentionMode] | None = None,
+        tokenization_config: TokenizationConfig | None = None,
     ):
         """Initialize the predictor.
 
@@ -1178,7 +1188,9 @@ class STPredictor(STBase):
             windowed_attention_size: the size for windowed attention. If set, we do
                 windowed attention instead of spatial/temporal attention.
             layer_attention_modes: directly specify the attention mode to use at each layer.
+            tokenization_config: Optional config for custom band groupings
         """
+        self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
             embedding_size=decoder_embedding_size,
             depth=depth,
@@ -1190,6 +1202,7 @@ class STPredictor(STBase):
             random_channel_embeddings=random_channel_embeddings,
             supported_modalities=supported_modalities,
             windowed_attention_size=windowed_attention_size,
+            tokenization_config=self.tokenization_config,
         )
         # TODO: Rename this weird misname
         self.learnable_channel_embeddings = learnable_channel_embeddings
@@ -1465,8 +1478,8 @@ class STPredictor(STBase):
             per_modality_output_tokens = []
             modality_data = tokens_and_masks[modality]
 
-            band_sets = Modality.get(modality).band_sets
-            for idx in range(len(band_sets)):
+            num_band_sets = self.tokenization_config.get_num_bandsets(modality)
+            for idx in range(num_band_sets):
                 per_channel_modality_data = modality_data[..., idx, :]
                 output_data = self.to_output_embed(self.norm(per_channel_modality_data))
                 per_modality_output_tokens.append(output_data)
@@ -1500,6 +1513,7 @@ class STEncoderConfig(Config):
     random_channel_embeddings: bool = False
     layer_attention_modes: list[str] | None = None
     fuse_using_cross_attn: bool = True
+    tokenization_config: TokenizationConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1509,6 +1523,8 @@ class STEncoderConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+        if self.tokenization_config is not None:
+            self.tokenization_config.validate()
 
         if self.layer_attention_modes is not None:
             if len(self.layer_attention_modes) != self.depth:
@@ -1557,6 +1573,7 @@ class STPredictorConfig(Config):
     output_embedding_size: int | None = None
     windowed_attention_size: int | None = None
     layer_attention_modes: list[str] | None = None
+    tokenization_config: TokenizationConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1566,6 +1583,8 @@ class STPredictorConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+        if self.tokenization_config is not None:
+            self.tokenization_config.validate()
 
         if self.layer_attention_modes is not None:
             if len(self.layer_attention_modes) != self.depth:
