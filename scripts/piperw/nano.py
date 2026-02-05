@@ -1,4 +1,4 @@
-"""Nano model training script with 1000 training sample limit."""
+"""Nano model training script."""
 
 import logging
 
@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
-MAX_TRAINING_SAMPLES = 1000
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -67,13 +66,15 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 
 
 def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
-    """Build the dataset config for an experiment with limited training samples."""
+    """Build the dataset config for an experiment."""
     config = build_dataset_config_default(common)
-    # Override to limit training samples - use command line arg if provided, otherwise use default
-    max_samples = common.max_training_samples if common.max_training_samples is not None else MAX_TRAINING_SAMPLES
-    config.max_training_samples = max_samples
+    # Only limit training samples if explicitly provided via command line
+    if common.max_training_samples is not None:
+        config.max_training_samples = common.max_training_samples
+        logger.info(f"Limiting dataset to {common.max_training_samples} training samples")
+    else:
+        logger.info("Using all available training samples (no limit)")
     config.seed = 3622  # For reproducible random sampling
-    logger.info(f"Limiting dataset to {max_samples} training samples")
     return config
 
 
