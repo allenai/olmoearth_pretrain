@@ -89,9 +89,7 @@ class ModalityMethodsMixin:
             if not f.name.endswith("_mask") and getattr(self, f.name) is not None:
                 result.append(f.name)
         if not has_timestamps:
-            raise ValueError(
-                f"{type(self).__name__} does not have a timestamps field"
-            )
+            raise ValueError(f"{type(self).__name__} does not have a timestamps field")
         return result
 
     @property
@@ -559,17 +557,10 @@ class TokensAndMasks(MaskedModalityMethodsMixin):
     def _flatten(x: Tensor) -> Tensor:
         return rearrange(x, "b ... d -> b (...) d")
 
-    def flatten_tokens_and_masks(
-        self, return_lists: bool = False
-    ) -> tuple[Tensor, Tensor] | tuple[list[Tensor], list[Tensor]]:
-        """Return the flattened tokens and masks.
-
-        Args:
-            return_lists: If True, return the original lists before concatenation.
-                          If False, return concatenated tensors.
-
-        Tokens will have shape [B, T, D] and masks will have shape [B, T]
-        """
+    def _flatten_per_modality(
+        self,
+    ) -> tuple[list[Tensor], list[Tensor]]:
+        """Flatten tokens and masks per modality (not concatenated)."""
         flattened_x, flattened_masks = [], []
         for attr_name in self.modalities:
             mask_attr_name = self.get_masked_modality_name(attr_name)
@@ -583,13 +574,30 @@ class TokensAndMasks(MaskedModalityMethodsMixin):
                 masked_attr = masked_attr.unsqueeze(dim=-1)
                 flattened_x.append(self._flatten(attr))
                 flattened_masks.append(self._flatten(masked_attr))
+        flattened_masks = [mask[:, :, 0] for mask in flattened_masks]
+        return flattened_x, flattened_masks
 
-        if return_lists:
-            flattened_masks = [mask[:, :, 0] for mask in flattened_masks]
-            return flattened_x, flattened_masks
+    def flatten_tokens_and_masks_per_modality(
+        self,
+    ) -> tuple[list[Tensor], list[Tensor]]:
+        """Flatten tokens and masks, returning separate tensors per modality.
 
+        Returns:
+            Tuple of (tokens_list, masks_list) where each element
+            corresponds to one modality.
+        """
+        return self._flatten_per_modality()
+
+    def flatten_all_tokens_and_masks(self) -> tuple[Tensor, Tensor]:
+        """Flatten and concatenate all tokens and masks across modalities.
+
+        Returns:
+            Tuple of (tokens, masks) concatenated across all modalities.
+            Tokens will have shape [B, T, D] and masks will have shape [B, T].
+        """
+        flattened_x, flattened_masks = self._flatten_per_modality()
         x = torch.cat(flattened_x, dim=1)
-        masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
+        masks = torch.cat(flattened_masks, dim=1)
         return x, masks
 
     def pool_spatially_and_concat_modalities(self) -> Tensor:

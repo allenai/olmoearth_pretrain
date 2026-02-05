@@ -99,7 +99,7 @@ def pool_instance_wise(
     Returns:
         Pooled instance features with shape [B, D].
     """
-    x, mask = tokens_and_masks.flatten_tokens_and_masks()
+    x, mask = tokens_and_masks.flatten_all_tokens_and_masks()
     assert isinstance(x, Tensor) and isinstance(mask, Tensor)
     mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
     x_for_pooling = x * mask.unsqueeze(-1)

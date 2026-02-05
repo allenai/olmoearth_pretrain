@@ -672,7 +672,7 @@ class TestTokensAndMasks:
         t_and_m = TokensAndMasks(
             sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
         )
-        x, mask = t_and_m.flatten_tokens_and_masks()
+        x, mask = t_and_m.flatten_all_tokens_and_masks()
 
         assert x.shape == (b, h * w * t, d)
         assert mask.shape == (b, h * w * t)
