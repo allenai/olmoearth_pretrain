@@ -9,12 +9,9 @@ import pytest
 import torch
 from upath import UPath
 
+from olmoearth_pretrain.data.collate import collate_olmoearth_pretrain
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
-from olmoearth_pretrain.data.dataset import (
-    OlmoEarthDataset,
-    OlmoEarthSample,
-    collate_olmoearth_pretrain,
-)
+from olmoearth_pretrain.data.dataset import OlmoEarthDataset, OlmoEarthSample
 
 logger = getLogger(__name__)
 
@@ -168,7 +165,9 @@ class TestOlmoEarthDataset:
         )
 
         # Test filling a missing modality
-        filled_data = dataset._fill_missing_modality(sample, "sentinel1")
+        filled_data = dataset._fill_missing_modality(
+            "sentinel1", sample.height, sample.width, sample.time
+        )
 
         # Check shape matches expected shape
         expected_shape = sample.get_expected_shape("sentinel1")
@@ -318,12 +317,3 @@ def test_helios_dataset_config_deprecation_warning(tmp_path: Path) -> None:
             h5py_dir=str(tmp_path),
             training_modalities=[Modality.SENTINEL2_L2A.name],
         )
-
-
-def test_collate_helios_deprecation_warning(
-    samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
-) -> None:
-    """Ensure the legacy collate_helios emits a deprecation warning."""
-    module = importlib.import_module("helios.data.dataset")
-    with pytest.warns(DeprecationWarning):
-        module.collate_helios(samples_with_missing_modalities)

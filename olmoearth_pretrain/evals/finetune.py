@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import os
 import random
 from logging import getLogger
@@ -20,7 +19,11 @@ from torch.utils.data import DataLoader
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
-from olmoearth_pretrain.evals.metrics import mean_iou
+from olmoearth_pretrain.evals.metrics import (
+    EvalResult,
+    EvalTaskResult,
+    segmentation_metrics,
+)
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
@@ -110,7 +113,7 @@ def _eval_cls(
     loader: DataLoader,
     device: torch.device,
     is_multilabel: bool,
-) -> float:
+) -> EvalResult:
     """Evaluate classification metric (micro F1 for multilabel, accuracy otherwise)."""
     module.eval()
     logits_all, labels_all = [], []
@@ -125,15 +128,15 @@ def _eval_cls(
     labels = torch.cat(labels_all, 0)
     if is_multilabel:
         preds = torch.sigmoid(logits).gt(0.5).int()
-        return f1_score(
-            labels.numpy().astype(int),
-            preds.numpy(),
-            average="micro",
-            zero_division=0,
-        )
+        labels_np = labels.numpy().astype(int)
+        preds_np = preds.numpy()
+        acc = accuracy_score(labels_np, preds_np)  # subset/exact match accuracy
+        f1 = f1_score(labels_np, preds_np, average="micro", zero_division=0)
+        return EvalResult.from_classification(acc, f1=f1)
     else:
         preds = torch.argmax(logits, dim=-1)
-        return accuracy_score(labels.numpy(), preds.numpy())
+        acc = accuracy_score(labels.numpy(), preds.numpy())
+        return EvalResult.from_classification(acc)
 
 
 @torch.no_grad()
@@ -143,8 +146,12 @@ def _eval_seg(
     device: torch.device,
     num_classes: int,
     patch_size: int,
-) -> float:
-    """Evaluate segmentation mIoU."""
+) -> EvalResult:
+    """Evaluate segmentation metrics.
+
+    Returns:
+        EvalResult with metrics: miou, overall_acc, macro_acc, macro_f1
+    """
     module.eval()
     preds_all, labels_all = [], []
     for masked, label in loader:
@@ -173,7 +180,7 @@ def _eval_seg(
         labels_all.append(label.cpu())
     preds = torch.cat(preds_all, 0)
     labels = torch.cat(labels_all, 0)
-    return mean_iou(preds, labels, num_classes=num_classes, ignore_label=-1)
+    return segmentation_metrics(preds, labels, num_classes=num_classes, ignore_label=-1)
 
 
 def count_params(backbone: nn.Module, head: nn.Module) -> tuple[int, int, int, int]:
@@ -216,15 +223,8 @@ def run_finetune_eval(
     test_loader: DataLoader | None,
     seed: int | None = None,
     best_checkpoint_path: str | None = None,
-) -> dict[str, Any]:
-    """Finetune the model on a downstream task and evaluate.
-
-    Returns:
-        Dictionary with keys:
-            - val_score: Validation score
-            - test_score: Test score (0.0 if no test loader)
-            - bootstrap_stats: Empty dict (bootstrap not supported for finetune)
-    """
+) -> EvalTaskResult:
+    """Finetune the model on a downstream task and evaluate."""
     if seed is not None:
         logger.info(f"Setting finetune random seed to {seed}")
         random.seed(seed)
@@ -286,6 +286,7 @@ def run_finetune_eval(
 
     best_state = _snapshot_state_dict(ft)
     best_val_metric = float("-inf")
+    best_val_result: EvalResult | None = None
 
     ft.train()
     wandb_logger = _get_wandb_logger(trainer)
@@ -346,42 +347,45 @@ def run_finetune_eval(
             opt.zero_grad()
 
         if task_config.task_type == TaskType.CLASSIFICATION:
-            val_metric = _eval_cls(ft, val_loader, device, task_config.is_multilabel)
+            val_result = _eval_cls(ft, val_loader, device, task_config.is_multilabel)
         else:
-            val_metric = _eval_seg(
+            val_result = _eval_seg(
                 ft,
                 val_loader,
                 device,
                 task_config.num_classes,
                 patch_size,
             )
+
         if wandb_logger is not None:
             wandb_logger.log(
                 {
                     f"{task_name}_step": (epoch + 1) * num_batches,
-                    f"{task_name}/val_metric": val_metric,
+                    f"{task_name}/val_metric": val_result.primary,
                 }
             )
         logger.info(
-            f"Finetune Epoch [{epoch + 1}/{epochs}] Validation Metric: {val_metric:.4f}"
+            f"Finetune Epoch [{epoch + 1}/{epochs}] Validation Metric: {val_result.primary:.4f}"
         )
-        scheduler.step(val_metric)
+        scheduler.step(val_result.primary)
 
-        if val_metric > best_val_metric:
-            best_val_metric = val_metric
+        if val_result.primary > best_val_metric:
+            best_val_metric = val_result.primary
+            best_val_result = val_result
             best_state = _snapshot_state_dict(ft)
             logger.info(
                 f"New best validation metric {best_val_metric:.4f} at epoch {epoch + 1}"
             )
         ft.train()
 
-    if best_val_metric == float("-inf"):
+    # If no training happened (epochs=0), evaluate once
+    if best_val_result is None:
         if task_config.task_type == TaskType.CLASSIFICATION:
-            best_val_metric = _eval_cls(
+            best_val_result = _eval_cls(
                 ft, val_loader, device, task_config.is_multilabel
             )
         else:
-            best_val_metric = _eval_seg(
+            best_val_result = _eval_seg(
                 ft,
                 val_loader,
                 device,
@@ -397,23 +401,17 @@ def run_finetune_eval(
     else:
         logger.info("No best checkpoint path provided, skipping saving best checkpoint")
 
-    if task_config.task_type == TaskType.CLASSIFICATION:
-        val_score = best_val_metric
-        test_score = (
-            _eval_cls(ft, test_loader, device, task_config.is_multilabel)
-            if test_loader is not None
-            else 0.0
-        )
-    else:
-        val_score = best_val_metric
-        test_score = (
-            _eval_seg(ft, test_loader, device, task_config.num_classes, patch_size)
-            if test_loader is not None
-            else 0.0
-        )
+    # Evaluate test set
+    test_result: EvalResult | None = None
+    if test_loader is not None:
+        if task_config.task_type == TaskType.CLASSIFICATION:
+            test_result = _eval_cls(ft, test_loader, device, task_config.is_multilabel)
+        else:
+            test_result = _eval_seg(
+                ft, test_loader, device, task_config.num_classes, patch_size
+            )
 
-    return {
-        "val_score": val_score,
-        "test_score": test_score,
-        "bootstrap_stats": {},
-    }
+    return EvalTaskResult(
+        val_result=best_val_result,
+        test_result=test_result,
+    )
