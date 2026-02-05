@@ -81,6 +81,8 @@ class ModalityMethodsMixin:
     @property
     def modalities_with_timestamps(self) -> list[str]:
         """Get all modalities including timestamps if present (excludes masks)."""
+        if TIMESTAMPS_FIELD not in fields(self):
+            raise ValueError("Class does not have a timestamps field")
         return [
             f.name
             for f in fields(self)  # type: ignore[arg-type]
