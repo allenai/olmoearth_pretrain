@@ -3,7 +3,6 @@
 import logging
 import math
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any
 
 import torch
@@ -33,6 +32,7 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
@@ -56,13 +56,6 @@ def return_modalities_from_dict(
     return [
         key for key in per_modality_input_tokens.keys() if not key.endswith("_mask")
     ]
-
-
-class PoolingType(StrEnum):
-    """Strategy for pooling the tokens."""
-
-    MAX = "max"
-    MEAN = "mean"
 
 
 # TokensAndMasks is imported from datatypes and re-exported here for backwards compatibility

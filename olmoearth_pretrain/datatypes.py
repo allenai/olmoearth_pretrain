@@ -19,7 +19,7 @@ from olmoearth_pretrain.data.constants import MISSING_VALUE, TIMESTAMPS, Modalit
 from olmoearth_pretrain.types import ArrayTensor
 
 if TYPE_CHECKING:
-    from olmoearth_pretrain.nn.flexi_vit import PoolingType
+    from olmoearth_pretrain.nn.pooling import PoolingType
 
 logger = logging.getLogger(__name__)
 
@@ -600,72 +600,23 @@ class TokensAndMasks(MaskedModalityBase):
 
     def pool_spatially_and_concat_modalities(self) -> Tensor:
         """Pool the modalities across time to get spatial features and concatenate."""
-        spatial_stacked_features = []
-        for attr_name in self.modalities:
-            if Modality.get(attr_name).is_spatial:
-                mask_attr_name = self.get_masked_modality_name(attr_name)
-                masked_attr = getattr(self, mask_attr_name)
-                if masked_attr is None:
-                    continue
-                if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
-                    attr = getattr(self, attr_name)
-                    pooled_attr = torch.mean(attr, dim=(-3))
-                    spatial_stacked_features.append(pooled_attr)
-        if len(spatial_stacked_features) == 0:
-            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
-        spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
-        return spatial_stacked_features
+        from olmoearth_pretrain.nn.pooling import (
+            pool_spatially_and_concat_modalities as _pool,
+        )
+
+        return _pool(self)
 
     def pool_spatially(self, pooling_type: PoolingType) -> Tensor:
         """Pool the modalities across time to get spatial features."""
-        from olmoearth_pretrain.nn.flexi_vit import PoolingType as PT
+        from olmoearth_pretrain.nn.pooling import pool_spatially as _pool
 
-        spatial_average = []
-        for attr_name in self.modalities:
-            if Modality.get(attr_name).is_spatial:
-                mask_attr_name = self.get_masked_modality_name(attr_name)
-                masked_attr = getattr(self, mask_attr_name)
-                if masked_attr is None:
-                    continue
-                if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
-                    attr = getattr(self, attr_name)
-                    if pooling_type == PT.MEAN:
-                        spatial_average.append(torch.mean(attr, dim=(-2, -3)))
-                    else:
-                        spatial_average.append(
-                            torch.max(torch.max(attr, dim=-2).values, dim=-2).values
-                        )
-        if len(spatial_average) == 0:
-            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
-        spatial_average_t = torch.stack(spatial_average, dim=-1)
-        if pooling_type == PT.MEAN:
-            return spatial_average_t.mean(dim=-1)
-        else:
-            return spatial_average_t.max(dim=-1).values
+        return _pool(self, pooling_type)
 
     def pool_instance_wise(self, pooling_type: PoolingType) -> Tensor:
         """Pool all the tokens in the instance."""
-        from olmoearth_pretrain.nn.flexi_vit import PoolingType as PT
+        from olmoearth_pretrain.nn.pooling import pool_instance_wise as _pool
 
-        x, mask = self.flatten_tokens_and_masks()
-        assert isinstance(x, Tensor) and isinstance(mask, Tensor)
-        mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
-        x_for_pooling = x * mask.unsqueeze(-1)
-        if pooling_type == PT.MAX:
-            x_for_pooling = x_for_pooling.masked_fill(
-                ~mask.bool().unsqueeze(-1), -float("inf")
-            )
-            return x_for_pooling.max(dim=1).values
-        elif pooling_type == PT.MEAN:
-            num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
-            logger.debug(f"num_encoded_tokens: {num_encoded_tokens}")
-            if (num_encoded_tokens == 0).any():
-                raise ValueError(
-                    f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
-                )
-            return x_for_pooling.sum(dim=1) / num_encoded_tokens
-        else:
-            raise ValueError(f"Invalid pooling type: {pooling_type}")
+        return _pool(self, pooling_type)
 
     def pool_unmasked_tokens(
         self,
@@ -680,16 +631,6 @@ class TokensAndMasks(MaskedModalityBase):
             spatial_pooling: Whether to keep the spatial dimensions when pooling.
             concat_features: Whether to concatenate the features instead of averaging.
         """
-        from olmoearth_pretrain.nn.flexi_vit import PoolingType as PT
+        from olmoearth_pretrain.nn.pooling import pool_unmasked_tokens as _pool
 
-        if pooling_type is None:
-            pooling_type = PT.MAX
-
-        if concat_features and spatial_pooling:
-            return self.pool_spatially_and_concat_modalities()
-        if concat_features:
-            raise ValueError("concat_features is not supported for non-spatial pooling")
-        if not spatial_pooling:
-            return self.pool_instance_wise(pooling_type)
-        else:
-            return self.pool_spatially(pooling_type)
+        return _pool(self, pooling_type, spatial_pooling, concat_features)

@@ -12,12 +12,12 @@ from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     EncoderConfig,
     FlexiVitBase,
-    PoolingType,
     Predictor,
     PredictorConfig,
     ProjectAndAggregate,
     TokensAndMasks,
 )
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
