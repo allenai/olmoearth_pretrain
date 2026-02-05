@@ -52,13 +52,17 @@ from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
 
 logger = logging.getLogger(__name__)
 
+# WorldCover class values (normalized: original_value / 100)
+# Original classes: 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100
+WORLDCOVER_CLASS_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
+
 # Histogram configuration for each modality
 # Format: {modality_name: num_bins}
 # The encoder will have a linear head for each modality that predicts num_bins values
 HISTOGRAM_CONFIG = {
-    "worldcover": 11,  # ESA WorldCover has 11 classes (10, 20, ..., 100 -> 0-10)
-    "worldcereal": 16,  # 8 bands x 2 (binary classification per band)
-    "openstreetmap_raster": 60,  # 30 bands x 2 (binary presence/absence per band)
+    "worldcover": 11,  # ESA WorldCover has 11 classes
+    "worldcereal": 8,  # 8 bands, binary per band -> predict mean per band
+    "openstreetmap_raster": 30,  # 30 bands, binary per band -> predict mean per band
 }
 
 # Histogram modalities config for train module
@@ -67,20 +71,22 @@ HISTOGRAM_MODALITIES = {
     "worldcover": {
         "num_bins": 11,
         "categorical": True,
-        "min_val": 0.0,
-        "max_val": 10.0,
+        # class_values maps normalized values to bin indices
+        "class_values": WORLDCOVER_CLASS_VALUES,
     },
     "worldcereal": {
-        "num_bins": 16,
-        "categorical": True,
-        "min_val": 0.0,
-        "max_val": 15.0,
+        # 8 bands, each is a one-hot encoded category
+        # Count positive values (>= threshold) per band
+        "num_bins": 8,
+        "one_hot": True,
+        "one_hot_threshold": 0.5,  # Values are normalized, threshold at 0.5
     },
     "openstreetmap_raster": {
-        "num_bins": 60,
-        "categorical": True,
-        "min_val": 0.0,
-        "max_val": 59.0,
+        # 30 bands, each is a one-hot encoded category (presence/absence)
+        # Count positive values (>= threshold) per band
+        "num_bins": 30,
+        "one_hot": True,
+        "one_hot_threshold": 0.5,
     },
 }
 

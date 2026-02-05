@@ -396,6 +396,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 histogram_targets = compute_histograms_for_batch(
                     batch, self.histogram_configs
                 )
+                # temp for debugging
+                print("histogram targets")
+                print(histogram_targets)
                 histogram_loss = self.histogram_loss.compute(
                     histogram_predictions, histogram_targets
                 )

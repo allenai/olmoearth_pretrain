@@ -170,6 +170,74 @@ class TestComputeHistogram:
         # Each histogram should sum to 1
         assert torch.allclose(hist.sum(dim=1), torch.ones(B))
 
+    def test_histogram_with_class_values(self) -> None:
+        """Test histogram with explicit class values (e.g., normalized WorldCover)."""
+        # Simulate normalized WorldCover values: 0.1, 0.2, 0.3, ... 1.0
+        # Create a sample with values close to class 0.1 and 0.3
+        # Shape: [1, 2, 2, 1, 1] -> 4 spatial locations
+        values = torch.tensor([[[[0.1], [0.11]], [[0.29], [0.31]]]]).float()
+
+        class_values = [0.1, 0.2, 0.3, 0.4, 0.5]
+
+        hist = compute_histogram(
+            values, num_bins=5, categorical=True, class_values=class_values
+        )
+
+        # 0.1, 0.11 should map to bin 0 (class 0.1)
+        # 0.29, 0.31 should map to bin 2 (class 0.3)
+        assert hist.shape == (1, 5)
+        assert hist[0, 0] == 0.5  # 2 out of 4 values
+        assert hist[0, 1] == 0.0  # 0 values
+        assert hist[0, 2] == 0.5  # 2 out of 4 values
+        assert hist[0, 3] == 0.0
+        assert hist[0, 4] == 0.0
+
+    def test_histogram_one_hot(self) -> None:
+        """Test histogram with one-hot encoded data."""
+        # Shape [B, H, W, T, C] = [1, 2, 2, 1, 3] -> 4 spatial locations, 3 channels
+        # Channels represent categories, values are binary (0 or 1)
+        values = torch.tensor(
+            [
+                [
+                    [[[1.0, 0.0, 0.0]], [[0.0, 1.0, 0.0]]],
+                    [[[1.0, 0.0, 1.0]], [[0.0, 0.0, 0.0]]],
+                ]
+            ]
+        )  # [1, 2, 2, 1, 3]
+
+        hist = compute_histogram(
+            values, num_bins=3, one_hot=True, one_hot_threshold=0.5
+        )
+
+        # 4 spatial locations total
+        # Channel 0: 2 positives (locations [0,0] and [1,0])
+        # Channel 1: 1 positive (location [0,1])
+        # Channel 2: 1 positive (location [1,0])
+        assert hist.shape == (1, 3)
+        assert torch.allclose(hist[0], torch.tensor([0.5, 0.25, 0.25]))
+
+    def test_histogram_one_hot_with_missing(self) -> None:
+        """Test one-hot histogram excludes missing values."""
+        # Create data with some missing values
+        values = torch.tensor(
+            [
+                [
+                    [[[1.0, 0.0]], [[0.0, 1.0]]],
+                    [[[MISSING_VALUE, MISSING_VALUE]], [[1.0, 1.0]]],
+                ]
+            ]
+        )  # [1, 2, 2, 1, 2]
+
+        hist = compute_histogram(
+            values, num_bins=2, one_hot=True, one_hot_threshold=0.5
+        )
+
+        # 3 valid spatial locations (one is missing)
+        # Channel 0: 2 positives out of 3 valid
+        # Channel 1: 2 positives out of 3 valid
+        assert hist.shape == (1, 2)
+        assert torch.allclose(hist[0], torch.tensor([2 / 3, 2 / 3]))
+
 
 class TestComputeHistogramsForBatch:
     """Tests for compute_histograms_for_batch function."""

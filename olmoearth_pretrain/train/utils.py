@@ -23,12 +23,22 @@ class HistogramConfig:
             If False, discretize continuous values into bins.
         min_val: Minimum value for binning (only used if categorical=False).
         max_val: Maximum value for binning (only used if categorical=False).
+        class_values: Optional list of expected class values (normalized).
+            If provided, values are mapped to bin indices by finding the closest
+            class value. Useful for normalized categorical data like WorldCover.
+        one_hot: If True, treat each channel as a separate category and count
+            positive values (>= threshold) per channel. num_bins should equal
+            the number of channels. Useful for binary/one-hot encoded modalities.
+        one_hot_threshold: Threshold for counting positive values when one_hot=True.
     """
 
     num_bins: int
     categorical: bool = True
     min_val: float = 0.0
     max_val: float = 1.0
+    class_values: list[float] | None = None
+    one_hot: bool = False
+    one_hot_threshold: float = 0.5
 
 
 def compute_histogram(
@@ -38,6 +48,9 @@ def compute_histogram(
     categorical: bool = True,
     min_val: float = 0.0,
     max_val: float = 1.0,
+    class_values: list[float] | None = None,
+    one_hot: bool = False,
+    one_hot_threshold: float = 0.5,
 ) -> torch.Tensor:
     """Compute normalized histogram per sample, excluding missing values.
 
@@ -45,6 +58,7 @@ def compute_histogram(
         values: Input tensor of shape [B, ...] where B is batch size.
             For categorical data, values should be integer class indices.
             For continuous data, values will be discretized into bins.
+            For one-hot data, shape should be [B, H, W, T, C] where C is num_bins.
         num_bins: Number of histogram bins.
         mask: Optional mask tensor of same shape as values.
             Values where mask == MaskValue.MISSING.value are excluded.
@@ -53,6 +67,13 @@ def compute_histogram(
             If False, discretize continuous values into bins.
         min_val: Minimum value for binning (only used if categorical=False).
         max_val: Maximum value for binning (only used if categorical=False).
+        class_values: Optional list of expected class values (can be normalized).
+            If provided, values are mapped to bin indices by finding the closest
+            class value. Useful for normalized categorical data like WorldCover.
+        one_hot: If True, treat each channel as a separate category and count
+            positive values (>= threshold) per channel. num_bins should equal
+            the number of channels.
+        one_hot_threshold: Threshold for counting positive values when one_hot=True.
 
     Returns:
         Normalized histogram tensor of shape [B, num_bins].
@@ -61,6 +82,45 @@ def compute_histogram(
     batch_size = values.shape[0]
     device = values.device
 
+    # Handle one-hot encoded data separately
+    if one_hot:
+        # For one-hot encoded data, count positive values per channel
+        # Values shape: [B, H, W, T, C] or [B, ..., C] where C = num_bins
+        num_channels = values.shape[-1]
+        if num_channels != num_bins:
+            raise ValueError(
+                f"For one_hot=True, num_bins ({num_bins}) must equal "
+                f"number of channels ({num_channels})"
+            )
+
+        # Reshape to [B, N, C] where N is spatial/temporal dims
+        reshaped = values.reshape(batch_size, -1, num_channels)
+
+        # Build validity mask (per spatial location, not per channel)
+        # Check if ANY channel at a location is not missing
+        valid_mask = (reshaped != MISSING_VALUE).any(dim=-1)  # [B, N]
+
+        # Count positive values per channel (value >= threshold)
+        is_positive = reshaped >= one_hot_threshold  # [B, N, C]
+
+        # Apply validity mask and count
+        histograms = torch.zeros(
+            batch_size, num_bins, device=device, dtype=torch.float32
+        )
+        for b in range(batch_size):
+            sample_valid = valid_mask[b]  # [N]
+            if sample_valid.any():
+                # Count positives only at valid locations
+                valid_positives = is_positive[b][sample_valid]  # [valid_N, C]
+                histograms[b] = valid_positives.sum(dim=0).float()
+
+        # Normalize: divide by number of valid spatial locations
+        valid_counts = valid_mask.sum(dim=1, keepdim=True).float().clamp(min=1.0)
+        histograms = histograms / valid_counts
+
+        return histograms
+
+    # Standard histogram computation for non-one-hot data
     # Flatten spatial/temporal dimensions: [B, ...]  -> [B, N]
     flat_values = values.reshape(batch_size, -1)
 
@@ -84,7 +144,17 @@ def compute_histogram(
     # Initialize output histogram
     histograms = torch.zeros(batch_size, num_bins, device=device, dtype=torch.float32)
 
-    if categorical:
+    if class_values is not None:
+        # Map values to bin indices by finding the closest class value
+        # This handles normalized categorical data (e.g., WorldCover)
+        class_tensor = torch.tensor(
+            class_values, device=device, dtype=flat_values.dtype
+        )
+        # Compute distance to each class value: [B, N, num_classes]
+        distances = torch.abs(flat_values.unsqueeze(-1) - class_tensor)
+        # Find closest class for each value
+        bin_indices = distances.argmin(dim=-1)
+    elif categorical:
         # For categorical data, values are class indices
         # Clamp to valid range and convert to long
         bin_indices = flat_values.long().clamp(0, num_bins - 1)
@@ -148,6 +218,9 @@ def compute_histograms_for_batch(
             categorical=config.categorical,
             min_val=config.min_val,
             max_val=config.max_val,
+            class_values=config.class_values,
+            one_hot=config.one_hot,
+            one_hot_threshold=config.one_hot_threshold,
         )
 
     return histograms
