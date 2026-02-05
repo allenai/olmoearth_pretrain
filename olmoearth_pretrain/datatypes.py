@@ -107,11 +107,6 @@ T = TypeVar("T", bound="MaskedOlmoEarthSample")
 TT = TypeVar("TT", bound="TokensAndMasks")
 
 
-# =============================================================================
-# OlmoEarthSample
-# =============================================================================
-
-
 @dataclass
 class OlmoEarthSample(ModalityMethodsMixin):
     """A sample of the data from the OlmoEarth Pretrain dataset.
@@ -367,11 +362,6 @@ class OlmoEarthSample(ModalityMethodsMixin):
         return replace(self, **output_dict)
 
 
-# =============================================================================
-# MaskedOlmoEarthSample
-# =============================================================================
-
-
 @dataclass
 class MaskedOlmoEarthSample(MaskedModalityMethodsMixin):
     """A masked sample of the data from the OlmoEarth Pretrain dataset.
@@ -496,11 +486,6 @@ class MaskedOlmoEarthSample(MaskedModalityMethodsMixin):
             d: Dictionary representation of the MaskedOlmoEarthSample.
         """
         return cls(**d)
-
-
-# =============================================================================
-# TokensAndMasks
-# =============================================================================
 
 
 @dataclass
