@@ -110,6 +110,8 @@ def build_train_module_config(
         max_grad_norm=1.0,
         scheduler=CosWithWarmup(warmup_steps=8000),
         ema_decay=(1.0, 1.0),
+        processing_patch_size=8,  # Process at ps=8 for speed
+        output_patch_size=1,  # Output at ps=1 for fine-grained embeddings
         dp_config=DataParallelConfig(
             name=DataParallelType.fsdp,
             param_dtype=DType.bfloat16,

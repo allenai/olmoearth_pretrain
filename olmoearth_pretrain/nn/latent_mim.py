@@ -49,7 +49,10 @@ class LatentMIM(nn.Module, DistributedMixins):
             p.requires_grad = False
 
     def forward(
-        self, x: MaskedOlmoEarthSample, patch_size: int
+        self,
+        x: MaskedOlmoEarthSample,
+        patch_size: int,
+        output_patch_size: int | None = None,
     ) -> tuple[
         TokensAndMasks,
         TokensAndMasks,
@@ -59,14 +62,26 @@ class LatentMIM(nn.Module, DistributedMixins):
     ]:
         """Forward pass for the Latent MIM Style.
 
+        Args:
+            x: Masked input sample
+            patch_size: Processing patch size (used for encoder processing)
+            output_patch_size: Optional output patch size. If None, uses patch_size.
+                              If different from patch_size, tokens will be upsampled.
+
         Returns:
             latent: embeddings from encoder
             decoded: predictions from decoder for masked tokens
             latent_projected_and_pooled: pooled tokens for contrastive loss
             reconstructed: MAE predictions if enabled
         """
+        # Use output_patch_size if provided, otherwise use patch_size
+        if output_patch_size is None:
+            output_patch_size = patch_size
+
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        output_dict = self.encoder(x, patch_size=patch_size)
+        output_dict = self.encoder(
+            x, patch_size=patch_size, output_patch_size=output_patch_size
+        )
         token_norm_stats = output_dict.pop("token_norm_stats", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
@@ -76,9 +91,9 @@ class LatentMIM(nn.Module, DistributedMixins):
             extra_metrics["token_norm_stats"] = token_norm_stats
         reconstructed = None
         if self.reconstructor:
-            reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
+            reconstructed = self.reconstructor(latent, x.timestamps, output_patch_size)
         decoded = self.decoder(
-            latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
+            latent, timestamps=x.timestamps, patch_size=output_patch_size, **decoder_kwargs
         )
         return (
             latent,

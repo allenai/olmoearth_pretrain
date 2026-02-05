@@ -85,6 +85,8 @@ class ContrastiveLatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     contrastive_config: LossConfig | None = None
     reinit_targets: bool = False
+    processing_patch_size: int | None = None
+    output_patch_size: int | None = None
 
     def build(
         self,
@@ -135,6 +137,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         contrastive_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         reinit_targets: bool = False,
+        processing_patch_size: int | None = None,
+        output_patch_size: int | None = None,
     ):
         """Initialize the training module.
 
@@ -162,6 +166,10 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             contrastive_config: An optional contrastive configration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
             reinit_targets: Whether or not to reinitialize the target encoder.
+            processing_patch_size: Patch size to use for processing (e.g., 8 for fast training).
+                                 If None, uses the patch_size from the batch.
+            output_patch_size: Patch size for output tokens (e.g., 1 for fine-grained embeddings).
+                              If None, uses processing_patch_size or batch patch_size.
         """
         super().__init__(
             model=model,
@@ -199,6 +207,8 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
+        self.processing_patch_size = processing_patch_size
+        self.output_patch_size = output_patch_size
         if reinit_targets:
             if ema_decay != (0.0, 0.0):
                 logger.warning(
@@ -321,6 +331,10 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
     ]:
         """Run a forward pass."""
+        # Determine processing and output patch sizes
+        processing_ps = self.processing_patch_size if self.processing_patch_size is not None else patch_size
+        output_ps = self.output_patch_size if self.output_patch_size is not None else processing_ps
+        
         with self._model_forward_context():
             (
                 latent,
@@ -328,15 +342,17 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 latent_projected_and_pooled,
                 reconstructed,
                 extra_metrics,
-            ) = self.model(batch, patch_size)
+            ) = self.model(batch, patch_size=processing_ps, output_patch_size=output_ps)
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
+                # Target encoder always uses output_patch_size for consistent targets
                 output_dict = self.model.target_encoder.forward(
                     batch.unmask(),
-                    patch_size=patch_size,
+                    patch_size=output_ps,
                     token_exit_cfg=token_exit_cfg,
+                    output_patch_size=output_ps,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
             loss = self.loss_fn(decoded, target_output)

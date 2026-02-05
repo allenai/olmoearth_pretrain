@@ -364,6 +364,154 @@ class ProjectAndAggregate(nn.Module):
         )
 
 
+class PatchUpsampler(nn.Module):
+    """Upsamples tokens from a larger patch size to a smaller one.
+    
+    Converts tokens from [B, H/ps_large, W/ps_large, ...] to [B, H/ps_small, W/ps_small, ...]
+    where ps_small < ps_large. This allows processing at a fast patch size (e.g., 8)
+    but outputting at a fine-grained patch size (e.g., 1).
+    """
+
+    def __init__(
+        self,
+        interpolation: str = "bilinear",
+        antialias: bool = True,
+    ):
+        """Initialize the patch upsampler.
+        
+        Args:
+            interpolation: Interpolation mode for upsampling ('bilinear', 'nearest', etc.)
+            antialias: Whether to apply antialiasing when upsampling
+        """
+        super().__init__()
+        self.interpolation = interpolation
+        self.antialias = antialias
+
+    def _upsample_tensor(
+        self,
+        x: Tensor,
+        from_patch_size: int,
+        to_patch_size: int,
+    ) -> Tensor:
+        """Upsample a single tensor from from_patch_size to to_patch_size.
+        
+        Args:
+            x: Input tensor with shape [B, H/from_ps, W/from_ps, ...] or 
+               [B, H/from_ps, W/from_ps, T, ...]
+            from_patch_size: Current patch size
+            to_patch_size: Target patch size (must be < from_patch_size)
+        
+        Returns:
+            Upsampled tensor with shape [B, H/to_ps, W/to_ps, ...] or 
+            [B, H/to_ps, W/to_ps, T, ...]
+        """
+        if from_patch_size == to_patch_size:
+            return x
+        
+        if to_patch_size > from_patch_size:
+            raise ValueError(
+                f"to_patch_size ({to_patch_size}) must be <= from_patch_size ({from_patch_size})"
+            )
+        
+        upsample_factor = from_patch_size // to_patch_size
+        
+        # Handle different tensor shapes
+        has_time_dim = len(x.shape) == 6  # [B, H, W, T, Band_Sets, D]
+        has_bandset_dim = len(x.shape) >= 5  # Has Band_Sets dimension
+        
+        if has_time_dim:
+            # [B, H, W, T, Band_Sets, D] -> [B*T*Band_Sets, D, H, W]
+            b, h, w, t, b_s, d = x.shape
+            x = rearrange(x, "b h w t b_s d -> (b t b_s) d h w")
+        elif has_bandset_dim and not has_time_dim:
+            # [B, H, W, Band_Sets, D] -> [B*Band_Sets, D, H, W]
+            b, h, w, b_s, d = x.shape
+            x = rearrange(x, "b h w b_s d -> (b b_s) d h w")
+        else:
+            # [B, H, W, D] -> [B, D, H, W]
+            b, h, w, d = x.shape
+            x = rearrange(x, "b h w d -> b d h w")
+        
+        # Upsample spatial dimensions
+        new_h = h * upsample_factor
+        new_w = w * upsample_factor
+        x = torch.nn.functional.interpolate(
+            x,
+            size=(new_h, new_w),
+            mode=self.interpolation,
+            antialias=self.antialias,
+        )
+        
+        # Reshape back
+        if has_time_dim:
+            # [B*T*Band_Sets, D, H', W'] -> [B, H', W', T, Band_Sets, D]
+            x = rearrange(x, "(b t b_s) d h w -> b h w t b_s d", b=b, t=t, b_s=b_s)
+        elif has_bandset_dim and not has_time_dim:
+            # [B*Band_Sets, D, H', W'] -> [B, H', W', Band_Sets, D]
+            x = rearrange(x, "(b b_s) d h w -> b h w b_s d", b=b, b_s=b_s)
+        else:
+            # [B, D, H', W'] -> [B, H', W', D]
+            x = rearrange(x, "b d h w -> b h w d")
+        
+        return x
+
+    def forward(
+        self,
+        tokens_and_masks: TokensAndMasks,
+        from_patch_size: int,
+        to_patch_size: int,
+    ) -> TokensAndMasks:
+        """Upsample tokens and masks from from_patch_size to to_patch_size.
+        
+        Args:
+            tokens_and_masks: TokensAndMasks object with tokens at from_patch_size
+            from_patch_size: Current patch size
+            to_patch_size: Target patch size (must be < from_patch_size)
+        
+        Returns:
+            New TokensAndMasks object with tokens upsampled to to_patch_size
+        """
+        if from_patch_size == to_patch_size:
+            return tokens_and_masks
+        
+        upsampled_dict = {}
+        
+        for modality_name in tokens_and_masks.modalities:
+            modality_tokens = getattr(tokens_and_masks, modality_name)
+            modality_mask_name = tokens_and_masks.get_masked_modality_name(modality_name)
+            modality_mask = getattr(tokens_and_masks, modality_mask_name)
+            
+            if modality_tokens is not None:
+                # Upsample tokens
+                upsampled_tokens = self._upsample_tensor(
+                    modality_tokens, from_patch_size, to_patch_size
+                )
+                upsampled_dict[modality_name] = upsampled_tokens
+                
+                # Upsample masks using nearest neighbor
+                if modality_mask is not None:
+                    # Save original interpolation mode
+                    original_interpolation = self.interpolation
+                    self.interpolation = "nearest"
+                    # Add a dummy dimension for upsampling (masks don't have D dimension)
+                    mask_with_dim = modality_mask.unsqueeze(-1)
+                    upsampled_mask_with_dim = self._upsample_tensor(
+                        mask_with_dim, from_patch_size, to_patch_size
+                    )
+                    # Remove the dummy dimension
+                    upsampled_mask = upsampled_mask_with_dim.squeeze(-1)
+                    upsampled_dict[modality_mask_name] = upsampled_mask
+                    # Restore original interpolation mode
+                    self.interpolation = original_interpolation
+                else:
+                    upsampled_dict[modality_mask_name] = None
+            else:
+                upsampled_dict[modality_name] = None
+                upsampled_dict[modality_mask_name] = None
+        
+        return TokensAndMasks(**upsampled_dict)
+
+
 class MultiModalPatchEmbeddings(nn.Module):
     """Module that patchifies and encodes the input data for multiple modalities."""
 
@@ -1667,21 +1815,28 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        output_patch_size: int | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
         Args:
             x: Masked input sample containing the data to be encoded
-            patch_size: Size of patches to divide the input into
+            patch_size: Size of patches to divide the input into (processing patch size)
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            output_patch_size: Optional patch size for output tokens. If None, uses patch_size.
+                              If different from patch_size, tokens will be upsampled after attention.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
         """
         if fast_pass and token_exit_cfg is not None:
             raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
+
+        # Use output_patch_size if provided, otherwise use patch_size
+        if output_patch_size is None:
+            output_patch_size = patch_size
 
         patchified_tokens_and_masks = self.patch_embeddings.forward(
             x, patch_size, fast_pass=fast_pass
@@ -1700,6 +1855,12 @@ class Encoder(FlexiVitBase):
         else:
             token_norm_stats = {}
         output = TokensAndMasks(**patchified_tokens_and_masks)
+        
+        # Upsample tokens if output_patch_size differs from patch_size
+        if output_patch_size != patch_size and output_patch_size < patch_size:
+            upsampler = PatchUpsampler(interpolation="bilinear", antialias=True)
+            output = upsampler(output, from_patch_size=patch_size, to_patch_size=output_patch_size)
+        
         output_dict: dict[str, Any] = {
             "tokens_and_masks": output,
         }
