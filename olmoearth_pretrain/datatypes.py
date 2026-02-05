@@ -23,9 +23,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# TypeVar for self-returning to_device method
-TM = TypeVar("TM", bound="MaskedModalityBase")
-
 
 class MaskValue(Enum):
     """Masks can take 4 possible values.
@@ -47,18 +44,84 @@ TIMESTAMPS_FIELD = "timestamps"
 
 
 # =============================================================================
-# Base Classes
+# Mixins for shared methods
+# =============================================================================
+
+
+class ModalityMethodsMixin:
+    """Shared methods for all modality containers."""
+
+    def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
+        """Convert to a dictionary.
+
+        Args:
+            include_nones: Whether to include None values in the output.
+
+        Returns:
+            Dictionary representation.
+        """
+        result = {}
+        for f in fields(self):  # type: ignore[arg-type]
+            val = getattr(self, f.name)
+            if include_nones or val is not None:
+                result[f.name] = val
+        return result
+
+
+class MaskedModalityMethodsMixin(ModalityMethodsMixin):
+    """Shared methods for masked modality containers (with _mask fields)."""
+
+    @staticmethod
+    def get_masked_modality_name(modality: str) -> str:
+        """Get the masked modality name."""
+        return f"{modality}_mask"
+
+    @staticmethod
+    def get_unmasked_modality_name(modality_mask_name: str) -> str:
+        """Get the unmasked modality name."""
+        return modality_mask_name.replace("_mask", "")
+
+    @property
+    def modalities(self) -> list[str]:
+        """Get the present modalities (excludes masks and timestamps)."""
+        return [
+            f.name
+            for f in fields(self)  # type: ignore[arg-type]
+            if not f.name.endswith("_mask")
+            and f.name != TIMESTAMPS_FIELD
+            and getattr(self, f.name) is not None
+        ]
+
+    @property
+    def modalities_with_timestamps(self) -> list[str]:
+        """Get all modalities including timestamps if present (excludes masks)."""
+        return [
+            f.name
+            for f in fields(self)  # type: ignore[arg-type]
+            if not f.name.endswith("_mask") and getattr(self, f.name) is not None
+        ]
+
+
+# TypeVar for self-returning methods
+T = TypeVar("T", bound="MaskedOlmoEarthSample")
+TT = TypeVar("TT", bound="TokensAndMasks")
+
+
+# =============================================================================
+# OlmoEarthSample
 # =============================================================================
 
 
 @dataclass
-class ModalityDataBase:
-    """Base class with all modality data fields defined once.
+class OlmoEarthSample(ModalityMethodsMixin):
+    """A sample of the data from the OlmoEarth Pretrain dataset.
 
-    This serves as the base for OlmoEarthSample. All modality fields are
-    defined here to avoid duplication.
+    This dataclass contains the data of a single sample or a batch of samples.
+    For each modality, we have an ArrayTensor named by the modality,
+    along with the latlon and timestamps.
     """
 
+    # Modality fields
     sentinel2_l2a: ArrayTensor | None = None  # [B, H, W, T, len(S2_bands)]
     sentinel1: ArrayTensor | None = None  # [B, H, W, T, len(S1_bands)]
     worldcover: ArrayTensor | None = None  # [B, H, W, 1, len(WC_bands)]
@@ -74,22 +137,7 @@ class ModalityDataBase:
     wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     latlon: ArrayTensor | None = None  # [B, 2]
-
-    def as_dict(self, include_nones: bool = False) -> dict[str, ArrayTensor | None]:
-        """Convert to a dictionary.
-
-        Args:
-            include_nones: Whether to include None values in the output.
-
-        Returns:
-            Dictionary representation.
-        """
-        result = {}
-        for f in fields(self):
-            val = getattr(self, f.name)
-            if include_nones or val is not None:
-                result[f.name] = val
-        return result
+    timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
     @property
     def modalities(self) -> list[str]:
@@ -117,135 +165,6 @@ class ModalityDataBase:
         if len(set(vals)) != 1:
             raise ValueError(f"Inconsistent batch sizes across fields: {set(vals)}")
         return vals[0]
-
-
-@dataclass
-class MaskedModalityBase:
-    """Base class with modality + mask pairs defined once.
-
-    This serves as the base for MaskedOlmoEarthSample and TokensAndMasks.
-    All modality and mask fields are defined here to avoid duplication.
-    """
-
-    sentinel2_l2a: Tensor | None = None
-    sentinel2_l2a_mask: Tensor | None = None
-    sentinel1: Tensor | None = None
-    sentinel1_mask: Tensor | None = None
-    worldcover: Tensor | None = None
-    worldcover_mask: Tensor | None = None
-    openstreetmap_raster: Tensor | None = None
-    openstreetmap_raster_mask: Tensor | None = None
-    srtm: Tensor | None = None
-    srtm_mask: Tensor | None = None
-    landsat: Tensor | None = None
-    landsat_mask: Tensor | None = None
-    naip: Tensor | None = None
-    naip_mask: Tensor | None = None
-    naip_10: Tensor | None = None
-    naip_10_mask: Tensor | None = None
-    gse: Tensor | None = None
-    gse_mask: Tensor | None = None
-    cdl: Tensor | None = None
-    cdl_mask: Tensor | None = None
-    worldpop: Tensor | None = None
-    worldpop_mask: Tensor | None = None
-    worldcereal: Tensor | None = None
-    worldcereal_mask: Tensor | None = None
-    wri_canopy_height_map: Tensor | None = None
-    wri_canopy_height_map_mask: Tensor | None = None
-    era5_10: Tensor | None = None
-    era5_10_mask: Tensor | None = None
-    latlon: Tensor | None = None
-    latlon_mask: Tensor | None = None
-
-    @staticmethod
-    def get_masked_modality_name(modality: str) -> str:
-        """Get the masked modality name."""
-        return f"{modality}_mask"
-
-    @staticmethod
-    def get_unmasked_modality_name(modality_mask_name: str) -> str:
-        """Get the unmasked modality name."""
-        return modality_mask_name.replace("_mask", "")
-
-    def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
-        """Convert to a dictionary.
-
-        Args:
-            include_nones: Whether to include None values in the output.
-
-        Returns:
-            Dictionary representation.
-        """
-        result = {}
-        for f in fields(self):
-            val = getattr(self, f.name)
-            if include_nones or val is not None:
-                result[f.name] = val
-        return result
-
-    @property
-    def modalities(self) -> list[str]:
-        """Get the present modalities (excludes masks and timestamps)."""
-        return [
-            f.name
-            for f in fields(self)
-            if not f.name.endswith("_mask")
-            and f.name != TIMESTAMPS_FIELD
-            and getattr(self, f.name) is not None
-        ]
-
-    @property
-    def modalities_with_timestamps(self) -> list[str]:
-        """Get all modalities including timestamps if present (excludes masks)."""
-        return [
-            f.name
-            for f in fields(self)
-            if not f.name.endswith("_mask") and getattr(self, f.name) is not None
-        ]
-
-    @property
-    def batch_size(self) -> int:
-        """Get the batch size of the data."""
-        for f in fields(self):
-            val = getattr(self, f.name)
-            if val is not None:
-                return val.shape[0]
-        raise ValueError("No data to get batch size from")
-
-    def to_device(self: TM, device: torch.device, non_blocking: bool = True) -> TM:
-        """Move all tensors to the specified device.
-
-        Args:
-            device: The device to move the tensors to.
-            non_blocking: Whether or not to use asynchronous GPU copies
-
-        Returns:
-            A new instance with all tensors moved to the specified device.
-        """
-        updates = {}
-        for f in fields(self):
-            val = getattr(self, f.name)
-            if val is not None and hasattr(val, "to"):
-                updates[f.name] = val.to(device, non_blocking=non_blocking)
-        return replace(self, **updates)
-
-
-# =============================================================================
-# OlmoEarthSample
-# =============================================================================
-
-
-@dataclass
-class OlmoEarthSample(ModalityDataBase):
-    """A sample of the data from the OlmoEarth Pretrain dataset.
-
-    This dataclass contains the data of a single sample or a batch of samples.
-    For each modality, we have an ArrayTensor named by the modality,
-    along with the latlon and timestamps.
-    """
-
-    timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
         """Returns the expected shape of an attribute.
@@ -454,7 +373,7 @@ class OlmoEarthSample(ModalityDataBase):
 
 
 @dataclass
-class MaskedOlmoEarthSample(MaskedModalityBase):
+class MaskedOlmoEarthSample(MaskedModalityMethodsMixin):
     """A masked sample of the data from the OlmoEarth Pretrain dataset.
 
     This dataclass contains the data for a single sample from the OlmoEarth
@@ -462,9 +381,72 @@ class MaskedOlmoEarthSample(MaskedModalityBase):
     and a mask for each modality named by modality_mask.
     """
 
+    # Modality fields with masks
+    sentinel2_l2a: Tensor | None = None
+    sentinel2_l2a_mask: Tensor | None = None
+    sentinel1: Tensor | None = None
+    sentinel1_mask: Tensor | None = None
+    worldcover: Tensor | None = None
+    worldcover_mask: Tensor | None = None
+    openstreetmap_raster: Tensor | None = None
+    openstreetmap_raster_mask: Tensor | None = None
+    srtm: Tensor | None = None
+    srtm_mask: Tensor | None = None
+    landsat: Tensor | None = None
+    landsat_mask: Tensor | None = None
+    naip: Tensor | None = None
+    naip_mask: Tensor | None = None
+    naip_10: Tensor | None = None
+    naip_10_mask: Tensor | None = None
+    gse: Tensor | None = None
+    gse_mask: Tensor | None = None
+    cdl: Tensor | None = None
+    cdl_mask: Tensor | None = None
+    worldpop: Tensor | None = None
+    worldpop_mask: Tensor | None = None
+    worldcereal: Tensor | None = None
+    worldcereal_mask: Tensor | None = None
+    wri_canopy_height_map: Tensor | None = None
+    wri_canopy_height_map_mask: Tensor | None = None
+    era5_10: Tensor | None = None
+    era5_10_mask: Tensor | None = None
+    latlon: Tensor | None = None
+    latlon_mask: Tensor | None = None
     timestamps: ArrayTensor | None = (
         None  # [B, T, D=3], where D=[day, month, year] (months are zero indexed)
     )
+
+    @property
+    def batch_size(self) -> int:
+        """Get the batch size of the sample.
+
+        Returns:
+            The batch size (first dimension of timestamps tensor).
+        """
+        if self.timestamps is not None:
+            return self.timestamps.shape[0]
+        for f in fields(self):
+            val = getattr(self, f.name)
+            if val is not None:
+                return val.shape[0]
+        raise ValueError("No data to get batch size from")
+
+    def to_device(self: T, device: torch.device, non_blocking: bool = True) -> T:
+        """Move all tensors to the specified device.
+
+        Args:
+            device: The device to move the tensors to.
+            non_blocking: Whether or not to use asynchronous GPU copies
+
+        Returns:
+            A new instance with all tensors moved to the specified device.
+        """
+        updates = {}
+        for f in fields(self):
+            val = getattr(self, f.name)
+            if val is not None and hasattr(val, "to"):
+                updates[f.name] = val.to(device, non_blocking=non_blocking)
+        return replace(self, **updates)
 
     def unmask(self) -> MaskedOlmoEarthSample:
         """Return an unmasked MaskedOlmoEarthSample.
@@ -479,17 +461,6 @@ class MaskedOlmoEarthSample(MaskedModalityBase):
                 if val is not None:
                     updates[f.name] = val * (val == MaskValue.MISSING.value)
         return replace(self, **updates)
-
-    @property
-    def batch_size(self) -> int:
-        """Get the batch size of the sample.
-
-        Returns:
-            The batch size (first dimension of timestamps tensor).
-        """
-        if self.timestamps is not None:
-            return self.timestamps.shape[0]
-        return super().batch_size
 
     @classmethod
     def from_olmoearthsample(
@@ -533,7 +504,7 @@ class MaskedOlmoEarthSample(MaskedModalityBase):
 
 
 @dataclass
-class TokensAndMasks(MaskedModalityBase):
+class TokensAndMasks(MaskedModalityMethodsMixin):
     """Embedded tokens with masks for computing loss.
 
     This is the output format from the encoder, containing embedded tokens
@@ -543,6 +514,64 @@ class TokensAndMasks(MaskedModalityBase):
         - modality: (B, P_H, P_W, T, Band_Sets, D)
         - modality_mask: (B, P_H, P_W, T, Band_Sets)
     """
+
+    # Modality fields with masks (no timestamps)
+    sentinel2_l2a: Tensor | None = None
+    sentinel2_l2a_mask: Tensor | None = None
+    sentinel1: Tensor | None = None
+    sentinel1_mask: Tensor | None = None
+    worldcover: Tensor | None = None
+    worldcover_mask: Tensor | None = None
+    openstreetmap_raster: Tensor | None = None
+    openstreetmap_raster_mask: Tensor | None = None
+    srtm: Tensor | None = None
+    srtm_mask: Tensor | None = None
+    landsat: Tensor | None = None
+    landsat_mask: Tensor | None = None
+    naip: Tensor | None = None
+    naip_mask: Tensor | None = None
+    naip_10: Tensor | None = None
+    naip_10_mask: Tensor | None = None
+    gse: Tensor | None = None
+    gse_mask: Tensor | None = None
+    cdl: Tensor | None = None
+    cdl_mask: Tensor | None = None
+    worldpop: Tensor | None = None
+    worldpop_mask: Tensor | None = None
+    worldcereal: Tensor | None = None
+    worldcereal_mask: Tensor | None = None
+    wri_canopy_height_map: Tensor | None = None
+    wri_canopy_height_map_mask: Tensor | None = None
+    era5_10: Tensor | None = None
+    era5_10_mask: Tensor | None = None
+    latlon: Tensor | None = None
+    latlon_mask: Tensor | None = None
+
+    @property
+    def batch_size(self) -> int:
+        """Get the batch size of the data."""
+        for f in fields(self):
+            val = getattr(self, f.name)
+            if val is not None:
+                return val.shape[0]
+        raise ValueError("No data to get batch size from")
+
+    def to_device(self: TT, device: torch.device, non_blocking: bool = True) -> TT:
+        """Move all tensors to the specified device.
+
+        Args:
+            device: The device to move the tensors to.
+            non_blocking: Whether or not to use asynchronous GPU copies
+
+        Returns:
+            A new instance with all tensors moved to the specified device.
+        """
+        updates = {}
+        for f in fields(self):
+            val = getattr(self, f.name)
+            if val is not None and hasattr(val, "to"):
+                updates[f.name] = val.to(device, non_blocking=non_blocking)
+        return replace(self, **updates)
 
     @property
     def device(self) -> torch.device:
