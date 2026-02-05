@@ -66,7 +66,9 @@ def compute_eval_metrics(
     if task_config.task_type == TaskType.CLASSIFICATION:
         val_result = eval_cls(ft, val_loader, device, task_config.is_multilabel)
     else:
-        val_result = eval_seg(ft, val_loader, device, task_config.num_classes, patch_size)
+        val_result = eval_seg(
+            ft, val_loader, device, task_config.num_classes, patch_size
+        )
 
     test_result: EvalResult | None = None
     if test_loader is not None:
