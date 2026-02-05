@@ -1,9 +1,9 @@
 """Launch fine-tune evaluation sweeps for OlmoEarth and other models.
 
 Example run:
-python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --project_name 2025_10_25_phase2_finetune --module_path olmoearth_pretrain/evals/models/clay/clay_launch.py --cluster ai2/titan --model clay --defaults_only
+python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --project_name test_finetune_resume --module_path olmoearth_pretrain/evals/models/clay/clay_launch.py --cluster ai2/jupiter --model clay --defaults_only
 
-python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200 --project_name 2025_10_25_phase2_finetune --module_path scripts/2025_10_02_phase2/base.py --cluster ai2/titan --defaults_only
+python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200 --project_name test_finetune_resume --module_path scripts/official/base.py --cluster ai2/jupiter --defaults_only
 
 To run only certain tasks, add the following argument:
 "--trainer.callbacks.downstream_evaluator.tasks_to_run=['m_eurosat', 'm_so2sat']"
