@@ -67,20 +67,6 @@ class ModalityMethodsMixin:
                 result[f.name] = val
         return result
 
-
-class MaskedModalityMethodsMixin(ModalityMethodsMixin):
-    """Shared methods for masked modality containers (with _mask fields)."""
-
-    @staticmethod
-    def get_masked_modality_name(modality: str) -> str:
-        """Get the masked modality name."""
-        return f"{modality}_mask"
-
-    @staticmethod
-    def get_unmasked_modality_name(modality_mask_name: str) -> str:
-        """Get the unmasked modality name."""
-        return modality_mask_name.replace("_mask", "")
-
     @property
     def modalities(self) -> list[str]:
         """Get the present modalities (excludes masks and timestamps)."""
@@ -100,6 +86,29 @@ class MaskedModalityMethodsMixin(ModalityMethodsMixin):
             for f in fields(self)  # type: ignore[arg-type]
             if not f.name.endswith("_mask") and getattr(self, f.name) is not None
         ]
+
+    @property
+    def batch_size(self) -> int:
+        """Get the batch size of the data."""
+        for f in fields(self):  # type: ignore[arg-type]
+            val = getattr(self, f.name)
+            if val is not None:
+                return val.shape[0]
+        raise ValueError("No data to get batch size from")
+
+
+class MaskedModalityMethodsMixin(ModalityMethodsMixin):
+    """Shared methods for masked modality containers (with _mask fields)."""
+
+    @staticmethod
+    def get_masked_modality_name(modality: str) -> str:
+        """Get the masked modality name."""
+        return f"{modality}_mask"
+
+    @staticmethod
+    def get_unmasked_modality_name(modality_mask_name: str) -> str:
+        """Get the unmasked modality name."""
+        return modality_mask_name.replace("_mask", "")
 
 
 # TypeVar for self-returning methods
@@ -133,33 +142,6 @@ class OlmoEarthSample(ModalityMethodsMixin):
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
-
-    @property
-    def modalities(self) -> list[str]:
-        """Get the modalities present in this sample (excludes timestamps)."""
-        return [
-            name
-            for name, val in self.as_dict(include_nones=False).items()
-            if name != TIMESTAMPS_FIELD
-        ]
-
-    @property
-    def modalities_with_timestamps(self) -> list[str]:
-        """Get all modalities including timestamps if present."""
-        return list(self.as_dict(include_nones=False).keys())
-
-    @property
-    def batch_size(self) -> int:
-        """Get the batch size of the data."""
-        vals = [
-            cast(ArrayTensor, x).shape[0]
-            for x in self.as_dict(include_nones=False).values()
-        ]
-        if not vals:
-            raise ValueError("No data to get batch size from")
-        if len(set(vals)) != 1:
-            raise ValueError(f"Inconsistent batch sizes across fields: {set(vals)}")
-        return vals[0]
 
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
         """Returns the expected shape of an attribute.
@@ -531,15 +513,6 @@ class TokensAndMasks(MaskedModalityMethodsMixin):
     era5_10_mask: Tensor | None = None
     latlon: Tensor | None = None
     latlon_mask: Tensor | None = None
-
-    @property
-    def batch_size(self) -> int:
-        """Get the batch size of the data."""
-        for f in fields(self):
-            val = getattr(self, f.name)
-            if val is not None:
-                return val.shape[0]
-        raise ValueError("No data to get batch size from")
 
     def to_device(self: TT, device: torch.device, non_blocking: bool = True) -> TT:
         """Move all tensors to the specified device.
