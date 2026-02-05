@@ -22,6 +22,14 @@ from olmoearth_pretrain.evals.finetune.checkpoint import (
     load_training_checkpoint,
     save_training_checkpoint,
 )
+from olmoearth_pretrain.evals.finetune.constants import (
+    FREEZE_EPOCH_FRACTION,
+    SCHEDULER_COOLDOWN,
+    SCHEDULER_FACTOR,
+    SCHEDULER_MIN_LR,
+    SCHEDULER_PATIENCE,
+    UNFREEZE_LR_FACTOR,
+)
 from olmoearth_pretrain.evals.finetune.evaluate import eval_cls, eval_seg
 from olmoearth_pretrain.evals.finetune.model import (
     BackboneWithHead,
@@ -32,15 +40,6 @@ from olmoearth_pretrain.evals.finetune.model import (
 from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
 
 logger = getLogger(__name__)
-
-
-# Finetuning constants
-FREEZE_EPOCH_FRACTION = 0.2  # Freeze backbone for first 20% of epochs
-UNFREEZE_LR_FACTOR = 0.1  # Reduce LR by 10x when unfreezing backbone
-SCHEDULER_FACTOR = 0.2
-SCHEDULER_PATIENCE = 2
-SCHEDULER_MIN_LR = 0.0
-SCHEDULER_COOLDOWN = 10
 
 
 def _get_wandb_logger(trainer: Trainer) -> Any | None:
