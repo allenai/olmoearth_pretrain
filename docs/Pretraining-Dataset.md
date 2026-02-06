@@ -205,3 +205,10 @@ The tar files containing these per-sample H5s are in the `h5py_data` folder.
 
 These tar files can be used for pre-training (see [Pretraining](Pretraining.md)), and
 can be generated from the GeoTIFFs (see [DatasetCreation](Dataset-Creation.md)).
+
+## 1K-Example Subset
+
+We also provide a separate download for a subset of 1K examples.
+
+* Dataset (GeoTIFFs/GeoJSONs, needs [conversion](Dataset-Creation.md) to H5s):
+* H5 (can be used with pre-training directly):
