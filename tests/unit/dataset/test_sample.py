@@ -2,6 +2,7 @@
 
 import calendar
 from collections.abc import Callable
+from dataclasses import fields
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -9,7 +10,11 @@ import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import BandSet, Modality, ModalitySpec
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.data.dataset import (
+    OlmoEarthSample,
+    subset_sample_cutmix,
+    subset_sample_default,
+)
 from olmoearth_pretrain.dataset.parse import (
     GridTile,
     ModalityImage,
@@ -23,8 +28,8 @@ CRS = "EPSG:32610"
 
 def test_all_attrs_have_bands() -> None:
     """Test all attributes are described in attribute_to_bands."""
-    for attribute_name in OlmoEarthSample._fields:
-        _ = OlmoEarthSample.num_bands(attribute_name)
+    for f in fields(OlmoEarthSample):
+        _ = OlmoEarthSample.num_bands(f.name)
 
 
 @pytest.fixture
@@ -155,8 +160,12 @@ def test_default_subsetting() -> None:
         sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
         timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
     )
-    subsetted_sample = sample.subset_default(
-        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
+    subsetted_sample = subset_sample_default(
+        sample,
+        patch_size=4,
+        max_tokens_per_instance=100,
+        sampled_hw_p=4,
+        current_length=12,
     )
 
     # 16 / 4 = 4 tokens along the height and width dimension
@@ -180,11 +189,19 @@ def test_cutmix_subsetting() -> None:
         sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
         timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
     )
-    default_subsetted_sample = sample.subset_default(
-        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
+    default_subsetted_sample = subset_sample_default(
+        sample,
+        patch_size=4,
+        max_tokens_per_instance=100,
+        sampled_hw_p=4,
+        current_length=12,
     )
-    cutmix_subsetted_sample = sample.subset_cutmix(
-        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
+    cutmix_subsetted_sample = subset_sample_cutmix(
+        sample,
+        patch_size=4,
+        max_tokens_per_instance=100,
+        sampled_hw_p=4,
+        current_length=12,
     )
     print(default_subsetted_sample)
     print(cutmix_subsetted_sample)
@@ -211,7 +228,8 @@ def test_subsetting_worldcover_too() -> None:
         worldcover=torch.ones((h, w, OlmoEarthSample.num_bands("worldcover"))),
         timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
     )
-    subsetted_sample = sample.subset_default(
+    subsetted_sample = subset_sample_default(
+        sample,
         patch_size=4,
         max_tokens_per_instance=100,
         sampled_hw_p=4,

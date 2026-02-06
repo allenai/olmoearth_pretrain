@@ -368,7 +368,7 @@ def estimate_static_tokens(
 def add_batch_dimension(sample: OlmoEarthSample) -> OlmoEarthSample:
     """Add a batch dimension to a sample."""
     sample_dict = {}
-    for key, val in sample.as_dict(ignore_nones=True).items():
+    for key, val in sample.as_dict().items():
         if val is not None:
             sample_dict[key] = val.unsqueeze(0)
     return OlmoEarthSample(**sample_dict)
@@ -379,7 +379,7 @@ def remove_batch_dimension(
 ) -> MaskedOlmoEarthSample:
     """Remove the batch dimension from a masked sample."""
     sample_dict = {}
-    for key, val in masked_sample.as_dict(return_none=False).items():
+    for key, val in masked_sample.as_dict().items():
         if val is not None:
             sample_dict[key] = val.squeeze(0)
     return MaskedOlmoEarthSample(**sample_dict)

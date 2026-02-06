@@ -24,10 +24,10 @@ from olmoearth_pretrain.evals.models import (
 )
 from olmoearth_pretrain.nn.flexi_vit import (
     FlexiVitBase,
-    PoolingType,
     TokensAndMasks,
 )
 from olmoearth_pretrain.nn.pooled_modality_predictor import EncodeEarlyAttnPool
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.nn.st_model import STBase
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 

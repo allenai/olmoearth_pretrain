@@ -224,7 +224,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 microbatch_b = microbatches_b[microbatch_idx]
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} "
-                    f"with batch size {microbatch_a.timestamps.shape[0]}"
+                    f"with batch size {microbatch_a.batch_size}"
                 )
                 masked_batch_a = microbatch_a.to_device(self.device)
                 masked_batch_b = microbatch_b.to_device(self.device)
