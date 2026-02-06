@@ -165,11 +165,14 @@ Tasks to add
 - canada wildfire
 
 
-` python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name wildfire_canada_test     --source  gs://rslearn-eai/datasets/wildfire/canada_fire_sat_test     --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/wildfire_run_data/  --register     --overwrite `
+` python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name canada_wildfire_sat_eval_split      --source  /weka/dfive-default/rslearn-eai/datasets/wildfire/canada_fire_sat_full  --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/wildfire_run_data/  --register     --overwrite `
 
-`python -m olmoearth_pretrain.internal.full_eval_sweep     --cluster=local     --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000     --module_path=scripts/official/tiny.py     --trainer.callbacks.downstream_evaluator.tasks_to_run="[wildfire_canada_test]"     --trainer.callbacks.downstream_evaluator.eval_on_startup=True     --trainer.callbacks.downstream_evaluator.cancel_after_first_eval=True     --trainer.callbacks.wandb.enabled=False --defaults_only `
+`python -m olmoearth_pretrain.internal.full_eval_sweep     --cluster=local     --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000     --module_path=scripts/official/tiny.py     --trainer.callbacks.downstream_evaluator.tasks_to_run="[canada_wildfire_sat_eval_split]"     --trainer.callbacks.downstream_evaluator.eval_on_startup=True     --trainer.callbacks.downstream_evaluator.cancel_after_first_eval=True     --trainer.callbacks.wandb.enabled=False --defaults_only `
 
 - yemen crop
+- ecosystem
+    `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name geo_ecosystem_test     --source  /weka/dfive-default/rslearn-eai/datasets/geo_annual/dataset --olmoearth-run-config-path /weka/dfive-default/rslearn-eai/datasets/geo_annual  --register     --overwrite &`
+
 - landslide
 - mangrove
 - nandi

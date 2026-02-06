@@ -472,18 +472,29 @@ def from_registry_entry(
     # Normalize split name: "valid" -> "val"
     normalized_split = "val" if split == "valid" else split
 
-    # Build tags for split filtering using the split_tag_key from ingestion
-    # Map split name to the entry's split value
+    # Resolve splits based on split_type from ingestion.
+    # "tags": all windows may live under one group dir, split by metadata tag
+    # "groups": windows are in separate group dirs (windows/train/, windows/val/, etc.)
+    split_value_map = {
+        "train": entry.train_split,
+        "val": entry.val_split,
+        "test": entry.test_split,
+    }
+    split_value = split_value_map.get(normalized_split, normalized_split)
+
     effective_tags = tags_override
-    if effective_tags is None and entry.split_tag_key:
-        split_value_map = {
-            "train": entry.train_split,
-            "val": entry.val_split,
-            "test": entry.test_split,
-        }
-        split_value = split_value_map.get(normalized_split, normalized_split)
-        effective_tags = {entry.split_tag_key: split_value}
-        log.info(f"Using split tags from ingestion: {entry.split_tag_key}={split_value}")
+    if effective_tags is None:
+        if entry.split_type == "tags" and entry.split_tag_key:
+            effective_tags = {entry.split_tag_key: split_value}
+            # Clear groups so rslearn scans all dirs, then filters by tag
+            if groups_override is None:
+                groups_override = []
+            log.info(f"Using tag-based splits: {entry.split_tag_key}={split_value}")
+        elif entry.split_type == "groups":
+            # Use split name as the group directory
+            if groups_override is None:
+                groups_override = [split_value]
+            log.info(f"Using group-based splits: groups={groups_override}")
 
     # Load runtime config and build dataset
     from olmoearth_pretrain.evals.datasets.rslearn_builder import load_runtime_config

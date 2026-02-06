@@ -592,13 +592,25 @@ def write_split_tags(
                 continue
 
             # Update options with our eval split tag (don't overwrite original "split")
-            # Ensure we write the string value, not the enum
             if window.options is None:
                 window.options = {}
             window.options[EVAL_SPLIT_TAG_KEY] = str(split_name)
 
             # Use rslearn's native save method
             window.save()
+
+            # Verify the tag persisted by re-reading metadata.json from disk
+            metadata_path = Path(dataset_path) / "windows" / group_name / window_name / "metadata.json"
+            with open(metadata_path) as f:
+                saved_meta = json.load(f)
+            saved_tag = saved_meta.get("options", {}).get(EVAL_SPLIT_TAG_KEY)
+            if saved_tag != str(split_name):
+                raise RuntimeError(
+                    f"write_split_tags: window.save() did not persist "
+                    f"{EVAL_SPLIT_TAG_KEY}={split_name} for "
+                    f"{group_name}/{window_name}. "
+                    f"Got: {saved_tag}"
+                )
             updated_count += 1
 
     logger.info(f"Wrote split tags for {updated_count} windows")
@@ -782,16 +794,23 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
     # Step 0d: Extract and instantiate the rslearn task from model config
     logger.info(f"[Step 0d] Extracting task from model config...")
-    # model.yaml structure: data.init_args.task.init_args.tasks.{task_name}
     task_wrapper_config = model_config["data"]["init_args"]["task"]
-    tasks_dict = task_wrapper_config["init_args"]["tasks"]
-    # For now, grab the first (and typically only) task
-    if len(tasks_dict) != 1:
-        raise NotImplementedError(
-            "Multiple tasks not supported in this workflow; found: "
-            + ", ".join(tasks_dict)
-        )
-    task_name, task_config = next(iter(tasks_dict.items()))
+    task_init_args = task_wrapper_config.get("init_args", {})
+
+    if "tasks" in task_init_args:
+        # Multi-task: data.init_args.task.init_args.tasks.{task_name}
+        tasks_dict = task_init_args["tasks"]
+        if len(tasks_dict) != 1:
+            raise NotImplementedError(
+                "Multiple tasks not supported in this workflow; found: "
+                + ", ".join(tasks_dict)
+            )
+        task_name, task_config = next(iter(tasks_dict.items()))
+    else:
+        # Single task: data.init_args.task is the task directly
+        task_name = "task"
+        task_config = task_wrapper_config
+
     logger.info(f"[Step 0d] Instantiating task '{task_name}': {task_config['class_path']}")
     rslearn_task = instantiate_from_config(task_config)
 

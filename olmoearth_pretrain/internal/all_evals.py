@@ -335,8 +335,8 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
-    "wildfire_canada_full": DownstreamTaskConfig(
-        dataset="wildfire_canada_full",
+    "canada_wildfire_sat_eval_split": DownstreamTaskConfig(
+        dataset="canada_wildfire_sat_eval_split",
         embedding_batch_size=32,
         probe_batch_size=16,
         patch_size=5, # TODO: This is changeable but we should know the valid sizes for inputs

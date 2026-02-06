@@ -306,8 +306,8 @@ class DownstreamEvaluator:
         train_embeddings, train_labels = self._get_embeddings(
             train_loader, is_train=True
         )
-        # log shape of train embeddings
         logger.info(f"Train embeddings shape: {train_embeddings.shape}")
+        logger.info(f"Train label counts: {torch.unique(train_labels, return_counts=True)}")
 
         # Subsample train embeddings if configured
         if self.max_train_samples and train_embeddings.shape[0] > self.max_train_samples:
@@ -321,6 +321,7 @@ class DownstreamEvaluator:
         logger.info(f"Getting val embeddings for {self.dataset}...")
         val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
         logger.info(f"Val embeddings shape: {val_embeddings.shape}")
+        logger.info(f"Val label counts: {torch.unique(val_labels, return_counts=True)}")
         if self.run_on_test:
             logger.info(f"Getting test loader for {self.dataset}...")
             test_loader = self._get_data_loader("test", self.embedding_batch_size)
@@ -329,6 +330,7 @@ class DownstreamEvaluator:
                 test_loader, is_train=False
             )
             logger.info(f"Test embeddings shape: {test_embeddings.shape}")
+            logger.info(f"Test label counts: {torch.unique(test_labels, return_counts=True)}")
         else:
             test_embeddings, test_labels = None, None
         logger.info(

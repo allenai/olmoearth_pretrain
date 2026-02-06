@@ -422,9 +422,15 @@ def build_model_dataset_from_config(
         logger.info(f"Using custom groups override: {groups_override}")
 
     # Apply tags override if provided
+    # When filtering by tags, clear groups so rslearn scans all directories
+    # first, then filters by tag. Otherwise rslearn only scans the group
+    # directories (e.g. windows/train/) which may not exist when all windows
+    # live under a single group (e.g. windows/val/) with tag-based splits.
     if tags_override:
         split_config.tags = tags_override
-        logger.info(f"Using custom tags override: {tags_override}")
+        if not groups_override:
+            split_config.groups = None
+        logger.info(f"Using custom tags override: {tags_override} (groups={split_config.groups})")
 
     # Apply max_samples override if provided
     if max_samples is not None and hasattr(split_config, 'num_samples'):
@@ -477,8 +483,7 @@ def build_dataset_from_registry_entry(
     model_yaml_path = f"{entry.model_config_path}/model.yaml"
     runtime_config = load_runtime_config(model_yaml_path, dataset_path)
 
-    # Map split name to the entry's split value
-    # e.g., split="val" -> entry.val_split (usually "val")
+    # Resolve splits based on split_type from ingestion.
     split_value_map = {
         "train": entry.train_split,
         "val": entry.val_split,
@@ -486,19 +491,23 @@ def build_dataset_from_registry_entry(
     }
     split_value = split_value_map.get(split, split)
 
-    # Build tags override using the split_tag_key from ingestion
-    # This filters to windows with e.g. {"eval_split": "val"}
     tags_override = None
-    if entry.split_tag_key:
+    groups_override = None
+
+    if entry.split_type == "tags" and entry.split_tag_key:
+        # Tag-based: scan all group dirs, filter by tag
         tags_override = {entry.split_tag_key: split_value}
-        logger.info(
-            f"Using split tags from ingestion: {entry.split_tag_key}={split_value}"
-        )
+        logger.info(f"Using tag-based splits: {entry.split_tag_key}={split_value}")
+    elif entry.split_type == "groups":
+        # Group-based: use split name as the group directory
+        groups_override = [split_value]
+        logger.info(f"Using group-based splits: groups={groups_override}")
 
     return build_model_dataset_from_config(
         runtime_config=runtime_config,
         source_path=dataset_path,
         split=split,
         max_samples=max_samples,
+        groups_override=groups_override,
         tags_override=tags_override,
     )
