@@ -6,24 +6,6 @@ It is a modified version of the base_debug_scripts/galileo.py script.
 
 import logging
 
-from olmo_core.config import DType
-from olmo_core.distributed.parallel.data_parallel import (
-    DataParallelConfig,
-    DataParallelType,
-)
-from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import CosWithWarmup
-from olmo_core.train.callbacks import (
-    ConfigSaverCallback,
-    GarbageCollectorCallback,
-    GPUMemoryMonitorCallback,
-    ProfilerCallback,
-)
-from olmo_core.train.checkpoint import CheckpointerConfig
-from olmo_core.train.common import Duration, LoadStrategy
-from olmo_core.train.config import TrainerConfig
-from upath import UPath
-
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
 from helios.data.dataset import HeliosDatasetConfig
@@ -41,6 +23,23 @@ from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.galileo import GalileoTrainModuleConfig
+from olmo_core.config import DType
+from olmo_core.distributed.parallel.data_parallel import (
+    DataParallelConfig,
+    DataParallelType,
+)
+from olmo_core.optim import AdamWConfig
+from olmo_core.optim.scheduler import CosWithWarmup
+from olmo_core.train.callbacks import (
+    ConfigSaverCallback,
+    GarbageCollectorCallback,
+    GPUMemoryMonitorCallback,
+    ProfilerCallback,
+)
+from olmo_core.train.checkpoint import CheckpointerConfig
+from olmo_core.train.common import Duration, LoadStrategy
+from olmo_core.train.config import TrainerConfig
+from upath import UPath
 
 logger = logging.getLogger(__name__)
 

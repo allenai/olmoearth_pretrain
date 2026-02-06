@@ -2,6 +2,22 @@
 
 import logging
 
+from helios.data.dataloader import HeliosDataLoaderConfig
+from helios.data.dataset import HeliosDatasetConfig
+from helios.data.normalize import Strategy
+from helios.internal.common import build_common_components
+from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
+from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
+from helios.nn.latent_mim import LatentMIMConfig
+from helios.train.callbacks import (
+    DownstreamEvaluatorCallbackConfig,
+    HeliosSpeedMonitorCallback,
+    HeliosWandBCallback,
+)
+from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
+from helios.train.loss import LossConfig
+from helios.train.masking import MaskingConfig
+from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 from olmo_core.config import DType
 from olmo_core.distributed.parallel.data_parallel import (
     DataParallelConfig,
@@ -19,23 +35,6 @@ from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
 from upath import UPath
-
-from helios.data.dataloader import HeliosDataLoaderConfig
-from helios.data.dataset import HeliosDatasetConfig
-from helios.data.normalize import Strategy
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, HeliosVisualizeConfig, main
-from helios.nn.flexihelios import EncoderConfig, PoolingType, PredictorConfig
-from helios.nn.latent_mim import LatentMIMConfig
-from helios.train.callbacks import (
-    DownstreamEvaluatorCallbackConfig,
-    HeliosSpeedMonitorCallback,
-    HeliosWandBCallback,
-)
-from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
-from helios.train.loss import LossConfig
-from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 logger = logging.getLogger(__name__)
 

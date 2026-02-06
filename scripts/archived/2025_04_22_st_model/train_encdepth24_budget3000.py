@@ -1,5 +1,10 @@
 """Trying to prototype fitting everything into olmo core."""
 
+from helios.data.dataloader import HeliosDataLoaderConfig
+from helios.internal.common import build_common_components
+from helios.internal.experiment import CommonComponents, main
+from helios.nn.latent_mim import LatentMIMConfig
+from helios.nn.st_model import STEncoderConfig, STPredictorConfig
 from shared import (
     NUM_DATA_LOADER_WORKERS,
     build_dataset_config,
@@ -7,12 +12,6 @@ from shared import (
     build_trainer_config,
     build_visualize_config,
 )
-
-from helios.data.dataloader import HeliosDataLoaderConfig
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, main
-from helios.nn.latent_mim import LatentMIMConfig
-from helios.nn.st_model import STEncoderConfig, STPredictorConfig
 
 MIN_PATCH_SIZE = 1
 MAX_PATCH_SIZE = 8
