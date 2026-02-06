@@ -205,3 +205,10 @@ The tar files containing these per-sample H5s are in the `h5py_data` folder.
 
 These tar files can be used for pre-training (see [Pretraining](Pretraining.md)), and
 can be generated from the GeoTIFFs (see [DatasetCreation](Dataset-Creation.md)).
+
+## 1K-Example Subset
+
+We also provide a separate download for a subset of 1K examples.
+
+* Dataset (GeoTIFFs/GeoJSONs, needs [conversion](Dataset-Creation.md) to H5s): https://storage.googleapis.com/ai2-olmoearth-projects-public-data/pretraining_data/subset_1k/subset_1k.tar
+* H5 (can be used with pre-training directly): https://storage.googleapis.com/ai2-olmoearth-projects-public-data/pretraining_data/subset_1k/subset_1k_h5py_data.tar
