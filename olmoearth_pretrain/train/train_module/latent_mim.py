@@ -283,6 +283,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     batch.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
+                    skip_chnattn=True,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
             loss = self.loss_fn(decoded, target_output)

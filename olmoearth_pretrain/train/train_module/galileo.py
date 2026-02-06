@@ -374,12 +374,14 @@ class GalileoTrainModule(OlmoEarthTrainModule):
                     batch_a.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_a,
+                    skip_chnattn=True,
                 )
                 target_output_a, _, _ = unpack_encoder_output(output_dict)
                 output_dict = self.model.target_encoder.forward(
                     batch_b.unmask(),
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg_b,
+                    skip_chnattn=True,
                 )
                 target_output_b, _, _ = unpack_encoder_output(output_dict)
 

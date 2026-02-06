@@ -16,6 +16,7 @@ from torch.distributed.fsdp import (
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.nn.channel_attention import AggregatedPredictor
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
@@ -47,6 +48,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
+        self.uses_aggregated_predictor = isinstance(decoder, AggregatedPredictor)
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int
@@ -65,21 +67,36 @@ class LatentMIM(nn.Module, DistributedMixins):
             latent_projected_and_pooled: pooled tokens for contrastive loss
             reconstructed: MAE predictions if enabled
         """
-        # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         output_dict = self.encoder(x, patch_size=patch_size)
         token_norm_stats = output_dict.pop("token_norm_stats", None)
+        original_masks = output_dict.pop("original_masks", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
         )
         extra_metrics = {}
         if token_norm_stats is not None:
             extra_metrics["token_norm_stats"] = token_norm_stats
-        reconstructed = None
-        if self.reconstructor:
-            reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
-        decoded = self.decoder(
-            latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
-        )
+
+        if self.uses_aggregated_predictor:
+            assert original_masks is not None, (
+                "Encoder must provide original_masks when using AggregatedPredictor"
+            )
+            decoded = self.decoder(
+                encoder_output=latent,
+                original_masks=original_masks,
+                timestamps=x.timestamps,
+                patch_size=patch_size,
+            )
+            reconstructed = None
+            if self.reconstructor:
+                reconstructed = self.reconstructor(decoded, x.timestamps, patch_size)
+        else:
+            reconstructed = None
+            if self.reconstructor:
+                reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
+            decoded = self.decoder(
+                latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
+            )
         return (
             latent,
             decoded,

@@ -20,6 +20,7 @@ from olmoearth_pretrain.data.constants import (
 )
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.attention import Block
+from olmoearth_pretrain.nn.channel_attention import ChnAttn, ChnAttnConfig
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
@@ -107,6 +108,8 @@ class TokensAndMasks(NamedTuple):
     wri_canopy_height_map_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
+    aggregated: Tensor | None = None
+    aggregated_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
@@ -967,6 +970,109 @@ class CompositeEncodings(nn.Module):
             )
         return output_dict
 
+    def forward_channel_only(
+        self,
+        per_modality_input_tokens: dict[str, Tensor],
+    ) -> dict[str, Tensor]:
+        """Apply only channel embeddings to the patchified data.
+
+        Used before channel attention aggregation so that the cross-attention
+        knows which bandset each token represents.
+
+        Args:
+            per_modality_input_tokens: Tokens only for each modality
+
+        Returns:
+            Tokens with channel embeddings applied
+        """
+        output_dict = {}
+        available_modalities = return_modalities_from_dict(per_modality_input_tokens)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        n = self.embedding_dim_per_embedding_type
+        for modality_name in modalities_to_process:
+            modality_tokens = per_modality_input_tokens[modality_name]
+            modality = Modality.get(modality_name)
+            device = modality_tokens.device
+
+            channel_embed = self.per_modality_channel_embeddings[modality.name]
+            actual_bandsets = modality_tokens.shape[-2]
+            if channel_embed.shape[0] != actual_bandsets:
+                raise ValueError(
+                    f"Channel embeddings for {modality.name} expect "
+                    f"{channel_embed.shape[0]} bandsets but tokens have "
+                    f"{actual_bandsets}."
+                )
+
+            # Build the einops pattern based on token dimensionality
+            if modality_tokens.ndim == 3:
+                b, b_s, _ = modality_tokens.shape
+                ein_string, ein_dict = "b b_s d", {"b": b, "b_s": b_s}
+            elif modality_tokens.ndim == 4:
+                b, t, b_s, _ = modality_tokens.shape
+                ein_string, ein_dict = "b t b_s d", {"b": b, "t": t, "b_s": b_s}
+            elif modality_tokens.ndim == 5:
+                b, h, w, b_s, _ = modality_tokens.shape
+                ein_string, ein_dict = (
+                    "b h w b_s d",
+                    {"b": b, "h": h, "w": w, "b_s": b_s},
+                )
+            elif modality_tokens.ndim == 6:
+                b, h, w, t, b_s, _ = modality_tokens.shape
+                ein_string, ein_dict = (
+                    "b h w t b_s d",
+                    {"b": b, "h": h, "w": w, "t": t, "b_s": b_s},
+                )
+            else:
+                raise ValueError(f"Unsupported tokens shape: {modality_tokens.shape}")
+
+            modality_embed = torch.zeros(modality_tokens.shape, device=device)
+            channel_embed_expanded = repeat(
+                channel_embed, f"b_s d -> {ein_string}", **ein_dict
+            ).to(device)
+            modality_embed[..., :n] += channel_embed_expanded
+            output_dict[modality_name] = modality_tokens + modality_embed
+        return output_dict
+
+    def forward_spatiotemporal_only(
+        self,
+        per_modality_input_tokens: dict[str, Tensor],
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+    ) -> dict[str, Tensor]:
+        """Apply only spatial and temporal encodings (no channel embeddings).
+
+        Used after channel attention aggregation, where the aggregated tokens
+        no longer have per-bandset structure.
+
+        Args:
+            per_modality_input_tokens: Tokens for each modality
+            timestamps: Timestamps of the data
+            patch_size: Size of patches
+            input_res: Resolution of the input data
+
+        Returns:
+            Tokens with spatial/temporal encodings applied
+        """
+        output_dict = {}
+        available_modalities = return_modalities_from_dict(per_modality_input_tokens)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        for modality_name in modalities_to_process:
+            output_dict[modality_name] = self._apply_encodings_per_modality(
+                modality_name,
+                per_modality_input_tokens[modality_name],
+                timestamps=timestamps,
+                patch_size=patch_size,
+                input_res=input_res,
+                use_modality_encodings=False,
+                use_temporal_encodings=True,
+            )
+        return output_dict
+
 
 class FlexiVitBase(nn.Module):
     """FlexiVitBase is a base class for FlexiVit models."""
@@ -1057,8 +1163,12 @@ class FlexiVitBase(nn.Module):
         """Collapse the tokens and masks, respectively, into two tensors."""
         tokens, masks = [], []
         available_modalities = return_modalities_from_dict(x)
+        # Include "aggregated" if present (from ChnAttn)
+        supported = self.supported_modality_names
+        if "aggregated" in available_modalities:
+            supported = list(supported) + ["aggregated"]
         modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
+            available_modalities, supported
         )
         for modality in modalities_to_process:
             masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
@@ -1101,8 +1211,12 @@ class FlexiVitBase(nn.Module):
         original_masks_dict = {}
         modalities_to_dims_dict = {}
         available_modalities = return_modalities_from_dict(x)
+        # Include "aggregated" if present (from ChnAttn)
+        supported = self.supported_modality_names
+        if "aggregated" in available_modalities:
+            supported = list(supported) + ["aggregated"]
         modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
+            available_modalities, supported
         )
         for modality in modalities_to_process:
             x_modality = x[modality]
@@ -1215,6 +1329,7 @@ class Encoder(FlexiVitBase):
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        chnattn_config: ChnAttnConfig | None = None,
     ):
         """Initialize the encoder.
 
@@ -1241,8 +1356,10 @@ class Encoder(FlexiVitBase):
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
             tokenization_config: Optional config for custom band groupings
+            chnattn_config: Optional config for channel attention aggregation
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
+        self.chnattn_config = chnattn_config
         super().__init__(
             embedding_size=embedding_size,
             depth=depth,
@@ -1273,6 +1390,27 @@ class Encoder(FlexiVitBase):
             self.embedding_size,
             tokenization_config=self.tokenization_config,
         )
+
+        # Channel attention aggregation
+        self.uses_chnattn = (
+            self.chnattn_config is not None and self.chnattn_config.enabled
+        )
+        if self.uses_chnattn:
+            assert self.chnattn_config is not None
+            attn_dim = self.chnattn_config.attn_dim or self.embedding_size
+            num_bandsets_per_modality = {
+                m.name: self.tokenization_config.get_num_bandsets(m.name)
+                for m in supported_modalities
+            }
+            self.chnattn = ChnAttn(
+                embedding_size=self.embedding_size,
+                attn_dim=attn_dim,
+                num_heads=self.chnattn_config.num_heads,
+                aggregation_mode=self.chnattn_config.aggregation_mode,
+                supported_modality_names=self.supported_modality_names,
+                num_bandsets_per_modality=num_bandsets_per_modality,
+            )
+
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
             num_layers=num_projection_layers,
@@ -1538,8 +1676,21 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        skip_composite_encodings: bool = False,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None]:
-        """Apply the attention to the tokens and masks."""
+        """Apply the attention to the tokens and masks.
+
+        Args:
+            x: Dict of per-modality tokens and masks.
+            timestamps: Timestamps tensor.
+            patch_size: Patch size.
+            input_res: Input resolution.
+            token_exit_cfg: Optional token exit configuration.
+            fast_pass: Whether to use fast pass mode.
+            skip_composite_encodings: If True, skip composite encodings
+                (used when ChnAttn has already handled channel embeddings
+                and spatiotemporal encodings are not needed at this stage).
+        """
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -1550,12 +1701,25 @@ class Encoder(FlexiVitBase):
         # exited tokens are just the linear projection
         exited_tokens, _ = self.collapse_and_combine_hwtc(x)
 
-        tokens_dict = self.composite_encodings.forward(
-            tokens_only_dict,
-            timestamps,
-            patch_size,
-            input_res,
-        )
+        if not skip_composite_encodings:
+            tokens_dict = self.composite_encodings.forward(
+                tokens_only_dict,
+                timestamps,
+                patch_size,
+                input_res,
+            )
+        else:
+            # When ChnAttn is active, only apply encodings to non-aggregated
+            # modalities (e.g. latlon). "aggregated" is not a real modality
+            # so CompositeEncodings can't handle it.
+            non_agg = {k: v for k, v in tokens_only_dict.items() if k != "aggregated"}
+            if non_agg:
+                encoded_non_agg = self.composite_encodings.forward(
+                    non_agg, timestamps, patch_size, input_res
+                )
+                tokens_dict = {**tokens_only_dict, **encoded_non_agg}
+            else:
+                tokens_dict = tokens_only_dict
         tokens_dict.update(original_masks_dict)
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
@@ -1659,6 +1823,7 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        skip_chnattn: bool = False,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -1667,15 +1832,79 @@ class Encoder(FlexiVitBase):
             patch_size: Size of patches to divide the input into
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
-            fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            fast_pass: Whether to always pass None as the mask to the transformer,
+                this enables torch based flash attention, and skips mask construction
+                and sorting
+            skip_chnattn: If True, bypass channel attention even if configured.
+                Used by the target encoder to produce per-modality output.
 
         Returns:
-            TokensAndMasks containing the encoded representations and their masks
+            Dict containing TokensAndMasks and optionally original_masks.
         """
         if fast_pass and token_exit_cfg is not None:
             raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
 
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
+
+        use_chnattn = self.uses_chnattn and not skip_chnattn
+
+        if use_chnattn:
+            # Save original per-modality masks before aggregation
+            original_masks = {}
+            for key, val in patchified_tokens_and_masks.items():
+                if key.endswith("_mask"):
+                    original_masks[key] = val
+
+            # Separate spatial and non-spatial modalities
+            spatial_tokens = {}
+            nonspatial_tokens = {}
+            available_modalities = return_modalities_from_dict(
+                patchified_tokens_and_masks
+            )
+            for mod in available_modalities:
+                mask_key = MaskedOlmoEarthSample.get_masked_modality_name(mod)
+                modality_spec = Modality.get(mod)
+                if modality_spec.is_spatial:
+                    spatial_tokens[mod] = patchified_tokens_and_masks[mod]
+                    spatial_tokens[mask_key] = patchified_tokens_and_masks[mask_key]
+                else:
+                    nonspatial_tokens[mod] = patchified_tokens_and_masks[mod]
+                    nonspatial_tokens[mask_key] = patchified_tokens_and_masks[mask_key]
+
+            # 1. Apply channel embeddings to spatial bandset tokens
+            spatial_tokens_only = {
+                k: v for k, v in spatial_tokens.items() if not k.endswith("_mask")
+            }
+            if spatial_tokens_only:
+                tokens_with_channel_emb = self.composite_encodings.forward_channel_only(
+                    spatial_tokens_only
+                )
+                # Re-merge masks for ChnAttn
+                chnattn_input = dict(tokens_with_channel_emb)
+                chnattn_input.update(
+                    {k: v for k, v in spatial_tokens.items() if k.endswith("_mask")}
+                )
+
+                # 2. Aggregate spatial modalities via channel attention
+                spatial_modality_names = [
+                    m
+                    for m in self.supported_modality_names
+                    if Modality.get(m).is_spatial
+                ]
+                agg_tokens, agg_mask = self.chnattn(
+                    chnattn_input, spatial_modality_names
+                )
+
+                # 3. Replace with aggregated + non-spatial passthrough
+                patchified_tokens_and_masks = {
+                    "aggregated": agg_tokens,
+                    "aggregated_mask": agg_mask,
+                }
+                patchified_tokens_and_masks.update(nonspatial_tokens)
+            else:
+                # No spatial modalities to aggregate
+                patchified_tokens_and_masks.update(nonspatial_tokens)
+
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
@@ -1686,6 +1915,10 @@ class Encoder(FlexiVitBase):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                # When ChnAttn is active, "aggregated" is not a real modality
+                # in CompositeEncodings, so skip composite encodings.
+                # Channel embeddings were already applied before ChnAttn.
+                skip_composite_encodings=use_chnattn,
             )
         else:
             token_norm_stats = {}
@@ -1698,6 +1931,10 @@ class Encoder(FlexiVitBase):
 
         if not fast_pass:
             output_dict["project_aggregated"] = self.project_and_aggregate(output)
+
+        if use_chnattn:
+            output_dict["original_masks"] = original_masks
+
         return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
@@ -2135,6 +2372,7 @@ class EncoderConfig(Config):
     qk_norm: bool = False
     log_token_norm_stats: bool = False
     tokenization_config: TokenizationConfig | None = None
+    chnattn_config: ChnAttnConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -2146,6 +2384,8 @@ class EncoderConfig(Config):
                     raise ValueError(f"Modality {modality} is not supported")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
+        if self.chnattn_config is not None:
+            self.chnattn_config.validate()
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:

@@ -15,6 +15,7 @@ from torch.distributed.fsdp import (
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.nn.channel_attention import AggregatedPredictor
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
@@ -47,54 +48,59 @@ class Galileo(nn.Module, DistributedMixins):
         self.reconstructor = reconstructor
         for p in self.target_encoder.parameters():
             p.requires_grad = False
+        self.uses_aggregated_predictor = isinstance(decoder, AggregatedPredictor)
+
+    def _forward_branch(
+        self,
+        x: MaskedOlmoEarthSample,
+        patch_size: int,
+        decoder: torch.nn.Module,
+    ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
+        """Shared forward logic for both branches.
+
+        Returns:
+            latent: embeddings from encoder
+            decoded: predictions from decoder for masked tokens
+            latent_projected_and_pooled: pooled tokens for contrastive loss
+            reconstructed: MAE predictions if enabled
+        """
+        output_dict = self.encoder(x, patch_size=patch_size)
+        original_masks = output_dict.pop("original_masks", None)
+        latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
+            output_dict
+        )
+
+        if self.uses_aggregated_predictor:
+            assert original_masks is not None
+            decoded = decoder(
+                encoder_output=latent,
+                original_masks=original_masks,
+                timestamps=x.timestamps,
+                patch_size=patch_size,
+            )
+            reconstructed = None
+            if self.reconstructor:
+                reconstructed = self.reconstructor(decoded, x.timestamps, patch_size)
+        else:
+            reconstructed = None
+            if self.reconstructor:
+                reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
+            decoded = decoder(
+                latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
+            )
+        return latent, decoded, latent_projected_and_pooled, reconstructed
 
     def forward_a(
         self, x: MaskedOlmoEarthSample, patch_size: int
     ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
-        """Forward pass for the Latent MIM Style.
-
-        Returns:
-            latent: embeddings from encoder
-            decoded: predictions from decoder for masked tokens
-            latent_projected_and_pooled: pooled tokens for contrastive loss
-            reconstructed: MAE predictions if enabled
-        """
-        # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        output_dict = self.encoder(x, patch_size=patch_size)
-        latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
-            output_dict
-        )
-        reconstructed = None
-        if self.reconstructor:
-            reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
-        decoded = self.decoder_a(
-            latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
-        )
-        return latent, decoded, latent_projected_and_pooled, reconstructed
+        """Forward pass using decoder_a."""
+        return self._forward_branch(x, patch_size, self.decoder_a)
 
     def forward_b(
         self, x: MaskedOlmoEarthSample, patch_size: int
     ) -> tuple[TokensAndMasks, TokensAndMasks, torch.Tensor, TokensAndMasks | None]:
-        """Forward pass for the Latent MIM Style.
-
-        Returns:
-            latent: embeddings from encoder
-            decoded: predictions from decoder for masked tokens
-            latent_projected_and_pooled: pooled tokens for contrastive loss
-            reconstructed: MAE predictions if enabled
-        """
-        # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        output_dict = self.encoder(x, patch_size=patch_size)
-        latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
-            output_dict
-        )
-        reconstructed = None
-        if self.reconstructor:
-            reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
-        decoded = self.decoder_b(
-            latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
-        )
-        return latent, decoded, latent_projected_and_pooled, reconstructed
+        """Forward pass using decoder_b."""
+        return self._forward_branch(x, patch_size, self.decoder_b)
 
     def forward(
         self,
