@@ -382,6 +382,16 @@ class DownstreamEvaluator:
         )
         return best_checkpoint_path
 
+    def _get_resume_checkpoint_path(self) -> str:
+        """Get the resume checkpoint path for resumable training."""
+        resume_checkpoint_path = os.path.join(
+            self.trainer.save_folder,
+            self.evaluation_name,
+            f"lr{self.ft_lr}",
+            "last.ckpt",
+        )
+        return resume_checkpoint_path
+
     def _val_finetune(self) -> EvalTaskResult:
         """Validate the model using finetuning."""
         logger.info(f"Validating {self.dataset} with finetune")
@@ -422,11 +432,20 @@ class DownstreamEvaluator:
 
         # Skip task if best checkpoint already exists
         best_checkpoint_path = self._get_best_checkpoint_path()
+        resume_checkpoint_path = self._get_resume_checkpoint_path()
         if os.path.exists(best_checkpoint_path):
-            logger.info("Best checkpoint already exists, skipping finetuning")
-            return EvalTaskResult(val_result=None, test_result=None)
+            logger.info(
+                f"Best checkpoint for {self.evaluation_name} already exists, "
+                f"skipping finetuning and evaluating on the best checkpoint..."
+            )
 
-        logger.info("Best checkpoint does not exist, running finetuning")
+        if os.path.exists(resume_checkpoint_path):
+            logger.info(
+                f"Found resume checkpoint at {resume_checkpoint_path}, will resume training"
+            )
+        else:
+            logger.info("No resume checkpoint found, starting fresh")
+
         result = run_finetune_eval(
             task_name=self.evaluation_name,
             task_config=self.config,
@@ -443,6 +462,7 @@ class DownstreamEvaluator:
             test_loader=test_loader,
             seed=self.finetune_seed,
             best_checkpoint_path=best_checkpoint_path,
+            resume_checkpoint_path=resume_checkpoint_path,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
