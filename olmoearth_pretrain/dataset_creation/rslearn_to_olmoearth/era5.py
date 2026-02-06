@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import tqdm
 from rslearn.data_sources import Item
-from rslearn.dataset import Window
+from rslearn.dataset import Dataset, Window
 from rslearn.utils.mp import star_imap_unordered
 from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
@@ -27,18 +27,17 @@ LAYER_NAME = "era5"
 logger = logging.getLogger(__name__)
 
 
-def convert_era5(window_path: UPath, olmoearth_path: UPath) -> None:
+def convert_era5(window: Window, olmoearth_path: UPath) -> None:
     """Add ERA5 data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
-        window_path: the rslearn window directory to read data from.
+        window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
     modality = Modality.ERA5
     assert len(modality.band_sets) == 1
     band_set = modality.band_sets[0]
 
-    window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
     layer_datas = window.load_layer_datas()
     raster_format = GeotiffRasterFormat()
@@ -205,15 +204,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    ds_path = UPath(args.ds_path)
+    dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
-    metadata_fnames = ds_path.glob("windows/res_160/*/metadata.json")
     jobs = []
-    for metadata_fname in metadata_fnames:
+    for window in dataset.load_windows(
+        workers=args.workers, show_progress=True, groups=["res_160"]
+    ):
         jobs.append(
             dict(
-                window_path=metadata_fname.parent,
+                window=window,
                 olmoearth_path=olmoearth_path,
             )
         )

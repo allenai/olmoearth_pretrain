@@ -10,7 +10,7 @@
         }
       ],
       "data_source": {
-        "name": "rslearn.data_sources.usda_cdl.CDL"
+        "class_path": "rslearn.data_sources.usda_cdl.CDL"
       },
       "resampling_method": "nearest",
       "type": "raster"

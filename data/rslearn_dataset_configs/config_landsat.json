@@ -27,14 +27,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "query_config": {
           "max_matches": 8,
           "space_mode": "INTERSECTS"
-        },
-        "sort_by": "cloud_cover"
+        }
       },
       "type": "raster"
     },
@@ -65,11 +67,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "-180d"
       },
       "type": "raster"
@@ -101,11 +105,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "-150d"
       },
       "type": "raster"
@@ -137,11 +143,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "-120d"
       },
       "type": "raster"
@@ -173,11 +181,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "-90d"
       },
       "type": "raster"
@@ -209,11 +219,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "-60d"
       },
       "type": "raster"
@@ -245,11 +257,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "-30d"
       },
       "type": "raster"
@@ -281,11 +295,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "0d"
       },
       "type": "raster"
@@ -317,11 +333,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "30d"
       },
       "type": "raster"
@@ -353,11 +371,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "60d"
       },
       "type": "raster"
@@ -389,11 +409,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "90d"
       },
       "type": "raster"
@@ -425,11 +447,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "120d"
       },
       "type": "raster"
@@ -461,11 +485,13 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
         "duration": "30d",
         "ingest": false,
-        "metadata_cache_dir": "cache/landsat",
-        "name": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "sort_by": "cloud_cover",
+        "init_args": {
+          "metadata_cache_dir": "cache/landsat",
+          "sort_by": "cloud_cover"
+        },
         "time_offset": "150d"
       },
       "type": "raster"
