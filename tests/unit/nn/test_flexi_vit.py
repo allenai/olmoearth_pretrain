@@ -92,6 +92,20 @@ class TestCompositeEncodings:
         assert not (wc_enc == worldcover_tokens).all()
         assert worldcover_tokens.shape == wc_enc.shape
 
+    def test_apply_encodings_per_modality_worldcover_rectangular_grid(
+        self,
+        composite_encodings: CompositeEncodings,
+    ) -> None:
+        """Rectangular (H!=W) spatial grids should not crash."""
+        B, H, W, C, D = 1, 18, 20, 1, 16
+        patch_size = 4
+        input_res = 10
+        worldcover_tokens = torch.randn(B, H, W, C, D)
+        wc_enc = composite_encodings._apply_encodings_per_modality(
+            "worldcover", worldcover_tokens, None, patch_size, input_res
+        )
+        assert worldcover_tokens.shape == wc_enc.shape
+
     def test_apply_encodings_per_modality_grad(
         self, composite_encodings: CompositeEncodings
     ) -> None:
