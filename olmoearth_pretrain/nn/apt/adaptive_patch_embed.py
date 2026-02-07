@@ -148,9 +148,10 @@ class AdaptivePatchEmbed(nn.Module):
 
                 for desc in descs:
                     size_in_base = 2 ** desc.scale
-
+                    logger.info(f"shape of base_patch_embeddings: {base_patch_embeddings.shape}")
                     if desc.scale == 0:
                         # Base scale: just take the token directly
+                        logger.info(f"taking base token for desc: {desc}")
                         token = base_patch_embeddings[bi, desc.y, desc.x, ti, :]  # [D]
                         sample_tokens.append(token.unsqueeze(0))
                     else:
