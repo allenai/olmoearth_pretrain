@@ -285,14 +285,14 @@ class DownstreamEvaluator:
 
         # Wrap model with APT if enabled (use finetune config with masking disabled)
         if self.use_apt:
-            from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoder
+            from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoderWrapper
 
             apt_config = (
                 self.apt_config
                 if self.apt_config is not None
                 else APTConfig.default_s2_finetune_config()
             )
-            model = APTEncoder(
+            model = APTEncoderWrapper(
                 encoder=model,
                 apt_config=apt_config,
                 apt_modality=self.apt_modality,

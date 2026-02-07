@@ -63,30 +63,6 @@ class ConvDownsample(nn.Module):
         return out.squeeze(-1).squeeze(-1)  # [B, D]
 
 
-class ZeroMLP(nn.Module):
-    """Zero-initialized MLP for combining embeddings.
-
-    Initialized with zeros so that initially e_final = e_resize,
-    preserving pretrained model behavior.
-    """
-
-    def __init__(self, embedding_size: int):
-        """Initialize the ZeroMLP.
-
-        Args:
-            embedding_size: Size of embeddings
-        """
-        super().__init__()
-        self.linear = nn.Linear(embedding_size, embedding_size)
-
-        # Zero initialization
-        nn.init.zeros_(self.linear.weight)
-        nn.init.zeros_(self.linear.bias)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass."""
-        return self.linear(x)
-
 
 class AdaptivePatchEmbed(nn.Module):
     """Adaptive patch embedding for mixed-size patches.
@@ -99,10 +75,9 @@ class AdaptivePatchEmbed(nn.Module):
 
     def __init__(
         self,
-        base_patch_embed: FlexiPatchEmbed,
-        num_scales: int = 3,
-        embedding_size: int = 768,
-        base_patch_size: int = 16,
+        num_scales: int,
+        embedding_size: int,
+        base_patch_size: int,
     ):
         """Initialize adaptive patch embedding.
 
@@ -113,7 +88,6 @@ class AdaptivePatchEmbed(nn.Module):
             base_patch_size: Base (smallest) patch size in pixels
         """
         super().__init__()
-        self.base_patch_embed = base_patch_embed
         self.num_scales = num_scales
         self.embedding_size = embedding_size
         self.base_patch_size = base_patch_size
@@ -126,201 +100,85 @@ class AdaptivePatchEmbed(nn.Module):
         for scale in range(1, num_scales):
             self.conv_downsample.append(ConvDownsample(embedding_size, scale))
 
-        # ZeroMLP for combining resize and detail paths
-        self.zero_mlp = ZeroMLP(embedding_size)
 
-    def embed_base_patch(self, patch: torch.Tensor) -> torch.Tensor:
-        """Embed a base-size patch.
 
-        Args:
-            patch: Patch with shape [B, H, W, C] where H=W=base_patch_size
-
-        Returns:
-            Embedding with shape [B, D]
-        """
-        # base_patch_embed expects [B, H, W, C] and returns [B, 1, 1, D]
-        # for a single-patch input
-        # Pass patch_size to tell FlexiPatchEmbed what size our input patches are
-        # The input H, W should match base_patch_size
-        input_size = patch.shape[1]  # H dimension
-        embedded = self.base_patch_embed(patch, patch_size=input_size)
-
-        # Flatten spatial dims
-        if embedded.ndim == 4:
-            embedded = embedded.view(embedded.shape[0], -1)
-        elif embedded.ndim == 3:
-            embedded = embedded.squeeze(1)
-
-        return embedded
-
-    def embed_large_patch(
+    def merge_token_block(
         self,
-        patch: torch.Tensor,
+        block: torch.Tensor,
         scale: int,
     ) -> torch.Tensor:
-        """Embed a large patch using resize + detail aggregation.
+        """Merge a block of base tokens into a single coarse token.
 
         Args:
-            patch: Patch with shape [B, H, W, C] where H=W=patch_sizes[scale]
+            block: Token block with shape [B, D, 2^scale, 2^scale]
             scale: Scale index (> 0)
 
         Returns:
-            Embedding with shape [B, D]
+            Merged token with shape [B, D]
         """
-        b, h, w, c = patch.shape
-        patch_size = self.patch_sizes[scale]
-
-        # Path 1: Resize to base size and embed
-        patch_resized = rearrange(patch, "b h w c -> b c h w")
-        patch_resized = F.interpolate(
-            patch_resized,
-            size=(self.base_patch_size, self.base_patch_size),
-            mode="bicubic",
-            antialias=True,
-        )
-        patch_resized = rearrange(patch_resized, "b c h w -> b h w c")
-        e_resize = self.embed_base_patch(patch_resized)
-
-        # Path 2: Split into subpatches, embed each, aggregate
-        # Number of subpatches per dimension
-        num_sub = patch_size // self.base_patch_size  # = 2^scale
-
-        # Split into subpatches: [B, H, W, C] -> [B, num_sub, num_sub, base_size, base_size, C]
-        subpatches = rearrange(
-            patch,
-            "b (nh ph) (nw pw) c -> b nh nw ph pw c",
-            nh=num_sub,
-            nw=num_sub,
-            ph=self.base_patch_size,
-            pw=self.base_patch_size,
-        )
-
-        # Embed each subpatch
-        subpatches_flat = rearrange(subpatches, "b nh nw ph pw c -> (b nh nw) ph pw c")
-        subpatch_embeds = self.embed_base_patch(subpatches_flat)  # [(B*nh*nw), D]
-
-        # Reshape to grid
-        subpatch_embeds = rearrange(
-            subpatch_embeds,
-            "(b nh nw) d -> b d nh nw",
-            b=b,
-            nh=num_sub,
-            nw=num_sub,
-        )
-
-        # Aggregate via conv downsample
-        conv_idx = scale - 1  # scale 1 -> conv 0, etc.
-        e_sub = self.conv_downsample[conv_idx](subpatch_embeds)  # [B, D]
-
-        # Combine: e_final = e_resize + zero_mlp(e_sub)
-        e_final = e_resize + self.zero_mlp(e_sub)
-
-        return e_final
-
-    def forward_single_scale(
-        self,
-        patches: torch.Tensor,
-        scale: int,
-    ) -> torch.Tensor:
-        """Forward pass for patches of a single scale.
-
-        Args:
-            patches: Patches with shape [N, H, W, C]
-            scale: Scale index
-
-        Returns:
-            Embeddings with shape [N, D]
-        """
-        if scale == 0:
-            return self.embed_base_patch(patches)
-        else:
-            return self.embed_large_patch(patches, scale)
+        conv_idx = scale - 1  # scale 1 -> index 0, scale 2 -> index 1
+        return self.conv_downsample[conv_idx](block)  # [B, D]
 
     def forward(
         self,
-        image: torch.Tensor,
-        patch_descriptors: list[PatchDescriptor],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass for adaptive patches.
+        base_patch_embeddings: torch.Tensor,
+        patch_descriptors: list[list[list[PatchDescriptor]]],
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        """Merge base-size tokens into adaptive tokens per batch and timestep.
 
         Args:
-            image: Full image with shape [H, W, C] or [B, H, W, C]
-            patch_descriptors: List of patch descriptors from partitioner
+            base_patch_embeddings: [B, H, W, T, D] tokens from standard
+                patchification + encodings.
+            patch_descriptors: Nested list [B][T] of PatchDescriptor lists from the partitioner
 
         Returns:
-            Tuple of:
-                - tokens: Embeddings with shape [N, D]
-                - positions: Patch center positions with shape [N, 2] in base patch units
+            all_tokens: List of [N_i, D] tensors, one per batch element (all timesteps concatenated)
+            all_positions: List of [N_i, 4] int tensors (y, x, size_in_base, timestep) per batch element
         """
-        if image.ndim == 3:
-            image = image.unsqueeze(0)
+        b, h, w, t, d = base_patch_embeddings.shape
+        all_tokens = []
+        all_positions = []
 
-        device = image.device
-        b, h, w, c = image.shape
+        for bi in range(b):
+            sample_tokens = []
+            sample_positions = []
 
-        if b != 1:
-            raise ValueError(
-                "AdaptivePatchEmbed.forward expects unbatched or batch_size=1 input. "
-                "Use forward_batch for batched inputs."
-            )
+            for ti in range(t):
+                descs = patch_descriptors[bi][ti]
 
-        tokens = []
-        positions = []
+                for desc in descs:
+                    size_in_base = 2 ** desc.scale
 
-        for desc in patch_descriptors:
-            # Extract patch from image
-            x_px = desc.x * self.base_patch_size
-            y_px = desc.y * self.base_patch_size
-            size = desc.size
+                    if desc.scale == 0:
+                        # Base scale: just take the token directly
+                        token = base_patch_embeddings[bi, desc.y, desc.x, ti, :]  # [D]
+                        sample_tokens.append(token.unsqueeze(0))
+                    else:
+                        # Coarser scale: extract the 2^s x 2^s block and merge
+                        block = base_patch_embeddings[
+                            bi,
+                            desc.y : desc.y + size_in_base,
+                            desc.x : desc.x + size_in_base,
+                            ti,
+                            :,
+                        ]  # [size_in_base, size_in_base, D]
+                        # ConvDownsample expects [1, D, H, W]
+                        block = rearrange(block, "h w d -> 1 d h w")
+                        token = self.merge_token_block(block, desc.scale)  # [1, D]
+                        sample_tokens.append(token)
 
-            patch = image[:, y_px : y_px + size, x_px : x_px + size, :]
+                    sample_positions.append([desc.y, desc.x, size_in_base, ti])
 
-            # Embed based on scale
-            embedding = self.forward_single_scale(patch, desc.scale)
-            tokens.append(embedding)
+            if sample_tokens:
+                all_tokens.append(torch.cat(sample_tokens, dim=0))  # [N_i, D]
+                all_positions.append(
+                    torch.tensor(sample_positions, dtype=torch.long, device=base_patch_embeddings.device)
+                )  # [N_i, 4]
+            else:
+                all_tokens.append(torch.zeros(0, d, device=base_patch_embeddings.device))
+                all_positions.append(torch.zeros(0, 4, dtype=torch.long, device=base_patch_embeddings.device))
 
-            # Position is center of patch in base patch units
-            size_in_base = size // self.base_patch_size
-            center_x = desc.x + size_in_base / 2.0
-            center_y = desc.y + size_in_base / 2.0
-            positions.append([center_x, center_y])
-
-        tokens = torch.cat(tokens, dim=0)  # [N, D]
-        positions = torch.tensor(
-            positions, device=device, dtype=torch.float32
-        )  # [N, 2]
-
-        return tokens, positions
-
-    def forward_batch(
-        self,
-        images: list[torch.Tensor],
-        patch_descriptors_batch: list[list[PatchDescriptor]],
-    ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[int]]:
-        """Forward pass for a batch of images with their patch descriptors.
-
-        Args:
-            images: List of images, each [H, W, C]
-            patch_descriptors_batch: List of patch descriptor lists
-
-        Returns:
-            Tuple of:
-                - tokens_list: List of embeddings, each [N_i, D]
-                - positions_list: List of positions, each [N_i, 2]
-                - lengths: Token count per image
-        """
-        tokens_list = []
-        positions_list = []
-        lengths = []
-
-        for image, descriptors in zip(images, patch_descriptors_batch):
-            tokens, positions = self.forward(image, descriptors)
-            tokens_list.append(tokens)
-            positions_list.append(positions)
-            lengths.append(len(descriptors))
-
-        return tokens_list, positions_list, lengths
-
+        return all_tokens, all_positions
 
 class AdaptiveMultiModalPatchEmbed(nn.Module):
     """Adaptive patch embedding for multiple modalities.

@@ -11,7 +11,6 @@ from olmoearth_pretrain.nn.apt.adaptive_patch_embed import (
     AdaptiveMultiModalPatchEmbed,
     AdaptivePatchEmbed,
     ConvDownsample,
-    ZeroMLP,
 )
 from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoder
 from olmoearth_pretrain.nn.apt.config import (
@@ -54,7 +53,6 @@ __all__ = [
     "AdaptivePatchEmbed",
     "AdaptiveMultiModalPatchEmbed",
     "ConvDownsample",
-    "ZeroMLP",
     # Encoder
     "APTEncoder",
     # Masking
