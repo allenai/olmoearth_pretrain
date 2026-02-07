@@ -316,7 +316,9 @@ class ChnAttn(nn.Module):
         out_masks = []
 
         for i, (mod_tokens, mod_masks) in enumerate(zip(all_tokens, all_masks)):
-            # mod_tokens: (B, H, W, T, bs, D), mod_masks: (B, H, W, T, bs)
+            # mod_tokens: (B, H, W, T_i, bs, D), mod_masks: (B, H, W, T_i, bs)
+            # Each modality may have a different T dimension
+            B_i, H_i, W_i, T_i = mod_tokens.shape[:4]
             flat_tokens = rearrange(mod_tokens, "b h w t n d -> (b h w t) n d")
             flat_masks = rearrange(mod_masks, "b h w t n -> (b h w t) n")
 
@@ -345,7 +347,9 @@ class ChnAttn(nn.Module):
                 query_i, flat_tokens, flat_tokens, key_padding_mask=ignore_mask
             )
             out = self.proj_out(out)
-            out = rearrange(out, "(b h w t) n d -> b h w t n d", b=B, h=H, w=W, t=T)
+            out = rearrange(
+                out, "(b h w t) n d -> b h w t n d", b=B_i, h=H_i, w=W_i, t=T_i
+            )
 
             # Zero out positions where all inputs were MISSING
             out = torch.where(
@@ -357,9 +361,31 @@ class ChnAttn(nn.Module):
             out_tokens.append(out)
             out_masks.append(mod_agg_mask)
 
-        # Stack: (B, H, W, T, N_modalities, D)
-        agg_tokens = torch.cat(out_tokens, dim=-2)
-        agg_masks = torch.cat(out_masks, dim=-1)
+        # Pad T dimension to max_T across modalities so we can cat along
+        # the modality (dim=-2) axis.
+        max_T = max(t.shape[3] for t in out_tokens)
+        padded_tokens = []
+        padded_masks = []
+        for out, mod_agg_mask in zip(out_tokens, out_masks):
+            T_i = out.shape[3]
+            if T_i < max_T:
+                pad_t = max_T - T_i
+                # out: (B, H, W, T_i, 1, D) -> pad T dim
+                out = torch.nn.functional.pad(out, (0, 0, 0, 0, pad_t, 0))
+                # mod_agg_mask: (B, H, W, T_i, 1) -> pad T dim with MISSING
+                mask_pad = torch.full(
+                    (*mod_agg_mask.shape[:3], pad_t, mod_agg_mask.shape[4]),
+                    MaskValue.MISSING.value,
+                    dtype=mod_agg_mask.dtype,
+                    device=mod_agg_mask.device,
+                )
+                mod_agg_mask = torch.cat([mask_pad, mod_agg_mask], dim=3)
+            padded_tokens.append(out)
+            padded_masks.append(mod_agg_mask)
+
+        # Stack: (B, H, W, max_T, N_modalities, D)
+        agg_tokens = torch.cat(padded_tokens, dim=-2)
+        agg_masks = torch.cat(padded_masks, dim=-1)
 
         return agg_tokens, agg_masks
 
