@@ -96,6 +96,12 @@ class CrossAttention(nn.Module):
         B, Nq, D = q.shape
         Nkv = k.shape[1]
 
+        # Cast to weight dtype for mixed-precision compatibility
+        weight_dtype = self.proj_k.weight.dtype
+        q = q.to(weight_dtype)
+        k = k.to(weight_dtype)
+        v = v.to(weight_dtype)
+
         q = q.reshape(B, Nq, self.num_heads, D // self.num_heads).permute(0, 2, 1, 3)
         q = q * self.scale
 
