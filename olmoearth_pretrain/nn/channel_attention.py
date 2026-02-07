@@ -608,8 +608,8 @@ class AggregatedPredictor(nn.Module):
         context = rearrange(agg_tokens, "b ... d -> b (...) d")
         context_mask = rearrange(agg_mask, "b ... -> b (...)")
 
-        # Project to decoder dim
-        context = self.input_norm(context)
+        # Project to decoder dim (cast for mixed-precision compatibility)
+        context = self.input_norm(context.to(self.input_norm.weight.dtype))
         context = self.encoder_to_decoder_embed(context)
 
         # Context mask: True where token is ONLINE_ENCODER (should attend)
@@ -734,7 +734,7 @@ class AggregatedPredictor(nn.Module):
             num_bandsets = self.tokenization_config.get_num_bandsets(modality)
             per_bandset_outputs = []
             for idx in range(num_bandsets):
-                bandset_data = modality_tokens[..., idx, :]
+                bandset_data = modality_tokens[..., idx, :].to(self.norm.weight.dtype)
                 out = self.to_output_embed(self.norm(bandset_data))
                 per_bandset_outputs.append(out)
             output_dict[modality] = torch.stack(per_bandset_outputs, dim=-2)
