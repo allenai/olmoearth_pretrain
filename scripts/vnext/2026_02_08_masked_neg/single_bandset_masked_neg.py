@@ -12,7 +12,6 @@ import sys
 
 from base_token_masked import (
     build_common_components as build_common_components_base,
-    build_dataloader_config as build_dataloader_config_base,
     build_dataset_config,
     build_trainer_config,
     build_visualize_config,
@@ -78,19 +77,19 @@ def _contrastive_config() -> LossConfig:
 
 # --- Tokenization configs ---
 
-S2_COLLAPSED_ALL = ModalityTokenization(
+S2_SINGLE_BANDSET = ModalityTokenization(
     band_groups=[
         ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"],
     ]
 )
 
-S2_COLLAPSED_NO_60M = ModalityTokenization(
+S2_SINGLE_BANDSET_NO_60M = ModalityTokenization(
     band_groups=[
         ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12"],
     ]
 )
 
-LANDSAT_COLLAPSED = ModalityTokenization(
+LANDSAT_SINGLE_BANDSET = ModalityTokenization(
     band_groups=[
         ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
     ]
@@ -98,11 +97,11 @@ LANDSAT_COLLAPSED = ModalityTokenization(
 
 
 def _tokenization_config(drop_60m: bool = False) -> TokenizationConfig:
-    s2 = S2_COLLAPSED_NO_60M if drop_60m else S2_COLLAPSED_ALL
+    s2 = S2_SINGLE_BANDSET_NO_60M if drop_60m else S2_SINGLE_BANDSET
     return TokenizationConfig(
         overrides={
             "sentinel2_l2a": s2,
-            "landsat": LANDSAT_COLLAPSED,
+            "landsat": LANDSAT_SINGLE_BANDSET,
         }
     )
 
@@ -183,6 +182,24 @@ def _build_model(common: CommonComponents) -> LatentMIMConfig:
     )
 
 
+def _build_dataloader(
+    common: CommonComponents, masking_type: str,
+) -> OlmoEarthDataLoaderConfig:
+    return OlmoEarthDataLoaderConfig(
+        num_workers=16,
+        global_batch_size=512,
+        token_budget=2250,
+        prefetch_factor=4,
+        sampled_hw_p_list=list(range(1, 13)),
+        min_patch_size=MIN_PATCH_SIZE,
+        max_patch_size=MAX_PATCH_SIZE,
+        work_dir=common.save_folder,
+        seed=3622,
+        num_masked_views=2,
+        masking_config=_masking_config(masking_type, common.tokenization_config),
+    )
+
+
 # ============================================================
 # Experiment 1: modality_cross_random + single_bandset bandsets
 # ============================================================
@@ -198,7 +215,7 @@ def build_train_module_exp1(common: CommonComponents) -> ContrastiveLatentMIMTra
 
 
 def build_dataloader_exp1(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    return build_dataloader_config_base(common)
+    return _build_dataloader(common, "modality_cross_random")
 
 
 build_model_exp1 = _build_model
@@ -219,7 +236,7 @@ def build_train_module_exp2(common: CommonComponents) -> ContrastiveLatentMIMTra
 
 
 def build_dataloader_exp2(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    return build_dataloader_config_base(common)
+    return _build_dataloader(common, "random_with_decode")
 
 
 build_model_exp2 = _build_model
@@ -240,7 +257,7 @@ def build_train_module_exp3(common: CommonComponents) -> ContrastiveLatentMIMTra
 
 
 def build_dataloader_exp3(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    return build_dataloader_config_base(common)
+    return _build_dataloader(common, "modality_cross_random")
 
 
 build_model_exp3 = _build_model
