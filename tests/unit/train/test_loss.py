@@ -176,6 +176,21 @@ def test_cross_entropy_loss() -> None:
     assert torch.isclose(loss_value, -torch.log(torch.tensor(0.5)), 0.0001)
 
 
+def test_infonce_loss() -> None:
+    """Just test that it runs as expected."""
+    b, d = 16, 128
+
+    loss = InfoNCELoss()
+    loss_value = loss.compute(torch.ones((b, d)), torch.zeros((b, d)))
+    # not very good! since they are all the same
+    # predictions and values
+    assert loss_value > 0.5
+    # check the weight
+    loss = InfoNCELoss(weight=0.1)
+    w_loss_value = loss.compute(torch.ones((b, d)), torch.zeros((b, d)))
+    assert 0.1 * loss_value == w_loss_value
+
+
 def test_modality_patch_discrimination_masked_negatives() -> None:
     """Test that masked negatives loss runs and masks identical-target negatives."""
     b, t_h, t_w, t, d = 4, 2, 2, 2, 8
@@ -197,29 +212,13 @@ def test_modality_patch_discrimination_masked_negatives() -> None:
     loss = ModalityPatchDiscriminationMaskedNegatives(tau=0.1)
     loss_value = loss.compute(preds, targets)
     assert loss_value > 0
-    assert torch.isfinite(loss_value)
 
     # Without masking (set threshold impossibly high so nothing is masked)
     loss_no_mask = ModalityPatchDiscriminationMaskedNegatives(
         tau=0.1, same_target_threshold=2.0
     )
     loss_no_mask_value = loss_no_mask.compute(preds, targets)
-    assert torch.isfinite(loss_no_mask_value)
+    assert loss_no_mask_value > 0
 
-    # Losses should differ when masking is active
-    assert not torch.isclose(loss_value, loss_no_mask_value)
-
-
-def test_infonce_loss() -> None:
-    """Just test that it runs as expected."""
-    b, d = 16, 128
-
-    loss = InfoNCELoss()
-    loss_value = loss.compute(torch.ones((b, d)), torch.zeros((b, d)))
-    # not very good! since they are all the same
-    # predictions and values
-    assert loss_value > 0.5
-    # check the weight
-    loss = InfoNCELoss(weight=0.1)
-    w_loss_value = loss.compute(torch.ones((b, d)), torch.zeros((b, d)))
-    assert 0.1 * loss_value == w_loss_value
+    # Masking removes false negatives from denominator, so loss should be lower
+    assert loss_value < loss_no_mask_value
