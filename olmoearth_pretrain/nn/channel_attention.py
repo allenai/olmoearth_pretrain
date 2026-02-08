@@ -245,6 +245,31 @@ class ChnAttn(nn.Module):
         D: int,
     ) -> tuple[Tensor, Tensor]:
         """All modalities fused into 1 token per (h,w,t)."""
+        # Pad T dimension to max_T across modalities (some may differ, e.g. static vs temporal)
+        max_T = max(t.shape[3] for t in all_tokens)
+        if any(t.shape[3] != max_T for t in all_tokens):
+            padded_tokens = []
+            padded_masks = []
+            for tokens, masks in zip(all_tokens, all_masks):
+                T_i = tokens.shape[3]
+                if T_i < max_T:
+                    pad_t = max_T - T_i
+                    # tokens: (B, H, W, T_i, bs, D) -> pad T dim at front
+                    tokens = torch.nn.functional.pad(tokens, (0, 0, 0, 0, pad_t, 0))
+                    # masks: (B, H, W, T_i, bs) -> pad T dim with MISSING
+                    mask_pad = torch.full(
+                        (*masks.shape[:3], pad_t, masks.shape[4]),
+                        MaskValue.MISSING.value,
+                        dtype=masks.dtype,
+                        device=masks.device,
+                    )
+                    masks = torch.cat([mask_pad, masks], dim=3)
+                padded_tokens.append(tokens)
+                padded_masks.append(masks)
+            all_tokens = padded_tokens
+            all_masks = padded_masks
+            T = max_T
+
         # Concat all bandsets: (B, H, W, T, total_bs, D)
         cat_tokens = torch.cat(all_tokens, dim=-2)
         cat_masks = torch.cat(all_masks, dim=-1)
