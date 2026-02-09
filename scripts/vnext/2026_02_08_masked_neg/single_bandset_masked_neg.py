@@ -1,9 +1,10 @@
 """Single bandset experiments with masked-negatives loss.
 
-Three experiments:
-1. modality_cross_random masking + single_bandset S2/Landsat bandsets + masked neg loss
-2. random_with_decode masking + single_bandset S2/Landsat bandsets + masked neg loss
-3. modality_cross_random masking + single_bandset S2/Landsat (no B01/B09) + masked neg loss
+Four experiments:
+1. modality_cross_random masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
+2. random_with_decode masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
+3. modality_cross_random masking + single bandset S2 (no 60m: 10 bands) / Landsat + masked neg loss
+4. modality_cross_random masking + single bandset S2 (10m only: 4 bands) / Landsat + masked neg loss
 """
 
 import copy
