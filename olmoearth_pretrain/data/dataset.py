@@ -7,7 +7,7 @@ import logging
 import shutil
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import Any, NamedTuple
 
 import h5py
 
@@ -34,9 +34,7 @@ from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
 from olmoearth_pretrain.datatypes import (
     OlmoEarthSample,
 )
-
-if TYPE_CHECKING:
-    from olmoearth_pretrain.nn.tokenization import TokenizationConfig
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 
 logger = logging.getLogger(__name__)
 

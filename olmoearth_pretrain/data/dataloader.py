@@ -7,7 +7,7 @@ import multiprocessing as mp
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 import torch
@@ -38,10 +38,8 @@ from olmoearth_pretrain.data.dataset import (
     OlmoEarthSample,
 )
 from olmoearth_pretrain.data.transform import Transform, TransformConfig
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskingConfig, MaskingStrategy
-
-if TYPE_CHECKING:
-    from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -634,7 +632,7 @@ class OlmoEarthDataLoaderConfig(Config):
     masking_config: MaskingConfig | None = None
     masking_config_b: MaskingConfig | None = None
     num_masked_views: int = 1  # 1 = single, 2 = double
-    tokenization_config: "TokenizationConfig | None" = None
+    tokenization_config: TokenizationConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
