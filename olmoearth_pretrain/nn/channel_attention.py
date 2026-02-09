@@ -27,6 +27,7 @@ from olmoearth_pretrain.data.constants import (
     get_modality_specs_from_names,
 )
 from olmoearth_pretrain.datatypes import MaskValue
+from olmoearth_pretrain.nn.attention import Attention
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 
 if TYPE_CHECKING:
@@ -59,76 +60,6 @@ class ChnAttnConfig(Config):
             raise ValueError(
                 f"aggregation_mode must be 'all' or 'per_modality', got {self.aggregation_mode}"
             )
-
-
-class CrossAttention(nn.Module):
-    """Multi-head cross-attention: Q attends to K/V.
-
-    No query projection since query is a learned parameter.
-    """
-
-    def __init__(self, dim: int, num_heads: int = 8, qkv_bias: bool = False):
-        """Initialize CrossAttention."""
-        super().__init__()
-        self.num_heads = num_heads
-        head_dim = dim // num_heads
-        assert dim % num_heads == 0, "dim must be divisible by num_heads"
-        self.scale = head_dim**-0.5
-
-        self.proj_k = nn.Linear(dim, dim, bias=qkv_bias)
-        self.proj_v = nn.Linear(dim, dim, bias=qkv_bias)
-
-    def forward(
-        self,
-        q: Tensor,
-        k: Tensor,
-        v: Tensor,
-        key_padding_mask: Tensor | None = None,
-    ) -> Tensor:
-        """Forward pass.
-
-        Args:
-            q: (B, Nq, D)
-            k: (B, Nkv, D)
-            v: (B, Nkv, D)
-            key_padding_mask: (B, Nkv), True means IGNORE this key position.
-        """
-        B, Nq, D = q.shape
-        Nkv = k.shape[1]
-
-        # Cast to weight dtype for mixed-precision compatibility
-        weight_dtype = self.proj_k.weight.dtype
-        q = q.to(weight_dtype)
-        k = k.to(weight_dtype)
-        v = v.to(weight_dtype)
-
-        q = q.reshape(B, Nq, self.num_heads, D // self.num_heads).permute(0, 2, 1, 3)
-        q = q * self.scale
-
-        k = (
-            self.proj_k(k)
-            .reshape(B, Nkv, self.num_heads, D // self.num_heads)
-            .permute(0, 2, 1, 3)
-        )
-        v = (
-            self.proj_v(v)
-            .reshape(B, Nkv, self.num_heads, D // self.num_heads)
-            .permute(0, 2, 1, 3)
-        )
-
-        attn = q @ k.transpose(-2, -1)  # (B, num_heads, Nq, Nkv)
-        if key_padding_mask is not None:
-            # key_padding_mask: (B, Nkv) -> (B, 1, 1, Nkv)
-            attn = attn.masked_fill(
-                key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf")
-            )
-        attn = attn.softmax(dim=-1)
-        # When all keys are masked (-inf), softmax produces NaN.
-        # Replace with 0 so downstream torch.where zeroing works cleanly
-        # and NaN gradients don't propagate backward.
-        attn = torch.nan_to_num(attn, nan=0.0)
-        x = (attn @ v).transpose(1, 2).reshape(B, Nq, D)
-        return x
 
 
 class ChnAttn(nn.Module):
@@ -176,8 +107,8 @@ class ChnAttn(nn.Module):
             else nn.Identity()
         )
 
-        self.cross_attn = CrossAttention(
-            dim=attn_dim, num_heads=num_heads, qkv_bias=True
+        self.cross_attn = Attention(
+            dim=attn_dim, num_heads=num_heads, qkv_bias=True, cross_attn=True
         )
 
         if aggregation_mode == "all":
@@ -285,9 +216,9 @@ class ChnAttn(nn.Module):
         # Project to attn_dim
         flat_tokens = self.proj_in(flat_tokens)
 
-        # Build key_padding_mask: True where we should IGNORE
+        # Build attn_mask: True where we should ATTEND
         # Only attend to ONLINE_ENCODER tokens
-        ignore_mask = flat_masks != MaskValue.ONLINE_ENCODER.value
+        attend_mask = flat_masks == MaskValue.ONLINE_ENCODER.value
 
         # Expand query: (1, 1, attn_dim) -> (B*H*W*T, 1, attn_dim)
         BN = flat_tokens.shape[0]
@@ -308,9 +239,7 @@ class ChnAttn(nn.Module):
         )
 
         # Cross-attend
-        out = self.cross_attn(
-            query, flat_tokens, flat_tokens, key_padding_mask=ignore_mask
-        )
+        out = self.cross_attn(x=query, y=flat_tokens, attn_mask=attend_mask)
 
         # Project back
         out = self.proj_out(out)
@@ -352,7 +281,7 @@ class ChnAttn(nn.Module):
             flat_masks = rearrange(mod_masks, "b h w t n -> (b h w t) n")
 
             flat_tokens = self.proj_in(flat_tokens)
-            ignore_mask = flat_masks != MaskValue.ONLINE_ENCODER.value
+            attend_mask = flat_masks == MaskValue.ONLINE_ENCODER.value
 
             BN = flat_tokens.shape[0]
             # Use the i-th query for this modality
@@ -372,9 +301,7 @@ class ChnAttn(nn.Module):
                 ),
             )
 
-            out = self.cross_attn(
-                query_i, flat_tokens, flat_tokens, key_padding_mask=ignore_mask
-            )
+            out = self.cross_attn(x=query_i, y=flat_tokens, attn_mask=attend_mask)
             out = self.proj_out(out)
             out = rearrange(
                 out, "(b h w t) n d -> b h w t n d", b=B_i, h=H_i, w=W_i, t=T_i
