@@ -1,12 +1,13 @@
 """Single bandset experiments with masked-negatives loss.
 
-Five experiments:
+Seven experiments:
 1. modality_cross_random masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
 2. random_with_decode masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
 3. modality_cross_random masking + single bandset S2 (no 60m: 10 bands) / Landsat + masked neg loss
 4. modality_cross_random masking + single bandset S2 (10m only: 4 bands) / Landsat + masked neg loss
 5. modality_cross_random masking + single bandset S2 (all 12) / Landsat + masked neg loss + band dropout 0.3
 6. modality_cross_random masking + single bandset S2 (all 12) / Landsat + masked neg loss + band dropout 0.5
+7. random_with_decode masking + single bandset S2/Landsat + ERA5 decode-only (1 bandset) + masked neg loss
 """
 
 import copy
@@ -58,6 +59,8 @@ ONLY_DECODE_MODALITIES = [
     Modality.CDL.name,
     Modality.WORLDCEREAL.name,
 ]
+
+ONLY_DECODE_MODALITIES_WITH_ERA5 = ONLY_DECODE_MODALITIES + [Modality.ERA5_10.name]
 
 _LOSS_CONFIG_DICT = {
     "type": "modality_patch_discrimination_masked_negatives",
@@ -410,6 +413,87 @@ def build_model_exp6(common: CommonComponents) -> LatentMIMConfig:
 
 
 # ============================================================
+# Experiment 7: random_with_decode + single_bandset + ERA5 decode-only
+# ============================================================
+
+
+def _masking_config_era5(
+    tokenization_config: TokenizationConfig | None = None,
+) -> MaskingConfig:
+    return MaskingConfig(
+        strategy_config={
+            "type": "random_with_decode",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "only_decode_modalities": ONLY_DECODE_MODALITIES_WITH_ERA5,
+        },
+        tokenization_config=tokenization_config,
+    )
+
+
+def _loss_config_era5() -> LossConfig:
+    return LossConfig(
+        loss_config={
+            "type": "modality_patch_discrimination_masked_negatives",
+            "tau": 0.1,
+            "same_target_threshold": 0.999,
+            "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES_WITH_ERA5,
+        }
+    )
+
+
+def build_common_exp7(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp7 (ERA5 decode-only)."""
+    common = _build_common(script, cmd, run_name, cluster, overrides)
+    common.training_modalities = common.training_modalities + [Modality.ERA5_10.name]
+    return common
+
+
+def build_train_module_exp7(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp7 (ERA5 decode-only)."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=32,
+        masking_config=_masking_config_era5(common.tokenization_config),
+        loss_config=_loss_config_era5(),
+        contrastive_config=_contrastive_config(),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_dataloader_exp7(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp7 (ERA5 decode-only)."""
+    return OlmoEarthDataLoaderConfig(
+        num_workers=16,
+        global_batch_size=512,
+        token_budget=2250,
+        prefetch_factor=4,
+        sampled_hw_p_list=list(range(1, 13)),
+        min_patch_size=MIN_PATCH_SIZE,
+        max_patch_size=MAX_PATCH_SIZE,
+        work_dir=common.save_folder,
+        seed=3622,
+        num_masked_views=2,
+        masking_config=_masking_config_era5(common.tokenization_config),
+    )
+
+
+build_model_exp7 = _build_model
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -449,6 +533,12 @@ EXPERIMENTS = {
         build_model_exp6,
         build_train_module_exp6,
         build_dataloader_exp6,
+    ),
+    "single_bandset_era5_decode_only_masked_neg": (
+        build_common_exp7,
+        build_model_exp7,
+        build_train_module_exp7,
+        build_dataloader_exp7,
     ),
 }
 
