@@ -7,7 +7,7 @@ import logging
 import shutil
 import time
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import h5py
 
@@ -35,6 +35,9 @@ from olmoearth_pretrain.datatypes import (
     OlmoEarthSample,
 )
 
+if TYPE_CHECKING:
+    from olmoearth_pretrain.nn.tokenization import TokenizationConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +48,7 @@ class GetItemArgs(NamedTuple):
     patch_size: int
     sampled_hw_p: int
     token_budget: int | None = None
+    tokenization_config: TokenizationConfig | None = None
 
 
 # TODO should training modalities be str or modality_spec
@@ -533,6 +537,7 @@ class OlmoEarthDataset(Dataset):
                 sampled_hw_p=args.sampled_hw_p,
                 current_length=current_length,
                 missing_timesteps_masks=missing_timesteps_masks,
+                tokenization_config=args.tokenization_config,
             )
         else:
             subset_sample = sample.subset_default(
@@ -541,6 +546,7 @@ class OlmoEarthDataset(Dataset):
                 sampled_hw_p=args.sampled_hw_p,
                 current_length=current_length,
                 missing_timesteps_masks=missing_timesteps_masks,
+                tokenization_config=args.tokenization_config,
             )
 
         sample_dict = subset_sample.as_dict(ignore_nones=True)

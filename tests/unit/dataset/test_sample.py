@@ -17,6 +17,10 @@ from olmoearth_pretrain.dataset.parse import (
     TimeSpan,
 )
 from olmoearth_pretrain.dataset.sample import image_tiles_to_samples
+from olmoearth_pretrain.nn.tokenization import (
+    ModalityTokenization,
+    TokenizationConfig,
+)
 
 CRS = "EPSG:32610"
 
@@ -224,3 +228,67 @@ def test_subsetting_worldcover_too() -> None:
     # so a token budget of floor((100 - 16) / 48 = 1)
 
     assert subsetted_sample.time == 1
+
+
+def test_subsetting_with_tokenization_config() -> None:
+    """Test subsetting respects TokenizationConfig band set overrides."""
+    h, w, t = 16, 16, 100
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
+        timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
+    )
+
+    # Default: sentinel2_l2a has 3 band sets
+    # tokens_per_timestep = 4*4*3 = 48, max_t = floor(100/48) = 2
+    default_subsetted = sample.subset_default(
+        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
+    )
+    assert default_subsetted.time == 2
+
+    # Override: put all S2 bands into a single token (1 band set)
+    s2_bands = Modality.SENTINEL2_L2A.band_order
+    config = TokenizationConfig(
+        overrides={
+            Modality.SENTINEL2_L2A.name: ModalityTokenization(
+                band_groups=[list(s2_bands)]
+            )
+        }
+    )
+    # tokens_per_timestep = 4*4*1 = 16, max_t = floor(100/16) = 6
+    config_subsetted = sample.subset_default(
+        patch_size=4,
+        max_tokens_per_instance=100,
+        sampled_hw_p=4,
+        current_length=12,
+        tokenization_config=config,
+    )
+    assert config_subsetted.time == 6
+
+
+def test_get_max_t_within_token_budget_with_tokenization_config() -> None:
+    """Test _get_max_t_within_token_budget directly with TokenizationConfig."""
+    h, w, t = 16, 16, 100
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
+        timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
+    )
+
+    # Default: 3 band sets -> tokens_per_timestep = 4*4*3 = 48
+    max_t_default = sample._get_max_t_within_token_budget(
+        h_w_p=4, max_tokens_per_instance=100
+    )
+    assert max_t_default == 2
+
+    # Single band set override -> tokens_per_timestep = 4*4*1 = 16
+    s2_bands = Modality.SENTINEL2_L2A.band_order
+    config = TokenizationConfig(
+        overrides={
+            Modality.SENTINEL2_L2A.name: ModalityTokenization(
+                band_groups=[list(s2_bands)]
+            )
+        }
+    )
+    max_t_config = sample._get_max_t_within_token_budget(
+        h_w_p=4, max_tokens_per_instance=100, tokenization_config=config
+    )
+    assert max_t_config == 6
