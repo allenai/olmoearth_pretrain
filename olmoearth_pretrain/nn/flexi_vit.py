@@ -1871,10 +1871,14 @@ class Encoder(FlexiVitBase):
             for mod in available_modalities:
                 mask_key = MaskedOlmoEarthSample.get_masked_modality_name(mod)
                 modality_spec = Modality.get(mod)
-                if modality_spec.is_spatial:
+                modality_mask = patchified_tokens_and_masks[mask_key]
+                if (
+                    modality_spec.is_spatial
+                    and (modality_mask == MaskValue.ONLINE_ENCODER.value).any()
+                ):
                     spatial_tokens[mod] = patchified_tokens_and_masks[mod]
                     spatial_tokens[mask_key] = patchified_tokens_and_masks[mask_key]
-                else:
+                elif not modality_spec.is_spatial:
                     nonspatial_tokens[mod] = patchified_tokens_and_masks[mod]
                     nonspatial_tokens[mask_key] = patchified_tokens_and_masks[mask_key]
 
