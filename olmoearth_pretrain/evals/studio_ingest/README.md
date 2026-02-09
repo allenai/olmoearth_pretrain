@@ -170,10 +170,21 @@ Tasks to add
 `python -m olmoearth_pretrain.internal.full_eval_sweep     --cluster=local     --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000     --module_path=scripts/official/tiny.py     --trainer.callbacks.downstream_evaluator.tasks_to_run="[canada_wildfire_sat_eval_split]"     --trainer.callbacks.downstream_evaluator.eval_on_startup=True     --trainer.callbacks.downstream_evaluator.cancel_after_first_eval=True     --trainer.callbacks.wandb.enabled=False --defaults_only `
 
 - yemen crop
+    - dataset location `/weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/dataset`
+    - yaml location `/weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/`
+    - command
+     `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name yemen_crop     --source  /weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/dataset --olmoearth-run-config-path /weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/ --register  --overwrite &`
+
+     - need to make sure if we have spatial split and tag based groups we can re split based on the tags not just based on the other things and make sure classes are well represented in both set ups
 - ecosystem
     `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name geo_ecosystem_annual_test     --source  /weka/dfive-default/rslearn-eai/datasets/geo_annual/dataset --olmoearth-run-config-path /weka/dfive-default/rslearn-eai/datasets/geo_annual  --register     --overwrite &`
 
-- landslide
+- tolbi crop
+- forest loss driver
 - mangrove
 - nandi
 - awf
+
+Soon but needs more thoughts
+- worldcover
+- fields of the world
