@@ -171,7 +171,7 @@ Tasks to add
 
 - yemen crop
 - ecosystem
-    `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name geo_ecosystem_test     --source  /weka/dfive-default/rslearn-eai/datasets/geo_annual/dataset --olmoearth-run-config-path /weka/dfive-default/rslearn-eai/datasets/geo_annual  --register     --overwrite &`
+    `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name geo_ecosystem_annual_test     --source  /weka/dfive-default/rslearn-eai/datasets/geo_annual/dataset --olmoearth-run-config-path /weka/dfive-default/rslearn-eai/datasets/geo_annual  --register     --overwrite &`
 
 - landslide
 - mangrove

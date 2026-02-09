@@ -223,15 +223,28 @@ def _copy_from_gcs(
     return dest_path
 
 
+def _tar_copy_cmd(src: str, dst: str, use_pv: bool) -> str:
+    """Build a streaming tar copy command, optionally with pv progress.
+
+    TODO: remove this helper once pv progress bar is no longer needed.
+    """
+    if use_pv:
+        return f"tar cf - -C {src} . | pv | tar xf - -C {dst}"
+    return f"tar cf - -C {src} . | tar xf - -C {dst}"
+
+
 def _copy_local(
     source_path: str,
     dest_path: str,
     source_groups: list[str] | None = None,
 ) -> str:
-    """Copy dataset locally using parallel find + xargs + cp.
+    """Copy dataset locally using streaming tar pipe.
 
-    Uses find to discover files and xargs -P for parallel copying.
-    Much faster than sequential copy for large datasets.
+    Uses ``tar cf - | tar xf -`` to stream data directly from source to
+    destination without intermediate files. This avoids per-file overhead
+    and is faster than rsync for bulk local copies.  Directory structure
+    is preserved because tar archives relative paths from the source and
+    recreates them at the destination.
 
     Args:
         source_path: Local source path
@@ -254,35 +267,35 @@ def _copy_local(
     # Create destination directory
     Path(dest_path).mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"  Copy method: find + xargs -P {NUM_WORKERS} (parallel local copy)")
+    # TODO: remove pv progress bar once copy performance is validated
+    has_pv = shutil.which("pv") is not None
+
+    logger.info("  Copy method: streaming tar pipe%s", " (with pv progress)" if has_pv else "")
 
     # Always copy config.json first
     config_src = Path(source_path) / "config.json"
     if config_src.exists():
         shutil.copy2(config_src, Path(dest_path) / "config.json")
-        logger.info(f"  Copied config.json")
+        logger.info("  Copied config.json")
 
     if source_groups:
         # Copy only specified groups under windows/
         logger.info(f"  Copying only groups: {source_groups}")
         for group in source_groups:
             group_src = f"{source_path}/windows/{group}"
-            group_dst_parent = f"{dest_path}/windows"
-            Path(group_dst_parent).mkdir(parents=True, exist_ok=True)
+            group_dst = f"{dest_path}/windows/{group}"
+            Path(group_dst).mkdir(parents=True, exist_ok=True)
 
-            # Use rsync for reliable parallel-safe copying
-            # -a = archive mode (preserves permissions, timestamps, etc.)
-            # --info=progress2 = show overall progress
-            cmd = f"rsync -a --info=progress2 {group_src}/ {group_dst_parent}/{group}/"
+            cmd = _tar_copy_cmd(group_src, group_dst, has_pv)
             logger.info(f"  Running: {cmd}")
-            result = subprocess.run(cmd, shell=True, check=True)
-            logger.info(f"  Copied group '{group}' (exit code: {result.returncode})")
+            subprocess.run(cmd, shell=True, check=True)
+            logger.info(f"  Copied group '{group}'")
     else:
-        # Copy entire windows directory using rsync
-        cmd = f"rsync -a --info=progress2 {source_path}/ {dest_path}/"
+        # Copy entire directory using streaming tar
+        cmd = _tar_copy_cmd(source_path, dest_path, has_pv)
         logger.info(f"  Running: {cmd}")
-        result = subprocess.run(cmd, shell=True, check=True)
-        logger.info(f"  Copy complete (exit code: {result.returncode})")
+        subprocess.run(cmd, shell=True, check=True)
+        logger.info("  Copy complete")
 
     return dest_path
 
