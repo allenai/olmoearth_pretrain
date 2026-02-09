@@ -123,6 +123,10 @@ class CrossAttention(nn.Module):
                 key_padding_mask.unsqueeze(1).unsqueeze(2), float("-inf")
             )
         attn = attn.softmax(dim=-1)
+        # When all keys are masked (-inf), softmax produces NaN.
+        # Replace with 0 so downstream torch.where zeroing works cleanly
+        # and NaN gradients don't propagate backward.
+        attn = torch.nan_to_num(attn, nan=0.0)
         x = (attn @ v).transpose(1, 2).reshape(B, Nq, D)
         return x
 

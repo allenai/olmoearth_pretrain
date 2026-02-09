@@ -196,11 +196,18 @@ class TokensAndMasks(NamedTuple):
         masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
         return x, masks
 
+    @staticmethod
+    def _is_spatial_modality(name: str) -> bool:
+        """Check if a modality is spatial, handling synthetic 'aggregated' from ChnAttn."""
+        if name == "aggregated":
+            return True
+        return Modality.get(name).is_spatial
+
     def pool_spatially_and_concat_modalities(self) -> Tensor:
         """Pool the modalities  across time to get spatial features and concatenate the features."""
         spatial_stacked_features = []
         for attr_name in self.modalities:
-            if Modality.get(attr_name).is_spatial:
+            if self._is_spatial_modality(attr_name):
                 mask_attr_name = self.get_masked_modality_name(attr_name)
                 masked_attr = getattr(self, mask_attr_name)
                 if masked_attr is None:
@@ -220,7 +227,7 @@ class TokensAndMasks(NamedTuple):
         """Pool the modalities across time to get spatial features."""
         spatial_average = []
         for attr_name in self.modalities:
-            if Modality.get(attr_name).is_spatial:
+            if self._is_spatial_modality(attr_name):
                 mask_attr_name = self.get_masked_modality_name(attr_name)
                 masked_attr = getattr(self, mask_attr_name)
                 if masked_attr is None:
