@@ -5,7 +5,8 @@ Five experiments:
 2. random_with_decode masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
 3. modality_cross_random masking + single bandset S2 (no 60m: 10 bands) / Landsat + masked neg loss
 4. modality_cross_random masking + single bandset S2 (10m only: 4 bands) / Landsat + masked neg loss
-5. modality_cross_random masking + single bandset S2 (all 12) / Landsat + masked neg loss + band dropout
+5. modality_cross_random masking + single bandset S2 (all 12) / Landsat + masked neg loss + band dropout 0.3
+6. modality_cross_random masking + single bandset S2 (all 12) / Landsat + masked neg loss + band dropout 0.5
 """
 
 import copy
@@ -373,8 +374,39 @@ def build_dataloader_exp5(common: CommonComponents) -> OlmoEarthDataLoaderConfig
 
 
 def build_model_exp5(common: CommonComponents) -> LatentMIMConfig:
-    """Build model for exp5 with band dropout."""
+    """Build model for exp5 with band dropout 0.3."""
     return _build_model(common, band_dropout_rate=BAND_DROPOUT_RATE)
+
+
+# ============================================================
+# Experiment 6: modality_cross_random + single_bandset + band dropout (0.5)
+# ============================================================
+
+BAND_DROPOUT_RATE_HIGH = 0.5
+
+
+def build_common_exp6(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp6."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp6(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp6."""
+    return _build_train_module(common, "modality_cross_random")
+
+
+def build_dataloader_exp6(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp6."""
+    return _build_dataloader(common, "modality_cross_random")
+
+
+def build_model_exp6(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp6 with band dropout 0.5."""
+    return _build_model(common, band_dropout_rate=BAND_DROPOUT_RATE_HIGH)
 
 
 # ============================================================
@@ -411,6 +443,12 @@ EXPERIMENTS = {
         build_model_exp5,
         build_train_module_exp5,
         build_dataloader_exp5,
+    ),
+    "single_bandset_band_dropout_0.5_cross_random_masked_neg": (
+        build_common_exp6,
+        build_model_exp6,
+        build_train_module_exp6,
+        build_dataloader_exp6,
     ),
 }
 
