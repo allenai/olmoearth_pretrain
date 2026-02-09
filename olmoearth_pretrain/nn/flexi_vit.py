@@ -373,6 +373,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         max_patch_size: int,
         embedding_size: int,
         tokenization_config: TokenizationConfig | None = None,
+        band_dropout_rate: float = 0.0,
     ):
         """Initialize the patch embeddings.
 
@@ -382,12 +383,17 @@ class MultiModalPatchEmbeddings(nn.Module):
             max_patch_size: Maximum size of patches
             embedding_size: Size of embeddings
             tokenization_config: Optional config for custom band groupings
+            band_dropout_rate: Probability of dropping each band channel during training.
+                When > 0, randomly zeroes out bands before the patch embedding Conv2d,
+                forcing the model to learn cross-spectral representations. Only active
+                during training (self.training=True). Default: 0.0 (no dropout).
         """
         super().__init__()
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
         self.supported_modality_names = supported_modality_names
         self.tokenization_config = tokenization_config or TokenizationConfig()
+        self.band_dropout_rate = band_dropout_rate
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -490,6 +496,32 @@ class MultiModalPatchEmbeddings(nn.Module):
             patchified_data = torch.index_select(
                 modality_data, -1, getattr(self, buffer_name)
             )
+
+            # Band dropout: randomly zero out channels before embedding to force
+            # cross-spectral learning when using single-bandset tokenization.
+            if self.training and self.band_dropout_rate > 0.0:
+                num_bands = patchified_data.shape[-1]
+                if num_bands > 1:
+                    batch_size = patchified_data.shape[0]
+                    keep_mask = (
+                        torch.rand(batch_size, num_bands, device=patchified_data.device)
+                        >= self.band_dropout_rate
+                    )
+                    # Ensure at least 1 band kept per sample
+                    no_bands_kept = ~keep_mask.any(dim=1)
+                    if no_bands_kept.any():
+                        rand_idx = torch.randint(
+                            num_bands, (no_bands_kept.sum(),), device=keep_mask.device
+                        )
+                        keep_mask[no_bands_kept, rand_idx] = True
+                    # Broadcast: [B, 1, 1, ..., num_bands]
+                    view_shape = (
+                        [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
+                    )
+                    patchified_data = (
+                        patchified_data * keep_mask.view(*view_shape).float()
+                    )
+
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
             ]
@@ -1215,6 +1247,7 @@ class Encoder(FlexiVitBase):
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        band_dropout_rate: float = 0.0,
     ):
         """Initialize the encoder.
 
@@ -1241,6 +1274,7 @@ class Encoder(FlexiVitBase):
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
             tokenization_config: Optional config for custom band groupings
+            band_dropout_rate: Probability of dropping each band channel during training.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1267,11 +1301,13 @@ class Encoder(FlexiVitBase):
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
+        self.band_dropout_rate = band_dropout_rate
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
             tokenization_config=self.tokenization_config,
+            band_dropout_rate=self.band_dropout_rate,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -2135,6 +2171,7 @@ class EncoderConfig(Config):
     qk_norm: bool = False
     log_token_norm_stats: bool = False
     tokenization_config: TokenizationConfig | None = None
+    band_dropout_rate: float = 0.0
 
     def validate(self) -> None:
         """Validate the configuration."""

@@ -1,10 +1,11 @@
 """Single bandset experiments with masked-negatives loss.
 
-Four experiments:
+Five experiments:
 1. modality_cross_random masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
 2. random_with_decode masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
 3. modality_cross_random masking + single bandset S2 (no 60m: 10 bands) / Landsat + masked neg loss
 4. modality_cross_random masking + single bandset S2 (10m only: 4 bands) / Landsat + masked neg loss
+5. modality_cross_random masking + single bandset S2 (all 12) / Landsat + masked neg loss + band dropout
 """
 
 import copy
@@ -13,11 +14,12 @@ import sys
 
 from base_token_masked import (
     build_common_components as build_common_components_base,
+)
+from base_token_masked import (
     build_dataset_config,
     build_trainer_config,
     build_visualize_config,
 )
-
 from olmo_core.config import DType
 from olmo_core.distributed.parallel.data_parallel import (
     DataParallelConfig,
@@ -76,11 +78,25 @@ def _loss_config() -> LossConfig:
 def _contrastive_config() -> LossConfig:
     return LossConfig(loss_config=copy.deepcopy(_CONTRASTIVE_CONFIG_DICT))
 
+
 # --- Tokenization configs ---
 
 S2_SINGLE_BANDSET = ModalityTokenization(
     band_groups=[
-        ["B02", "B03", "B04", "B08", "B05", "B06", "B07", "B8A", "B11", "B12", "B01", "B09"],
+        [
+            "B02",
+            "B03",
+            "B04",
+            "B08",
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12",
+            "B01",
+            "B09",
+        ],
     ]
 )
 
@@ -132,7 +148,11 @@ def _masking_config(
 
 
 def _build_common(
-    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str],
+    script: str,
+    cmd: SubCmd,
+    run_name: str,
+    cluster: str,
+    overrides: list[str],
     s2_config: ModalityTokenization = S2_SINGLE_BANDSET,
 ) -> CommonComponents:
     common = build_common_components_base(script, cmd, run_name, cluster, overrides)
@@ -141,7 +161,8 @@ def _build_common(
 
 
 def _build_train_module(
-    common: CommonComponents, masking_type: str,
+    common: CommonComponents,
+    masking_type: str,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
@@ -161,7 +182,10 @@ def _build_train_module(
     )
 
 
-def _build_model(common: CommonComponents) -> LatentMIMConfig:
+def _build_model(
+    common: CommonComponents,
+    band_dropout_rate: float = 0.0,
+) -> LatentMIMConfig:
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
     encoder_config = EncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
@@ -173,6 +197,7 @@ def _build_model(common: CommonComponents) -> LatentMIMConfig:
         drop_path=0.1,
         max_sequence_length=12,
         tokenization_config=common.tokenization_config,
+        band_dropout_rate=band_dropout_rate,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -191,7 +216,8 @@ def _build_model(common: CommonComponents) -> LatentMIMConfig:
 
 
 def _build_dataloader(
-    common: CommonComponents, masking_type: str,
+    common: CommonComponents,
+    masking_type: str,
 ) -> OlmoEarthDataLoaderConfig:
     return OlmoEarthDataLoaderConfig(
         num_workers=16,
@@ -212,17 +238,23 @@ def _build_dataloader(
 # Experiment 1: modality_cross_random + single_bandset bandsets
 # ============================================================
 
+
 def build_common_exp1(
     script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
 ) -> CommonComponents:
+    """Build common components for exp1."""
     return _build_common(script, cmd, run_name, cluster, overrides)
 
 
-def build_train_module_exp1(common: CommonComponents) -> ContrastiveLatentMIMTrainModuleConfig:
+def build_train_module_exp1(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp1."""
     return _build_train_module(common, "modality_cross_random")
 
 
 def build_dataloader_exp1(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp1."""
     return _build_dataloader(common, "modality_cross_random")
 
 
@@ -233,17 +265,23 @@ build_model_exp1 = _build_model
 # Experiment 2: random_with_decode + single_bandset bandsets
 # ============================================================
 
+
 def build_common_exp2(
     script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
 ) -> CommonComponents:
+    """Build common components for exp2."""
     return _build_common(script, cmd, run_name, cluster, overrides)
 
 
-def build_train_module_exp2(common: CommonComponents) -> ContrastiveLatentMIMTrainModuleConfig:
+def build_train_module_exp2(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp2."""
     return _build_train_module(common, "random_with_decode")
 
 
 def build_dataloader_exp2(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp2."""
     return _build_dataloader(common, "random_with_decode")
 
 
@@ -254,17 +292,25 @@ build_model_exp2 = _build_model
 # Experiment 3: modality_cross_random + single_bandset bandsets (no B01/B09)
 # ============================================================
 
+
 def build_common_exp3(
     script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
 ) -> CommonComponents:
-    return _build_common(script, cmd, run_name, cluster, overrides, s2_config=S2_SINGLE_BANDSET_NO_60M)
+    """Build common components for exp3."""
+    return _build_common(
+        script, cmd, run_name, cluster, overrides, s2_config=S2_SINGLE_BANDSET_NO_60M
+    )
 
 
-def build_train_module_exp3(common: CommonComponents) -> ContrastiveLatentMIMTrainModuleConfig:
+def build_train_module_exp3(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp3."""
     return _build_train_module(common, "modality_cross_random")
 
 
 def build_dataloader_exp3(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp3."""
     return _build_dataloader(common, "modality_cross_random")
 
 
@@ -275,21 +321,60 @@ build_model_exp3 = _build_model
 # Experiment 4: modality_cross_random + 10m bands only (no 20m/60m)
 # ============================================================
 
+
 def build_common_exp4(
     script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
 ) -> CommonComponents:
-    return _build_common(script, cmd, run_name, cluster, overrides, s2_config=S2_SINGLE_BANDSET_10M_ONLY)
+    """Build common components for exp4."""
+    return _build_common(
+        script, cmd, run_name, cluster, overrides, s2_config=S2_SINGLE_BANDSET_10M_ONLY
+    )
 
 
-def build_train_module_exp4(common: CommonComponents) -> ContrastiveLatentMIMTrainModuleConfig:
+def build_train_module_exp4(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp4."""
     return _build_train_module(common, "modality_cross_random")
 
 
 def build_dataloader_exp4(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp4."""
     return _build_dataloader(common, "modality_cross_random")
 
 
 build_model_exp4 = _build_model
+
+
+# ============================================================
+# Experiment 5: modality_cross_random + single_bandset + band dropout (0.3)
+# ============================================================
+
+BAND_DROPOUT_RATE = 0.3
+
+
+def build_common_exp5(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp5."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp5(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp5."""
+    return _build_train_module(common, "modality_cross_random")
+
+
+def build_dataloader_exp5(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp5."""
+    return _build_dataloader(common, "modality_cross_random")
+
+
+def build_model_exp5(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp5 with band dropout."""
+    return _build_model(common, band_dropout_rate=BAND_DROPOUT_RATE)
 
 
 # ============================================================
@@ -298,20 +383,34 @@ build_model_exp4 = _build_model
 
 EXPERIMENTS = {
     "single_bandset_cross_random_masked_neg": (
-        build_common_exp1, build_model_exp1, build_train_module_exp1,
+        build_common_exp1,
+        build_model_exp1,
+        build_train_module_exp1,
         build_dataloader_exp1,
     ),
     "single_bandset_random_decode_masked_neg": (
-        build_common_exp2, build_model_exp2, build_train_module_exp2,
+        build_common_exp2,
+        build_model_exp2,
+        build_train_module_exp2,
         build_dataloader_exp2,
     ),
     "single_bandset_no60m_cross_random_masked_neg": (
-        build_common_exp3, build_model_exp3, build_train_module_exp3,
+        build_common_exp3,
+        build_model_exp3,
+        build_train_module_exp3,
         build_dataloader_exp3,
     ),
     "single_bandset_10m_only_cross_random_masked_neg": (
-        build_common_exp4, build_model_exp4, build_train_module_exp4,
+        build_common_exp4,
+        build_model_exp4,
+        build_train_module_exp4,
         build_dataloader_exp4,
+    ),
+    "single_bandset_band_dropout_cross_random_masked_neg": (
+        build_common_exp5,
+        build_model_exp5,
+        build_train_module_exp5,
+        build_dataloader_exp5,
     ),
 }
 
@@ -325,7 +424,9 @@ if __name__ == "__main__":
         print(f"Available: {list(EXPERIMENTS.keys())}")
         sys.exit(1)
 
-    common_builder, model_builder, train_module_builder, dataloader_builder = EXPERIMENTS[exp_key]
+    common_builder, model_builder, train_module_builder, dataloader_builder = (
+        EXPERIMENTS[exp_key]
+    )
 
     logger.info(f"Running experiment: {exp_key}")
     main(
