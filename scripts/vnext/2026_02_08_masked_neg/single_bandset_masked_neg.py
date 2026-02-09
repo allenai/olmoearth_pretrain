@@ -89,6 +89,12 @@ S2_SINGLE_BANDSET_NO_60M = ModalityTokenization(
     ]
 )
 
+S2_SINGLE_BANDSET_10M_ONLY = ModalityTokenization(
+    band_groups=[
+        ["B02", "B03", "B04", "B08"],
+    ]
+)
+
 LANDSAT_SINGLE_BANDSET = ModalityTokenization(
     band_groups=[
         ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
@@ -96,11 +102,12 @@ LANDSAT_SINGLE_BANDSET = ModalityTokenization(
 )
 
 
-def _tokenization_config(drop_60m: bool = False) -> TokenizationConfig:
-    s2 = S2_SINGLE_BANDSET_NO_60M if drop_60m else S2_SINGLE_BANDSET
+def _tokenization_config(
+    s2_config: ModalityTokenization = S2_SINGLE_BANDSET,
+) -> TokenizationConfig:
     return TokenizationConfig(
         overrides={
-            "sentinel2_l2a": s2,
+            "sentinel2_l2a": s2_config,
             "landsat": LANDSAT_SINGLE_BANDSET,
         }
     )
@@ -125,10 +132,10 @@ def _masking_config(
 
 def _build_common(
     script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str],
-    drop_60m: bool = False,
+    s2_config: ModalityTokenization = S2_SINGLE_BANDSET,
 ) -> CommonComponents:
     common = build_common_components_base(script, cmd, run_name, cluster, overrides)
-    common.tokenization_config = _tokenization_config(drop_60m=drop_60m)
+    common.tokenization_config = _tokenization_config(s2_config=s2_config)
     return common
 
 
@@ -249,7 +256,7 @@ build_model_exp2 = _build_model
 def build_common_exp3(
     script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
 ) -> CommonComponents:
-    return _build_common(script, cmd, run_name, cluster, overrides, drop_60m=True)
+    return _build_common(script, cmd, run_name, cluster, overrides, s2_config=S2_SINGLE_BANDSET_NO_60M)
 
 
 def build_train_module_exp3(common: CommonComponents) -> ContrastiveLatentMIMTrainModuleConfig:
@@ -261,6 +268,27 @@ def build_dataloader_exp3(common: CommonComponents) -> OlmoEarthDataLoaderConfig
 
 
 build_model_exp3 = _build_model
+
+
+# ============================================================
+# Experiment 4: modality_cross_random + 10m bands only (no 20m/60m)
+# ============================================================
+
+def build_common_exp4(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    return _build_common(script, cmd, run_name, cluster, overrides, s2_config=S2_SINGLE_BANDSET_10M_ONLY)
+
+
+def build_train_module_exp4(common: CommonComponents) -> ContrastiveLatentMIMTrainModuleConfig:
+    return _build_train_module(common, "modality_cross_random")
+
+
+def build_dataloader_exp4(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    return _build_dataloader(common, "modality_cross_random")
+
+
+build_model_exp4 = _build_model
 
 
 # ============================================================
@@ -279,6 +307,10 @@ EXPERIMENTS = {
     "single_bandset_no60m_cross_random_masked_neg": (
         build_common_exp3, build_model_exp3, build_train_module_exp3,
         build_dataloader_exp3,
+    ),
+    "single_bandset_10m_only_cross_random_masked_neg": (
+        build_common_exp4, build_model_exp4, build_train_module_exp4,
+        build_dataloader_exp4,
     ),
 }
 
