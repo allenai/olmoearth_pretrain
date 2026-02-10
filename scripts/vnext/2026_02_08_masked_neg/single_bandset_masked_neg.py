@@ -1,6 +1,6 @@
 """Single bandset experiments with masked-negatives loss.
 
-Seven experiments:
+Eight experiments:
 1. modality_cross_random masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
 2. random_with_decode masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
 3. modality_cross_random masking + single bandset S2 (no 60m: 10 bands) / Landsat + masked neg loss
@@ -8,6 +8,7 @@ Seven experiments:
 5. modality_cross_random masking + single bandset S2 (all 12) / Landsat + masked neg loss + band dropout 0.3
 6. modality_cross_random masking + single bandset S2 (all 12) / Landsat + masked neg loss + band dropout 0.5
 7. random_with_decode masking + single bandset S2/Landsat + ERA5 decode-only (1 bandset) + masked neg loss
+8. modality_cross_random masking + 2 bandsets S2 (10m+20m) / Landsat single + masked neg loss
 """
 
 import copy
@@ -113,6 +114,13 @@ S2_SINGLE_BANDSET_NO_60M = ModalityTokenization(
 S2_SINGLE_BANDSET_10M_ONLY = ModalityTokenization(
     band_groups=[
         ["B02", "B03", "B04", "B08"],
+    ]
+)
+
+S2_TWO_BANDSETS_10M_20M = ModalityTokenization(
+    band_groups=[
+        ["B02", "B03", "B04", "B08"],
+        ["B05", "B06", "B07", "B8A", "B11", "B12"],
     ]
 )
 
@@ -494,6 +502,35 @@ build_model_exp7 = _build_model
 
 
 # ============================================================
+# Experiment 8: modality_cross_random + 2 bandsets S2 (10m+20m) / Landsat single
+# ============================================================
+
+
+def build_common_exp8(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp8 (2 S2 bandsets: 10m+20m)."""
+    return _build_common(
+        script, cmd, run_name, cluster, overrides, s2_config=S2_TWO_BANDSETS_10M_20M
+    )
+
+
+def build_train_module_exp8(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp8."""
+    return _build_train_module(common, "modality_cross_random")
+
+
+def build_dataloader_exp8(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp8."""
+    return _build_dataloader(common, "modality_cross_random")
+
+
+build_model_exp8 = _build_model
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -539,6 +576,12 @@ EXPERIMENTS = {
         build_model_exp7,
         build_train_module_exp7,
         build_dataloader_exp7,
+    ),
+    "two_bandset_cross_random_masked_neg": (
+        build_common_exp8,
+        build_model_exp8,
+        build_train_module_exp8,
+        build_dataloader_exp8,
     ),
 }
 
