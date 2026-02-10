@@ -5,6 +5,7 @@ This wraps an existing Encoder and replaces uniform patching with APT.
 
 import copy
 import logging
+import math
 from typing import Any
 
 import numpy as np
@@ -127,6 +128,59 @@ class APTEncoder(Encoder):
 
         return tokens, masks
 
+    @staticmethod
+    def split_and_expand_per_modality(
+        x: Tensor,
+        modalities_to_dims_dict: dict,
+        apt_modality: str | None = None,
+        apt_positions: list[Tensor] | None = None,
+        apt_original_dims: tuple | None = None,
+        apt_num_bandsets: int = 1,
+    ) -> dict[str, Tensor]:
+        """Split tokens per modality, scattering APT tokens back to the spatial grid.
+
+        Non-APT modalities use the standard reshape.
+        APT modality tokens are scattered back to [B, H, W, T, B_S, D] using
+        positions from adaptive_patch_embed, so coarse tokens are broadcast
+        to all grid positions they cover.
+        """
+        tokens_only_dict: dict[str, Tensor] = {}
+        tokens_reshaped = 0
+
+        for modality, dims in modalities_to_dims_dict.items():
+            middle_dims = dims[1:-1]
+            num_tokens = math.prod(middle_dims)
+            modality_tokens = x[:, tokens_reshaped : tokens_reshaped + num_tokens]
+
+            if modality == apt_modality and apt_positions is not None:
+                # Scatter flat APT tokens back to the original spatial grid
+                b, h, w, t, bs, d = apt_original_dims
+
+                output = torch.zeros(b, h, w, t, bs, d, device=x.device, dtype=x.dtype)
+
+                for bi in range(b):
+                    positions = apt_positions[bi]  # [N_i, 4]
+
+                    for pi in range(positions.shape[0]):
+                        y, xp, size, ti = positions[pi].tolist()
+                        tok_start = pi * apt_num_bandsets
+                        patch_tokens = modality_tokens[bi, tok_start : tok_start + apt_num_bandsets]  # [bs, d]
+
+                        if size == 1:
+                            output[bi, y, xp, ti] = patch_tokens
+                        else:
+                            output[bi, y : y + size, xp : xp + size, ti] = (
+                                patch_tokens.unsqueeze(0).unsqueeze(0).expand(size, size, apt_num_bandsets, d)
+                            )
+
+                tokens_only_dict[modality] = output
+            else:
+                x_modality = modality_tokens.view(x.shape[0], *middle_dims, x.shape[-1])
+                tokens_only_dict[modality] = x_modality
+
+            tokens_reshaped += num_tokens
+
+        return tokens_only_dict
 
     def apply_attn(
         self,
@@ -168,8 +222,16 @@ class APTEncoder(Encoder):
         # so each band_set is a separate token with D=embedding_size, matching the standard path
         if num_bandsets > 1:
             all_tokens = [rearrange(t, "n (bs d) -> (n bs) d", bs=num_bandsets) for t in all_tokens]
-        # Need to have a New collapse and combine where we can also still create tokens and masks
-        # TODO: For now we assume everything is encode only except what we will set as missing
+
+        # Save original spatial dims before overwriting for flat bookkeeping
+        apt_original_dims = modalities_to_dims_dict[self.apt_modality]
+
+        # Update dims dict: APT tokens are flat [B, N, D] for collapse/expand bookkeeping
+        max_apt_tokens = max(t.shape[0] for t in all_tokens)
+        modalities_to_dims_dict[self.apt_modality] = (
+            apt_modality_tokens.shape[0], max_apt_tokens, self.embedding_size,
+        )
+
         tokens, mask = self.collapse_and_combine_hwtc_apt(tokens_dict, all_tokens, all_positions, self.apt_modality)
 
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
@@ -200,6 +262,15 @@ class APTEncoder(Encoder):
 
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
+
+        # Log active token count before attention (use original mask, not new_mask which is None during fast_pass)
+        num_active = (mask == MaskValue.ONLINE_ENCODER.value).sum().item()
+        num_total = mask.numel()
+        logger.info(
+            f"APT attention input: tokens={tokens.shape}, "
+            f"active={int(num_active)}/{num_total} "
+            f"({100*num_active/num_total:.1f}%)"
+        )
 
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
@@ -259,7 +330,12 @@ class APTEncoder(Encoder):
         tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
 
         tokens_per_modality_dict = self.split_and_expand_per_modality(
-            tokens, modalities_to_dims_dict
+            tokens,
+            modalities_to_dims_dict,
+            apt_modality=self.apt_modality,
+            apt_positions=all_positions,
+            apt_original_dims=apt_original_dims,
+            apt_num_bandsets=num_bandsets,
         )
         # merge original masks and the processed tokens
         tokens_per_modality_dict.update(original_masks_dict)
@@ -537,7 +613,10 @@ class APTEncoderWrapper(nn.Module):
         For the APT modality, uses adaptive patching.
         For other modalities, falls back to standard uniform patching.
         """
-
+        # APT produces variable-length sequences with padding — masking is required
+        if fast_pass:
+            logger.debug("APT requires masking; overriding fast_pass=True -> False")
+            fast_pass = False
 
         # we need to get the patchified tokens normally for all the modalities and then the other tokens for the APT modality
         # we also will neeed the positions for the apt modality so that we can properly handle the composite encodings for it
