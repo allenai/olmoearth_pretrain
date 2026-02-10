@@ -78,7 +78,7 @@ echo "=============================================="
 echo "PART 1: Baseline (No APT) Experiments"
 echo "=============================================="
 
-for dataset in bigearthnet; do
+for dataset in eurosat mados so2sat bigearthnet; do
     task_name="${DATASETS_NO_APT[$dataset]}"
 
     for patch_size in "${PATCH_SIZES[@]}"; do
