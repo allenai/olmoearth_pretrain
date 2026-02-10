@@ -78,24 +78,24 @@ echo "=============================================="
 echo "PART 1: Baseline (No APT) Experiments"
 echo "=============================================="
 
-for dataset in bigearthnet; do
-    task_name="${DATASETS_NO_APT[$dataset]}"
+# for dataset in bigearthnet; do
+#     task_name="${DATASETS_NO_APT[$dataset]}"
 
-    for patch_size in "${PATCH_SIZES[@]}"; do
-        run_name="1_${dataset}_baseline_p${patch_size}"
-        script="${SCRIPT_DIR}/${dataset}_eval_tiny.py"
+#     for patch_size in "${PATCH_SIZES[@]}"; do
+#         run_name="1_${dataset}_baseline_p${patch_size}"
+#         script="${SCRIPT_DIR}/${dataset}_eval_tiny.py"
 
-        echo ""
-        echo ">>> Launching: $run_name"
-        echo "    Dataset: $dataset, Patch Size: $patch_size"
+#         echo ""
+#         echo ">>> Launching: $run_name"
+#         echo "    Dataset: $dataset, Patch Size: $patch_size"
 
-        python "$script" $CMD \
-            "$run_name" "$CLUSTER_ARG" \
-            --trainer.load_path="$CHECKPOINT" \
-            --trainer.callbacks.downstream_evaluator.tasks.${task_name}.patch_size=$patch_size \
-            $EXTRA_ARGS
-    done
-done
+#         python "$script" $CMD \
+#             "$run_name" "$CLUSTER_ARG" \
+#             --trainer.load_path="$CHECKPOINT" \
+#             --trainer.callbacks.downstream_evaluator.tasks.${task_name}.patch_size=$patch_size \
+#             $EXTRA_ARGS
+#     done
+# done
 
 # -----------------------------------------------------------------------------
 # PART 2: APT experiments with different thresholds
@@ -109,7 +109,7 @@ for dataset in eurosat mados so2sat bigearthnet; do
     task_name="${DATASETS_APT[$dataset]}"
 
     for threshold in "${APT_THRESHOLDS[@]}"; do
-        run_name="1_${dataset}_apt_t${threshold}"
+        run_name="2_${dataset}_apt_t${threshold}"
         script="${SCRIPT_DIR}/apt_${dataset}_eval_tiny.py"
 
         echo ""

@@ -120,9 +120,6 @@ class APTEncoder(Encoder):
             x_modality_mask = x[masked_modality_name]
             tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
             masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
-        # log the shapes of all tokens and masks in a loop
-        for token, mask in zip(tokens, masks):
-            logger.info(f"token shape: {token.shape}, mask shape: {mask.shape}")
         tokens = torch.cat(tokens, dim=1)
         masks = torch.cat(masks, dim=1)
 
