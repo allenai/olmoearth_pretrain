@@ -209,6 +209,13 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
+        masking_config=MaskingConfig(
+            strategy_config={
+                "type": "random",
+                "encode_ratio": 0.5,
+                "decode_ratio": 0.5,
+            }
+        ),
     )
 
 
