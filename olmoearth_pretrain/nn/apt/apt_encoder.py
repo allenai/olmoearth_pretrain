@@ -91,23 +91,37 @@ class APTEncoder(Encoder):
                 modality
             )
             if modality == apt_modality:
-                # Need to loop through and padd and make a coresponding match for each sample in the batch
-                max_across_samples = max(apt_token_sample.shape[0] for apt_token_sample in apt_tokens)
+                # Pad per-sample APT tokens to same length and stack into a batch
+                max_across_samples = max(t.shape[0] for t in apt_tokens)
+                padded_tokens = []
+                padded_masks = []
                 for apt_token_sample in apt_tokens:
-                    if apt_token_sample.shape[0] < max_across_samples:
-                        pad_tensor = torch.zeros(max_across_samples - apt_token_sample.shape[0], *apt_token_sample.shape[1:])
-                        apt_token_sample_padded = torch.cat([apt_token_sample, pad_tensor], dim=0)
-                        mask_tensor = torch.full_like(apt_token_sample, MaskValue.ONLINE_ENCODER.value)
-                        mask_padding_tensor = torch.full_like(pad_tensor, MaskValue.MISSING.value)
-                        mask_tensor = torch.cat([mask_tensor, mask_padding_tensor], dim=0)
-                        tokens.append(apt_token_sample_padded)
-                        masks.append(mask_tensor)
-                        break
+                    n_tok = apt_token_sample.shape[0]
+                    device = apt_token_sample.device
+                    dtype = apt_token_sample.dtype
+                    if n_tok < max_across_samples:
+                        pad = torch.zeros(max_across_samples - n_tok, apt_token_sample.shape[-1], device=device, dtype=dtype)
+                        padded_tokens.append(torch.cat([apt_token_sample, pad], dim=0))
+                        padded_masks.append(torch.cat([
+                            torch.full((n_tok,), MaskValue.ONLINE_ENCODER.value, device=device),
+                            torch.full((max_across_samples - n_tok,), MaskValue.MISSING.value, device=device),
+                        ]))
+                    else:
+                        padded_tokens.append(apt_token_sample)
+                        padded_masks.append(
+                            torch.full((n_tok,), MaskValue.ONLINE_ENCODER.value, device=device)
+                        )
+                tokens.append(torch.stack(padded_tokens))  # [B, max_tokens, D]
+                masks.append(torch.stack(padded_masks))    # [B, max_tokens]
+                continue
 
             x_modality = x[modality]
             x_modality_mask = x[masked_modality_name]
             tokens.append(rearrange(x_modality, "b ... d -> b (...) d"))
             masks.append(rearrange(x_modality_mask, "b ... -> b (...)"))
+        # log the shapes of all tokens and masks in a loop
+        for token, mask in zip(tokens, masks):
+            logger.info(f"token shape: {token.shape}, mask shape: {mask.shape}")
         tokens = torch.cat(tokens, dim=1)
         masks = torch.cat(masks, dim=1)
 
@@ -145,10 +159,15 @@ class APTEncoder(Encoder):
 
         # Apply adaptive token merging on the post-encoding tokens for the APT modality
         apt_modality_tokens = tokens_dict[self.apt_modality]
+        num_bandsets = apt_modality_tokens.shape[-2] if apt_modality_tokens.ndim == 6 else 1
         # Flatten band_sets into D: [B, H, W, T, B_S, D] -> [B, H, W, T, B_S*D]
         if apt_modality_tokens.ndim == 6:
             apt_modality_tokens = rearrange(apt_modality_tokens, "b h w t bs d -> b h w t (bs d)")
         all_tokens, all_positions = self.adaptive_patch_embed.forward(apt_modality_tokens, patch_descs)
+        # Unfold band_sets back into sequence dim: [N_i, bs*d] -> [N_i*bs, d]
+        # so each band_set is a separate token with D=embedding_size, matching the standard path
+        if num_bandsets > 1:
+            all_tokens = [rearrange(t, "n (bs d) -> (n bs) d", bs=num_bandsets) for t in all_tokens]
         # Need to have a New collapse and combine where we can also still create tokens and masks
         # TODO: For now we assume everything is encode only except what we will set as missing
         tokens, mask = self.collapse_and_combine_hwtc_apt(tokens_dict, all_tokens, all_positions, self.apt_modality)
@@ -306,7 +325,7 @@ class APTEncoderWrapper(nn.Module):
 
     def __init__(
         self,
-        encoder: APTEncoder,
+        encoder: Encoder,
         apt_config: APTConfig,
         apt_modality: str = "sentinel2_l2a",
         apt_bandset_idx: int = 0,
@@ -314,7 +333,7 @@ class APTEncoderWrapper(nn.Module):
         """Initialize APT encoder.
 
         Args:
-            encoder: The base encoder to wrap
+            encoder: The base encoder (Encoder or APTEncoder) to wrap
             apt_config: APT configuration
             apt_modality: Which modality to apply APT to (others use uniform patching)
             apt_bandset_idx: Which bandset index to use for APT (default: 0, first bandset)
@@ -357,6 +376,70 @@ class APTEncoderWrapper(nn.Module):
         self.num_samples = 0
         self.all_entropy_scores: list[float] = []  # Collect scores for distribution analysis
         self.log_entropy_distribution_every: int = 10  # Log distribution every N samples
+
+        # Convert base Encoder -> APTEncoder with pretrained weights
+        self._load_encoder_into_apt_encoder()
+
+    def _load_encoder_into_apt_encoder(self) -> None:
+        """Convert base Encoder -> APTEncoder, loading pretrained weights non-strictly.
+
+        Existing encoder weights are preserved. New APT-specific layers
+        (adaptive_patch_embed) are randomly initialized.
+        """
+        if isinstance(self.encoder, APTEncoder):
+            logger.info("Encoder is already an APTEncoder, skipping conversion")
+            return
+
+        base_encoder = self.encoder
+        pretrained_sd = base_encoder.state_dict()
+        device = next(base_encoder.parameters()).device
+        logger.info(f"Loading encoder into apt encoder with device {device}")
+
+        # Extract architecture config from the base encoder
+        block0 = base_encoder.blocks[0]
+        num_proj_layers = sum(
+            1 for m in base_encoder.project_and_aggregate.projection
+            if isinstance(m, nn.Linear)
+        )
+
+        apt_encoder = APTEncoder(
+            embedding_size=base_encoder.embedding_size,
+            max_patch_size=base_encoder.max_patch_size,
+            min_patch_size=base_encoder.min_patch_size,
+            num_heads=block0.attn.num_heads,
+            mlp_ratio=block0.mlp.fc1.out_features / base_encoder.embedding_size,
+            depth=len(base_encoder.blocks),
+            drop_path=getattr(block0.drop_path, "drop_prob", 0.0),
+            supported_modalities=base_encoder.supported_modalities,
+            max_sequence_length=base_encoder.max_sequence_length,
+            num_register_tokens=base_encoder.num_register_tokens,
+            learnable_channel_embeddings=base_encoder.learnable_channel_embeddings,
+            random_channel_embeddings=base_encoder.random_channel_embeddings,
+            num_projection_layers=num_proj_layers,
+            aggregate_then_project=base_encoder.project_and_aggregate.aggregate_then_project,
+            use_flash_attn=base_encoder.use_flash_attn,
+            qk_norm=not isinstance(block0.attn.q_norm, nn.Identity),
+            log_token_norm_stats=base_encoder.log_token_norm_stats,
+            tokenization_config=getattr(base_encoder, "tokenization_config", None),
+            # APT-specific
+            apt_num_scales=self.apt_config.partitioner.num_scales,
+            apt_base_patch_size=self.apt_config.partitioner.base_patch_size,
+            apt_modality=self.apt_modality,
+        )
+
+        # Load pretrained weights non-strictly — missing keys are new APT layers
+        missing, unexpected = apt_encoder.load_state_dict(pretrained_sd, strict=False)
+        logger.info(
+            f"Converted Encoder -> APTEncoder (non-strict): "
+            f"{len(missing)} new keys (randomly init), "
+            f"{len(unexpected)} unexpected keys"
+        )
+        if missing:
+            logger.info(f"New APT keys: {missing}")
+        if unexpected:
+            logger.warning(f"Unexpected keys not loaded: {unexpected}")
+
+        self.encoder = apt_encoder.to(device)
 
     @property
     def embedding_size(self) -> int:

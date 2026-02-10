@@ -267,25 +267,16 @@ class DownstreamEvaluator:
         print(
             f"Getting embeddings for {self.dataset} with norm method {self.norm_method}"
         )
-        if hasattr(self.trainer.train_module.model, "encoder"):
-            model = self.trainer.train_module.model.encoder
-        else:
-            model = self.trainer.train_module.model
 
-        if hasattr(model, "patch_size"):
-            # For non-helios models we override the task patch size with the model patch size
-            self.patch_size = model.patch_size
-            logger.info(
-                f"Using patch size {self.patch_size} for {self.dataset} with model patch size {model.patch_size} and task patch size {self.patch_size}"
-            )
-        else:
-            logger.info(
-                f"No patch size found from model for {self.dataset}, using task patch size {self.patch_size}"
-            )
-
-        # Wrap model with APT if enabled (use finetune config with masking disabled)
         if self.use_apt:
+            # For APT we need the full model (not just encoder) so the wrapper
+            # can access patch embeddings, composite encodings, etc.
             from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoderWrapper
+
+            if hasattr(self.trainer.train_module.model, "encoder"):
+                model = self.trainer.train_module.model.encoder
+            else:
+                model = self.trainer.train_module.model
 
             apt_config = (
                 self.apt_config
@@ -302,6 +293,22 @@ class DownstreamEvaluator:
                 f"masking disabled: {apt_config.disable_masking}, "
                 f"thresholds: {apt_config.partitioner.thresholds}, "
                 f"num_scales: {apt_config.partitioner.num_scales}"
+            )
+        else:
+            if hasattr(self.trainer.train_module.model, "encoder"):
+                model = self.trainer.train_module.model.encoder
+            else:
+                model = self.trainer.train_module.model
+
+        if hasattr(model, "patch_size"):
+            # For non-helios models we override the task patch size with the model patch size
+            self.patch_size = model.patch_size
+            logger.info(
+                f"Using patch size {self.patch_size} for {self.dataset} with model patch size {model.patch_size} and task patch size {self.patch_size}"
+            )
+        else:
+            logger.info(
+                f"No patch size found from model for {self.dataset}, using task patch size {self.patch_size}"
             )
 
         # Superset of the kwargs the wrapper may need
@@ -484,14 +491,14 @@ class DownstreamEvaluator:
         model = self._get_local_model()
 
         if self.use_apt:
-            from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoder
+            from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoderWrapper
 
             apt_config = (
                 self.apt_config
                 if self.apt_config is not None
                 else APTConfig.default_s2_finetune_config()
             )
-            model = APTEncoder(
+            model = APTEncoderWrapper(
                 encoder=model,
                 apt_config=apt_config,
                 apt_modality=self.apt_modality,

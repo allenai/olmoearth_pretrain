@@ -139,6 +139,10 @@ class AdaptivePatchEmbed(nn.Module):
         all_tokens = []
         all_positions = []
 
+        # TODO: Batch this. Two options:
+        # A) Use unfold to get all 2x2 windows per scale, mask-index, batch through one conv call.
+        # B) Have the partitioner return a dense [B, H, W, T] scale map instead of descriptor lists,
+        #    then use mask indexing + batched conv per scale with no Python loops over patches.
         for bi in range(b):
             sample_tokens = []
             sample_positions = []
@@ -148,10 +152,10 @@ class AdaptivePatchEmbed(nn.Module):
 
                 for desc in descs:
                     size_in_base = 2 ** desc.scale
-                    logger.info(f"shape of base_patch_embeddings: {base_patch_embeddings.shape}")
+                    # logger.info(f"shape of base_patch_embeddings: {base_patch_embeddings.shape}")
                     if desc.scale == 0:
                         # Base scale: just take the token directly
-                        logger.info(f"taking base token for desc: {desc}")
+                        # logger.info(f"taking base token for desc: {desc}")
                         token = base_patch_embeddings[bi, desc.y, desc.x, ti, :]  # [D]
                         sample_tokens.append(token.unsqueeze(0))
                     else:
