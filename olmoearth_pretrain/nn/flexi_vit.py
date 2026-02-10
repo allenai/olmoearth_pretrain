@@ -1420,7 +1420,7 @@ class Encoder(FlexiVitBase):
         fast_pass: bool,
     ) -> Tensor | None:
         """Get the attention mask or None if we should pass None to the transformer."""
-        # TODO: we need to get the logic riht for this to work generally but for now we will use the mask
+        # TODO: we need to get the logic right for this to work generally but for now we will use the mask
         if fast_pass:
             return None
         else:
