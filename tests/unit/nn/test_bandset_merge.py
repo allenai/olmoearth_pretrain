@@ -21,24 +21,26 @@ class TestBandsetMerge:
         D, num_bs = 16, 3
         merge = BandsetMerge(D, num_bs)
 
-        tokens = torch.randn(2, 4, 4, 3, num_bs, D)  # [B, H, W, T, bs, D]
+        tokens = torch.randn(2, 4, 4, 3, num_bs, D)
         mask = torch.zeros(2, 4, 4, 3, num_bs, dtype=torch.long)
 
         merged_tokens, merged_mask = merge(tokens, mask)
         assert merged_tokens.shape == (2, 4, 4, 3, 1, D)
         assert merged_mask.shape == (2, 4, 4, 3, 1)
 
-    def test_mean_pool_init(self) -> None:
-        """After init, merge should approximate mean pooling."""
+    def test_mean_pool_init_all_encoder(self) -> None:
+        """With all-ENCODER mask, merge should approximate mean pooling."""
         D, num_bs = 8, 3
         merge = BandsetMerge(D, num_bs)
 
-        # Create tokens where each bandset has distinct values
         tokens = torch.zeros(1, 1, 1, 1, num_bs, D)
         tokens[0, 0, 0, 0, 0] = torch.ones(D) * 3.0
         tokens[0, 0, 0, 0, 1] = torch.ones(D) * 6.0
         tokens[0, 0, 0, 0, 2] = torch.ones(D) * 9.0
-        mask = torch.zeros(1, 1, 1, 1, num_bs, dtype=torch.long)
+        # All bandsets are ENCODER
+        mask = torch.full(
+            (1, 1, 1, 1, num_bs), MaskValue.ONLINE_ENCODER.value, dtype=torch.long
+        )
 
         merged, _ = merge(tokens, mask)
         expected_mean = torch.ones(D) * 6.0  # (3+6+9)/3
@@ -46,18 +48,43 @@ class TestBandsetMerge:
             merged.squeeze(), expected_mean, atol=1e-5, rtol=1e-5
         )
 
-    def test_mask_takes_first_bandset(self) -> None:
-        """Merged mask should equal the first bandset's mask (uniform assumption)."""
+    def test_non_encoder_bandsets_zeroed(self) -> None:
+        """Non-ENCODER bandsets should be zeroed before projection."""
+        D, num_bs = 8, 3
+        merge = BandsetMerge(D, num_bs)
+
+        tokens = torch.zeros(1, 1, 1, 1, num_bs, D)
+        tokens[0, 0, 0, 0, 0] = torch.ones(D) * 3.0
+        tokens[0, 0, 0, 0, 1] = torch.ones(D) * 6.0  # DECODER — should be zeroed
+        tokens[0, 0, 0, 0, 2] = torch.ones(D) * 9.0
+
+        mask = torch.full(
+            (1, 1, 1, 1, num_bs), MaskValue.ONLINE_ENCODER.value, dtype=torch.long
+        )
+        mask[0, 0, 0, 0, 1] = MaskValue.DECODER.value
+
+        merged, _ = merge(tokens, mask)
+        # With mean-pool init: (3 + 0 + 9)/3 * (3/2) = 6.0
+        expected = torch.ones(D) * 6.0
+        torch.testing.assert_close(merged.squeeze(), expected, atol=1e-5, rtol=1e-5)
+
+    def test_merged_mask_encoder_wins(self) -> None:
+        """If any bandset is ENCODER, merged mask should be ENCODER."""
         D, num_bs = 8, 3
         merge = BandsetMerge(D, num_bs)
 
         tokens = torch.randn(2, 2, 2, 1, num_bs, D)
-        mask = torch.full((2, 2, 2, 1, num_bs), MaskValue.ONLINE_ENCODER.value)
-        mask[0, 0, 0, 0, :] = MaskValue.DECODER.value
+        mask = torch.full(
+            (2, 2, 2, 1, num_bs), MaskValue.DECODER.value, dtype=torch.long
+        )
+        # One bandset is ENCODER at position (0,0,0,0)
+        mask[0, 0, 0, 0, 1] = MaskValue.ONLINE_ENCODER.value
 
         _, merged_mask = merge(tokens, mask)
-        assert merged_mask[0, 0, 0, 0, 0].item() == MaskValue.DECODER.value
-        assert merged_mask[0, 1, 0, 0, 0].item() == MaskValue.ONLINE_ENCODER.value
+        # Should be ENCODER because bandset 1 is ENCODER
+        assert merged_mask[0, 0, 0, 0, 0].item() == MaskValue.ONLINE_ENCODER.value
+        # All DECODER → merged should be DECODER
+        assert merged_mask[0, 1, 0, 0, 0].item() == MaskValue.DECODER.value
 
     def test_gradient_flows(self) -> None:
         """Gradients should flow through the merge projection."""
@@ -89,8 +116,8 @@ class TestBandsetUnmerge:
         assert unmerged_tokens.shape == (2, 4, 4, 3, num_bs, D)
         assert unmerged_mask.shape == (2, 4, 4, 3, num_bs)
 
-    def test_mask_expansion(self) -> None:
-        """Unmerged mask should broadcast the single mask to all bandsets."""
+    def test_mask_expansion_from_merged(self) -> None:
+        """When mask has 1 bandset, it should be expanded to num_bandsets."""
         D, num_bs = 8, 3
         unmerge = BandsetUnmerge(D, num_bs)
 
@@ -99,14 +126,29 @@ class TestBandsetUnmerge:
         mask[0, 0, 0, 0, 0] = MaskValue.DECODER.value
 
         _, unmerged_mask = unmerge(tokens, mask)
-        # All bandsets at (0,0,0,0) should be DECODER
         for bs in range(num_bs):
             assert unmerged_mask[0, 0, 0, 0, bs].item() == MaskValue.DECODER.value
-        # All bandsets at (0,1,0,0) should be ONLINE_ENCODER (0)
         for bs in range(num_bs):
             assert (
                 unmerged_mask[0, 1, 0, 0, bs].item() == MaskValue.ONLINE_ENCODER.value
             )
+
+    def test_original_mask_passthrough(self) -> None:
+        """When mask already has num_bandsets, it should be used as-is."""
+        D, num_bs = 8, 3
+        unmerge = BandsetUnmerge(D, num_bs)
+
+        tokens = torch.randn(1, 2, 2, 1, 1, D)
+        # Original mask with different values per bandset
+        original_mask = torch.zeros(1, 2, 2, 1, num_bs, dtype=torch.long)
+        original_mask[0, 0, 0, 0, 0] = MaskValue.ONLINE_ENCODER.value
+        original_mask[0, 0, 0, 0, 1] = MaskValue.DECODER.value
+        original_mask[0, 0, 0, 0, 2] = MaskValue.ONLINE_ENCODER.value
+
+        _, unmerged_mask = unmerge(tokens, original_mask)
+        assert unmerged_mask[0, 0, 0, 0, 0].item() == MaskValue.ONLINE_ENCODER.value
+        assert unmerged_mask[0, 0, 0, 0, 1].item() == MaskValue.DECODER.value
+        assert unmerged_mask[0, 0, 0, 0, 2].item() == MaskValue.ONLINE_ENCODER.value
 
     def test_gradient_flows(self) -> None:
         """Gradients should flow through the unmerge projection."""
@@ -204,12 +246,13 @@ class TestEncoderWithMerge:
         )
         encoder = config.build()
 
-        # Build input
+        # Build input with cross-bandset masking (different masks per bandset)
         s2_data = torch.randn(B, H, W, T, 12)
-        s2_mask = torch.zeros(B, H, W, T, 3, dtype=torch.long)
-        # Uniform mask: all bandsets same value
-        s2_mask[:, :8, :8, :, :] = MaskValue.ONLINE_ENCODER.value
-        s2_mask[:, 8:, 8:, :, :] = MaskValue.DECODER.value
+        s2_mask = torch.full(
+            (B, H, W, T, 3), MaskValue.ONLINE_ENCODER.value, dtype=torch.long
+        )
+        # Bandset 1 is DECODER at some positions
+        s2_mask[:, :8, :8, :, 1] = MaskValue.DECODER.value
 
         latlon = torch.randn(B, 2)
         latlon_mask = torch.zeros(B, 1, dtype=torch.long)
@@ -234,8 +277,14 @@ class TestEncoderWithMerge:
         # S2 should have 1 bandset (merged from 3)
         s2_out = tokens_and_masks.sentinel2_l2a
         assert s2_out is not None
-        # bandset dim should be 1
         assert s2_out.shape[-2] == 1
+
+        # original_bandset_masks should be in output
+        assert "original_bandset_masks" in output
+        orig_masks = output["original_bandset_masks"]
+        assert "sentinel2_l2a_mask" in orig_masks
+        # Original masks should have 3 bandsets
+        assert orig_masks["sentinel2_l2a_mask"].shape[-1] == 3
 
 
 class TestPredictorWithUnmerge:
@@ -300,11 +349,8 @@ class TestLatentMIMWithMerge:
         )
         model = config.build()
 
-        # Online encoder should merge
         assert model.encoder.merge_enabled is True
-        # Target encoder should NOT merge
         assert model.target_encoder.merge_enabled is False
-        # But target encoder should still have the modules (for EMA alignment)
         assert model.target_encoder.bandset_merge_modules is not None
 
     def test_param_count_alignment(

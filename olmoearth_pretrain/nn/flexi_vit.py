@@ -1749,6 +1749,19 @@ class Encoder(FlexiVitBase):
             raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
 
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
+
+        # Save original per-bandset masks before merge (for decoder to know
+        # which bandsets are ENCODER vs DECODER).
+        original_bandset_masks: dict[str, Tensor] | None = None
+        if self.merge_enabled and self.bandset_merge_modules is not None:
+            original_bandset_masks = {}
+            for mod_name in self.bandset_merge_modules:
+                mask_name = MaskedOlmoEarthSample.get_masked_modality_name(mod_name)
+                if mask_name in patchified_tokens_and_masks:
+                    original_bandset_masks[mask_name] = patchified_tokens_and_masks[
+                        mask_name
+                    ].clone()
+
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
@@ -1771,6 +1784,11 @@ class Encoder(FlexiVitBase):
 
         if not fast_pass:
             output_dict["project_aggregated"] = self.project_and_aggregate(output)
+
+        # Pass original bandset masks to decoder via output dict
+        if original_bandset_masks:
+            output_dict["original_bandset_masks"] = original_bandset_masks
+
         return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
@@ -2142,6 +2160,7 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        original_bandset_masks: dict[str, Tensor] | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -2150,6 +2169,10 @@ class Predictor(PredictorBase):
             timestamps: Timestamps of the tokens
             patch_size: Patch size of the tokens
             input_res: Input resolution of the tokens
+            original_bandset_masks: Optional dict mapping mask names to their
+                pre-merge per-bandset masks.  When provided, the decoder uses
+                these instead of expanding the merged mask so it knows which
+                bandsets are ENCODER (context) vs DECODER (to predict).
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -2161,12 +2184,21 @@ class Predictor(PredictorBase):
             for mod_name, unmerge_mod in self.bandset_unmerge_modules.items():
                 if mod_name in decoder_emedded_dict:
                     mask_name = MaskedOlmoEarthSample.get_masked_modality_name(mod_name)
+                    # Use original per-bandset masks when available (they carry
+                    # the correct ENCODER/DECODER assignments per bandset).
+                    if (
+                        original_bandset_masks is not None
+                        and mask_name in original_bandset_masks
+                    ):
+                        unmerge_mask = original_bandset_masks[mask_name]
+                    else:
+                        unmerge_mask = decoder_emedded_dict[mask_name]
                     (
                         decoder_emedded_dict[mod_name],
                         decoder_emedded_dict[mask_name],
                     ) = unmerge_mod(
                         decoder_emedded_dict[mod_name],
-                        decoder_emedded_dict[mask_name],
+                        unmerge_mask,
                     )
             # Rebuild TokensAndMasks so getattr works in the loop below
             x = TokensAndMasks(**decoder_emedded_dict)

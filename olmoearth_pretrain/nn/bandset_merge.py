@@ -12,6 +12,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from olmoearth_pretrain.datatypes import MaskValue
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +22,11 @@ class BandsetMerge(nn.Module):
 
     Takes tokens of shape ``[..., num_bandsets, D]`` and produces ``[..., 1, D]``.
     Initialized to approximate mean pooling for stable early training.
+
+    Non-ENCODER bandsets are zeroed out before projection to prevent information
+    leakage (e.g. when some bandsets are assigned DECODER role by the masking
+    strategy).  The result is rescaled so that the effective magnitude matches
+    what the projection would produce with all bandsets active.
     """
 
     def __init__(self, embedding_size: int, num_bandsets: int) -> None:
@@ -45,19 +52,37 @@ class BandsetMerge(nn.Module):
     def forward(self, tokens: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
         """Merge bandset tokens into one.
 
+        Non-ENCODER bandsets are zeroed out before the learned projection.
+        Output is rescaled by ``num_bandsets / num_active`` so that magnitude
+        stays consistent regardless of how many bandsets are active.
+
         Args:
             tokens: ``[B, P_H, P_W, T, num_bandsets, D]``
             mask: ``[B, P_H, P_W, T, num_bandsets]``
 
         Returns:
             Tuple of (merged_tokens ``[..., 1, D]``, merged_mask ``[..., 1]``).
-            Mask is taken from the first bandset (assumes uniform masking across bandsets).
         """
+        # Zero out non-ENCODER bandsets to prevent information leakage
+        encoder_mask = mask == MaskValue.ONLINE_ENCODER.value  # [..., num_bandsets]
+        tokens = tokens * encoder_mask.unsqueeze(-1).float()
+
+        # Normalize by number of active bandsets for consistent magnitude
+        active_count = encoder_mask.sum(dim=-1, keepdim=True).clamp(min=1).float()
+        scale = self.num_bandsets / active_count  # [..., 1]
+
         tokens_cat = tokens.flatten(-2)  # [..., num_bandsets * D]
         merged = self.proj(tokens_cat)  # [..., D]
+        merged = merged * scale  # rescale
         merged = merged.unsqueeze(-2)  # [..., 1, D]
-        # Uniform masking: all bandsets have same mask, take first
-        merged_mask = mask[..., 0:1]  # [..., 1]
+
+        # Merged mask: ONLINE_ENCODER if any bandset is ENCODER, else take min
+        has_encoder = encoder_mask.any(dim=-1, keepdim=True)  # [..., 1]
+        merged_mask = torch.where(
+            has_encoder,
+            torch.full_like(mask[..., 0:1], MaskValue.ONLINE_ENCODER.value),
+            mask.min(dim=-1, keepdim=True).values,
+        )
         return merged, merged_mask
 
 
@@ -79,7 +104,8 @@ class BandsetUnmerge(nn.Module):
 
         Args:
             tokens: ``[B, P_H, P_W, T, 1, D]``
-            mask: ``[B, P_H, P_W, T, 1]``
+            mask: Either ``[..., 1]`` (merged mask, will be expanded) or
+                ``[..., num_bandsets]`` (original pre-merge mask, used as-is).
 
         Returns:
             Tuple of (unmerged_tokens ``[..., num_bandsets, D]``,
@@ -89,6 +115,11 @@ class BandsetUnmerge(nn.Module):
         expanded = self.proj(squeezed)  # [..., num_bandsets * D]
         *spatial, _ = expanded.shape
         unmerged = expanded.reshape(*spatial, self.num_bandsets, self.output_size)
-        # Expand mask: [..., 1] -> [..., num_bandsets]
-        unmerged_mask = mask.expand(*mask.shape[:-1], self.num_bandsets).contiguous()
+        # If mask already has num_bandsets, use as-is; otherwise expand
+        if mask.shape[-1] == self.num_bandsets:
+            unmerged_mask = mask
+        else:
+            unmerged_mask = mask.expand(
+                *mask.shape[:-1], self.num_bandsets
+            ).contiguous()
         return unmerged, unmerged_mask
