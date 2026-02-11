@@ -137,13 +137,16 @@ class OlmoEarthSample(ModalityMethodsMixin):
     openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
+    # naip with different tile resolution is currently not used in favor of naip_10.
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
+    # naip_10 is currently 4x the height/width of sentinel2_l2a.
     naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
     gse: ArrayTensor | None = None  # [B, H, W, 1, len(GSE_bands)]
     cdl: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
     worldpop: ArrayTensor | None = None  # [B, H, W, 1, len(WORLDPOP_bands)]
     worldcereal: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
     wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
@@ -485,6 +488,8 @@ class TokensAndMasks(MaskedModalityMethodsMixin):
     Shapes:
         - modality: (B, P_H, P_W, T, Band_Sets, D)
         - modality_mask: (B, P_H, P_W, T, Band_Sets)
+        - era5_10: (B, T, Band_Sets, D) — no spatial dims (not spatially varying)
+        - latlon: (B, D) — no spatial or temporal dims
     """
 
     # Modality fields with masks (no timestamps)
