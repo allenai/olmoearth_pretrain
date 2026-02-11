@@ -287,6 +287,139 @@ class TestEncoderWithMerge:
         assert orig_masks["sentinel2_l2a_mask"].shape[-1] == 3
 
 
+class TestEncoderWithMidLayerMerge:
+    """Test Encoder with merge_bandsets=True and merge_after_layer >= 0."""
+
+    @pytest.fixture
+    def supported_modalities(self) -> list[ModalitySpec]:
+        """Create a list of supported modalities for testing."""
+        return [Modality.SENTINEL2_L2A, Modality.LATLON]
+
+    def test_encoder_config_build_midlayer(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """EncoderConfig with merge_after_layer=0 should build and store the layer."""
+        names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names=names,
+            embedding_size=16,
+            max_patch_size=8,
+            num_heads=2,
+            depth=4,
+            mlp_ratio=2.0,
+            merge_bandsets=True,
+            merge_after_layer=1,
+        )
+        encoder = config.build()
+        assert encoder.merge_enabled is True
+        assert encoder.merge_after_layer == 1
+        assert encoder.bandset_merge_modules is not None
+
+    def test_midlayer_merge_output_shape(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Mid-layer merge should produce 1 bandset for S2 in output."""
+        B, H, W, T = 2, 16, 16, 2
+        names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names=names,
+            embedding_size=16,
+            max_patch_size=8,
+            num_heads=2,
+            depth=4,
+            mlp_ratio=2.0,
+            merge_bandsets=True,
+            merge_after_layer=1,  # merge after layer 1 (2 layers of cross-bandset attn)
+        )
+        encoder = config.build()
+
+        s2_data = torch.randn(B, H, W, T, 12)
+        s2_mask = torch.full(
+            (B, H, W, T, 3), MaskValue.ONLINE_ENCODER.value, dtype=torch.long
+        )
+        # Bandset 1 is DECODER at some positions
+        s2_mask[:, :8, :8, :, 1] = MaskValue.DECODER.value
+
+        latlon = torch.randn(B, 2)
+        latlon_mask = torch.zeros(B, 1, dtype=torch.long)
+
+        timestamps = (
+            torch.tensor([[15, 1, 2023], [15, 6, 2023]], dtype=torch.long)
+            .unsqueeze(0)
+            .expand(B, -1, -1)
+        )
+
+        sample = MaskedOlmoEarthSample(
+            sentinel2_l2a=s2_data,
+            sentinel2_l2a_mask=s2_mask,
+            latlon=latlon,
+            latlon_mask=latlon_mask,
+            timestamps=timestamps,
+        )
+
+        output = encoder(sample, patch_size=2)
+        tokens_and_masks = output["tokens_and_masks"]
+
+        # S2 should have 1 bandset (merged from 3)
+        s2_out = tokens_and_masks.sentinel2_l2a
+        assert s2_out is not None
+        assert s2_out.shape[-2] == 1
+
+        # original_bandset_masks should be in output
+        assert "original_bandset_masks" in output
+        orig_masks = output["original_bandset_masks"]
+        assert "sentinel2_l2a_mask" in orig_masks
+        assert orig_masks["sentinel2_l2a_mask"].shape[-1] == 3
+
+    def test_midlayer_merge_gradient_flows(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Gradients should flow through mid-layer merge."""
+        B, H, W, T = 1, 16, 16, 1
+        names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            supported_modality_names=names,
+            embedding_size=16,
+            max_patch_size=8,
+            num_heads=2,
+            depth=4,
+            mlp_ratio=2.0,
+            merge_bandsets=True,
+            merge_after_layer=1,
+        )
+        encoder = config.build()
+
+        s2_data = torch.randn(B, H, W, T, 12)
+        s2_mask = torch.full(
+            (B, H, W, T, 3), MaskValue.ONLINE_ENCODER.value, dtype=torch.long
+        )
+        latlon = torch.randn(B, 2)
+        latlon_mask = torch.zeros(B, 1, dtype=torch.long)
+        timestamps = (
+            torch.tensor([[15, 1, 2023]], dtype=torch.long)
+            .unsqueeze(0)
+            .expand(B, -1, -1)
+        )
+
+        sample = MaskedOlmoEarthSample(
+            sentinel2_l2a=s2_data,
+            sentinel2_l2a_mask=s2_mask,
+            latlon=latlon,
+            latlon_mask=latlon_mask,
+            timestamps=timestamps,
+        )
+
+        output = encoder(sample, patch_size=2)
+        tokens_and_masks = output["tokens_and_masks"]
+        loss = tokens_and_masks.sentinel2_l2a.sum()
+        loss.backward()
+
+        # Merge projection should have gradients
+        assert encoder.bandset_merge_modules is not None
+        merge_mod = encoder.bandset_merge_modules["sentinel2_l2a"]
+        assert merge_mod.proj.weight.grad is not None
+
+
 class TestPredictorWithUnmerge:
     """Test Predictor with unmerge_bandsets=True."""
 

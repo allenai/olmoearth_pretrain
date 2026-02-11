@@ -1249,6 +1249,7 @@ class Encoder(FlexiVitBase):
         tokenization_config: TokenizationConfig | None = None,
         band_dropout_rate: float = 0.0,
         merge_bandsets: bool = False,
+        merge_after_layer: int = -1,
     ):
         """Initialize the encoder.
 
@@ -1276,8 +1277,12 @@ class Encoder(FlexiVitBase):
             log_token_norm_stats: Whether to log the token norm stats
             tokenization_config: Optional config for custom band groupings
             band_dropout_rate: Probability of dropping each band channel during training.
-            merge_bandsets: If True, merge multi-bandset tokens into one after patch
-                embedding and composite encodings, before the transformer.
+            merge_bandsets: If True, merge multi-bandset tokens into one.
+                merge_after_layer controls when the merge happens.
+            merge_after_layer: Which transformer layer to merge after.
+                -1 (default) = merge before the transformer (pre-transformer merge).
+                >= 0 = merge after that transformer block (mid-layer merge).
+                Only used when merge_bandsets is True.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1319,8 +1324,10 @@ class Encoder(FlexiVitBase):
         )
         self.norm = nn.LayerNorm(self.embedding_size)
 
-        # Bandset merging: merge multi-bandset tokens into one before transformer
+        # Bandset merging: merge multi-bandset tokens into one.
+        # merge_after_layer=-1 means before transformer; >=0 means after that block.
         self.merge_enabled = merge_bandsets
+        self.merge_after_layer = merge_after_layer
         self.bandset_merge_modules: nn.ModuleDict | None = None
         if merge_bandsets:
             from olmoearth_pretrain.nn.bandset_merge import BandsetMerge
@@ -1584,6 +1591,25 @@ class Encoder(FlexiVitBase):
             tokens, _ = self.add_removed_tokens(tokens, indices, mask)
         return tokens
 
+    def _apply_bandset_merge(
+        self,
+        tokens_dict: dict[str, Tensor],
+        original_masks_dict: dict[str, Tensor],
+        modalities_to_dims_dict: dict[str, tuple],
+    ) -> None:
+        """Merge multi-bandset tokens into one per (h, w, t) position in-place."""
+        assert self.bandset_merge_modules is not None
+        for mod_name, merge_mod in self.bandset_merge_modules.items():
+            if mod_name in tokens_dict:
+                mask_name = MaskedOlmoEarthSample.get_masked_modality_name(mod_name)
+                tokens_dict[mod_name], tokens_dict[mask_name] = merge_mod(
+                    tokens_dict[mod_name], tokens_dict[mask_name]
+                )
+                original_masks_dict[mask_name] = tokens_dict[mask_name]
+        for mod_name in list(modalities_to_dims_dict.keys()):
+            if mod_name in tokens_dict:
+                modalities_to_dims_dict[mod_name] = tokens_dict[mod_name].shape
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -1612,22 +1638,15 @@ class Encoder(FlexiVitBase):
         )
         tokens_dict.update(original_masks_dict)
 
-        # Merge multi-bandset tokens into one per (h, w, t) position
-        if self.merge_enabled and self.bandset_merge_modules is not None:
-            for mod_name, merge_mod in self.bandset_merge_modules.items():
-                if mod_name in tokens_dict:
-                    mask_name = MaskedOlmoEarthSample.get_masked_modality_name(mod_name)
-                    tokens_dict[mod_name], tokens_dict[mask_name] = merge_mod(
-                        tokens_dict[mod_name], tokens_dict[mask_name]
-                    )
-                    # Also update original_masks_dict so end-of-method restore
-                    # uses merged masks
-                    original_masks_dict[mask_name] = tokens_dict[mask_name]
-            # Update dims dict so split_and_expand_per_modality uses merged shapes
-            for mod_name in list(modalities_to_dims_dict.keys()):
-                if mod_name in tokens_dict:
-                    modalities_to_dims_dict[mod_name] = tokens_dict[mod_name].shape
-            # Recompute exited_tokens from merged tokens
+        # Pre-transformer merge (merge_after_layer == -1)
+        if (
+            self.merge_enabled
+            and self.bandset_merge_modules is not None
+            and self.merge_after_layer < 0
+        ):
+            self._apply_bandset_merge(
+                tokens_dict, original_masks_dict, modalities_to_dims_dict
+            )
             exited_tokens, _ = self.collapse_and_combine_hwtc(tokens_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -1686,6 +1705,59 @@ class Encoder(FlexiVitBase):
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
             )
+
+            # Mid-layer merge: after the specified block, unpack → merge → repack
+            if (
+                self.merge_enabled
+                and self.bandset_merge_modules is not None
+                and self.merge_after_layer >= 0
+                and i_blk == self.merge_after_layer
+            ):
+                # 1. Remove register tokens
+                if self.has_register_tokens:
+                    tokens, _ = self.pop_register_tokens(tokens)
+
+                # 2. Unpack flash-attn packing
+                if self.use_flash_attn:
+                    tokens = self.unpack_tokens(tokens, new_mask, og_shape)
+
+                # 3. Restore removed (non-ENCODER) tokens to full sequence
+                if not fast_pass and indices is not None:
+                    tokens, _ = self.add_removed_tokens(tokens, indices, new_mask)
+
+                # 4. Split flat sequence back to per-modality tensors
+                tokens_per_mod = self.split_and_expand_per_modality(
+                    tokens, modalities_to_dims_dict
+                )
+                tokens_per_mod.update(original_masks_dict)
+
+                # 5. Apply bandset merge
+                self._apply_bandset_merge(
+                    tokens_per_mod, original_masks_dict, modalities_to_dims_dict
+                )
+
+                # 6. Re-collapse to flat sequence
+                tokens, mask = self.collapse_and_combine_hwtc(tokens_per_mod)
+
+                # 7. Re-remove masked tokens
+                tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
+                    self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
+                )
+
+                # 8. Re-pack for flash attention
+                if self.use_flash_attn:
+                    cu_seqlens = get_cumulative_sequence_lengths(seq_lengths)
+                    og_shape = tokens.shape
+                    tokens = self.pack_tokens(tokens, new_mask)
+
+                # 9. Rebuild attention mask
+                attn_mask = self._maybe_get_attn_mask(new_mask, fast_pass=fast_pass)
+
+                # 10. Re-add register tokens
+                if self.has_register_tokens:
+                    tokens, attn_mask = self.add_register_tokens_and_masks(
+                        tokens, attn_mask
+                    )
 
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
@@ -2277,6 +2349,7 @@ class EncoderConfig(Config):
     tokenization_config: TokenizationConfig | None = None
     band_dropout_rate: float = 0.0
     merge_bandsets: bool = False
+    merge_after_layer: int = -1
 
     def validate(self) -> None:
         """Validate the configuration."""

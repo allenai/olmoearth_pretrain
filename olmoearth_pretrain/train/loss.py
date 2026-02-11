@@ -524,7 +524,9 @@ class _DeprecatedPatchDiscriminationLossNew(PatchDiscriminationLoss):
         super().__init__(*args, **kwargs)
 
 
-LOSS_REGISTRY.register("patch_discrimination_new")(_DeprecatedPatchDiscriminationLossNew)
+LOSS_REGISTRY.register("patch_discrimination_new")(
+    _DeprecatedPatchDiscriminationLossNew
+)
 
 
 class _DeprecatedModalityPatchDiscriminationLossNew(ModalityPatchDiscriminationLoss):
