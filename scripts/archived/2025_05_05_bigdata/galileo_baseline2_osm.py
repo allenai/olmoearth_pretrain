@@ -10,14 +10,13 @@ from galileo_shared import (
     build_trainer_config,
     build_visualize_config,
 )
-from olmo_core.config import Config, DType
-
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.dataset import HeliosDatasetConfig
 from helios.internal.experiment import CommonComponents, main
 from helios.internal.utils import MODEL_SIZE_ARGS
 from helios.nn.flexihelios import EncoderConfig, PredictorConfig
 from helios.nn.galileo import GalileoConfig
+from olmo_core.config import Config, DType
 
 MIN_PATCH_SIZE = 1
 MAX_PATCH_SIZE = 8

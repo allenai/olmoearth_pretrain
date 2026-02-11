@@ -4,6 +4,20 @@ The eval.sh calls this script with all the different checkpoints we had for this
 model architecture related to fixed modality masking.
 """
 
+from helios.data.constants import Modality
+from helios.internal.experiment import (
+    CommonComponents,
+    main,
+)
+from helios.nn.flexihelios import (
+    PoolingType,
+)
+from helios.train.callbacks import (
+    DownstreamEvaluatorCallbackConfig,
+    HeliosSpeedMonitorCallback,
+    HeliosWandBCallback,
+)
+from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 from latent_mim_all_data import (
     build_common_components,
     build_dataloader_config,
@@ -22,21 +36,6 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
-
-from helios.data.constants import Modality
-from helios.internal.experiment import (
-    CommonComponents,
-    main,
-)
-from helios.nn.flexihelios import (
-    PoolingType,
-)
-from helios.train.callbacks import (
-    DownstreamEvaluatorCallbackConfig,
-    HeliosSpeedMonitorCallback,
-    HeliosWandBCallback,
-)
-from helios.train.callbacks.evaluator_callback import DownstreamTaskConfig
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:

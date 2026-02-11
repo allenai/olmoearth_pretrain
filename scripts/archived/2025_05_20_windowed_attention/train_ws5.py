@@ -1,5 +1,8 @@
 """Trying to prototype fitting everything into olmo core."""
 
+from helios.internal.experiment import CommonComponents, main
+from helios.nn.latent_mim import LatentMIMConfig
+from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 from shared import (
     build_dataloader_config,
     build_dataset_config,
@@ -9,10 +12,6 @@ from shared import (
     build_visualize_config,
     my_build_common_components,
 )
-
-from helios.internal.experiment import CommonComponents, main
-from helios.nn.latent_mim import LatentMIMConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 
 def my_build_model_config(common: CommonComponents) -> LatentMIMConfig:
