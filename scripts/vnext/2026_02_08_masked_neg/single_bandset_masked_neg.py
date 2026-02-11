@@ -11,6 +11,7 @@ Ten experiments:
 8. modality_cross_random masking + 2 bandsets S2 (10m+20m) / Landsat single + masked neg loss
 9. merged 3 bandsets S2 / Landsat + modality_cross_random masking + masked neg loss (merge before transformer, unmerge in decoder)
 10. mid-layer merged 3 bandsets S2 / Landsat + modality_cross_random masking + masked neg loss (merge after layer 3, unmerge in decoder)
+11. default 3 bandsets S2 / 2 bandsets Landsat set via TokenizationConfig + modality_cross_random masking + masked neg loss (sanity check)
 """
 
 import copy
@@ -129,6 +130,22 @@ S2_TWO_BANDSETS_10M_20M = ModalityTokenization(
 LANDSAT_SINGLE_BANDSET = ModalityTokenization(
     band_groups=[
         ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
+    ]
+)
+
+# Default bandsets (matching ModalitySpec defaults) — for verification
+S2_THREE_BANDSETS_DEFAULT = ModalityTokenization(
+    band_groups=[
+        ["B02", "B03", "B04", "B08"],
+        ["B05", "B06", "B07", "B8A", "B11", "B12"],
+        ["B01", "B09"],
+    ]
+)
+
+LANDSAT_TWO_BANDSETS_DEFAULT = ModalityTokenization(
+    band_groups=[
+        ["B8"],
+        ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
     ]
 )
 
@@ -714,6 +731,102 @@ def build_dataloader_exp10(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 11: default 3 bandsets S2 / 2 bandsets Landsat via TokenizationConfig + modality_cross_random
+# ============================================================
+
+
+def _tokenization_config_default_bandsets() -> TokenizationConfig:
+    return TokenizationConfig(
+        overrides={
+            "sentinel2_l2a": S2_THREE_BANDSETS_DEFAULT,
+            "landsat": LANDSAT_TWO_BANDSETS_DEFAULT,
+        }
+    )
+
+
+def build_common_exp11(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp11 (default bandsets via tokenization config)."""
+    common = build_common_components_base(script, cmd, run_name, cluster, overrides)
+    common.tokenization_config = _tokenization_config_default_bandsets()
+    return common
+
+
+def build_train_module_exp11(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp11."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=32,
+        masking_config=_masking_config(
+            "modality_cross_random", common.tokenization_config
+        ),
+        loss_config=_loss_config(),
+        contrastive_config=_contrastive_config(),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp11(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp11 (default bandsets via tokenization config)."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
+
+
+def build_dataloader_exp11(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp11."""
+    return OlmoEarthDataLoaderConfig(
+        num_workers=16,
+        global_batch_size=512,
+        token_budget=2250,
+        prefetch_factor=4,
+        sampled_hw_p_list=list(range(1, 13)),
+        min_patch_size=MIN_PATCH_SIZE,
+        max_patch_size=MAX_PATCH_SIZE,
+        work_dir=common.save_folder,
+        seed=3622,
+        num_masked_views=2,
+        masking_config=_masking_config(
+            "modality_cross_random", common.tokenization_config
+        ),
+    )
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -777,6 +890,12 @@ EXPERIMENTS = {
         build_model_exp10,
         build_train_module_exp10,
         build_dataloader_exp10,
+    ),
+    "default_bandsets_via_tokenconfig_cross_random_masked_neg": (
+        build_common_exp11,
+        build_model_exp11,
+        build_train_module_exp11,
+        build_dataloader_exp11,
     ),
 }
 
