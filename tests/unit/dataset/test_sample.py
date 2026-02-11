@@ -2,7 +2,6 @@
 
 import calendar
 from collections.abc import Callable
-from dataclasses import fields
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -28,8 +27,8 @@ CRS = "EPSG:32610"
 
 def test_all_attrs_have_bands() -> None:
     """Test all attributes are described in attribute_to_bands."""
-    for f in fields(OlmoEarthSample):
-        _ = OlmoEarthSample.num_bands(f.name)
+    for f_name in OlmoEarthSample._fields:
+        _ = OlmoEarthSample.num_bands(f_name)
 
 
 @pytest.fixture

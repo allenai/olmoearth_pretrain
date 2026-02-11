@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, fields, replace
 from enum import Enum
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import numpy as np
 import torch
@@ -14,7 +13,6 @@ from einops import rearrange
 from torch import Tensor
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
-from torch.utils._pytree import register_pytree_node
 
 from olmoearth_pretrain.data.constants import MISSING_VALUE, TIMESTAMPS, Modality
 from olmoearth_pretrain.types import ArrayTensor
@@ -45,88 +43,43 @@ TIMESTAMPS_FIELD = "timestamps"
 
 
 # =============================================================================
-# Mixins for shared methods
+# Shared standalone helpers (called by NamedTuple methods to avoid duplication)
 # =============================================================================
 
 
-class ModalityMethodsMixin:
-    """Shared methods for all modality containers."""
-
-    def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
-        """Convert to a dictionary.
-
-        Args:
-            include_nones: Whether to include None values in the output.
-
-        Returns:
-            Dictionary representation.
-        """
-        result = {}
-        for f in fields(self):  # type: ignore[arg-type]
-            val = getattr(self, f.name)
-            if include_nones or val is not None:
-                result[f.name] = val
-        return result
-
-    @property
-    def modalities(self) -> list[str]:
-        """Get the present modalities (excludes masks and timestamps)."""
-        return [
-            f.name
-            for f in fields(self)  # type: ignore[arg-type]
-            if not f.name.endswith("_mask")
-            and f.name != TIMESTAMPS_FIELD
-            and getattr(self, f.name) is not None
-        ]
-
-    @property
-    def modalities_with_timestamps(self) -> list[str]:
-        """Get all modalities including timestamps if present (excludes masks)."""
-        has_timestamps = False
-        result = []
-        for f in fields(self):  # type: ignore[arg-type]
-            if f.name == TIMESTAMPS_FIELD:
-                has_timestamps = True
-            if not f.name.endswith("_mask") and getattr(self, f.name) is not None:
-                result.append(f.name)
-        if not has_timestamps:
-            raise ValueError(f"{type(self).__name__} does not have a timestamps field")
-        return result
-
-    @property
-    def batch_size(self) -> int:
-        """Get the batch size of the data."""
-        for f in fields(self):  # type: ignore[arg-type]
-            val = getattr(self, f.name)
-            if val is not None:
-                return val.shape[0]
-        raise ValueError("No data to get batch size from")
+def _as_dict(obj: NamedTuple, include_nones: bool = False) -> dict[str, Any]:
+    """Convert a NamedTuple to a dict, optionally including None values."""
+    result = {}
+    for name in obj._fields:
+        val = getattr(obj, name)
+        if include_nones or val is not None:
+            result[name] = val
+    return result
 
 
-class MaskedModalityMethodsMixin(ModalityMethodsMixin):
-    """Shared methods for masked modality containers (with _mask fields)."""
-
-    @staticmethod
-    def get_masked_modality_name(modality: str) -> str:
-        """Get the masked modality name."""
-        return f"{modality}_mask"
-
-    @staticmethod
-    def get_unmasked_modality_name(modality_mask_name: str) -> str:
-        """Get the unmasked modality name."""
-        return modality_mask_name.replace("_mask", "")
+def _modalities(obj: NamedTuple) -> list[str]:
+    """Get present modalities (excludes masks and timestamps)."""
+    return [
+        name
+        for name in obj._fields
+        if not name.endswith("_mask")
+        and name != TIMESTAMPS_FIELD
+        and getattr(obj, name) is not None
+    ]
 
 
-# TypeVar for self-returning methods
-T = TypeVar("T", bound="MaskedOlmoEarthSample")
-TT = TypeVar("TT", bound="TokensAndMasks")
+def _get_masked_modality_name(modality: str) -> str:
+    return f"{modality}_mask"
 
 
-@dataclass
-class OlmoEarthSample(ModalityMethodsMixin):
+def _get_unmasked_modality_name(modality_mask_name: str) -> str:
+    return modality_mask_name.replace("_mask", "")
+
+
+class OlmoEarthSample(NamedTuple):
     """A sample of the data from the OlmoEarth Pretrain dataset.
 
-    This dataclass contains the data of a single sample or a batch of samples.
+    This NamedTuple contains the data of a single sample or a batch of samples.
     For each modality, we have an ArrayTensor named by the modality,
     along with the latlon and timestamps.
     """
@@ -152,19 +105,42 @@ class OlmoEarthSample(ModalityMethodsMixin):
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
-    def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
-        """Returns the expected shape of an attribute.
-
-        This is useful if you want to know what the shape of a
-        missing attribute would have been for this sample.
+    def as_dict(self, include_nones: bool = False) -> dict[str, ArrayTensor | None]:
+        """Convert to a dictionary.
 
         Args:
-            attribute: The attribute to get the shape of.
-            mask: Whether to get the shape of the mask.
-
-        Returns:
-            The shape of the attribute.
+            include_nones: Whether to include None values.
         """
+        return _as_dict(self, include_nones=include_nones)
+
+    @property
+    def modalities(self) -> list[str]:
+        """Get the present modalities (excludes masks and timestamps)."""
+        return _modalities(self)
+
+    @property
+    def modalities_with_timestamps(self) -> list[str]:
+        """Get all modalities including timestamps if present (excludes masks)."""
+        result = []
+        for name in self._fields:
+            if not name.endswith("_mask") and getattr(self, name) is not None:
+                result.append(name)
+        return result
+
+    @property
+    def batch_size(self) -> int:
+        """Get the batch size of the data."""
+        vals = [
+            cast(ArrayTensor, x).shape[0]
+            for x in self.as_dict(include_nones=False).values()
+        ]
+        if len(set(vals)) == 1:
+            return vals[0]
+        else:
+            return 1
+
+    def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
+        """Returns the expected shape of an attribute."""
         if attribute == "timestamps":
             if not mask:
                 if self.timestamps is None:
@@ -183,13 +159,26 @@ class OlmoEarthSample(ModalityMethodsMixin):
         else:
             return Modality.get(attribute).num_bands
 
+    def to_device(
+        self, device: torch.device, non_blocking: bool = True
+    ) -> OlmoEarthSample:
+        """Move all tensors to the specified device."""
+        return OlmoEarthSample(
+            **{
+                key: val.to(device, non_blocking=non_blocking)
+                for key, val in self.as_dict(include_nones=False).items()
+                if val is not None
+            }
+        )
+
     def distribute_tensors(self, device_mesh: DeviceMesh) -> OlmoEarthSample:
         """Distribute the tensors to the specified device mesh."""
-        updates = {
-            key: distribute_tensor(val, device_mesh)
-            for key, val in self.as_dict(include_nones=False).items()
-        }
-        return replace(self, **updates)
+        return OlmoEarthSample(
+            **{
+                key: distribute_tensor(val, device_mesh)
+                for key, val in self.as_dict(include_nones=False).items()
+            }
+        )
 
     @property
     def height(self) -> int:
@@ -283,10 +272,9 @@ class OlmoEarthSample(ModalityMethodsMixin):
         num_bands = modality_spec.num_band_sets if mask else modality_spec.num_bands
 
         if modality_spec.is_spacetime_varying:
-            if height is None or width is None:
-                raise ValueError(
-                    f"height and width required for spatial modality {attribute}"
-                )
+            assert height is not None and width is not None, (
+                f"height and width required for spatial modality {attribute}"
+            )
             return (
                 height * modality_spec.image_tile_size_factor,
                 width * modality_spec.image_tile_size_factor,
@@ -294,10 +282,9 @@ class OlmoEarthSample(ModalityMethodsMixin):
                 num_bands,
             )
         elif modality_spec.is_space_only_varying:
-            if height is None or width is None:
-                raise ValueError(
-                    f"height and width required for spatial modality {attribute}"
-                )
+            assert height is not None and width is not None, (
+                f"height and width required for spatial modality {attribute}"
+            )
             return (
                 height * modality_spec.image_tile_size_factor,
                 width * modality_spec.image_tile_size_factor,
@@ -317,8 +304,9 @@ class OlmoEarthSample(ModalityMethodsMixin):
 
     def scale(self, s: float) -> OlmoEarthSample:
         """Multiply a OlmoEarthSample by a float."""
-        updates = {k: cast(ArrayTensor, v) * s for k, v in self.as_dict().items()}
-        return replace(self, **updates)
+        return OlmoEarthSample(
+            **{k: cast(ArrayTensor, v) * s for k, v in self.as_dict().items()}
+        )
 
     def add(
         self, other: OlmoEarthSample, timestamps_to_keep: ArrayTensor
@@ -336,7 +324,7 @@ class OlmoEarthSample(ModalityMethodsMixin):
                 )
             summed_dict[key] = val + other_val
         summed_dict["timestamps"] = timestamps_to_keep
-        return replace(self, **summed_dict)
+        return OlmoEarthSample(**summed_dict)
 
     def rotate(self) -> OlmoEarthSample:
         """Rotate the instances by one.
@@ -350,15 +338,13 @@ class OlmoEarthSample(ModalityMethodsMixin):
                 output_dict[key] = np.concatenate((v[1:], v[:1]), axis=0)
             elif isinstance(v, torch.Tensor):
                 output_dict[key] = torch.cat((v[1:], v[:1]), dim=0)
-        return replace(self, **output_dict)
+        return OlmoEarthSample(**output_dict)
 
 
-@dataclass
-class MaskedOlmoEarthSample(MaskedModalityMethodsMixin):
+class MaskedOlmoEarthSample(NamedTuple):
     """A masked sample of the data from the OlmoEarth Pretrain dataset.
 
-    This dataclass contains the data for a single sample from the OlmoEarth
-    Pretrain dataset. For each modality we have an ArrayTensor named by modality,
+    For each modality we have an ArrayTensor named by modality,
     and a mask for each modality named by modality_mask.
     """
 
@@ -397,37 +383,51 @@ class MaskedOlmoEarthSample(MaskedModalityMethodsMixin):
         None  # [B, T, D=3], where D=[day, month, year] (months are zero indexed)
     )
 
+    def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
+        """Convert to a dictionary.
+
+        Args:
+            include_nones: Whether to include None values.
+        """
+        return _as_dict(self, include_nones=include_nones)
+
+    @property
+    def modalities(self) -> list[str]:
+        """Get the present modalities (excludes masks and timestamps)."""
+        return _modalities(self)
+
+    @staticmethod
+    def get_masked_modality_name(modality: str) -> str:
+        """Get the masked modality name."""
+        return _get_masked_modality_name(modality)
+
+    @staticmethod
+    def get_unmasked_modality_name(modality_mask_name: str) -> str:
+        """Get the unmasked modality name."""
+        return _get_unmasked_modality_name(modality_mask_name)
+
     @property
     def batch_size(self) -> int:
-        """Get the batch size of the sample.
-
-        Returns:
-            The batch size (first dimension of timestamps tensor).
-        """
+        """Get the batch size of the sample."""
         if self.timestamps is not None:
             return self.timestamps.shape[0]
-        for f in fields(self):
-            val = getattr(self, f.name)
+        for name in self._fields:
+            val = getattr(self, name)
             if val is not None:
                 return val.shape[0]
         raise ValueError("No data to get batch size from")
 
-    def to_device(self: T, device: torch.device, non_blocking: bool = True) -> T:
-        """Move all tensors to the specified device.
-
-        Args:
-            device: The device to move the tensors to.
-            non_blocking: Whether or not to use asynchronous GPU copies
-
-        Returns:
-            A new instance with all tensors moved to the specified device.
-        """
-        updates = {}
-        for f in fields(self):
-            val = getattr(self, f.name)
-            if val is not None and hasattr(val, "to"):
-                updates[f.name] = val.to(device, non_blocking=non_blocking)
-        return replace(self, **updates)
+    def to_device(
+        self, device: torch.device, non_blocking: bool = True
+    ) -> MaskedOlmoEarthSample:
+        """Move all tensors to the specified device."""
+        return MaskedOlmoEarthSample(
+            **{
+                key: val.to(device, non_blocking=non_blocking)
+                for key, val in self.as_dict(include_nones=False).items()
+                if val is not None and hasattr(val, "to")
+            }
+        )
 
     def unmask(self) -> MaskedOlmoEarthSample:
         """Return an unmasked MaskedOlmoEarthSample.
@@ -436,12 +436,11 @@ class MaskedOlmoEarthSample(MaskedModalityMethodsMixin):
         which remain MISSING.
         """
         updates = {}
-        for f in fields(self):
-            if f.name.endswith("_mask"):
-                val = getattr(self, f.name)
-                if val is not None:
-                    updates[f.name] = val * (val == MaskValue.MISSING.value)
-        return replace(self, **updates)
+        for name in _MASKED_SAMPLE_MASK_FIELDS:
+            val = getattr(self, name)
+            if val is not None:
+                updates[name] = val * (val == MaskValue.MISSING.value)
+        return self._replace(**updates)
 
     @classmethod
     def from_olmoearthsample(
@@ -471,16 +470,17 @@ class MaskedOlmoEarthSample(MaskedModalityMethodsMixin):
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> MaskedOlmoEarthSample:
-        """Create a MaskedOlmoEarthSample from a dictionary.
-
-        Args:
-            d: Dictionary representation of the MaskedOlmoEarthSample.
-        """
+        """Create a MaskedOlmoEarthSample from a dictionary."""
         return cls(**d)
 
 
-@dataclass
-class TokensAndMasks(MaskedModalityMethodsMixin):
+# Pre-computed tuple of mask field names for faster iteration in unmask()
+_MASKED_SAMPLE_MASK_FIELDS: tuple[str, ...] = tuple(
+    f for f in MaskedOlmoEarthSample._fields if f.endswith("_mask")
+)
+
+
+class TokensAndMasks(NamedTuple):
     """Embedded tokens with masks for computing loss.
 
     This is the output format from the encoder, containing embedded tokens
@@ -525,28 +525,55 @@ class TokensAndMasks(MaskedModalityMethodsMixin):
     latlon: Tensor | None = None
     latlon_mask: Tensor | None = None
 
-    def to_device(self: TT, device: torch.device, non_blocking: bool = True) -> TT:
-        """Move all tensors to the specified device.
+    def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
+        """Convert to a dictionary.
 
         Args:
-            device: The device to move the tensors to.
-            non_blocking: Whether or not to use asynchronous GPU copies
-
-        Returns:
-            A new instance with all tensors moved to the specified device.
+            include_nones: Whether to include None values.
         """
-        updates = {}
-        for f in fields(self):
-            val = getattr(self, f.name)
-            if val is not None and hasattr(val, "to"):
-                updates[f.name] = val.to(device, non_blocking=non_blocking)
-        return replace(self, **updates)
+        return _as_dict(self, include_nones=include_nones)
+
+    @property
+    def modalities(self) -> list[str]:
+        """Get the present modalities (excludes masks and timestamps)."""
+        return _modalities(self)
+
+    @staticmethod
+    def get_masked_modality_name(modality: str) -> str:
+        """Get the masked modality name."""
+        return _get_masked_modality_name(modality)
+
+    @staticmethod
+    def get_unmasked_modality_name(modality_mask_name: str) -> str:
+        """Get the unmasked modality name."""
+        return _get_unmasked_modality_name(modality_mask_name)
+
+    @property
+    def batch_size(self) -> int:
+        """Get the batch size."""
+        for name in self._fields:
+            val = getattr(self, name)
+            if val is not None:
+                return val.shape[0]
+        raise ValueError("No data to get batch size from")
+
+    def to_device(
+        self, device: torch.device, non_blocking: bool = True
+    ) -> TokensAndMasks:
+        """Move all tensors to the specified device."""
+        return TokensAndMasks(
+            **{
+                key: val.to(device, non_blocking=non_blocking)
+                for key, val in self.as_dict(include_nones=False).items()
+                if val is not None and hasattr(val, "to")
+            }
+        )
 
     @property
     def device(self) -> torch.device:
         """Get the device of the tokens and masks."""
-        for f in fields(self):
-            val = getattr(self, f.name)
+        for name in self._fields:
+            val = getattr(self, name)
             if val is not None:
                 return val.device
         raise ValueError("No data to get device from")
@@ -554,9 +581,9 @@ class TokensAndMasks(MaskedModalityMethodsMixin):
     def get_shape_dict(self) -> dict[str, tuple]:
         """Return a dictionary of the shapes of the fields."""
         return {
-            f.name: getattr(self, f.name).shape
-            for f in fields(self)
-            if getattr(self, f.name) is not None
+            name: getattr(self, name).shape
+            for name in self._fields
+            if getattr(self, name) is not None
         }
 
     @staticmethod
@@ -586,12 +613,7 @@ class TokensAndMasks(MaskedModalityMethodsMixin):
     def flatten_tokens_and_masks_per_modality(
         self,
     ) -> tuple[list[Tensor], list[Tensor]]:
-        """Flatten tokens and masks, returning separate tensors per modality.
-
-        Returns:
-            Tuple of (tokens_list, masks_list) where each element
-            corresponds to one modality.
-        """
+        """Flatten tokens and masks, returning separate tensors per modality."""
         return self._flatten_per_modality()
 
     def flatten_all_tokens_and_masks(self) -> tuple[Tensor, Tensor]:
@@ -642,33 +664,3 @@ class TokensAndMasks(MaskedModalityMethodsMixin):
         from olmoearth_pretrain.nn.pooling import pool_unmasked_tokens as _pool
 
         return _pool(self, pooling_type, spatial_pooling, concat_features)
-
-
-# =============================================================================
-# Register dataclasses as pytree nodes so that torch.utils._pytree.tree_map
-# (used by FSDP's cast_forward_inputs, among others) can walk inside them
-# and cast the leaf tensors.
-# =============================================================================
-
-
-def _dataclass_flatten(obj: Any) -> tuple[list[Any], list[str]]:
-    """Flatten a dataclass into (children, field_names) for pytree."""
-    names = [f.name for f in fields(obj)]
-    children = [getattr(obj, name) for name in names]
-    return children, names
-
-
-def _masked_sample_unflatten(children: list[Any], names: list[str]) -> MaskedOlmoEarthSample:
-    return MaskedOlmoEarthSample(**dict(zip(names, children)))
-
-
-def _tokens_and_masks_unflatten(children: list[Any], names: list[str]) -> TokensAndMasks:
-    return TokensAndMasks(**dict(zip(names, children)))
-
-
-register_pytree_node(
-    MaskedOlmoEarthSample, _dataclass_flatten, _masked_sample_unflatten
-)
-register_pytree_node(
-    TokensAndMasks, _dataclass_flatten, _tokens_and_masks_unflatten
-)
