@@ -14,6 +14,7 @@ from einops import rearrange
 from torch import Tensor
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import distribute_tensor
+from torch.utils._pytree import register_pytree_node
 
 from olmoearth_pretrain.data.constants import MISSING_VALUE, TIMESTAMPS, Modality
 from olmoearth_pretrain.types import ArrayTensor
@@ -641,3 +642,33 @@ class TokensAndMasks(MaskedModalityMethodsMixin):
         from olmoearth_pretrain.nn.pooling import pool_unmasked_tokens as _pool
 
         return _pool(self, pooling_type, spatial_pooling, concat_features)
+
+
+# =============================================================================
+# Register dataclasses as pytree nodes so that torch.utils._pytree.tree_map
+# (used by FSDP's cast_forward_inputs, among others) can walk inside them
+# and cast the leaf tensors.
+# =============================================================================
+
+
+def _dataclass_flatten(obj: Any) -> tuple[list[Any], list[str]]:
+    """Flatten a dataclass into (children, field_names) for pytree."""
+    names = [f.name for f in fields(obj)]
+    children = [getattr(obj, name) for name in names]
+    return children, names
+
+
+def _masked_sample_unflatten(children: list[Any], names: list[str]) -> MaskedOlmoEarthSample:
+    return MaskedOlmoEarthSample(**dict(zip(names, children)))
+
+
+def _tokens_and_masks_unflatten(children: list[Any], names: list[str]) -> TokensAndMasks:
+    return TokensAndMasks(**dict(zip(names, children)))
+
+
+register_pytree_node(
+    MaskedOlmoEarthSample, _dataclass_flatten, _masked_sample_unflatten
+)
+register_pytree_node(
+    TokensAndMasks, _dataclass_flatten, _tokens_and_masks_unflatten
+)
