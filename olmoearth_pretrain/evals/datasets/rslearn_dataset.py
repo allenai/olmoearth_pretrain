@@ -214,11 +214,19 @@ class RslearnToOlmoEarthDataset(Dataset):
         # Derive input modalities from runtime config if not provided
         if input_modalities is None:
             modality_layers = runtime_config.get_modality_layers()
-            # Map rslearn layer names to OlmoEarth modality names
+            # Map rslearn layer names to OlmoEarth modality names.
+            # Also handles "pre_"/"post_" prefixed names for compatibility
+            # with older datasets.
             input_modalities = []
             for layer in modality_layers:
-                if layer in RSLEARN_TO_OLMOEARTH:
-                    olmoearth_name, _ = RSLEARN_TO_OLMOEARTH[layer]
+                resolved = layer
+                if layer not in RSLEARN_TO_OLMOEARTH:
+                    for prefix in ("pre_", "post_"):
+                        if layer.startswith(prefix) and layer[len(prefix):] in RSLEARN_TO_OLMOEARTH:
+                            resolved = layer[len(prefix):]
+                            break
+                if resolved in RSLEARN_TO_OLMOEARTH:
+                    olmoearth_name, _ = RSLEARN_TO_OLMOEARTH[resolved]
                     input_modalities.append(olmoearth_name)
                 else:
                     input_modalities.append(layer)

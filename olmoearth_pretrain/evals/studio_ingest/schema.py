@@ -1,10 +1,7 @@
 """Schema definitions for the eval dataset registry.
 
-This module defines the dataclasses that represent:
-1. Per-band normalization statistics (BandStats, ModalityStats)
-2. Dataset registry entries (EvalDatasetEntry)
-
-These are serialized to JSON and stored on Weka alongside the dataset.
+This module defines the dataclasses that represent dataset registry entries
+(EvalDatasetEntry), serialized to JSON and stored on Weka alongside the dataset.
 
 Design Decisions:
 -----------------
@@ -39,11 +36,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
-
-from rslearn.train.tasks.classification import (
-    ClassificationTask as RsClassificationTask,
-)
-from rslearn.train.tasks.segmentation import SegmentationTask as RsSegmentationTask
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.evals.task_types import SplitName, SplitType, TaskType
@@ -109,141 +101,34 @@ def instantiate_from_config(config: dict) -> Any:
     return cls(**resolved_args)
 
 
-# =============================================================================
-# Normalization Statistics
-# =============================================================================
-
-# rslearn layer name -> (olmoearth modality name, all bands)
-RSLEARN_TO_OLMOEARTH: dict[str, tuple[str, Modality]] = {
+# rslearn layer name -> olmoearth modality
+_RSLEARN_TO_OLMOEARTH: dict[str, Modality] = {
     "sentinel2": Modality.SENTINEL2_L2A,
+    "sentinel2_l2a": Modality.SENTINEL2_L2A,
     "sentinel1": Modality.SENTINEL1,
     "sentinel1_ascending": Modality.SENTINEL1,
     "sentinel1_descending": Modality.SENTINEL1,
     "landsat": Modality.LANDSAT,
 }
 
-TASK_TYPE_MAP = {"tolbi_crops": TaskType.SEGMENTATION}
 
-# THis may not be needed if we load stuff from rslearn correctly
-TASK_TYPE_TO_RSLEARN_TASK_CLASS = {
-    TaskType.SEGMENTATION: RsSegmentationTask,
-    TaskType.CLASSIFICATION: RsClassificationTask,
-}
+def rslearn_to_olmoearth(layer_name: str) -> Modality:
+    """Map an rslearn layer name to an OlmoEarth Modality.
 
-
-@dataclass
-class BandStats:
-    """Per-band normalization statistics.
-
-    These statistics are computed during dataset ingestion by sampling
-    a subset of the data. They're used to normalize inputs during
-    evaluation if the user opts not to use pretrain normalization stats.
-
-    Attributes:
-        band_name: Name of the band (e.g., "B02", "VV")
-        mean: Mean pixel value across sampled data
-        std: Standard deviation of pixel values
-        min: Minimum observed value
-        max: Maximum observed value
-        p1: 1st percentile value (for robust min)
-        p99: 99th percentile value (for robust max)
-
-    Usage:
-        # Normalize using mean/std
-        normalized = (pixel - stats.mean) / stats.std
-
-        # Normalize using robust percentiles
-        normalized = (pixel - stats.p1) / (stats.p99 - stats.p1)
+    Also handles layer names prefixed with "pre_" or "post_" (e.g.
+    "pre_sentinel2" -> Modality.SENTINEL2_L2A). This was added to make
+    compatible with older datasets that use these prefixed layer names.
     """
+    if layer_name in _RSLEARN_TO_OLMOEARTH:
+        return _RSLEARN_TO_OLMOEARTH[layer_name]
 
-    band_name: str
-    mean: float
-    std: float
-    min: float
-    max: float
-    p1: float
-    p99: float
+    for prefix in ("pre_", "post_"):
+        if layer_name.startswith(prefix):
+            stripped = layer_name[len(prefix):]
+            if stripped in _RSLEARN_TO_OLMOEARTH:
+                return _RSLEARN_TO_OLMOEARTH[stripped]
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            "band_name": self.band_name,
-            "mean": self.mean,
-            "std": self.std,
-            "min": self.min,
-            "max": self.max,
-            "p1": self.p1,
-            "p99": self.p99,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> BandStats:
-        """Create from dictionary."""
-        return cls(**data)
-
-
-@dataclass
-class ModalityStats:
-    """Per-modality normalization statistics.
-
-    Contains statistics for all bands within a single modality.
-    Also tracks metadata about how the stats were computed.
-
-    Attributes:
-        modality: Modality name (e.g., "sentinel2_l2a", "sentinel1")
-        bands: Dict mapping band name -> BandStats
-        num_samples: Number of samples used to compute stats
-        sample_fraction: Fraction of dataset that was sampled
-        computed_at: ISO 8601 timestamp of when stats were computed
-
-    Example structure in JSON:
-        {
-            "modality": "sentinel2_l2a",
-            "bands": {
-                "B02": {"mean": 1234.5, "std": 456.7, ...},
-                "B03": {"mean": 2345.6, "std": 567.8, ...},
-                ...
-            },
-            "num_samples": 5000,
-            "sample_fraction": 0.1,
-            "computed_at": "2024-01-15T10:30:00Z"
-        }
-    """
-
-    modality: str
-    bands: dict[str, BandStats]
-    num_samples: int
-    sample_fraction: float
-    computed_at: str
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            "modality": self.modality,
-            "bands": {name: stats.to_dict() for name, stats in self.bands.items()},
-            "num_samples": self.num_samples,
-            "sample_fraction": self.sample_fraction,
-            "computed_at": self.computed_at,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ModalityStats:
-        """Create from dictionary."""
-        return cls(
-            modality=data["modality"],
-            bands={
-                name: BandStats.from_dict(stats)
-                for name, stats in data["bands"].items()
-            },
-            num_samples=data["num_samples"],
-            sample_fraction=data["sample_fraction"],
-            computed_at=data["computed_at"],
-        )
-
-
-# =============================================================================
-# Dataset Registry Entry
-# =============================================================================
+    raise KeyError(f"Unknown rslearn layer name: {layer_name!r}")
 
 
 @dataclass

@@ -50,6 +50,22 @@ def _collate_inputs_only(batch):
     return batch
 
 
+def _resolve_layer_name(layer: str) -> str | None:
+    """Resolve an rslearn layer name to a key in RSLEARN_TO_OLMOEARTH.
+
+    Also handles layer names prefixed with "pre_" or "post_" to make
+    compatible with older datasets that use these prefixed layer names.
+    """
+    if layer in RSLEARN_TO_OLMOEARTH:
+        return layer
+    for prefix in ("pre_", "post_"):
+        if layer.startswith(prefix):
+            stripped = layer[len(prefix):]
+            if stripped in RSLEARN_TO_OLMOEARTH:
+                return stripped
+    return None
+
+
 def _get_bands_by_modality_from_runtime_config(runtime_config) -> dict[str, list[str]]:
     """Extract bands by modality from runtime config.
 
@@ -63,8 +79,9 @@ def _get_bands_by_modality_from_runtime_config(runtime_config) -> dict[str, list
     modality_layers = runtime_config.get_modality_layers()
 
     for layer in modality_layers:
-        if layer in RSLEARN_TO_OLMOEARTH:
-            olmoearth_name, band_order = RSLEARN_TO_OLMOEARTH[layer]
+        resolved = _resolve_layer_name(layer)
+        if resolved is not None:
+            olmoearth_name, band_order = RSLEARN_TO_OLMOEARTH[resolved]
             bands_by_modality[olmoearth_name] = band_order
 
     return bands_by_modality

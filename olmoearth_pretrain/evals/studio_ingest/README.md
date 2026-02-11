@@ -120,6 +120,8 @@ incompabilities
 - What if the dataset is too big
 - Need to auto generate images
 - Variable time lengths means we would potentially want to do use flash attn for inference
+- what should be the process for updating or adding new data to an eval -> I think we should just create a new one rather than overwrite because we want experiments to be comparable
+- if dice loss is used in task we should use it for lienar probing which should help
 
 
 Next steps
@@ -176,15 +178,25 @@ Tasks to add
      `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name yemen_crop     --source  /weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/dataset --olmoearth-run-config-path /weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/ --register  --overwrite &`
 
      - need to make sure if we have spatial split and tag based groups we can re split based on the tags not just based on the other things and make sure classes are well represented in both set ups
-- ecosystem
+- ecosystem - need to test evaluation -- seems good
     `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name geo_ecosystem_annual_test     --source  /weka/dfive-default/rslearn-eai/datasets/geo_annual/dataset --olmoearth-run-config-path /weka/dfive-default/rslearn-eai/datasets/geo_annual  --register     --overwrite &`
 
-- tolbi crop
-- forest loss driver
-- mangrove
+- tolbi crop - need to finish ingestion
+    - --source gs://rslearn-eai/datasets/tolbi     --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/tolbi_run_data     --groups 20251210
+        - command
+     `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name tolbi_crop  --source  gs://rslearn-eai/datasets/tolbi --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/tolbi_run_data --register  --overwrite &`
+- forest loss driver - need to finish ingestion issue because the layers have weird naming
+    -- source `/weka/dfive-default/rslearn-eai/datasets/forest_loss_driver/dataset_v1/combined/`
+    -- config `/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/forest_loss_driver`
+    -- command `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name forest_loss_driver  --source /weka/dfive-default/rslearn-eai/datasets/forest_loss_driver/dataset_v1/combined/ --olmoearth-run-config-path /weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/forest_loss_driver --register  --overwrite > forest_driver_ingest.out 2>&1 &`
+- oil_spill_detection
+    `python3 -m olmoearth_pretrain.evals.studio_ingest.cli  ingest --name oil_spill_detection --source  gs://oil_spill_detection/dataset.tar.gz  --olmoearth-run-config-path gs://oil_spill_detection --untar-source `
+-  settlement task
+    -- command: `rm ni`
 - nandi
 - awf
 
 Soon but needs more thoughts
-- worldcover
-- fields of the world
+- worldcover subsample?
+- fields of the world subsample?
+- LFMC

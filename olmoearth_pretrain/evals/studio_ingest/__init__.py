@@ -3,10 +3,9 @@
 This module provides tooling to ingest datasets from the Studio platform
 into the OlmoEarth evaluation system. It handles:
 
-1. Validation of rslearn dataset structure
-2. Copying data from GCS to Weka
-3. Computing normalization statistics (via band_stats.py)
-4. Registering datasets in the eval registry
+1. Copying data from GCS to Weka
+2. Computing normalization statistics (via band_stats.py)
+3. Registering datasets in the eval registry
 
 ⚠️  INTERNAL USE ONLY - This is for AI2 internal workflows.
 
@@ -28,16 +27,10 @@ from olmoearth_pretrain.evals.studio_ingest.registry import (
     list_dataset_names,
     load_registry,
 )
-from olmoearth_pretrain.evals.studio_ingest.schema import (
-    BandStats,
-    EvalDatasetEntry,
-    ModalityStats,
-)
+from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
 
 __all__ = [
     "EvalDatasetEntry",
-    "ModalityStats",
-    "BandStats",
     "Registry",
     "get_dataset_entry",
     "list_dataset_names",

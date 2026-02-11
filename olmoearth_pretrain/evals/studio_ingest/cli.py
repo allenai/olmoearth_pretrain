@@ -2,10 +2,8 @@
 
 This module provides CLI commands for:
 - ingest: Full ingestion of a dataset
-- validate: Validate a dataset without ingesting
 - list: List all registered datasets
 - info: Show details for a specific dataset
-- compute-norm-stats: Compute normalization stats for existing dataset
 
 Usage:
     uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.cli <command> [options]
@@ -19,11 +17,6 @@ Examples:
         --task-type regression \\
         --modalities sentinel2_l2a sentinel1 \\
         --property-name lfmc_value
-
-    # Validate without ingesting
-    python -m olmoearth_pretrain.evals.studio_ingest.cli validate \\
-        --source gs://bucket/lfmc \\
-        --modalities sentinel2_l2a
 
     # List all datasets
     python -m olmoearth_pretrain.evals.studio_ingest.cli list
@@ -132,6 +125,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         train_val_split_ratio=args.train_val_split_ratio,
         split_seed=args.split_seed,
         num_samples=args.num_samples,
+        untar_source=args.untar_source,
     )
 
     entry = ingest_dataset(config)
@@ -207,6 +201,13 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=None,
         help="Number of samples for stats computation (default: all)",
+    )
+
+    # Archive handling
+    parser.add_argument(
+        "--untar-source",
+        action="store_true",
+        help="Source is a .tar.gz archive on GCS; stream and extract directly to Weka",
     )
 
     # Registry arguments

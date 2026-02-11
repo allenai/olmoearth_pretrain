@@ -43,19 +43,6 @@ def get_eval_dataset(
     norm_method: str = NormMethod.NORM_NO_CLIP,
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
-    # TODO: This is hacky and complicated we need a simple solution here.
-    # if input_modalities:
-    #     if eval_dataset not in ["pastis", "pastis128", "nandi", "awf"]:
-    #         raise ValueError(
-    #             f"input_modalities is only supported for multimodal tasks, got {eval_dataset}"
-    #         )
-
-    # if input_layers:
-    #     if eval_dataset not in ["nandi", "awf"]:
-    #         raise ValueError(
-    #             f"input_layers is only supported for rslearn tasks, got {eval_dataset}"
-    #         )
-
     if eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
         return GeobenchDataset(

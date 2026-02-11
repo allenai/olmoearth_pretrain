@@ -306,8 +306,8 @@ EVAL_TASKS = {
     # (dataset name, task_type -> eval_mode, modalities) is not task-specific and
     # can be derived from EvalDatasetEntry. Only batch sizes and learning rates
     # need manual tuning. See: olmoearth_pretrain.evals.studio_ingest.registry
-    "tolbi_crops": DownstreamTaskConfig(
-        dataset="tolbi_crops",
+    "tolbi_crop": DownstreamTaskConfig(
+        dataset="tolbi_crop",
         embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=16,
@@ -361,6 +361,32 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(10),
         probe_lr=0.001,
         input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=100,
+        eval_mode=EvalMode.LINEAR_PROBE,
+    ),
+    "geo_ecosystem_annual_test": DownstreamTaskConfig(
+        dataset="geo_ecosystem_annual_test",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        epochs=100,
+        eval_mode=EvalMode.LINEAR_PROBE,
+    ),
+    "forest_loss_driver": DownstreamTaskConfig(
+        dataset="forest_loss_driver",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
         epochs=100,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),

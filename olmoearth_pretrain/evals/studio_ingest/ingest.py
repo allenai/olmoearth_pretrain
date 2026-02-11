@@ -5,12 +5,11 @@ from Studio/GCS into the OlmoEarth eval system on Weka.
 
 Ingestion Flow:
 --------------
-1. Validate the source dataset
-2. Create the destination directory on Weka
-3. Copy data from source to destination
-4. Compute normalization statistics
-5. Create metadata.json in the dataset directory
-6. Register the dataset in the central registry
+1. Create the destination directory on Weka
+2. Copy data from source to destination
+3. Compute normalization statistics
+4. Create metadata.json in the dataset directory
+5. Register the dataset in the central registry
 
 Design Decisions:
 ----------------
@@ -56,17 +55,16 @@ from typing import Any
 import yaml
 from rslearn.config import DatasetConfig
 from rslearn.dataset.dataset import Dataset as RslearnDataset
-from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
 
 from olmoearth_pretrain.evals.studio_ingest.band_stats import (
     compute_band_stats_from_model_config,
 )
 from olmoearth_pretrain.evals.studio_ingest.schema import (
-    RSLEARN_TO_OLMOEARTH,
     EvalDatasetEntry,
     instantiate_from_config,
     rslearn_task_type_to_olmoearth_task_type,
+    rslearn_to_olmoearth,
 )
 from olmoearth_pretrain.evals.task_types import SplitName, SplitType
 
@@ -101,8 +99,6 @@ def get_eval_datasets_base_path() -> str:
     Returns:
         Base path string (either from env var or default Weka path)
     """
-    import os
-
     return os.environ.get(EVAL_DATASETS_ENV_VAR, DEFAULT_WEKA_BASE_PATH)
 
 
@@ -135,6 +131,10 @@ class IngestConfig:
 
         # Normalization
         num_samples: Number of samples for stats computation (None = all)
+
+        # Archive handling
+        untar_source: If True, source_path points to a .tar.gz archive on GCS
+            that will be streamed and extracted directly to the destination.
     """
 
     # Required
@@ -153,6 +153,9 @@ class IngestConfig:
 
     # Normalization
     num_samples: int | None = None
+
+    # Archive handling
+    untar_source: bool = False
 
 
 # =============================================================================
@@ -209,17 +212,62 @@ def _copy_from_gcs(
         logger.info(f"  Copying only groups: {source_groups}")
         for group in source_groups:
             group_src = f"{source_path}/windows/{group}"
-            group_dst = f"{dest_path}/windows/{group}"
-            logger.info(f"  Running: gsutil -m cp -r {group_src} {group_dst}")
-            subprocess.run(["gsutil", "-m", "cp", "-r", group_src, group_dst], check=True)
+            group_dst_parent = f"{dest_path}/windows"
+            Path(group_dst_parent).mkdir(parents=True, exist_ok=True)
+            logger.info(f"  Running: gsutil -m cp -r {group_src} {group_dst_parent}")
+            subprocess.run(["gsutil", "-m", "cp", "-r", group_src, group_dst_parent], check=True)
     else:
         # Copy entire windows directory
         windows_src = f"{source_path}/windows"
-        windows_dst = f"{dest_path}/windows"
-        logger.info(f"  Running: gsutil -m cp -r {windows_src} {windows_dst}")
-        subprocess.run(["gsutil", "-m", "cp", "-r", windows_src, windows_dst], check=True)
+        logger.info(f"  Running: gsutil -m cp -r {windows_src} {dest_path}")
+        subprocess.run(["gsutil", "-m", "cp", "-r", windows_src, dest_path], check=True)
 
     logger.info(f"  gsutil copy complete")
+    return dest_path
+
+
+def _copy_from_gcs_tar(
+    source_path: str,
+    dest_path: str,
+) -> str:
+    """Download a .tar.gz archive from GCS and extract it to dest_path.
+
+    Downloads the archive to dest_path first, then extracts in place and
+    removes the archive file. If the archive contains a single top-level
+    directory, returns the path to that directory (e.g. dest_path/dataset/).
+
+    Args:
+        source_path: GCS path to a .tar.gz archive (gs://bucket/dataset.tar.gz)
+        dest_path: Local destination path to extract into
+
+    Returns:
+        Path to the extracted dataset directory
+    """
+    logger.info(f"  Copy method: gsutil download + tar extract")
+
+    Path(dest_path).mkdir(parents=True, exist_ok=True)
+
+    archive_name = Path(source_path).name
+    local_archive = Path(dest_path) / archive_name
+
+    logger.info(f"  Downloading {source_path} -> {local_archive}")
+    subprocess.run(["gsutil", "cp", source_path, str(local_archive)], check=True)
+
+    logger.info(f"  Extracting {local_archive} -> {dest_path}")
+    subprocess.run(["tar", "xzf", str(local_archive), "-C", dest_path], check=True)
+
+    logger.info(f"  Removing archive {local_archive}")
+    local_archive.unlink()
+
+    # If the archive extracted into a single subdirectory, use that as the
+    # dataset path (e.g. dataset.tar.gz -> dest_path/dataset/)
+    entries = [p for p in Path(dest_path).iterdir() if p.name != archive_name]
+    if len(entries) == 1 and entries[0].is_dir():
+        dataset_path = str(entries[0])
+        logger.info(f"  Extracted dataset directory: {dataset_path}")
+        return dataset_path
+
+    logger.info(f"  tar extract complete")
     return dest_path
 
 
@@ -370,10 +418,12 @@ def copy_dataset(
     source_path: str,
     name: str,
     source_groups: list[str] | None = None,
+    untar_source: bool = False,
 ) -> str:
     """Copy an rslearn dataset to our Weka location.
 
     Dispatches to the fastest available copy method based on source path:
+    - GCS tar.gz (gs://, untar_source=True) -> gsutil stream + tar extract
     - GCS (gs://) -> gsutil -m cp -r (parallel transfers)
     - Local/Weka (/weka, /) -> find + xargs -P (parallel local copy)
     - Other -> UPath generic copy (fallback)
@@ -383,6 +433,8 @@ def copy_dataset(
         name: Name for the copied dataset
         source_groups: If specified, only copy these groups (subdirs under windows/).
             If None, copies everything.
+        untar_source: If True, source_path is a .tar.gz archive on GCS that
+            will be streamed and extracted directly to the destination.
 
     Returns:
         Path to the copied dataset on Weka
@@ -403,7 +455,9 @@ def copy_dataset(
         return dest_path
 
     # Dispatch to appropriate copy method based on source
-    if source_path.startswith("gs://"):
+    if untar_source and source_path.startswith("gs://"):
+        _copy_from_gcs_tar(source_path, dest_path)
+    elif source_path.startswith("gs://"):
         _copy_from_gcs(source_path, dest_path, source_groups)
     elif source_path.startswith("/weka") or source_path.startswith("/"):
         _copy_local(source_path, dest_path, source_groups)
@@ -651,35 +705,6 @@ def count_split_stats(
 
 
 # =============================================================================
-# Label Scanning Utilities
-# =============================================================================
-
-GEOTIFF_RASTER_FORMAT = GeotiffRasterFormat()
-
-
-def get_label_layer_info(dataset_config: DatasetConfig) -> tuple[str, list[str]] | None:
-    """Find the label layer in the dataset config.
-
-    The label layer is identified by having no data_source (meaning it's derived/local).
-
-    Args:
-        dataset_config: The rslearn DatasetConfig
-
-    Returns:
-        Tuple of (layer_name, bands) if found, None otherwise
-    """
-    for layer_name, layer_config in dataset_config.layers.items():
-        if layer_config.data_source is not None:
-            # This is a modality layer with an external data source
-            continue
-        # Found a layer without data_source - this should be the label layer
-        if layer_config.band_sets:
-            bands = layer_config.band_sets[0].bands
-            return (layer_name, bands)
-    return None
-
-
-# =============================================================================
 # Transform Extraction Utilities
 # =============================================================================
 
@@ -771,10 +796,19 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     logger.info(f"Source: {config.source_path}")
     logger.info(f"Model config: {config.olmoearth_run_config_path}")
 
+    # If source is a tar.gz archive, we must extract it before reading config.json
+    if config.untar_source:
+        logger.info(f"[Step 1/6] Extracting tar archive to Weka (before config load)...")
+        weka_path = copy_dataset(config.source_path, config.name, config.source_groups, config.untar_source)
+        logger.info(f"[Step 1/6] Extract complete")
+        dataset_config_path = UPath(weka_path) / "config.json"
+    else:
+        weka_path = None
+        dataset_config_path = UPath(config.source_path) / "config.json"
+
     # Step 0a: Load dataset config
     logger.info(f"[Step 0a] Loading dataset config.json...")
-    config_upath = UPath(config.source_path) / "config.json"
-    with config_upath.open() as f:
+    with dataset_config_path.open() as f:
         dataset_dict = json.load(f)
     logger.info(f"[Step 0a] Parsing dataset config...")
     dataset_config = DatasetConfig.model_validate(dataset_dict)
@@ -795,7 +829,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     for layer_name, layer_config in dataset_config.layers.items():
         if layer_config.data_source is None:
             continue
-        olmoearth_modality = RSLEARN_TO_OLMOEARTH[layer_name]
+        olmoearth_modality = rslearn_to_olmoearth(layer_name)
         modalities.append(olmoearth_modality.name)
         modality_layer_names.append(layer_name)
         query_config = layer_config.data_source.query_config
@@ -852,10 +886,13 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
 
 
-    # Step 1: Copy dataset to Weka
-    logger.info(f"[Step 1/6] Copying dataset to Weka...")
-    weka_path = copy_dataset(config.source_path, config.name, config.source_groups)
-    logger.info(f"[Step 1/6] Copy complete")
+    # Step 1: Copy dataset to Weka (skip if already extracted via untar_source)
+    if weka_path is None:
+        logger.info(f"[Step 1/6] Copying dataset to Weka...")
+        weka_path = copy_dataset(config.source_path, config.name, config.source_groups)
+        logger.info(f"[Step 1/6] Copy complete")
+    else:
+        logger.info(f"[Step 1/6] Already extracted to {weka_path}, skipping copy")
 
     # Step 2: Scan windows and determine existing splits
     logger.info(f"[Step 2/6] Scanning windows and determining splits...")
