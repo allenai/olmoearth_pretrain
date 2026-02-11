@@ -1,6 +1,6 @@
 """Single bandset experiments with masked-negatives loss.
 
-Eight experiments:
+Nine experiments:
 1. modality_cross_random masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
 2. random_with_decode masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
 3. modality_cross_random masking + single bandset S2 (no 60m: 10 bands) / Landsat + masked neg loss
@@ -9,6 +9,7 @@ Eight experiments:
 6. modality_cross_random masking + single bandset S2 (all 12) / Landsat + masked neg loss + band dropout 0.5
 7. random_with_decode masking + single bandset S2/Landsat + ERA5 decode-only (1 bandset) + masked neg loss
 8. modality_cross_random masking + 2 bandsets S2 (10m+20m) / Landsat single + masked neg loss
+9. merged 3 bandsets S2 / Landsat + uniform bandset masking + masked neg loss (merge before transformer, unmerge in decoder)
 """
 
 import copy
@@ -531,6 +532,106 @@ build_model_exp8 = _build_model
 
 
 # ============================================================
+# Experiment 9: merged 3 bandsets S2/Landsat + uniform bandset masking
+# ============================================================
+
+
+def build_common_exp9(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp9 (merged bandsets, default 3-bandset tokenization)."""
+    common = build_common_components_base(script, cmd, run_name, cluster, overrides)
+    # Use default tokenization (3 bandsets for S2, 2 for Landsat) — merge happens in model
+    return common
+
+
+def _masking_config_uniform_bandset(
+    tokenization_config: TokenizationConfig | None = None,
+) -> MaskingConfig:
+    return MaskingConfig(
+        strategy_config={
+            "type": "modality_cross_uniform_bandset",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "allow_encoding_decoding_same_bandset": True,
+            "only_decode_modalities": ONLY_DECODE_MODALITIES,
+        },
+        tokenization_config=tokenization_config,
+    )
+
+
+def build_train_module_exp9(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp9 (merged bandsets with uniform masking)."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=32,
+        masking_config=_masking_config_uniform_bandset(common.tokenization_config),
+        loss_config=_loss_config(),
+        contrastive_config=_contrastive_config(),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp9(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp9 with merge_bandsets + unmerge_bandsets."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        merge_bandsets=True,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        unmerge_bandsets=True,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
+
+
+def build_dataloader_exp9(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp9 (uniform bandset masking)."""
+    return OlmoEarthDataLoaderConfig(
+        num_workers=16,
+        global_batch_size=512,
+        token_budget=2250,
+        prefetch_factor=4,
+        sampled_hw_p_list=list(range(1, 13)),
+        min_patch_size=MIN_PATCH_SIZE,
+        max_patch_size=MAX_PATCH_SIZE,
+        work_dir=common.save_folder,
+        seed=3622,
+        num_masked_views=2,
+        masking_config=_masking_config_uniform_bandset(common.tokenization_config),
+    )
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -582,6 +683,12 @@ EXPERIMENTS = {
         build_model_exp8,
         build_train_module_exp8,
         build_dataloader_exp8,
+    ),
+    "merged_bandsets_uniform_masking_masked_neg": (
+        build_common_exp9,
+        build_model_exp9,
+        build_train_module_exp9,
+        build_dataloader_exp9,
     ),
 }
 

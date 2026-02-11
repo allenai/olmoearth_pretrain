@@ -1779,6 +1779,116 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
         return MaskedOlmoEarthSample(**output_dict)
 
 
+@MASKING_STRATEGY_REGISTRY.register("uniform_bandset_random")
+class UniformBandsetRandomMaskingStrategy(RandomMaskingStrategy):
+    """Random masking where all bandsets at each (h,w,t) share the same mask.
+
+    Creates a random mask as usual, then broadcasts the first bandset's mask to all
+    bandsets so that all bandsets at the same spatial-temporal position have the same
+    mask value.  This is designed for use with bandset merging where the encoder merge
+    projection always needs to see all bandsets together.
+    """
+
+    def _create_random_mask(
+        self,
+        modality: ModalitySpec,
+        shape: torch.Size,
+        patch_size_at_16: int,
+        device: torch.device | None = None,
+        encode_ratio: float | None = None,
+        decode_ratio: float | None = None,
+    ) -> ArrayTensor:
+        mask = super()._create_random_mask(
+            modality, shape, patch_size_at_16, device, encode_ratio, decode_ratio
+        )
+        if mask.shape[-1] > 1:
+            # Broadcast first bandset mask to all bandsets
+            mask = mask[..., 0:1].expand_as(mask).contiguous()
+        return mask
+
+
+@MASKING_STRATEGY_REGISTRY.register("modality_cross_uniform_bandset")
+class ModalityCrossUniformBandsetMaskingStrategy(ModalityCrossMaskingStrategy):
+    """Cross-modality masking with uniform bandset masks within each modality.
+
+    Combines two properties:
+    1. All bandsets within a modality get the same mask at each (h,w,t) position
+       (via ``UniformBandsetRandomMaskingStrategy``).
+    2. Cross-modality encode/decode selection treats all bandsets of a modality as
+       one unit (overridden ``select_encoded_decoded_bandsets``).
+    """
+
+    def __init__(
+        self,
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+        allow_encoding_decoding_same_bandset: bool = True,
+        min_encoded_bandsets: int = 2,
+        max_encoded_bandsets: int | None = None,
+        min_decoded_bandsets: int | None = None,
+        max_decoded_bandsets: int | None = None,
+        only_decode_modalities: list[str] = [],
+    ) -> None:
+        """Initialize the masking strategy."""
+        random_strategy = UniformBandsetRandomMaskingStrategy(
+            encode_ratio, decode_ratio
+        )
+        super().__init__(
+            strategy=random_strategy,
+            encode_ratio=encode_ratio,
+            decode_ratio=decode_ratio,
+            allow_encoding_decoding_same_bandset=allow_encoding_decoding_same_bandset,
+            min_encoded_bandsets=min_encoded_bandsets,
+            max_encoded_bandsets=max_encoded_bandsets,
+            min_decoded_bandsets=min_decoded_bandsets,
+            max_decoded_bandsets=max_decoded_bandsets,
+            only_decode_modalities=only_decode_modalities,
+        )
+
+    def select_encoded_decoded_bandsets(
+        self, present_modalities_bandsets: list[list[tuple[str, int]]]
+    ) -> list[tuple[set[tuple[str, int]], set[tuple[str, int]]]]:
+        """Select encode/decode at modality level, not bandset level.
+
+        All bandsets of a modality are either all encoded or all decoded.
+        """
+        encoded_decoded_bandsets: list[
+            tuple[set[tuple[str, int]], set[tuple[str, int]]]
+        ] = []
+        for sample_bandsets in present_modalities_bandsets:
+            # Group bandsets by modality
+            modality_groups: dict[str, list[tuple[str, int]]] = {}
+            for modality, bs_idx in sample_bandsets:
+                modality_groups.setdefault(modality, []).append((modality, bs_idx))
+
+            modality_names = list(modality_groups.keys())
+            encodable = [
+                m for m in modality_names if m not in self.only_decode_modalities
+            ]
+
+            if len(modality_names) <= 1:
+                all_bs = [bs for bss in modality_groups.values() for bs in bss]
+                encoded_decoded_bandsets.append((set(all_bs), set()))
+            elif len(encodable) == 0:
+                # All are decode-only
+                all_bs = [bs for bss in modality_groups.values() for bs in bss]
+                encoded_decoded_bandsets.append((set(), set(all_bs)))
+            else:
+                # Randomly split encodable modalities
+                np.random.shuffle(encodable)
+                n_enc = max(1, len(encodable) // 2)
+                enc_mods = set(encodable[:n_enc])
+
+                # Decode-only modalities plus non-encoded encodable modalities
+                dec_mods = set(modality_names) - enc_mods
+
+                enc_bs = set(bs for m in enc_mods for bs in modality_groups.get(m, []))
+                dec_bs = set(bs for m in dec_mods for bs in modality_groups.get(m, []))
+                encoded_decoded_bandsets.append((enc_bs, dec_bs))
+
+        return encoded_decoded_bandsets
+
+
 def propagate_tokenization_config(
     masking_strategy: MaskingStrategy,
     tokenization_config: "TokenizationConfig",

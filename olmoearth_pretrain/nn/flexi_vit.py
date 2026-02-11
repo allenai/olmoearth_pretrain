@@ -1248,6 +1248,7 @@ class Encoder(FlexiVitBase):
         log_token_norm_stats: bool = False,
         tokenization_config: TokenizationConfig | None = None,
         band_dropout_rate: float = 0.0,
+        merge_bandsets: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1275,6 +1276,8 @@ class Encoder(FlexiVitBase):
             log_token_norm_stats: Whether to log the token norm stats
             tokenization_config: Optional config for custom band groupings
             band_dropout_rate: Probability of dropping each band channel during training.
+            merge_bandsets: If True, merge multi-bandset tokens into one after patch
+                embedding and composite encodings, before the transformer.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1315,6 +1318,21 @@ class Encoder(FlexiVitBase):
             aggregate_then_project=aggregate_then_project,
         )
         self.norm = nn.LayerNorm(self.embedding_size)
+
+        # Bandset merging: merge multi-bandset tokens into one before transformer
+        self.merge_enabled = merge_bandsets
+        self.bandset_merge_modules: nn.ModuleDict | None = None
+        if merge_bandsets:
+            from olmoearth_pretrain.nn.bandset_merge import BandsetMerge
+
+            self.bandset_merge_modules = nn.ModuleDict()
+            for modality in supported_modalities:
+                num_bs = self.tokenization_config.get_num_bandsets(modality.name)
+                if num_bs > 1:
+                    self.bandset_merge_modules[modality.name] = BandsetMerge(
+                        self.embedding_size, num_bs
+                    )
+
         self.apply(self._init_weights)
 
         if frozen_patch_embeddings:
@@ -1593,6 +1611,25 @@ class Encoder(FlexiVitBase):
             input_res,
         )
         tokens_dict.update(original_masks_dict)
+
+        # Merge multi-bandset tokens into one per (h, w, t) position
+        if self.merge_enabled and self.bandset_merge_modules is not None:
+            for mod_name, merge_mod in self.bandset_merge_modules.items():
+                if mod_name in tokens_dict:
+                    mask_name = MaskedOlmoEarthSample.get_masked_modality_name(mod_name)
+                    tokens_dict[mod_name], tokens_dict[mask_name] = merge_mod(
+                        tokens_dict[mod_name], tokens_dict[mask_name]
+                    )
+                    # Also update original_masks_dict so end-of-method restore
+                    # uses merged masks
+                    original_masks_dict[mask_name] = tokens_dict[mask_name]
+            # Update dims dict so split_and_expand_per_modality uses merged shapes
+            for mod_name in list(modalities_to_dims_dict.keys()):
+                if mod_name in tokens_dict:
+                    modalities_to_dims_dict[mod_name] = tokens_dict[mod_name].shape
+            # Recompute exited_tokens from merged tokens
+            exited_tokens, _ = self.collapse_and_combine_hwtc(tokens_dict)
+
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
@@ -1778,6 +1815,7 @@ class PredictorBase(FlexiVitBase):
         use_flash_attn: bool = False,
         qk_norm: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        unmerge_bandsets: bool = False,
     ):
         """Initialize the predictor.
 
@@ -1796,6 +1834,8 @@ class PredictorBase(FlexiVitBase):
             use_flash_attn: Whether to use flash attention
             qk_norm: Whether to apply normalization to Q and K in attention
             tokenization_config: Optional config for custom band groupings
+            unmerge_bandsets: If True, expand merged encoder tokens back to per-bandset
+                tokens at the start of the decoder.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1829,6 +1869,21 @@ class PredictorBase(FlexiVitBase):
 
         self.input_norm = nn.LayerNorm(encoder_embedding_size)
         self.norm = nn.LayerNorm(decoder_embedding_size)
+
+        # Bandset unmerging: expand merged encoder tokens back to per-bandset tokens
+        self.bandset_unmerge_modules: nn.ModuleDict | None = None
+        if unmerge_bandsets:
+            from olmoearth_pretrain.nn.bandset_merge import BandsetUnmerge
+
+            self.bandset_unmerge_modules = nn.ModuleDict()
+            for modality in supported_modalities:
+                num_bs = self.tokenization_config.get_num_bandsets(modality.name)
+                if num_bs > 1:
+                    self.bandset_unmerge_modules[modality.name] = BandsetUnmerge(
+                        input_size=encoder_embedding_size,
+                        num_bandsets=num_bs,
+                    )
+
         self.apply(self._init_weights)
 
     def add_masks(self, x: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -2100,6 +2155,23 @@ class Predictor(PredictorBase):
             TokensAndMasks containing the predicted tokens and their masks
         """
         decoder_emedded_dict = x.as_dict(return_none=False)
+
+        # Unmerge bandsets: expand merged encoder tokens back to per-bandset tokens
+        if self.bandset_unmerge_modules is not None:
+            for mod_name, unmerge_mod in self.bandset_unmerge_modules.items():
+                if mod_name in decoder_emedded_dict:
+                    mask_name = MaskedOlmoEarthSample.get_masked_modality_name(mod_name)
+                    (
+                        decoder_emedded_dict[mod_name],
+                        decoder_emedded_dict[mask_name],
+                    ) = unmerge_mod(
+                        decoder_emedded_dict[mod_name],
+                        decoder_emedded_dict[mask_name],
+                    )
+            # Rebuild TokensAndMasks so getattr works in the loop below
+            x = TokensAndMasks(**decoder_emedded_dict)
+            decoder_emedded_dict = x.as_dict(return_none=False)
+
         # Apply Input Norms and encoder to decoder embeds to each modality
         available_modalities = x.modalities
         modalities_to_process = get_modalities_to_process(
@@ -2172,6 +2244,7 @@ class EncoderConfig(Config):
     log_token_norm_stats: bool = False
     tokenization_config: TokenizationConfig | None = None
     band_dropout_rate: float = 0.0
+    merge_bandsets: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -2218,6 +2291,7 @@ class PredictorConfig(Config):
     use_flash_attn: bool = False
     qk_norm: bool = False
     tokenization_config: TokenizationConfig | None = None
+    unmerge_bandsets: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
