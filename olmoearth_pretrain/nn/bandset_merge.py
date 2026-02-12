@@ -68,11 +68,15 @@ class BandsetMerge(nn.Module):
         tokens = tokens * encoder_mask.unsqueeze(-1).to(tokens.dtype)
 
         # Normalize by number of active bandsets for consistent magnitude
-        active_count = encoder_mask.sum(dim=-1, keepdim=True).clamp(min=1).to(tokens.dtype)
+        active_count = (
+            encoder_mask.sum(dim=-1, keepdim=True).clamp(min=1).to(tokens.dtype)
+        )
         scale = self.num_bandsets / active_count  # [..., 1]
 
         tokens_cat = tokens.flatten(-2)  # [..., num_bandsets * D]
-        merged = self.proj(tokens_cat)  # [..., D]
+        # Cast to match proj weight dtype (FSDP may store weights in bfloat16
+        # while composite_encodings produces float32 intermediates)
+        merged = self.proj(tokens_cat.to(self.proj.weight.dtype))  # [..., D]
         merged = merged * scale  # rescale
         merged = merged.unsqueeze(-2)  # [..., 1, D]
 
@@ -112,7 +116,10 @@ class BandsetUnmerge(nn.Module):
             unmerged_mask ``[..., num_bandsets]``).
         """
         squeezed = tokens.squeeze(-2)  # [..., D]
-        expanded = self.proj(squeezed)  # [..., num_bandsets * D]
+        # Cast to match proj weight dtype (see BandsetMerge.forward for rationale)
+        expanded = self.proj(
+            squeezed.to(self.proj.weight.dtype)
+        )  # [..., num_bandsets * D]
         *spatial, _ = expanded.shape
         unmerged = expanded.reshape(*spatial, self.num_bandsets, self.output_size)
         # If mask already has num_bandsets, use as-is; otherwise expand
