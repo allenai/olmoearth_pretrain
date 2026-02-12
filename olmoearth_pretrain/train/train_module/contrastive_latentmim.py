@@ -313,8 +313,9 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
+                target_batch = self.model.prepare_target_batch(batch)
                 output_dict = self.model.target_encoder.forward(
-                    batch.unmask(),
+                    target_batch,
                     patch_size=patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )

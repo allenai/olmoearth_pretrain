@@ -496,7 +496,16 @@ class OlmoEarthTrainModule(TrainModule):
         return total_norm
 
     def update_target_encoder(self) -> None:
-        """Update the target encoder."""
+        """Update the target encoder.
+
+        When the target encoder has a different architecture (e.g. different
+        tokenization config), EMA updates are skipped because the parameter
+        structures don't align.
+        """
+        if getattr(self.model, "has_separate_target_encoder", False):
+            # Separate target encoder with different architecture; EMA not applicable
+            return
+
         # Update target encoder with EMA this should be a callback
         cur_ema_value = (
             self.start_ema

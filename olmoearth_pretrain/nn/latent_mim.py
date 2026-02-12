@@ -15,8 +15,9 @@ from torch.distributed.fsdp import (
 )
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         encoder: nn.Module,
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
+        target_encoder: nn.Module | None = None,
     ):
         """Initialize the Latent MIM Style.
 
@@ -39,14 +41,90 @@ class LatentMIM(nn.Module, DistributedMixins):
             encoder: The encoder to use.
             decoder: The decoder to use.
             reconstructor: Optional reconstructor for auto-encoding.
+            target_encoder: Optional separate target encoder with different
+                tokenization. If None, a frozen deepcopy of the encoder is used.
         """
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.reconstructor = reconstructor
-        self.target_encoder = deepcopy(self.encoder)
+
+        if target_encoder is not None:
+            self.target_encoder = target_encoder
+            self.has_separate_target_encoder = True
+        else:
+            self.target_encoder = deepcopy(self.encoder)
+            self.has_separate_target_encoder = False
         for p in self.target_encoder.parameters():
             p.requires_grad = False
+
+        # Cache tokenization configs for batch adaptation
+        encoder_tok = getattr(self.encoder, "tokenization_config", None)
+        target_tok = getattr(self.target_encoder, "tokenization_config", None)
+        self._encoder_tokenization_config = encoder_tok or TokenizationConfig()
+        self._target_tokenization_config = target_tok or TokenizationConfig()
+
+    def prepare_target_batch(
+        self, batch: MaskedOlmoEarthSample
+    ) -> MaskedOlmoEarthSample:
+        """Prepare a batch for the target encoder.
+
+        If the target encoder uses the same tokenization as the online encoder,
+        this is equivalent to ``batch.unmask()``. Otherwise, masks are adapted
+        to the target tokenization config and unmasked.
+
+        Args:
+            batch: The masked batch from the dataloader.
+
+        Returns:
+            An unmasked batch with masks shaped for the target encoder's
+            tokenization config.
+        """
+        if not self.has_separate_target_encoder:
+            return batch.unmask()
+
+        enc_tok = self._encoder_tokenization_config
+        tgt_tok = self._target_tokenization_config
+
+        updates: dict[str, Any] = {}
+        for modality in batch.modalities:
+            mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+            mask = getattr(batch, mask_name)
+            if mask is None:
+                continue
+
+            num_enc_bs = enc_tok.get_num_bandsets(modality)
+            num_tgt_bs = tgt_tok.get_num_bandsets(modality)
+
+            if num_enc_bs == num_tgt_bs:
+                # Same bandset count: standard unmask
+                updates[mask_name] = mask * (mask == MaskValue.MISSING.value)
+            else:
+                # Different bandset count: detect missing, create new mask
+                # Check if any bandset at each position is MISSING
+                is_missing = (mask == MaskValue.MISSING.value).any(
+                    dim=-1, keepdim=True
+                )  # [..., 1]
+                # Create new mask: ONLINE_ENCODER (0) everywhere, MISSING where missing
+                new_mask = torch.where(
+                    is_missing,
+                    torch.tensor(
+                        MaskValue.MISSING.value,
+                        dtype=mask.dtype,
+                        device=mask.device,
+                    ),
+                    torch.tensor(
+                        MaskValue.ONLINE_ENCODER.value,
+                        dtype=mask.dtype,
+                        device=mask.device,
+                    ),
+                )
+                # Expand to target bandset count
+                updates[mask_name] = new_mask.expand(
+                    *mask.shape[:-1], num_tgt_bs
+                ).contiguous()
+
+        return batch._replace(**updates)
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int
@@ -128,6 +206,7 @@ class LatentMIMConfig(Config):
     encoder_config: Config
     decoder_config: Config
     reconstructor_config: Config | None = None
+    target_encoder_config: Config | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -149,6 +228,22 @@ class LatentMIMConfig(Config):
         ):
             raise ValueError("Encoder embedding size must be consistent!")
 
+        if self.target_encoder_config is not None:
+            if (
+                self.encoder_config.supported_modalities
+                != self.target_encoder_config.supported_modalities
+            ):
+                raise ValueError(
+                    "Encoder and target encoder must support the same modalities"
+                )
+            if (
+                self.encoder_config.embedding_size
+                != self.target_encoder_config.embedding_size
+            ):
+                raise ValueError(
+                    "Encoder and target encoder must have the same embedding size"
+                )
+
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
         self.validate()
@@ -159,8 +254,14 @@ class LatentMIMConfig(Config):
             if self.reconstructor_config is not None
             else None
         )
+        target_encoder = (
+            self.target_encoder_config.build()
+            if self.target_encoder_config is not None
+            else None
+        )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
+            target_encoder=target_encoder,
         )
