@@ -39,6 +39,7 @@ from olmoearth_pretrain.data.dataset import (
     subset_sample_default,
 )
 from olmoearth_pretrain.data.transform import Transform, TransformConfig
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskingConfig, MaskingStrategy
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         masking_strategy: MaskingStrategy | None = None,
         masking_strategy_b: MaskingStrategy | None = None,
         num_masked_views: int = 1,
+        tokenization_config: TokenizationConfig | None = None,
     ):
         """Initialize the OlmoEarthDataLoader.
 
@@ -106,6 +108,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             masking_strategy: Masking strategy to apply in the dataloader workers.
             masking_strategy_b: Optional second masking strategy for Galileo-style training.
             num_masked_views: Number of masked views to return (1=single, 2=double).
+            tokenization_config: Optional tokenization config for custom band groupings.
         """
         super().__init__(
             work_dir=work_dir,
@@ -139,6 +142,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.masking_strategy = masking_strategy
         self.masking_strategy_b = masking_strategy_b
         self.num_masked_views = num_masked_views
+        self.tokenization_config = tokenization_config
 
         # Validate configuration
         if masking_strategy is None:
@@ -302,6 +306,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             patch_size=patch_size,
             sampled_hw_p=sampled_hw_p,
             token_budget=self.token_budget,
+            tokenization_config=self.tokenization_config,
         )
         item = self.dataset[args]
         return item
@@ -629,6 +634,7 @@ class OlmoEarthDataLoaderConfig(Config):
     masking_config: MaskingConfig | None = None
     masking_config_b: MaskingConfig | None = None
     num_masked_views: int = 1  # 1 = single, 2 = double
+    tokenization_config: TokenizationConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -709,6 +715,7 @@ class OlmoEarthDataLoaderConfig(Config):
             masking_strategy=masking_strategy,
             masking_strategy_b=masking_strategy_b,
             num_masked_views=self.num_masked_views,
+            tokenization_config=self.tokenization_config,
         )
 
 

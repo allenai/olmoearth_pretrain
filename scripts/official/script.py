@@ -157,6 +157,7 @@ def build_dataloader_config(
         num_masked_views=2,  # ContrastiveLatentMIM needs 2 views
         masking_config=get_masking_config(common),
         # masking_config_b is not set, so both views use the same strategy
+        tokenization_config=common.tokenization_config,
     )
 
 
