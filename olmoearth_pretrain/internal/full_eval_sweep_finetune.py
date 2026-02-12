@@ -1,9 +1,33 @@
 """Launch fine-tune evaluation sweeps for OlmoEarth and other models.
 
-Example run:
-python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --project_name 2025_10_25_phase2_finetune --module_path olmoearth_pretrain/evals/models/clay/clay_launch.py --cluster ai2/titan --model clay --defaults_only
+Usage examples:
 
-python olmoearth_pretrain/internal/full_eval_sweep_finetune.py --checkpoint_path /weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200 --project_name 2025_10_25_phase2_finetune --module_path scripts/2025_10_02_phase2/base.py --cluster ai2/titan --defaults_only
+1. Finetune all eval tasks using TerraMind model (default lr only):
+   python olmoearth_pretrain/internal/full_eval_sweep_finetune.py \
+       --project_name test_finetune \
+       --module_path olmoearth_pretrain/evals/models/terramind/terramind_launch.py \
+       --cluster ai2/jupiter \
+       --model terramind \
+       --defaults_only
+
+2. Finetune all eval tasks using OlmoEarth model (default lr only):
+   python olmoearth_pretrain/internal/full_eval_sweep_finetune.py \
+       --checkpoint_path /weka/dfive-default/helios/checkpoints/joer/phase2.0_base_lr0.0001_wd0.02/step667200 \
+       --project_name test_finetune \
+       --module_path scripts/official/base.py \
+       --cluster ai2/jupiter \
+       --defaults_only
+
+3. To run a subset of tasks, add:
+     --trainer.callbacks.downstream_evaluator.tasks_to_run='["m_eurosat","m_so2sat","mados"]'
+   You can also launch multiple jobs with different tasks_to_run values to speed up the finetuning.
+
+Flags:
+  --defaults_only  Runs just one job: lr = 1e-4
+  (omit)           Sweeps lrs: [1e-4, 5e-4, 1e-3]
+
+OlmoEarth: normalization method (pretrained vs dataset) is *not* swept.
+Each FT eval task's normalization is defined in all_evals.py.
 """
 
 import argparse
@@ -293,7 +317,7 @@ def _format_launch_command(
     if cluster != "local":
         parts.extend(
             [
-                "--launch.priority=urgent",
+                "--launch.priority=high",
                 "--launch.num_gpus=1",
                 "--launch.preemptible=True",
                 "--launch.task_name=eval",
@@ -306,7 +330,7 @@ def _format_launch_command(
     parts.extend(FT_MODE_ARGS)
     parts.extend(_format_ft_lr_args(lr))
     parts.extend(seed_args)
-    # parts.append("--train_module.dp_config=null")
+    parts.append("--train_module.dp_config=null")
     return " ".join(parts)
 
 
