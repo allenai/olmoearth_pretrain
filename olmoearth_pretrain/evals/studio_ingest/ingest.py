@@ -178,6 +178,27 @@ def _check_weka_exists() -> bool:
     return Path("/weka").exists()
 
 
+def _try_copy_config_json(source_path: str, dest_path: str) -> None:
+    """Try to copy config.json from source to destination.
+
+    config.json may not exist if the dataset config lives in dataset.json
+    alongside model.yaml instead. Logs a warning and continues if missing.
+    """
+    src = UPath(source_path) / "config.json"
+    dst = UPath(dest_path) / "config.json"
+    try:
+        if not src.exists():
+            logger.info("  config.json not found in source, skipping")
+            return
+        with src.open("rb") as f:
+            data = f.read()
+        with dst.open("wb") as f:
+            f.write(data)
+        logger.info("  Copied config.json")
+    except Exception:
+        logger.warning(f"  Failed to copy config.json from {source_path}, skipping")
+
+
 def _copy_from_gcs(
     source_path: str,
     dest_path: str,
@@ -201,11 +222,7 @@ def _copy_from_gcs(
     # Create destination directory
     Path(dest_path).mkdir(parents=True, exist_ok=True)
 
-    # Always copy config.json first
-    config_src = f"{source_path}/config.json"
-    config_dst = f"{dest_path}/config.json"
-    logger.info(f"  Copying config.json...")
-    subprocess.run(["gsutil", "cp", config_src, config_dst], check=True)
+    _try_copy_config_json(source_path, dest_path)
 
     if source_groups:
         # Copy only specified groups
@@ -320,11 +337,7 @@ def _copy_local(
 
     logger.info("  Copy method: streaming tar pipe%s", " (with pv progress)" if has_pv else "")
 
-    # Always copy config.json first
-    config_src = Path(source_path) / "config.json"
-    if config_src.exists():
-        shutil.copy2(config_src, Path(dest_path) / "config.json")
-        logger.info("  Copied config.json")
+    _try_copy_config_json(source_path, dest_path)
 
     if source_groups:
         # Copy only specified groups under windows/
@@ -372,14 +385,7 @@ def _copy_generic(
 
     dest.mkdir(parents=True, exist_ok=True)
 
-    # Copy config.json
-    config_src = source / "config.json"
-    if config_src.exists():
-        with config_src.open() as f:
-            config_data = f.read()
-        with (dest / "config.json").open("w") as f:
-            f.write(config_data)
-        logger.info(f"    Copied config.json")
+    _try_copy_config_json(source_path, dest_path)
 
     # Copy windows directory (filtered by groups if specified)
     windows_src = source / "windows"
@@ -796,20 +802,29 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     logger.info(f"Source: {config.source_path}")
     logger.info(f"Model config: {config.olmoearth_run_config_path}")
 
-    # If source is a tar.gz archive, we must extract it before reading config.json
+    # If source is a tar.gz archive, we must extract it before reading config
     if config.untar_source:
         logger.info(f"[Step 1/6] Extracting tar archive to Weka (before config load)...")
         weka_path = copy_dataset(config.source_path, config.name, config.source_groups, config.untar_source)
         logger.info(f"[Step 1/6] Extract complete")
-        dataset_config_path = UPath(weka_path) / "config.json"
+        dataset_folder = weka_path
     else:
         weka_path = None
-        dataset_config_path = UPath(config.source_path) / "config.json"
+        dataset_folder = config.source_path
 
-    # Step 0a: Load dataset config
-    logger.info(f"[Step 0a] Loading dataset config.json...")
-    with dataset_config_path.open() as f:
-        dataset_dict = json.load(f)
+    # Step 0a: Load dataset config (prefer dataset.json from model config
+    # folder, fall back to config.json from dataset folder)
+    logger.info(f"[Step 0a] Loading dataset config...")
+    dataset_json_path = UPath(config.olmoearth_run_config_path) / "dataset.json"
+    config_json_path = UPath(dataset_folder) / "config.json"
+    if dataset_json_path.exists():
+        logger.info(f"[Step 0a] Using dataset.json from {config.olmoearth_run_config_path}")
+        with dataset_json_path.open() as f:
+            dataset_dict = json.load(f)
+    else:
+        logger.info(f"[Step 0a] dataset.json not found, falling back to config.json")
+        with config_json_path.open() as f:
+            dataset_dict = json.load(f)
     logger.info(f"[Step 0a] Parsing dataset config...")
     dataset_config = DatasetConfig.model_validate(dataset_dict)
     logger.info(f"[Step 0a] Dataset config loaded successfully")
