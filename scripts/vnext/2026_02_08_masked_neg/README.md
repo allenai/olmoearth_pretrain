@@ -19,34 +19,36 @@ Experiments investigating S2 bandset configurations and cross-spectral learning 
 
 ## Launch Commands
 
+Run all commands from the **repo root**. Commit and push before launching — Beaker pulls code from the repo.
+
 ### Dry run (always do this first)
 
 ```bash
-EXPERIMENT=midlayer_merged_bandsets_cross_random_masked_neg \
-  python3 scripts/vnext/2026_02_08_masked_neg/single_bandset_masked_neg.py dry_run run_name local
+EXPERIMENT=<key> \
+  python scripts/vnext/2026_02_08_masked_neg/single_bandset_masked_neg.py dry_run run_name local
 ```
 
 ### Experiment 9: Pre-transformer merge
 
 ```bash
 EXPERIMENT=merged_bandsets_cross_random_masked_neg \
-  python3 scripts/vnext/2026_02_08_masked_neg/single_bandset_masked_neg.py launch run_name ai2/jupiter \
-  --launch.num_gpus=8 \
-  --launch.clusters="[ai2/jupiter,ai2/ceres]" \
-  --trainer.callbacks.wandb.project=2026_02_08_merged_bandsets
+  python scripts/vnext/2026_02_08_masked_neg/single_bandset_masked_neg.py launch \
+  merged_bandsets_cross_random_masked_neg_fix ai2/jupiter \
+  launch.num_gpus=8 \
+  'launch.clusters=[ai2/jupiter,ai2/ceres,ai2/titan]' \
+  trainer.callbacks.wandb.project=2026_02_08_masked_neg
 ```
 
 ### Experiment 10: Mid-layer merge (merge after layer 3)
 
 ```bash
 EXPERIMENT=midlayer_merged_bandsets_cross_random_masked_neg \
-  python3 scripts/vnext/2026_02_08_masked_neg/single_bandset_masked_neg.py launch run_name ai2/jupiter \
-  --launch.num_gpus=8 \
-  --launch.clusters="[ai2/jupiter,ai2/ceres]" \
-  --trainer.callbacks.wandb.project=2026_02_08_merged_bandsets
+  python scripts/vnext/2026_02_08_masked_neg/single_bandset_masked_neg.py launch \
+  midlayer_merged_bandsets_cross_random_masked_neg_fix ai2/jupiter \
+  launch.num_gpus=8 \
+  'launch.clusters=[ai2/jupiter,ai2/ceres,ai2/titan]' \
+  trainer.callbacks.wandb.project=2026_02_08_masked_neg
 ```
-
-> **Remember:** Commit and push before launching — Beaker pulls code from the repo.
 
 ## Architecture: Bandset Merge/Unmerge
 
