@@ -55,6 +55,7 @@ class APTEncoder(Encoder):
         apt_num_scales: int = 2,
         apt_base_patch_size: int = 4,
         apt_modality: str = "sentinel2_l2a",
+        apt_conv_init: str = "average",
         **kwargs: Any,
     ):
         """Initialize the APT encoder.
@@ -64,6 +65,7 @@ class APTEncoder(Encoder):
             apt_num_scales: Number of APT scales (1 = base only, 2 = base + 2x, etc.)
             apt_base_patch_size: Smallest patch size in base-patch-grid units.
             apt_modality: Which modality to apply adaptive patching to.
+            apt_conv_init: Weight init for ConvDownsample. "kaiming" or "average".
             **kwargs: Passed to Encoder.
         """
         super().__init__(*args, **kwargs)
@@ -78,6 +80,7 @@ class APTEncoder(Encoder):
             num_scales=apt_num_scales,
             embedding_size=token_dim,
             base_patch_size=apt_base_patch_size,
+            conv_init=apt_conv_init,
         )
 
     def collapse_and_combine_hwtc_apt(self, x: dict[str, Tensor], apt_tokens: Tensor, apt_positions: Tensor, apt_modality: str) -> tuple[Tensor, Tensor]:
@@ -498,6 +501,7 @@ class APTEncoderWrapper(nn.Module):
             apt_num_scales=self.apt_config.partitioner.num_scales,
             apt_base_patch_size=self.apt_config.partitioner.base_patch_size,
             apt_modality=self.apt_modality,
+            apt_conv_init=self.apt_config.embed.conv_init,
         )
 
         # Load pretrained weights non-strictly — missing keys are new APT layers

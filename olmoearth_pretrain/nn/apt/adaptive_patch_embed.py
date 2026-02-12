@@ -23,12 +23,13 @@ class ConvDownsample(nn.Module):
     Reduces a 2^scale x 2^scale grid of subpatch embeddings to a single embedding.
     """
 
-    def __init__(self, embedding_size: int, scale: int):
+    def __init__(self, embedding_size: int, scale: int, init: str = "average"):
         """Initialize the conv downsample module.
 
         Args:
             embedding_size: Size of embeddings
             scale: Scale index (1 = 2x2, 2 = 4x4, etc.)
+            init: Weight initialization strategy. "kaiming" (default) or "average".
         """
         super().__init__()
         self.embedding_size = embedding_size
@@ -38,15 +39,21 @@ class ConvDownsample(nn.Module):
         # Stack of 2x2 stride-2 convs to reduce grid to 1x1
         layers = []
         for _ in range(scale):
-            layers.append(
-                nn.Conv2d(
-                    embedding_size,
-                    embedding_size,
-                    kernel_size=2,
-                    stride=2,
-                    padding=0,
-                )
+            conv = nn.Conv2d(
+                embedding_size,
+                embedding_size,
+                kernel_size=2,
+                stride=2,
+                padding=0,
             )
+            if init == "average":
+                # Identity across channels, spatial average within each channel
+                nn.init.zeros_(conv.weight)
+                conv.weight.data[range(embedding_size), range(embedding_size), :, :] = 1.0 / 4.0
+                nn.init.zeros_(conv.bias)
+            elif init != "kaiming":
+                raise ValueError(f"Unknown init: {init!r}, expected 'kaiming' or 'average'")
+            layers.append(conv)
         self.convs = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -78,14 +85,15 @@ class AdaptivePatchEmbed(nn.Module):
         num_scales: int,
         embedding_size: int,
         base_patch_size: int,
+        conv_init: str = "average",
     ):
         """Initialize adaptive patch embedding.
 
         Args:
-            base_patch_embed: Pretrained FlexiPatchEmbed for base patch size
             num_scales: Number of patch size scales (1 = base only)
             embedding_size: Size of embeddings
             base_patch_size: Base (smallest) patch size in pixels
+            conv_init: Weight initialization for ConvDownsample. "kaiming" or "average".
         """
         super().__init__()
         self.num_scales = num_scales
@@ -98,7 +106,7 @@ class AdaptivePatchEmbed(nn.Module):
         # Conv downsampling for each scale > 0
         self.conv_downsample = nn.ModuleList()
         for scale in range(1, num_scales):
-            self.conv_downsample.append(ConvDownsample(embedding_size, scale))
+            self.conv_downsample.append(ConvDownsample(embedding_size, scale, init=conv_init))
 
 
 

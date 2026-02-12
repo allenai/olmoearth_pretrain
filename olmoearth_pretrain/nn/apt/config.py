@@ -114,6 +114,7 @@ class APTEmbedConfig(Config):
     embedding_size: int = 768
     base_patch_size: int = 4  # Smallest patch: 4px
     num_scales: int = 2  # Scales: 4, 8
+    conv_init: str = "average"  # "kaiming" or "average"
 
     def build(self, base_patch_embed):
         """Build the adaptive embed instance.
@@ -128,6 +129,7 @@ class APTEmbedConfig(Config):
             num_scales=self.num_scales,
             embedding_size=self.embedding_size,
             base_patch_size=self.base_patch_size,
+            conv_init=self.conv_init,
         )
 
 
