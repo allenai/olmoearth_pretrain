@@ -34,20 +34,28 @@ class BandsetMerge(nn.Module):
         super().__init__()
         self.num_bandsets = num_bandsets
         self.embedding_size = embedding_size
-        self.proj = nn.Linear(num_bandsets * embedding_size, embedding_size)
+        self.proj = nn.Sequential(
+            nn.Linear(num_bandsets * embedding_size, embedding_size),
+            nn.GELU(),
+            nn.Linear(embedding_size, embedding_size),
+        )
         self._init_as_mean_pool()
 
     def _init_as_mean_pool(self) -> None:
         """Initialize weights to approximate mean pooling for stable early training."""
         with torch.no_grad():
-            self.proj.weight.zero_()
-            self.proj.bias.zero_()
+            # First linear: block-diagonal identity / n  → mean pool at init
+            self.proj[0].weight.zero_()
+            self.proj[0].bias.zero_()
             for i in range(self.num_bandsets):
                 start = i * self.embedding_size
                 end = start + self.embedding_size
-                self.proj.weight[:, start:end] = (
+                self.proj[0].weight[:, start:end] = (
                     torch.eye(self.embedding_size) / self.num_bandsets
                 )
+            # Second linear: identity so full MLP ≈ mean pool at init
+            self.proj[2].weight.copy_(torch.eye(self.embedding_size))
+            self.proj[2].bias.zero_()
 
     def forward(self, tokens: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
         """Merge bandset tokens into one.
@@ -76,7 +84,7 @@ class BandsetMerge(nn.Module):
         tokens_cat = tokens.flatten(-2)  # [..., num_bandsets * D]
         # Cast to match proj weight dtype (FSDP may store weights in bfloat16
         # while composite_encodings produces float32 intermediates)
-        merged = self.proj(tokens_cat.to(self.proj.weight.dtype))  # [..., D]
+        merged = self.proj(tokens_cat.to(self.proj[0].weight.dtype))  # [..., D]
         merged = merged * scale  # rescale
         merged = merged.unsqueeze(-2)  # [..., 1, D]
 

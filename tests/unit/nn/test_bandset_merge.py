@@ -65,8 +65,9 @@ class TestBandsetMerge:
 
         merged, _ = merge(tokens, mask)
         # With mean-pool init: (3 + 0 + 9)/3 * (3/2) = 6.0
+        # Tolerance relaxed because GELU in the MLP is not perfectly linear
         expected = torch.ones(D) * 6.0
-        torch.testing.assert_close(merged.squeeze(), expected, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(merged.squeeze(), expected, atol=1e-3, rtol=1e-3)
 
     def test_merged_mask_encoder_wins(self) -> None:
         """If any bandset is ENCODER, merged mask should be ENCODER."""
@@ -98,7 +99,7 @@ class TestBandsetMerge:
         loss = merged.sum()
         loss.backward()
         assert tokens.grad is not None
-        assert merge.proj.weight.grad is not None
+        assert merge.proj[0].weight.grad is not None
 
 
 class TestBandsetUnmerge:
@@ -417,7 +418,7 @@ class TestEncoderWithMidLayerMerge:
         # Merge projection should have gradients
         assert encoder.bandset_merge_modules is not None
         merge_mod = encoder.bandset_merge_modules["sentinel2_l2a"]
-        assert merge_mod.proj.weight.grad is not None
+        assert merge_mod.proj[0].weight.grad is not None
 
 
 class TestPredictorWithUnmerge:
