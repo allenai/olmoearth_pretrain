@@ -519,7 +519,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                         [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
                     )
                     patchified_data = (
-                        patchified_data * keep_mask.view(*view_shape).float()
+                        patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
                     )
 
             embedding_module = self.per_modality_embeddings[modality][
