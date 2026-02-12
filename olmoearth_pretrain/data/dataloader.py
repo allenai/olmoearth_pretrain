@@ -1,5 +1,6 @@
 """OlmoEarth Pretrain DataLoader."""
 
+import functools
 import logging
 import math
 import multiprocessing as mp
@@ -25,6 +26,10 @@ from upath import UPath
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data.collate import (
+    collate_double_masked_batched,
+    collate_single_masked_batched,
+)
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDataset
 from olmoearth_pretrain.data.constants import IMAGE_TILE_SIZE, Modality
 from olmoearth_pretrain.data.dataset import (
@@ -32,6 +37,9 @@ from olmoearth_pretrain.data.dataset import (
     OlmoEarthDataset,
     OlmoEarthSample,
 )
+from olmoearth_pretrain.data.transform import Transform, TransformConfig
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig
+from olmoearth_pretrain.train.masking import MaskingConfig, MaskingStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +73,42 @@ class OlmoEarthDataLoader(DataLoaderBase):
         persistent_workers: bool = True,
         multiprocessing_context: str = "spawn",
         num_dataset_repeats_per_epoch: int = 1,
+        # Dataloader-side masking
+        transform: Transform | None = None,
+        masking_strategy: MaskingStrategy | None = None,
+        masking_strategy_b: MaskingStrategy | None = None,
+        num_masked_views: int = 1,
+        tokenization_config: TokenizationConfig | None = None,
     ):
-        """Initialize the OlmoEarthDataLoader."""
+        """Initialize the OlmoEarthDataLoader.
+
+        Args:
+            dataset: The dataset to load from.
+            work_dir: The working directory for storing indices.
+            global_batch_size: The global batch size across all workers.
+            min_patch_size: Minimum patch size for training.
+            max_patch_size: Maximum patch size for training.
+            sampled_hw_p_list: List of possible height/width in patches to sample.
+            token_budget: Optional token budget per instance.
+            dp_world_size: Data parallel world size.
+            dp_rank: Data parallel rank.
+            fs_local_rank: File system local rank.
+            seed: Random seed.
+            shuffle: Whether to shuffle the data.
+            num_workers: Number of dataloader workers.
+            prefetch_factor: Prefetch factor for dataloader.
+            collator: Collation function.
+            target_device_type: Target device type ("cpu" or "cuda").
+            drop_last: Whether to drop the last incomplete batch.
+            persistent_workers: Whether to keep workers alive between epochs.
+            multiprocessing_context: Multiprocessing context ("spawn" or "forkserver").
+            num_dataset_repeats_per_epoch: Number of times to repeat the dataset per epoch.
+            transform: Optional transform to apply in the dataloader workers.
+            masking_strategy: Masking strategy to apply in the dataloader workers.
+            masking_strategy_b: Optional second masking strategy for Galileo-style training.
+            num_masked_views: Number of masked views to return (1=single, 2=double).
+            tokenization_config: Optional tokenization config for custom band groupings.
+        """
         super().__init__(
             work_dir=work_dir,
             global_batch_size=global_batch_size,
@@ -93,6 +135,20 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = multiprocessing_context
         self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
+
+        # Dataloader-side masking configuration
+        self.transform = transform
+        self.masking_strategy = masking_strategy
+        self.masking_strategy_b = masking_strategy_b
+        self.num_masked_views = num_masked_views
+        self.tokenization_config = tokenization_config
+
+        # Validate configuration
+        if masking_strategy is None:
+            raise ValueError("masking_strategy must be provided")
+        if num_masked_views not in (1, 2):
+            raise ValueError(f"num_masked_views must be 1 or 2, got {num_masked_views}")
+
         if self.num_workers > 0 and self.multiprocessing_context == "forkserver":
             # Overhead of loading modules on import by preloading them
             mp.set_forkserver_preload(["torch", "rasterio"])
@@ -249,6 +305,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             patch_size=patch_size,
             sampled_hw_p=sampled_hw_p,
             token_budget=self.token_budget,
+            tokenization_config=self.tokenization_config,
         )
         item = self.dataset[args]
         return item
@@ -371,27 +428,37 @@ class OlmoEarthDataLoader(DataLoaderBase):
         output_dict["timestamps"] = timestamps
         return OlmoEarthSample(**output_dict)
 
-    def get_mock_batch(self) -> OlmoEarthSample:
-        """Get a mock batch, for dry-run of forward and backward pass."""
+    def get_mock_batch(self) -> Any:
+        """Get a mock batch, for dry-run of forward and backward pass.
+
+        Returns the appropriate batch format based on num_masked_views:
+        - 1: (patch_size, MaskedOlmoEarthSample) - single masked view
+        - 2: (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample) - double masked
+        """
         logger.info("Getting mock batch NOT FROM DATASET")
         logger.info(f"Training modalities: {self.dataset.training_modalities}")
+        logger.info(f"num_masked_views: {self.num_masked_views}")
         rng = get_rng(42)
         batch_size = self.global_batch_size // self.dp_world_size
         patch_size = 1
+
+        # Generate mock samples
+        mock_samples = [
+            self._get_mock_sample(rng).subset_default(
+                patch_size,
+                max_tokens_per_instance=1500,
+                sampled_hw_p=6,
+                current_length=12,
+            )
+            for _ in range(batch_size)
+        ]
+
+        # Pass raw samples to the collator - the batched collators handle
+        # transform + masking internally when num_masked_views > 0
         collated_sample = self.collator(
-            [
-                (
-                    patch_size,
-                    self._get_mock_sample(rng).subset_default(
-                        patch_size,
-                        max_tokens_per_instance=1500,
-                        sampled_hw_p=6,
-                        current_length=12,
-                    ),
-                )
-                for num in range(batch_size)
-            ]
+            [(patch_size, sample) for sample in mock_samples]
         )
+
         return collated_sample
 
     def fast_forward(self, global_step: int) -> np.ndarray:
@@ -461,6 +528,11 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             )
             for i in range(workers)
         ]
+        # Dataloader-side masking configuration
+        self.transform = data_loader.transform
+        self.masking_strategy = data_loader.masking_strategy
+        self.masking_strategy_b = data_loader.masking_strategy_b
+        self.num_masked_views = data_loader.num_masked_views
 
     def _get_batch_item_params_iterator(
         self,
@@ -505,10 +577,19 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         """Get worker info."""
         return torch.utils.data.get_worker_info()
 
-    def __iter__(self) -> Iterator[OlmoEarthSample]:
-        """Iterate over the dataset."""
+    def __iter__(self) -> Iterator[Any]:
+        """Iterate over the dataset.
+
+        Yields batches in one of two formats depending on num_masked_views:
+        - 1: (patch_size, MaskedOlmoEarthSample) - single masked view
+        - 2: (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample) - double masked views
+
+        Transform and masking are applied in the batched collator for better vectorization.
+        """
         global_indices = self.data_loader.get_global_indices()
         indices = self.data_loader._get_local_instance_indices(global_indices)
+
+        # Create iterator that fetches samples from the dataset
         instance_iterator = (
             self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
             for idx, patch_size, sampled_hw_p in self._get_batch_item_params_iterator(
@@ -520,9 +601,9 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         )
 
         return (
-            self.data_loader.collator(batch)
+            self.data_loader.collator(batch)  # type: ignore[arg-type]
             for batch in iter_batched(
-                instance_iterator,
+                instance_iterator,  # type: ignore[arg-type]
                 self.data_loader.rank_batch_size,
                 self.data_loader.drop_last,
             )
@@ -546,6 +627,12 @@ class OlmoEarthDataLoaderConfig(Config):
     target_device_type: str | None = None
     drop_last: bool = True
     num_dataset_repeats_per_epoch: int = 1
+    # New fields for dataloader-side masking
+    transform_config: TransformConfig | None = None
+    masking_config: MaskingConfig | None = None
+    masking_config_b: MaskingConfig | None = None
+    num_masked_views: int = 1  # 1 = single, 2 = double
+    tokenization_config: TokenizationConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -553,6 +640,12 @@ class OlmoEarthDataLoaderConfig(Config):
             raise ValueError("Work directory is not set")
         if self.min_patch_size > self.max_patch_size:
             raise ValueError("min_patch_size must be less than max_patch_size")
+        if self.masking_config is None:
+            raise ValueError("masking_config must be provided")
+        if self.num_masked_views not in (1, 2):
+            raise ValueError(
+                f"num_masked_views must be 1 or 2, got {self.num_masked_views}"
+            )
 
     @property
     def work_dir_upath(self) -> UPath:
@@ -562,12 +655,40 @@ class OlmoEarthDataLoaderConfig(Config):
     def build(
         self,
         dataset: OlmoEarthDataset,
-        collator: Callable,
         dp_process_group: dist.ProcessGroup | None = None,
     ) -> "OlmoEarthDataLoader":
         """Build the OlmoEarthDataLoader."""
         self.validate()
         dataset.prepare()
+
+        # Build transform and masking strategies
+        transform = (
+            self.transform_config.build() if self.transform_config is not None else None
+        )
+        # masking_config is required (validated above)
+        assert self.masking_config is not None
+        masking_strategy = self.masking_config.build()
+        masking_strategy_b = (
+            self.masking_config_b.build() if self.masking_config_b is not None else None
+        )
+
+        # Select appropriate collator based on num_masked_views
+        # Use batched collators that apply transform + masking to the entire batch
+        # at once for better vectorization
+        collator: Callable
+        if self.num_masked_views == 1:
+            collator = functools.partial(
+                collate_single_masked_batched,
+                transform=transform,
+                masking_strategy=masking_strategy,
+            )
+        else:  # num_masked_views == 2
+            collator = functools.partial(
+                collate_double_masked_batched,
+                transform=transform,
+                masking_strategy=masking_strategy,
+                masking_strategy_b=masking_strategy_b,
+            )
 
         return OlmoEarthDataLoader(
             dataset=dataset,
@@ -588,6 +709,11 @@ class OlmoEarthDataLoaderConfig(Config):
             sampled_hw_p_list=self.sampled_hw_p_list,
             token_budget=self.token_budget,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
+            transform=transform,
+            masking_strategy=masking_strategy,
+            masking_strategy_b=masking_strategy_b,
+            num_masked_views=self.num_masked_views,
+            tokenization_config=self.tokenization_config,
         )
 
 

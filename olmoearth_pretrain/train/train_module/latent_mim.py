@@ -13,18 +13,18 @@ from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.data.transform import TransformConfig
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskingConfig
+from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
 )
-from olmoearth_pretrain.train.utils import split_batch
+from olmoearth_pretrain.train.utils import split_masked_batch
 
 logger = getLogger(__name__)
 
@@ -182,7 +182,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         return self.base_loss.compute(pred, targets)
 
     def train_batch(
-        self, batch: tuple[int, OlmoEarthSample], dry_run: bool = False
+        self,
+        batch: tuple[int, MaskedOlmoEarthSample],
+        dry_run: bool = False,
     ) -> None:
         """Train a batch.
 
@@ -195,6 +197,10 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         like l1 and l2 weight microbatches with less tokens relatively more.
 
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
+
+        Args:
+            batch: A (patch_size, MaskedOlmoEarthSample) tuple from the dataloader.
+            dry_run: If True, skip metric recording and just run forward/backward.
         """
         if not dry_run:
             self.update_target_encoder()
@@ -202,19 +208,22 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
-        patch_size, batch_data = batch
-        # Split into micro-batches.
-        microbatches = split_batch(batch_data, self.rank_microbatch_size)
-        num_microbatches = len(microbatches)
-        for microbatch_idx, microbatch in enumerate(microbatches):
+        patch_size = batch[0]
+        batch_data = batch[1]
+
+        # Split batch into microbatches
+        masked_microbatches = split_masked_batch(batch_data, self.rank_microbatch_size)
+        num_microbatches = len(masked_microbatches)
+
+        for microbatch_idx in range(num_microbatches):
             with self._train_microbatch_context(microbatch_idx, num_microbatches):
-                print(
-                    f"Training microbatch {microbatch_idx} of {num_microbatches} with batch size {microbatch.batch_size} on rank {get_local_rank()}\n"
+                microbatch_masked = masked_microbatches[microbatch_idx]
+                logger.info(
+                    f"Training microbatch {microbatch_idx} of {num_microbatches} "
+                    f"with batch size {microbatch_masked.timestamps.shape[0]} on rank {get_local_rank()}"
                 )
-                microbatch = self.transform.apply(microbatch).to_device(self.device)
-                masked_batch = self.masking_strategy.apply_mask(
-                    microbatch, patch_size=patch_size
-                )
+                masked_batch = microbatch_masked.to_device(self.device)
+
                 # Run Encoder and decoder on the augmented input
                 loss, latent, decoded, target_output = self.model_forward(
                     masked_batch, patch_size, self.token_exit_cfg

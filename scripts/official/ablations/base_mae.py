@@ -58,6 +58,26 @@ MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
 
+def get_masking_config() -> MaskingConfig:
+    """Get the masking configuration for the experiment."""
+    return MaskingConfig(
+        strategy_config={
+            "type": "modality_cross_random",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "allow_encoding_decoding_same_bandset": True,
+            "only_decode_modalities": [
+                "worldcover",
+                "srtm",
+                "openstreetmap_raster",
+                "wri_canopy_height_map",
+                "cdl",
+                "worldcereal",
+            ],
+        }
+    )
+
+
 def my_build_common_components(
     script: str,
     cmd: SubCmd,
@@ -123,22 +143,7 @@ def build_train_module_config(
     return MAETrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
         rank_microbatch_size=32,
-        masking_config=MaskingConfig(
-            strategy_config={
-                "type": "modality_cross_random",
-                "encode_ratio": 0.5,
-                "decode_ratio": 0.5,
-                "allow_encoding_decoding_same_bandset": True,
-                "only_decode_modalities": [
-                    "worldcover",
-                    "srtm",
-                    "openstreetmap_raster",
-                    "wri_canopy_height_map",
-                    "cdl",
-                    "worldcereal",
-                ],
-            }
-        ),
+        masking_config=get_masking_config(),
         mae_loss_config=LossConfig(
             loss_config={"type": "mae", "loss_function": "SmoothL1Loss", "beta": 0.1}
         ),
@@ -157,8 +162,6 @@ def build_train_module_config(
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
     """Build the dataloader config for an experiment."""
-    # things should be set during building
-
     return OlmoEarthDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
@@ -169,6 +172,8 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
+        num_masked_views=1,  # MAE only needs 1 view (no contrastive)
+        masking_config=get_masking_config(),
     )
 
 

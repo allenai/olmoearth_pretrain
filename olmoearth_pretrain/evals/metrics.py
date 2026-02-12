@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 
@@ -10,6 +11,14 @@ import torch
 # Pixels with this label are excluded from loss and metric calculations.
 SEGMENTATION_IGNORE_LABEL = -1
 
+@dataclass
+class EvalTaskResult:
+    """Result from an evaluation task (knn, linear probe, finetune)."""
+
+    val_result: EvalResult | None
+    test_result: EvalResult | None
+    bootstrap_stats: dict[str, Any] = field(default_factory=dict)
+    eval_time: float | None = None
 
 @dataclass
 class EvalResult:
@@ -22,9 +31,19 @@ class EvalResult:
     metrics: dict[str, float]
 
     @classmethod
-    def from_classification(cls, accuracy: float) -> EvalResult:
-        """Create EvalResult from classification accuracy."""
-        return cls(primary=accuracy, metrics={"accuracy": accuracy})
+    def from_classification(
+        cls, accuracy: float, f1: float | None = None
+    ) -> EvalResult:
+        """Create EvalResult from classification metrics.
+
+        Args:
+            accuracy: Classification accuracy (exact match for multilabel)
+            f1: Optional F1 score (micro-averaged, typically for multilabel tasks)
+        """
+        metrics = {"accuracy": accuracy}
+        if f1 is not None:
+            metrics["f1"] = f1
+        return cls(primary=accuracy, metrics=metrics)
 
     @classmethod
     def from_segmentation(
@@ -33,19 +52,17 @@ class EvalResult:
         overall_acc: float,
         macro_acc: float,
         macro_f1: float,
-        per_class_f1: dict[int, float] | None = None,
     ) -> EvalResult:
         """Create EvalResult from segmentation metrics."""
-        metrics = {
-            "miou": miou,
-            "overall_acc": overall_acc,
-            "macro_acc": macro_acc,
-            "macro_f1": macro_f1,
-        }
-        if per_class_f1:
-            for cls_idx, val in per_class_f1.items():
-                metrics[f"f1_cls_{cls_idx}"] = val
-        return cls(primary=miou, metrics=metrics)
+        return cls(
+            primary=miou,
+            metrics={
+                "miou": miou,
+                "overall_acc": overall_acc,
+                "macro_acc": macro_acc,
+                "macro_f1": macro_f1,
+            },
+        )
 
 
 def _build_confusion_matrix(
@@ -146,16 +163,9 @@ def segmentation_metrics(
     valid_f1_classes = class_totals > 0
     macro_f1 = per_class_f1[valid_f1_classes].mean().item()
 
-    per_class_f1_dict = {
-        i: per_class_f1[i].item()
-        for i in range(num_classes)
-        if class_totals[i] > 0
-    }
-
     return EvalResult.from_segmentation(
         miou=miou,
         overall_acc=overall_acc,
         macro_acc=macro_acc,
         macro_f1=macro_f1,
-        per_class_f1=per_class_f1_dict,
     )

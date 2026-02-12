@@ -75,17 +75,14 @@ class _StandaloneConfig:
     CLASS_NAME_FIELD = "_CLASS_"
 
     @classmethod
-    def _resolve_class(cls, class_name: str) -> type | None:
+    def _resolve_class(cls, class_name: str) -> type:
         """Resolve a fully-qualified class name to a class object."""
         if "." not in class_name:
-            return None
+            raise ValueError(f"Class name must be fully qualified (got '{class_name}')")
         *modules, cls_name = class_name.split(".")
         module_name = ".".join(modules)
-        try:
-            module = import_module(module_name)
-            return getattr(module, cls_name)
-        except (ImportError, AttributeError):
-            return None
+        module = import_module(module_name)
+        return getattr(module, cls_name)
 
     @classmethod
     def _clean_data(cls, data: Any) -> Any:
@@ -101,19 +98,16 @@ class _StandaloneConfig:
 
             if class_name is not None:
                 resolved_cls = cls._resolve_class(class_name)
-                if resolved_cls is not None and is_dataclass(resolved_cls):
-                    # Get the field names for this dataclass
-                    field_names = {f.name for f in fields(resolved_cls)}
-                    # Filter to only include valid fields
-                    valid_kwargs = {
-                        k: v for k, v in cleaned.items() if k in field_names
-                    }
-                    try:
-                        return resolved_cls(**valid_kwargs)
-                    except TypeError as e:
-                        raise TypeError(
-                            f"Failed to instantiate {class_name}: {e}"
-                        ) from e
+                if not is_dataclass(resolved_cls):
+                    raise TypeError(f"Class '{class_name}' is not a dataclass")
+                # Get the field names for this dataclass
+                field_names = {f.name for f in fields(resolved_cls)}
+                # Filter to only include valid fields
+                valid_kwargs = {k: v for k, v in cleaned.items() if k in field_names}
+                try:
+                    return resolved_cls(**valid_kwargs)
+                except TypeError as e:
+                    raise TypeError(f"Failed to instantiate {class_name}: {e}") from e
             return cleaned
 
         elif isinstance(data, list | tuple):

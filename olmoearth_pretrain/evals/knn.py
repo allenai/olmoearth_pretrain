@@ -11,7 +11,7 @@ from olmo_core.data.utils import get_rng
 from sklearn.metrics import accuracy_score, f1_score
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
-from olmoearth_pretrain.evals.metrics import EvalResult
+from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ def run_knn(
     skip_idx: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
-) -> dict[str, EvalResult | dict | None]:
+) -> EvalTaskResult:
     """Run KNN on the OlmoEarth Pretrain model.
 
     Args:
@@ -97,11 +97,11 @@ def run_knn(
                     seed=bootstrap_seed,
                 )
 
-        return {
-            "val_score": EvalResult.from_classification(val_score),
-            "test_score": test_result,
-            "bootstrap_stats": bootstrap_stats,
-        }
+        return EvalTaskResult(
+            val_result=EvalResult.from_classification(val_score),
+            test_result=test_result,
+            bootstrap_stats=bootstrap_stats,
+        )
     else:
         # multilabel dataset, e.g., BigEarthNet
         # we will run KNN or K-Means once per class to compute predictions
@@ -168,11 +168,11 @@ def run_knn(
                     seed=bootstrap_seed,
                 )
 
-        return {
-            "val_score": EvalResult.from_classification(val_score),
-            "test_score": test_result,
-            "bootstrap_stats": bootstrap_stats,
-        }
+        return EvalTaskResult(
+            val_result=EvalResult.from_classification(val_score),
+            test_result=test_result,
+            bootstrap_stats=bootstrap_stats,
+        )
 
 
 def _bootstrap_knn_test(

@@ -71,29 +71,45 @@ def build_common_components(
     return config
 
 
+def get_masking_config(common: CommonComponents) -> MaskingConfig:
+    """Get the masking configuration for the experiment.
+
+    Args:
+        common: Common experiment components containing optional tokenization_config.
+    """
+    return MaskingConfig(
+        strategy_config={
+            "type": "modality_cross_random",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "allow_encoding_decoding_same_bandset": True,
+            "only_decode_modalities": [
+                Modality.WORLDCOVER.name,
+                Modality.SRTM.name,
+                Modality.OPENSTREETMAP_RASTER.name,
+                Modality.WRI_CANOPY_HEIGHT_MAP.name,
+                Modality.CDL.name,
+                Modality.WORLDCEREAL.name,
+            ],
+        },
+        tokenization_config=common.tokenization_config,
+    )
+
+
 def build_train_module_config(
     common: CommonComponents,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build the train module config for an experiment."""
+    """Build the train module config for an experiment.
+
+    Args:
+        common: Common experiment components.
+    """
+    # The train module still needs the masking_config for reference (e.g., for metric
+    # naming), but the actual masking happens in the dataloader workers.
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
         rank_microbatch_size=32,
-        masking_config=MaskingConfig(
-            strategy_config={
-                "type": "modality_cross_random",
-                "encode_ratio": 0.5,
-                "decode_ratio": 0.5,
-                "allow_encoding_decoding_same_bandset": True,
-                "only_decode_modalities": [
-                    Modality.WORLDCOVER.name,
-                    Modality.SRTM.name,
-                    Modality.OPENSTREETMAP_RASTER.name,
-                    Modality.WRI_CANOPY_HEIGHT_MAP.name,
-                    Modality.CDL.name,
-                    Modality.WORLDCEREAL.name,
-                ],
-            }
-        ),
+        masking_config=get_masking_config(common),
         loss_config=LossConfig(
             loss_config={
                 "type": "modality_patch_discrimination_new",
@@ -118,20 +134,32 @@ def build_train_module_config(
     )
 
 
-def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Build the dataloader config for an experiment."""
-    # things should be set during building
+def build_dataloader_config(
+    common: CommonComponents,
+) -> OlmoEarthDataLoaderConfig:
+    """Build the dataloader config for an experiment.
 
+    Masking is performed in the dataloader workers (CPU) instead of in the train module
+    (GPU). This improves throughput by offloading CPU-bound masking operations to
+    dataloader workers.
+
+    Args:
+        common: Common experiment components.
+    """
     return OlmoEarthDataLoaderConfig(
-        num_workers=16,
+        num_workers=12,
         global_batch_size=512,
         token_budget=2250,
-        prefetch_factor=4,
+        prefetch_factor=2,
         sampled_hw_p_list=list(range(1, 13)),  # try only temporal tokens
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
+        num_masked_views=2,  # ContrastiveLatentMIM needs 2 views
+        masking_config=get_masking_config(common),
+        # masking_config_b is not set, so both views use the same strategy
+        tokenization_config=common.tokenization_config,
     )
 
 

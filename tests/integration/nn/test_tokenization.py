@@ -10,9 +10,9 @@ from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
     TokenizationConfig,
 )
-from olmoearth_pretrain.train.masking import MaskingConfig
-from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
-    _propagate_tokenization_config,
+from olmoearth_pretrain.train.masking import (
+    MaskingConfig,
+    propagate_tokenization_config,
 )
 
 
@@ -238,7 +238,7 @@ def test_masking_and_encoder_use_same_bandset_count() -> None:
     masking_strategy = MaskingConfig(
         strategy_config={"type": "random", "encode_ratio": 0.5, "decode_ratio": 0.5}
     ).build()
-    _propagate_tokenization_config(masking_strategy, tokenization_config)
+    propagate_tokenization_config(masking_strategy, tokenization_config)
 
     sample = OlmoEarthSample(
         sentinel2_l2a=torch.zeros((1, 2, 2, 1, 12), dtype=torch.float32),
