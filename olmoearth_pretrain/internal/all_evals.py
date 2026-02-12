@@ -320,21 +320,6 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
-    "wildfire_canada_test": DownstreamTaskConfig(
-        dataset="wildfire_canada_test",
-        embedding_batch_size=32,
-        probe_batch_size=16,
-        patch_size=5, # TODO: This is changeable but we should know the valid sizes for inputs
-        num_workers=2,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
-        probe_lr=0.1,
-        eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
-    ),
     "canada_wildfire_sat_eval_split": DownstreamTaskConfig(
         dataset="canada_wildfire_sat_eval_split",
         embedding_batch_size=32,
