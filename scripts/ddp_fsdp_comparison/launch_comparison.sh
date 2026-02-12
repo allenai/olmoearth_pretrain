@@ -20,7 +20,8 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="scripts/ddp_fsdp_comparison"
 CLUSTER="${1:-ai2/saturn-cirrascale}"
 RUN_PREFIX="ddp_fsdp_comparison_$(date +%Y%m%d_%H%M%S)"
 
@@ -33,7 +34,7 @@ echo ""
 
 # Launch FSDP run
 echo "[1/2] Launching FSDP run..."
-python "$SCRIPT_DIR/compare_ddp_fsdp.py" launch "${RUN_PREFIX}" "$CLUSTER" \
+python "$REPO_ROOT/$SCRIPT_DIR/compare_ddp_fsdp.py" launch "${RUN_PREFIX}" "$CLUSTER" \
     --dp_type=fsdp \
     --launch.num_gpus=4 \
     --launch.num_nodes=1
@@ -42,7 +43,7 @@ echo ""
 
 # Launch DDP run
 echo "[2/2] Launching DDP run..."
-python "$SCRIPT_DIR/compare_ddp_fsdp.py" launch "${RUN_PREFIX}" "$CLUSTER" \
+python "$REPO_ROOT/$SCRIPT_DIR/compare_ddp_fsdp.py" launch "${RUN_PREFIX}" "$CLUSTER" \
     --dp_type=ddp \
     --launch.num_gpus=4 \
     --launch.num_nodes=1
