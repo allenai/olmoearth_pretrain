@@ -65,10 +65,10 @@ class BandsetMerge(nn.Module):
         """
         # Zero out non-ENCODER bandsets to prevent information leakage
         encoder_mask = mask == MaskValue.ONLINE_ENCODER.value  # [..., num_bandsets]
-        tokens = tokens * encoder_mask.unsqueeze(-1).float()
+        tokens = tokens * encoder_mask.unsqueeze(-1).to(tokens.dtype)
 
         # Normalize by number of active bandsets for consistent magnitude
-        active_count = encoder_mask.sum(dim=-1, keepdim=True).clamp(min=1).float()
+        active_count = encoder_mask.sum(dim=-1, keepdim=True).clamp(min=1).to(tokens.dtype)
         scale = self.num_bandsets / active_count  # [..., 1]
 
         tokens_cat = tokens.flatten(-2)  # [..., num_bandsets * D]
