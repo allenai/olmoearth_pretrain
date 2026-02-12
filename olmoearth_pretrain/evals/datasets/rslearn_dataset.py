@@ -20,21 +20,13 @@ from rslearn.train.model_context import RasterImage
 from torch.utils.data import Dataset
 
 from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS
+from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.data.constants import Modality as DataModality
 from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSample
 
 from .normalize import normalize_bands
-
-# rslearn layer name -> (olmoearth modality name, all bands)
-RSLEARN_TO_OLMOEARTH: dict[str, tuple[str, list[str]]] = {
-    "sentinel2": ("sentinel2_l2a", DataModality.SENTINEL2_L2A.band_order),
-    "sentinel1": ("sentinel1", DataModality.SENTINEL1.band_order),
-    "sentinel1_ascending": ("sentinel1", DataModality.SENTINEL1.band_order),
-    "sentinel1_descending": ("sentinel1", DataModality.SENTINEL1.band_order),
-    "landsat": ("landsat", DataModality.LANDSAT.band_order),
-}
 
 
 def get_timestamps(
@@ -226,8 +218,7 @@ class RslearnToOlmoEarthDataset(Dataset):
                             resolved = layer[len(prefix):]
                             break
                 if resolved in RSLEARN_TO_OLMOEARTH:
-                    olmoearth_name, _ = RSLEARN_TO_OLMOEARTH[resolved]
-                    input_modalities.append(olmoearth_name)
+                    input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
                 else:
                     input_modalities.append(layer)
 

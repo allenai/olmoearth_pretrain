@@ -30,12 +30,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from olmoearth_pretrain.data.constants import Modality as DataModality
+from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.evals.datasets.rslearn_builder import (
     build_model_dataset_from_config,
     load_runtime_config,
 )
-from olmoearth_pretrain.evals.datasets.rslearn_dataset import RSLEARN_TO_OLMOEARTH
 
 # Default to 0 (no multiprocessing), but allow override via env var
 _default_workers = 0
@@ -81,8 +81,8 @@ def _get_bands_by_modality_from_runtime_config(runtime_config) -> dict[str, list
     for layer in modality_layers:
         resolved = _resolve_layer_name(layer)
         if resolved is not None:
-            olmoearth_name, band_order = RSLEARN_TO_OLMOEARTH[resolved]
-            bands_by_modality[olmoearth_name] = band_order
+            modality = RSLEARN_TO_OLMOEARTH[resolved]
+            bands_by_modality[modality.name] = modality.band_order
 
     return bands_by_modality
 

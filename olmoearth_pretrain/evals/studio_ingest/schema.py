@@ -37,7 +37,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.data.constants import ModalitySpec
+from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.evals.task_types import SplitName, SplitType, TaskType
 
 DEFAULT_TARGET_PROPERTY = "category"
@@ -101,32 +102,21 @@ def instantiate_from_config(config: dict) -> Any:
     return cls(**resolved_args)
 
 
-# rslearn layer name -> olmoearth modality
-_RSLEARN_TO_OLMOEARTH: dict[str, Modality] = {
-    "sentinel2": Modality.SENTINEL2_L2A,
-    "sentinel2_l2a": Modality.SENTINEL2_L2A,
-    "sentinel1": Modality.SENTINEL1,
-    "sentinel1_ascending": Modality.SENTINEL1,
-    "sentinel1_descending": Modality.SENTINEL1,
-    "landsat": Modality.LANDSAT,
-}
+def rslearn_to_olmoearth(layer_name: str) -> ModalitySpec:
+    """Map an rslearn layer name to an OlmoEarth ModalitySpec.
 
-
-def rslearn_to_olmoearth(layer_name: str) -> Modality:
-    """Map an rslearn layer name to an OlmoEarth Modality.
-
+    Uses RSLEARN_TO_OLMOEARTH from rslearn_dataset as the single source of truth.
     Also handles layer names prefixed with "pre_" or "post_" (e.g.
-    "pre_sentinel2" -> Modality.SENTINEL2_L2A). This was added to make
-    compatible with older datasets that use these prefixed layer names.
+    "pre_sentinel2" -> Modality.SENTINEL2_L2A).
     """
-    if layer_name in _RSLEARN_TO_OLMOEARTH:
-        return _RSLEARN_TO_OLMOEARTH[layer_name]
+    if layer_name in RSLEARN_TO_OLMOEARTH:
+        return RSLEARN_TO_OLMOEARTH[layer_name]
 
     for prefix in ("pre_", "post_"):
         if layer_name.startswith(prefix):
             stripped = layer_name[len(prefix):]
-            if stripped in _RSLEARN_TO_OLMOEARTH:
-                return _RSLEARN_TO_OLMOEARTH[stripped]
+            if stripped in RSLEARN_TO_OLMOEARTH:
+                return RSLEARN_TO_OLMOEARTH[stripped]
 
     raise KeyError(f"Unknown rslearn layer name: {layer_name!r}")
 

@@ -390,6 +390,19 @@ EVAL_TASKS = {
         epochs=100,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
+    "nigeria_settlement": DownstreamTaskConfig(
+        dataset="nigeria_settlement",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        epochs=100,
+        eval_mode=EvalMode.LINEAR_PROBE,
+    ),
 }
 
 FT_EVAL_TASKS = {
