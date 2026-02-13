@@ -207,7 +207,7 @@ class DownstreamEvaluator:
                     epochs=self.epochs,
                     eval_interval=self.linear_probe_eval_interval,
                     probe_type=self.probe_type,
-                    lr=self.probe_lr,
+                    lr=self.probe_lr,  # type: ignore
                     select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
