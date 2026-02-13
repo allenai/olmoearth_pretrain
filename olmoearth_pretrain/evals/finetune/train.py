@@ -99,6 +99,7 @@ def run_finetune_eval(
     seed: int | None = None,
     best_checkpoint_path: str | None = None,
     resume_checkpoint_path: str | None = None,
+    freeze_epoch_fraction: float = FREEZE_EPOCH_FRACTION,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     if seed is not None:
@@ -133,7 +134,7 @@ def run_finetune_eval(
         )
 
     # Freeze the backbone for the first portion of epochs
-    freeze_epochs = math.ceil(FREEZE_EPOCH_FRACTION * epochs) if epochs > 0 else 0
+    freeze_epochs = math.ceil(freeze_epoch_fraction * epochs) if epochs > 0 else 0
     backbone_unfrozen = freeze_epochs == 0
     if not backbone_unfrozen:
         set_backbone_trainable(ft.backbone, False)
