@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
+import torch
 
 from olmoearth_pretrain.data.constants import ModalitySpec
 
@@ -105,7 +106,6 @@ class FlexiPatchEmbed(nn.Module):
         batch_size = x.shape[0]
         has_time_dimension = False
         num_timesteps = 0  # ignored if has_time_dimension is False
-
         if len(x.shape) == 5:
             has_time_dimension = True
             num_timesteps = x.shape[3]
@@ -142,6 +142,7 @@ class FlexiPatchEmbed(nn.Module):
                 antialias=self.antialias,
             )
         # Apply conv with resized weights
+        x = x.contiguous(memory_format=torch.channels_last)
         x = self.proj(x)
         # At this point x has embedding dim sized channel dimension
         if has_time_dimension:

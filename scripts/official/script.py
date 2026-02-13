@@ -107,12 +107,12 @@ def build_train_module_config(
     # The train module still needs the masking_config for reference (e.g., for metric
     # naming), but the actual masking happens in the dataloader workers.
     return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
         rank_microbatch_size=32,
         masking_config=get_masking_config(common),
         loss_config=LossConfig(
             loss_config={
-                "type": "modality_patch_discrimination_new",
+                "type": "modality_patch_discrimination_new_vec",
                 "tau": 0.1,
             }
         ),
