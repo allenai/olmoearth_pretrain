@@ -268,7 +268,7 @@ class PatchDiscriminationLossNew(Loss):
 class ModalityPatchDiscriminationLossNew(Loss):
     """Loss function for per-modality patch discrimination task.
 
-    This has lower memory consumption than the old patch discrimination loss.
+    This is a fully parallelized implementation with no for loops over samples.
     It does not support all discrimination loss.
     """
 
@@ -297,6 +297,124 @@ class ModalityPatchDiscriminationLossNew(Loss):
         self.weight = weight
         self.modality_weights = modality_weights
 
+    def _compute_modality_loss_parallel(
+        self,
+        all_preds: Tensor,
+        all_masks: Tensor,
+        all_targets: Tensor,
+    ) -> Tensor | None:
+        """Compute patch discrimination loss for a single modality in parallel.
+
+        Args:
+            all_preds: Predictions tensor of shape (batch, tokens, dim)
+            all_masks: Mask tensor of shape (batch, tokens)
+            all_targets: Targets tensor of shape (batch, tokens, dim)
+
+        Returns:
+            The computed loss value for this modality, or None if no valid tokens.
+        """
+        # Get counts per sample
+        decoder_mask = all_masks == MaskValue.DECODER.value
+        count = decoder_mask.sum(dim=-1)  # (batch,)
+
+        # Filter out samples with no decoded values
+        valid_samples = count > 0
+        if not valid_samples.any():
+            return None
+
+        count = count[valid_samples]
+        batch_size = count.shape[0]
+        max_count = count.max().item()
+
+        if max_count == 0:
+            return None
+
+        # Flatten masks for indexing
+        flat_masks = all_masks[valid_samples].flatten()
+        flat_preds = all_preds[valid_samples].reshape(-1, all_preds.shape[-1])
+        flat_targets = all_targets[valid_samples].reshape(-1, all_targets.shape[-1])
+
+        # Get only decoder tokens
+        decoder_indices = flat_masks == MaskValue.DECODER.value
+        pred_decoder = flat_preds[decoder_indices]  # (total_tokens, dim)
+        target_decoder = flat_targets[decoder_indices]  # (total_tokens, dim)
+
+        if self.pred2unit:
+            pred_mu = pred_decoder.mean(0, keepdims=True)
+            pred_std = pred_decoder.std(0, keepdims=True)
+            pred_decoder = (pred_decoder - pred_mu) / (pred_std + 1e-4)
+
+        pred_decoder = F.normalize(pred_decoder, p=2, dim=-1)
+        target_decoder = F.normalize(target_decoder, p=2, dim=-1)
+
+        # Pad to (batch, max_count, dim)
+        dim = pred_decoder.shape[-1]
+        pred_padded = torch.zeros(
+            batch_size,
+            max_count,
+            dim,
+            device=pred_decoder.device,
+            dtype=pred_decoder.dtype,
+        )
+        target_padded = torch.zeros(
+            batch_size,
+            max_count,
+            dim,
+            device=target_decoder.device,
+            dtype=target_decoder.dtype,
+        )
+
+        # Create indices for scattering
+        # batch_indices: which batch each token belongs to
+        batch_indices = torch.repeat_interleave(
+            torch.arange(batch_size, device=count.device), count
+        )
+        # position_indices: position within each batch
+        position_indices = torch.cat(
+            [torch.arange(c, device=count.device) for c in count]
+        )
+
+        pred_padded[batch_indices, position_indices] = pred_decoder
+        target_padded[batch_indices, position_indices] = target_decoder
+
+        # Compute scores: (batch, max_count, max_count)
+        scores = torch.bmm(pred_padded, target_padded.transpose(1, 2)) / self.tau
+
+        # Create validity mask for rows and columns
+        # valid_mask[b, i] = True if position i is valid for batch b
+        range_tensor = torch.arange(max_count, device=count.device)
+        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(
+            1
+        )  # (batch, max_count)
+
+        # Mask out invalid positions in scores (set to large negative)
+        # For rows that are invalid, we'll skip them in loss
+        # For columns that are invalid, set to -inf so they don't contribute to softmax
+        col_mask = valid_mask.unsqueeze(1).expand(
+            -1, max_count, -1
+        )  # (batch, max_count, max_count)
+        scores = scores.masked_fill(~col_mask, -torch.finfo(scores.dtype).max)
+
+        # Labels are diagonal: each position i should match position i
+        labels = range_tensor.unsqueeze(0).expand(batch_size, -1)  # (batch, max_count)
+
+        # Compute cross entropy per position
+        # scores: (batch, max_count, max_count), labels: (batch, max_count)
+        loss_per_pos = F.cross_entropy(
+            scores.reshape(-1, max_count),
+            labels.reshape(-1),
+            reduction="none",
+        ) * (self.tau * 2)  # (batch * max_count,)
+        loss_per_pos = loss_per_pos.reshape(batch_size, max_count)
+
+        # Only average over valid positions per sample, then average over samples
+        # Sum losses for valid positions, divide by count
+        valid_mask_float = valid_mask.float()
+        loss_per_sample = (loss_per_pos * valid_mask_float).sum(dim=1) / count.float()
+        loss = loss_per_sample.mean()
+
+        return loss
+
     def compute(
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
     ) -> Tensor:
@@ -320,48 +438,11 @@ class ModalityPatchDiscriminationLossNew(Loss):
         for all_preds, all_masks, all_targets, modality in zip(
             modality_preds, modality_masks, modality_targets, targets.modalities
         ):
-            # Samples may have different number of tokens
-            # TODO: Skip unqueeze and the for loop when mask_other_samples is True
-            pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-            target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
-            bs, nt, _ = pred.shape
-
-            if self.pred2unit:
-                pred_mu = pred.mean(1, keepdims=True)
-                pred_std = pred.std(1, keepdims=True)
-                pred = (pred - pred_mu) / (pred_std + 1e-4)
-
-            pred = F.normalize(pred, p=2, dim=-1)
-            target = F.normalize(target, p=2, dim=-1)
-
-            count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
-            losses = []
-            start = 0
-            for c in count:
-                end = start + c
-                if c == 0:
-                    # we will occasionally get a sample with no decoded values due to missing data this will let us skip it
-                    # logger.warning("No decoded values for this sample")
-                    continue
-                pred_sample = pred[:, start:end, :]
-                target_sample = target[:, start:end, :]
-                score_sample = (
-                    torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
-                )
-                labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
-                loss = F.cross_entropy(
-                    score_sample.flatten(0, 1),
-                    labels.flatten(0, 1),
-                    reduction="none",
-                ) * (self.tau * 2)
-                loss = loss.mean()
-                losses.append(loss)
-                start = end
-            if len(losses) == 0:
-                # If no losses were computed, skip this modality
-                # logger.warning("No decoded values for this modality")
+            loss = self._compute_modality_loss_parallel(
+                all_preds, all_masks, all_targets
+            )
+            if loss is None:
                 continue
-            loss = torch.stack(losses).mean()
             if self.modality_weights is not None:
                 loss = loss * self.modality_weights[modality]
             total_loss += loss

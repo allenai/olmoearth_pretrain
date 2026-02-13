@@ -3,6 +3,7 @@
 import logging
 
 import torch
+import torch.nn.functional as F
 
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.train.loss import (
@@ -11,6 +12,7 @@ from olmoearth_pretrain.train.loss import (
     InfoNCELoss,
     L1Loss,
     L2Loss,
+    ModalityPatchDiscriminationLossNew,
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
 )
@@ -238,3 +240,172 @@ def test_infonce_loss() -> None:
     loss = InfoNCELoss(weight=0.1)
     w_loss_value = loss.compute(torch.ones((b, d)), torch.zeros((b, d)))
     assert 0.1 * loss_value == w_loss_value
+
+
+def _modality_patch_disc_reference(
+    predictions: TokensAndMasks,
+    targets: TokensAndMasks,
+    tau: float = 0.1,
+    pred2unit: bool = False,
+) -> torch.Tensor:
+    """Reference sequential implementation for testing parallelized version."""
+    modality_preds, modality_masks = predictions.flatten_tokens_and_masks(
+        return_lists=True
+    )
+    modality_targets = targets.flatten_tokens_and_masks(return_lists=True)[0]
+
+    total_loss = 0
+    for all_preds, all_masks, all_targets in zip(
+        modality_preds, modality_masks, modality_targets
+    ):
+        pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+        target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+
+        if pred2unit:
+            pred_mu = pred.mean(1, keepdims=True)
+            pred_std = pred.std(1, keepdims=True)
+            pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+        pred = F.normalize(pred, p=2, dim=-1)
+        target = F.normalize(target, p=2, dim=-1)
+
+        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+        losses = []
+        start = 0
+        for c in count:
+            end = start + c
+            if c == 0:
+                continue
+            pred_sample = pred[:, start:end, :]
+            target_sample = target[:, start:end, :]
+            score_sample = (
+                torch.einsum("npd,nqd->npq", pred_sample, target_sample) / tau
+            )
+            labels = torch.arange(c, dtype=torch.long, device=pred.device)[None]
+            loss = F.cross_entropy(
+                score_sample.flatten(0, 1),
+                labels.flatten(0, 1),
+                reduction="none",
+            ) * (tau * 2)
+            loss = loss.mean()
+            losses.append(loss)
+            start = end
+        if len(losses) == 0:
+            continue
+        loss = torch.stack(losses).mean()
+        total_loss += loss
+
+    return total_loss
+
+
+def test_modality_patch_disc_parallelized_matches_sequential() -> None:
+    """Test that parallelized modality patch disc loss matches sequential."""
+    b, t_h, t_w, t, d = 5, 4, 4, 2, 8
+
+    torch.manual_seed(42)
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
+    )
+
+    loss_parallel = ModalityPatchDiscriminationLossNew()
+    parallel_loss = loss_parallel.compute(preds, targets)
+    reference_loss = _modality_patch_disc_reference(preds, targets)
+
+    logger.info(f"parallel_loss: {parallel_loss}, reference_loss: {reference_loss}")
+    assert torch.isclose(parallel_loss, reference_loss, rtol=1e-4, atol=1e-6)
+
+
+def test_modality_patch_disc_parallelized_uneven_tokens() -> None:
+    """Test parallelized loss with uneven number of decoder tokens per sample."""
+    b, t_h, t_w, t, d = 5, 4, 4, 2, 8
+
+    torch.manual_seed(123)
+    # Random masks - some samples have more decoder tokens than others
+    s2_mask = torch.randint(0, 3, (b, t_h, t_w, t))
+    latlon_mask = torch.randint(0, 3, (b, 1))
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=latlon_mask,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=latlon_mask,
+    )
+
+    loss_parallel = ModalityPatchDiscriminationLossNew()
+    parallel_loss = loss_parallel.compute(preds, targets)
+    reference_loss = _modality_patch_disc_reference(preds, targets)
+
+    logger.info(f"parallel_loss: {parallel_loss}, reference_loss: {reference_loss}")
+    assert torch.isclose(parallel_loss, reference_loss, rtol=1e-4, atol=1e-6)
+
+
+def test_modality_patch_disc_parallelized_with_missing_samples() -> None:
+    """Test parallelized loss when some samples have no decoder tokens."""
+    b, t_h, t_w, t, d = 5, 4, 4, 2, 8
+
+    torch.manual_seed(456)
+    # Create masks where first sample has no decoder tokens
+    s2_mask = torch.randint(0, 3, (b, t_h, t_w, t))
+    s2_mask[0] = MaskValue.ONLINE_ENCODER.value  # No decoder tokens for first sample
+    s2_mask[2] = MaskValue.MISSING.value  # All missing for third sample
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
+    )
+
+    loss_parallel = ModalityPatchDiscriminationLossNew()
+    parallel_loss = loss_parallel.compute(preds, targets)
+    reference_loss = _modality_patch_disc_reference(preds, targets)
+
+    logger.info(f"parallel_loss: {parallel_loss}, reference_loss: {reference_loss}")
+    assert torch.isclose(parallel_loss, reference_loss, rtol=1e-4, atol=1e-6)
+
+
+def test_modality_patch_disc_parallelized_pred2unit() -> None:
+    """Test parallelized loss with pred2unit=True."""
+    b, t_h, t_w, t, d = 5, 4, 4, 2, 8
+
+    torch.manual_seed(789)
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
+    )
+
+    loss_parallel = ModalityPatchDiscriminationLossNew(pred2unit=True)
+    parallel_loss = loss_parallel.compute(preds, targets)
+    reference_loss = _modality_patch_disc_reference(preds, targets, pred2unit=True)
+
+    logger.info(f"parallel_loss: {parallel_loss}, reference_loss: {reference_loss}")
+    assert torch.isclose(parallel_loss, reference_loss, rtol=1e-4, atol=1e-6)
