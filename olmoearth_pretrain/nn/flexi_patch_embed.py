@@ -8,11 +8,11 @@ import logging
 from collections.abc import Iterable
 from typing import Any
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
-import torch
 
 from olmoearth_pretrain.data.constants import ModalitySpec
 
@@ -57,11 +57,12 @@ class FlexiPatchEmbed(nn.Module):
             patch_size_at_16 * modality_spec.image_tile_size_factor
         )
 
-        self.proj = nn.Conv2d(
-            in_chans,
+        # Use Linear instead of Conv2d — kernel_size == stride means the conv is just
+        # a reshape + matmul. Linear hits cuBLAS GEMM (always fast on TensorCores)
+        # whereas Conv2d with small in_chans and large kernels hits slow cuDNN paths.
+        self.proj = nn.Linear(
+            in_chans * self.patch_size[0] * self.patch_size[1],
             embedding_size,
-            kernel_size=self.patch_size,
-            stride=self.patch_size,
             bias=bias,
         )
         self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
@@ -103,9 +104,11 @@ class FlexiPatchEmbed(nn.Module):
                 will be used, at an image_tile_size_factor of 16
         """
         # x has input shape [b, h, w, (t), c]
+        # log to make sure we are not running deterministic algorithms
         batch_size = x.shape[0]
         has_time_dimension = False
         num_timesteps = 0  # ignored if has_time_dimension is False
+
         if len(x.shape) == 5:
             has_time_dimension = True
             num_timesteps = x.shape[3]
@@ -128,7 +131,7 @@ class FlexiPatchEmbed(nn.Module):
         assert isinstance(patch_size, tuple) and len(patch_size) == 2, (
             "patch_size must be a 2-tuple"
         )
-        # Resize input
+        # Resize input so that the base patch_size tiles evenly
         if patch_size != self.patch_size:
             shape = x.shape[-2:]
             new_shape = (
@@ -141,23 +144,25 @@ class FlexiPatchEmbed(nn.Module):
                 mode=self.interpolation,
                 antialias=self.antialias,
             )
-        # Apply conv with resized weights
-        x = x.contiguous(memory_format=torch.channels_last)
+        # Reshape non-overlapping patches into tokens and project with Linear
+        # (equivalent to Conv2d with kernel_size == stride, but uses fast cuBLAS GEMM)
+        p_h, p_w = self.patch_size
+        h_patches = x.shape[2] // p_h
+        w_patches = x.shape[3] // p_w
+        x = rearrange(x, "b c (h p1) (w p2) -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w)
         x = self.proj(x)
-        # At this point x has embedding dim sized channel dimension
+        # Reshape back to spatial layout: b, h, w, (t,) d
         if has_time_dimension:
-            _, d, h, w = x.shape
             x = rearrange(
                 x,
-                "(b t) d h w -> b h w t d",
+                "(b t) (h w) d -> b h w t d",
                 b=batch_size,
                 t=num_timesteps,
-                d=d,
-                h=h,
-                w=w,
+                h=h_patches,
+                w=w_patches,
             )
         else:
-            x = rearrange(x, "b d h w -> b h w d")
+            x = rearrange(x, "b (h w) d -> b h w d", h=h_patches, w=w_patches)
 
         x = self.norm(x)
 
