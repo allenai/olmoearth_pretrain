@@ -16,6 +16,8 @@ Experiments investigating S2 bandset configurations and cross-spectral learning 
 | 8 | `two_bandset_cross_random_masked_neg` | modality_cross_random + 2 bandsets S2 (10m+20m) / Landsat single |
 | 9 | `merged_bandsets_cross_random_masked_neg` | 3 bandsets S2 / 2 bandsets Landsat, merge before transformer, unmerge in decoder |
 | 10 | `midlayer_merged_bandsets_cross_random_masked_neg` | 3 bandsets S2 / 2 bandsets Landsat, merge after layer 3, unmerge in decoder |
+| 11 | `default_bandsets_via_tokenconfig_cross_random_masked_neg` | default 3 bandsets S2 / 2 bandsets Landsat via TokenizationConfig (sanity check) |
+| 12 | `two_bandset_midlayer_merged_cross_random_masked_neg` | 2 bandsets S2 (10m+20m) / Landsat single, merge after layer 3, unmerge in decoder |
 
 ## Launch Commands
 
@@ -45,6 +47,17 @@ EXPERIMENT=merged_bandsets_cross_random_masked_neg \
 EXPERIMENT=midlayer_merged_bandsets_cross_random_masked_neg \
   python scripts/vnext/2026_02_08_masked_neg/single_bandset_masked_neg.py launch \
   midlayer_merged_bandsets_cross_random_masked_neg_fix ai2/jupiter \
+  launch.num_gpus=8 \
+  'launch.clusters=[ai2/jupiter,ai2/ceres,ai2/titan]' \
+  trainer.callbacks.wandb.project=2026_02_08_masked_neg
+```
+
+### Experiment 12: Two bandsets S2 + mid-layer merge (combines exp 8 + 10)
+
+```bash
+EXPERIMENT=two_bandset_midlayer_merged_cross_random_masked_neg \
+  python scripts/vnext/2026_02_08_masked_neg/single_bandset_masked_neg.py launch \
+  two_bandset_midlayer_merged_cross_random_masked_neg ai2/jupiter \
   launch.num_gpus=8 \
   'launch.clusters=[ai2/jupiter,ai2/ceres,ai2/titan]' \
   trainer.callbacks.wandb.project=2026_02_08_masked_neg
