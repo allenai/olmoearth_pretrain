@@ -13,7 +13,7 @@ Thirteen experiments:
 10. mid-layer merged 3 bandsets S2 / Landsat + modality_cross_random masking + masked neg loss (merge after layer 3, unmerge in decoder)
 11. default 3 bandsets S2 / 2 bandsets Landsat set via TokenizationConfig + modality_cross_random masking + masked neg loss (sanity check)
 12. mid-layer merged 2 bandsets S2 (10m+20m) / Landsat single + modality_cross_random masking + masked neg loss (combines exp 8 + 10)
-13. single bandset S2 (no 60m: 10 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.5)) + modality_cross_random masking + masked neg loss
+13. single bandset S2 (no 60m: 10 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + modality_cross_random masking + masked neg loss
 """
 
 import copy
@@ -887,10 +887,10 @@ def build_dataloader_exp12(common: CommonComponents) -> OlmoEarthDataLoaderConfi
     return _build_dataloader(common, "modality_cross_random")
 
 
-RANDOM_BAND_DROPOUT_MAX_RATE = 0.5
+RANDOM_BAND_DROPOUT_MAX_RATE = 0.3
 
 # ============================================================
-# Experiment 13: single bandset + random band dropout (rate ~ Uniform(0, 0.5))
+# Experiment 13: single bandset + random band dropout (rate ~ Uniform(0, 0.3))
 # ============================================================
 
 
@@ -911,7 +911,7 @@ def build_train_module_exp13(
 
 
 def build_model_exp13(common: CommonComponents) -> LatentMIMConfig:
-    """Build model for exp13 with random band dropout (rate ~ Uniform(0, 0.5))."""
+    """Build model for exp13 with random band dropout (rate ~ Uniform(0, 0.3))."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
     encoder_config = EncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
