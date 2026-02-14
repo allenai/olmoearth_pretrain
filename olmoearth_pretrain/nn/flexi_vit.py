@@ -374,6 +374,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         embedding_size: int,
         tokenization_config: TokenizationConfig | None = None,
         band_dropout_rate: float = 0.0,
+        random_band_dropout: bool = False,
     ):
         """Initialize the patch embeddings.
 
@@ -387,6 +388,9 @@ class MultiModalPatchEmbeddings(nn.Module):
                 When > 0, randomly zeroes out bands before the patch embedding Conv2d,
                 forcing the model to learn cross-spectral representations. Only active
                 during training (self.training=True). Default: 0.0 (no dropout).
+            random_band_dropout: If True, sample the dropout rate per forward call from
+                Uniform(0, band_dropout_rate). This reduces train-inference mismatch
+                and acts as stronger augmentation. Default: False (fixed rate).
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -394,6 +398,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.supported_modality_names = supported_modality_names
         self.tokenization_config = tokenization_config or TokenizationConfig()
         self.band_dropout_rate = band_dropout_rate
+        self.random_band_dropout = random_band_dropout
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -503,9 +508,14 @@ class MultiModalPatchEmbeddings(nn.Module):
                 num_bands = patchified_data.shape[-1]
                 if num_bands > 1:
                     batch_size = patchified_data.shape[0]
+                    if self.random_band_dropout:
+                        # Sample rate from Uniform(0, band_dropout_rate)
+                        rate = torch.rand(1, device=patchified_data.device).item() * self.band_dropout_rate
+                    else:
+                        rate = self.band_dropout_rate
                     keep_mask = (
                         torch.rand(batch_size, num_bands, device=patchified_data.device)
-                        >= self.band_dropout_rate
+                        >= rate
                     )
                     # Ensure at least 1 band kept per sample
                     no_bands_kept = ~keep_mask.any(dim=1)
@@ -1248,6 +1258,7 @@ class Encoder(FlexiVitBase):
         log_token_norm_stats: bool = False,
         tokenization_config: TokenizationConfig | None = None,
         band_dropout_rate: float = 0.0,
+        random_band_dropout: bool = False,
         merge_bandsets: bool = False,
         merge_after_layer: int = -1,
     ):
@@ -1277,6 +1288,7 @@ class Encoder(FlexiVitBase):
             log_token_norm_stats: Whether to log the token norm stats
             tokenization_config: Optional config for custom band groupings
             band_dropout_rate: Probability of dropping each band channel during training.
+            random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             merge_bandsets: If True, merge multi-bandset tokens into one.
                 merge_after_layer controls when the merge happens.
             merge_after_layer: Which transformer layer to merge after.
@@ -1310,12 +1322,14 @@ class Encoder(FlexiVitBase):
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
         self.band_dropout_rate = band_dropout_rate
+        self.random_band_dropout = random_band_dropout
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
             tokenization_config=self.tokenization_config,
             band_dropout_rate=self.band_dropout_rate,
+            random_band_dropout=self.random_band_dropout,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -2348,6 +2362,7 @@ class EncoderConfig(Config):
     log_token_norm_stats: bool = False
     tokenization_config: TokenizationConfig | None = None
     band_dropout_rate: float = 0.0
+    random_band_dropout: bool = False
     merge_bandsets: bool = False
     merge_after_layer: int = -1
 
