@@ -1370,28 +1370,22 @@ class Encoder(FlexiVitBase):
         assert x.shape[1] > 0, (
             "x must have at least one token we should not mask all tokens"
         )
-        masked_tokens = repeat(
-            torch.zeros_like(x[0, 0, :]), "d -> b t d", b=x.shape[0], t=indices.shape[1]
-        )
-        full_mask = torch.cat(
-            (
-                mask,
-                torch.zeros(
-                    (x.shape[0], indices.shape[1] - x.shape[1]),
-                    device=x.device,
-                    dtype=mask.dtype,
-                ),
-            ),
-            dim=-1,
-        )
-        # can't set value on leaf variable
-        out = masked_tokens.clone()
-        # put tokens in full masked tensor (at the first N positions in every row)
-        out[full_mask] = x[mask]
-        # then move them to their original positions
-        out = out.scatter(1, indices[:, :, None].expand_as(out), out)
-        full_mask = full_mask.scatter(1, indices.expand_as(full_mask), full_mask)
-        # Values that were masked out are not returned but the values that are still there are returned to the original positions
+        batch, num_kept, dim = x.shape
+        num_total = indices.shape[1]
+
+        # Zero out non-masked tokens, pad to full length, then scatter to original positions.
+        # This avoids boolean indexing (which triggers nonzero/GPU sync).
+        x_active = x * mask.unsqueeze(-1).to(x.dtype)
+        padded = x_active.new_zeros(batch, num_total, dim)
+        padded[:, :num_kept] = x_active
+
+        out = padded.new_zeros(batch, num_total, dim)
+        out.scatter_(1, indices[:, :, None].expand_as(padded), padded)
+
+        full_mask = mask.new_zeros(batch, num_total)
+        full_mask[:, :num_kept] = mask
+        full_mask = full_mask.scatter(1, indices, full_mask)
+
         return out, full_mask
 
     def create_exit_seqs(
