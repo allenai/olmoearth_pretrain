@@ -410,8 +410,8 @@ class ModalityPatchDiscriminationLossNew(Loss):
     ) -> Tensor | None:
         """Compute patch discrimination loss for a single modality in parallel.
 
-        Uses sort-based token reordering instead of boolean indexing to avoid
-        GPU→CPU sync points from nonzero() calls.
+        Uses sort-based token reordering and pure masking to avoid all
+        boolean indexing (nonzero) and GPU→CPU sync points.
 
         Args:
             all_preds: Predictions tensor of shape (batch, tokens, dim)
@@ -421,22 +421,12 @@ class ModalityPatchDiscriminationLossNew(Loss):
         Returns:
             The computed loss value for this modality, or None if no valid tokens.
         """
+        batch_size, num_tokens, dim = all_preds.shape
         decoder_mask = all_masks == MaskValue.DECODER.value
         count = decoder_mask.sum(dim=-1)  # (batch,)
-
-        # Filter to samples with decoder tokens (batch-dim indexing, cheap)
-        valid_samples = count > 0
-        if not valid_samples.any():
-            return None
-
-        count = count[valid_samples]
-        all_preds = all_preds[valid_samples]
-        all_targets = all_targets[valid_samples]
-        decoder_mask = decoder_mask[valid_samples]
-        batch_size, num_tokens, dim = all_preds.shape
+        num_valid = (count > 0).sum()  # stays as tensor, no sync
 
         # Sort tokens so decoder tokens come first, preserving relative order.
-        # This avoids boolean indexing (which triggers nonzero/GPU sync).
         _, sort_indices = decoder_mask.long().sort(dim=1, descending=True, stable=True)
         sort_expanded = sort_indices.unsqueeze(-1).expand(-1, -1, dim)
         sorted_preds = all_preds.gather(1, sort_expanded)
@@ -449,12 +439,12 @@ class ModalityPatchDiscriminationLossNew(Loss):
         if self.pred2unit:
             # Global mean/std across all decoder tokens (matches original flat behavior)
             mask_float = valid_mask.unsqueeze(-1).float()  # (batch, tokens, 1)
-            total_decoder = mask_float.sum()
+            total_decoder = mask_float.sum().clamp(min=1)
             pred_mu = (sorted_preds * mask_float).sum(dim=(0, 1), keepdim=True) / total_decoder
             centered = sorted_preds - pred_mu
             pred_var = (centered**2 * mask_float).sum(dim=(0, 1), keepdim=True) / (
                 total_decoder - 1
-            )
+            ).clamp(min=1)
             pred_std = pred_var.sqrt()
             sorted_preds = (sorted_preds - pred_mu) / (pred_std + 1e-4)
 
@@ -468,6 +458,10 @@ class ModalityPatchDiscriminationLossNew(Loss):
         col_mask = valid_mask.unsqueeze(1).expand_as(scores)
         scores = scores.masked_fill(~col_mask, -torch.finfo(scores.dtype).max)
 
+        # Also mask rows for zero-count samples to prevent NaN from all-inf softmax
+        row_mask = valid_mask.unsqueeze(2).expand_as(scores)
+        scores = scores.masked_fill(~row_mask, 0.0)
+
         # Labels: diagonal (decoder token i should match decoder token i)
         labels = range_tensor.unsqueeze(0).expand(batch_size, -1)
 
@@ -479,10 +473,10 @@ class ModalityPatchDiscriminationLossNew(Loss):
         ) * (self.tau * 2)
         loss_per_pos = loss_per_pos.reshape(batch_size, num_tokens)
 
-        # Average over valid positions per sample, then over samples
+        # Zero out invalid positions, average per sample, then over valid samples only
         valid_mask_float = valid_mask.float()
-        loss_per_sample = (loss_per_pos * valid_mask_float).sum(dim=1) / count.float()
-        loss = loss_per_sample.mean()
+        loss_per_sample = (loss_per_pos * valid_mask_float).sum(dim=1) / count.float().clamp(min=1)
+        loss = loss_per_sample.sum() / num_valid.float().clamp(min=1)
 
         return loss
 
