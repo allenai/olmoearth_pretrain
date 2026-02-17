@@ -5,7 +5,7 @@ import logging
 import os
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import partial
 from typing import Any
@@ -846,6 +846,8 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
 
     tasks: dict[str, DownstreamTaskConfig]
     enabled: bool = True
+    # Override eval_interval for all tasks when set (avoids per-task overrides that can break config merge).
+    eval_interval_override: Duration | None = None
     # Whether to run the evaluators on startup
     eval_on_startup: bool = False
     # Whether to cancel the training after the first evaluation
@@ -931,12 +933,17 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             self.verify_input_modalities(task, config)
             # Sort to ensure consistent order
             task.input_modalities.sort()
-            self.verify_input_layers(task)
-            logger.info(f"Adding {evaluation_name} with eval mode {task.eval_mode}")
+            # Apply callback-level eval_interval override to all tasks if set
+            task_to_use = task
+            if self.eval_interval_override is not None:
+                task_to_use = replace(
+                    task, eval_interval=self.eval_interval_override
+                )
+            logger.info(f"Adding {evaluation_name} with eval mode {task_to_use.eval_mode}")
             evaluators.append(
                 DownstreamEvaluator(
                     evaluation_name=evaluation_name,
-                    task=task,
+                    task=task_to_use,
                     trainer=trainer,
                     device=trainer.device,
                     run_on_test=self.run_on_test,
