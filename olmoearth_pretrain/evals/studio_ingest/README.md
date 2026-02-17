@@ -189,11 +189,35 @@ Tasks to add
     -- source `/weka/dfive-default/rslearn-eai/datasets/forest_loss_driver/dataset_v1/combined/`
     -- config `/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/forest_loss_driver`
     -- command `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name forest_loss_driver  --source /weka/dfive-default/rslearn-eai/datasets/forest_loss_driver/dataset_v1/combined/ --olmoearth-run-config-path /weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/forest_loss_driver --register  --overwrite > forest_driver_ingest.out 2>&1 &`
+
+### Quick launch template
+
+```bash
+NAME=my_task
+SOURCE=/weka/dfive-default/rslearn-eai/datasets/my_task/dataset
+CONFIG=/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/my_task
+
+OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest \
+    --name "$NAME" \
+    --source "$SOURCE" \
+    --olmoearth-run-config-path "$CONFIG" \
+    --register \
+    --overwrite \
+    > "${NAME}_ingest.out" 2>&1 &
+```
+
 - oil_spill_detection
     `python3 -m olmoearth_pretrain.evals.studio_ingest.cli  ingest --name oil_spill_detection --source  gs://oil_spill_detection/dataset.tar.gz  --olmoearth-run-config-path gs://oil_spill_detection --untar-source `
 -  settlement task
     -- command: `rm ni`
+
+In olmoearth projects I can find these configs
 - nandi
+    "NANDI_DIR": "/weka/dfive-default/rslearn-eai/datasets/crop/kenya_nandi/20250625", /weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/awf
+
+    bash
+`NAME=nandi_crop SOURCE=/weka/dfive-default/rslearn-eai/datasets/crop/kenya_nandi/20250625 CONFIG=/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/nandi && OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest --name "$NAME" --source "$SOURCE" --olmoearth-run-config-path "$CONFIG" --register --overwrite > "${NAME}_ingest.out" 2>&1 &`
+    "AWF_DIR": "/weka/dfive-default/rslearn-eai/datasets/crop/awf_2023", "/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/nandi"
 - awf
 
 Soon but needs more thoughts

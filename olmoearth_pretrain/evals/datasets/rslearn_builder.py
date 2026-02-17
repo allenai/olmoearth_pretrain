@@ -23,7 +23,7 @@ def _init_rslearn_jsonargparse() -> None:
     from rslearn.utils.jsonargparse import init_jsonargparse
     init_jsonargparse()
 
-
+# TODO: we should validate this in some way
 def parse_model_config(model_config_path: str) -> dict[str, Any]:
     """Load and parse model.yaml, substituting environment variables.
 
@@ -341,39 +341,18 @@ def load_runtime_config(
 
     Returns:
         RuntimeConfig with parsed model config.
+
+    Raises:
+        FileNotFoundError: If model.yaml does not exist.
+        Exception: If model.yaml cannot be parsed.
     """
-    try:
-        model_config = parse_model_config(model_config_path)
-    except FileNotFoundError:
-        logger.warning(f"model.yaml not found at {model_config_path}")
-        model_config = {}
-    except Exception as e:
-        logger.warning(f"Failed to parse model.yaml: {e}")
-        model_config = {}
+    model_config = parse_model_config(model_config_path)
 
     return RuntimeConfig(
         model_config=model_config,
         source_path=source_path,
     )
 
-
-def get_sizing_for_split(
-    runtime_config: RuntimeConfig,
-    split: str,
-) -> tuple[int | None, int | None]:
-    """Get crop and pad sizes for a given split.
-
-    Args:
-        runtime_config: RuntimeConfig with parsed model config.
-        split: Dataset split ("train", "val", "test").
-
-    Returns:
-        Tuple of (crop_size, pad_size) for the split.
-    """
-    crop_size = runtime_config.get_crop_size(split if split == "train" else "val")
-    # TODO: Extract pad_size similarly if needed
-    pad_size = None
-    return crop_size, pad_size
 
 
 def build_model_dataset_from_config(
@@ -451,7 +430,7 @@ def build_model_dataset_from_config(
 
 
 def build_dataset_from_registry_entry(
-    entry: Any,  # EvalDatasetEntry
+    entry: EvalDatasetEntry,
     split: str = "val",
     max_samples: int | None = None,
 ) -> Any:
@@ -469,19 +448,9 @@ def build_dataset_from_registry_entry(
     Returns:
         ModelDataset instance.
     """
-    if not entry.model_config_path:
-        raise ValueError(
-            f"Entry '{entry.name}' has no model_config_path. "
-            "Cannot use jsonargparse builder without model.yaml path."
-        )
 
-    # Use weka_path (copied dataset with split tags) if available, else source_path
-    dataset_path = entry.weka_path if entry.weka_path else entry.source_path
-    if not dataset_path:
-        raise ValueError(f"Entry '{entry.name}' has no weka_path or source_path.")
 
-    model_yaml_path = f"{entry.model_config_path}/model.yaml"
-    runtime_config = load_runtime_config(model_yaml_path, dataset_path)
+    runtime_config = load_runtime_config(entry.model_yaml_path, entry.weka_path)
 
     # Resolve splits based on split_type from ingestion.
     split_value_map = {
@@ -505,7 +474,7 @@ def build_dataset_from_registry_entry(
 
     return build_model_dataset_from_config(
         runtime_config=runtime_config,
-        source_path=dataset_path,
+        source_path=entry.weka_path,
         split=split,
         max_samples=max_samples,
         groups_override=groups_override,

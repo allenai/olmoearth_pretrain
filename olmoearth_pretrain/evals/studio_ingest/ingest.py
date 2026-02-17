@@ -179,24 +179,77 @@ def _check_weka_exists() -> bool:
 
 
 def _try_copy_config_json(source_path: str, dest_path: str) -> None:
-    """Try to copy config.json from source to destination.
-
-    config.json may not exist if the dataset config lives in dataset.json
-    alongside model.yaml instead. Logs a warning and continues if missing.
-    """
+    """Copy config.json from source to destination if it exists."""
     src = UPath(source_path) / "config.json"
+    if not src.exists():
+        logger.info("  config.json not found in source, skipping")
+        return
     dst = UPath(dest_path) / "config.json"
-    try:
-        if not src.exists():
-            logger.info("  config.json not found in source, skipping")
-            return
-        with src.open("rb") as f:
-            data = f.read()
-        with dst.open("wb") as f:
-            f.write(data)
-        logger.info("  Copied config.json")
-    except Exception:
-        logger.warning(f"  Failed to copy config.json from {source_path}, skipping")
+    with src.open("rb") as f:
+        data = f.read()
+    with dst.open("wb") as f:
+        f.write(data)
+    logger.info("  Copied config.json")
+
+
+def _ensure_config_json(dataset_path: str, model_config_dir: str) -> None:
+    """Ensure config.json exists in the dataset folder.
+
+    If config.json is missing or is a broken symlink, copy dataset.json from
+    the model config folder as config.json. dataset.json and config.json
+    contain the same rslearn dataset config.
+
+    This avoids needing to pass the config path around — rslearn and all
+    downstream eval code can just read config.json from the dataset folder.
+    """
+    config_json = Path(dataset_path) / "config.json"
+
+    # A broken symlink reports exists()=False but is_symlink()=True
+    if config_json.exists() and not config_json.is_symlink():
+        return
+
+    dataset_json = UPath(model_config_dir) / "dataset.json"
+    if not dataset_json.exists():
+        raise FileNotFoundError(
+            f"config.json missing from {dataset_path} and no dataset.json "
+            f"found in {model_config_dir}"
+        )
+
+    # Remove broken symlink if present
+    if config_json.is_symlink():
+        logger.info(f"  Removing broken config.json symlink in {dataset_path}")
+        config_json.unlink()
+
+    logger.info(f"  config.json missing, copying dataset.json from {model_config_dir}")
+    with dataset_json.open("rb") as f:
+        data = f.read()
+    with open(config_json, "wb") as f:
+        f.write(data)
+    logger.info("  Wrote config.json to dataset folder")
+
+
+def _copy_model_yaml(dataset_path: str, model_config_dir: str) -> None:
+    """Copy model.yaml into the dataset folder for canonical access at eval time.
+
+    Skips if model.yaml already exists in the dataset folder.
+    """
+    dest = Path(dataset_path) / "model.yaml"
+    if dest.exists():
+        logger.info("  model.yaml already exists in dataset folder, skipping copy")
+        return
+
+    src = UPath(model_config_dir) / "model.yaml"
+    if not src.exists():
+        raise FileNotFoundError(
+            f"model.yaml not found at {model_config_dir}"
+        )
+
+    logger.info(f"  Copying model.yaml from {model_config_dir} to dataset folder")
+    with src.open("rb") as f:
+        data = f.read()
+    with open(dest, "wb") as f:
+        f.write(data)
+    logger.info("  Wrote model.yaml to dataset folder")
 
 
 def _copy_from_gcs(
@@ -420,6 +473,25 @@ def _copy_directory_recursive(src: UPath, dst: UPath) -> None:
                 f.write(data)
 
 
+def _resolve_dataset_root(path: str) -> str:
+    """Find the actual rslearn dataset root within a directory.
+
+    If path itself contains a windows/ dir, return it. Otherwise check if
+    there's a single subdirectory that contains windows/ (happens when a tar
+    archive extracts with a top-level wrapper directory).
+    """
+    p = Path(path)
+    if (p / "windows").exists():
+        return path
+    # Check for a single nested directory containing windows/
+    subdirs = [d for d in p.iterdir() if d.is_dir() and d.name != ".rslearn_dataset_index"]
+    if len(subdirs) == 1 and (subdirs[0] / "windows").exists():
+        resolved = str(subdirs[0])
+        logger.info(f"  Resolved dataset root to nested directory: {resolved}")
+        return resolved
+    return path
+
+
 def copy_dataset(
     source_path: str,
     name: str,
@@ -458,20 +530,21 @@ def copy_dataset(
     # Check if destination already exists
     if Path(dest_path).exists():
         logger.warning(f"  Destination already exists, skipping copy...")
-        return dest_path
+        # For tar extracts, the actual dataset may be in a subdirectory
+        return _resolve_dataset_root(dest_path)
 
     # Dispatch to appropriate copy method based on source
     if untar_source and source_path.startswith("gs://"):
-        _copy_from_gcs_tar(source_path, dest_path)
+        actual_path = _copy_from_gcs_tar(source_path, dest_path)
     elif source_path.startswith("gs://"):
-        _copy_from_gcs(source_path, dest_path, source_groups)
+        actual_path = _copy_from_gcs(source_path, dest_path, source_groups)
     elif source_path.startswith("/weka") or source_path.startswith("/"):
-        _copy_local(source_path, dest_path, source_groups)
+        actual_path = _copy_local(source_path, dest_path, source_groups)
     else:
-        _copy_generic(source_path, dest_path, source_groups)
+        actual_path = _copy_generic(source_path, dest_path, source_groups)
 
-    logger.info(f"  Dataset copy complete: {dest_path}")
-    return dest_path
+    logger.info(f"  Dataset copy complete: {actual_path}")
+    return actual_path
 
 
 # =============================================================================
@@ -802,39 +875,39 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     logger.info(f"Source: {config.source_path}")
     logger.info(f"Model config: {config.olmoearth_run_config_path}")
 
-    # If source is a tar.gz archive, we must extract it before reading config
-    if config.untar_source:
-        logger.info(f"[Step 1/6] Extracting tar archive to Weka (before config load)...")
-        weka_path = copy_dataset(config.source_path, config.name, config.source_groups, config.untar_source)
-        logger.info(f"[Step 1/6] Extract complete")
-        dataset_folder = weka_path
-    else:
-        weka_path = None
-        dataset_folder = config.source_path
+    # Step 1: Copy dataset to Weka
+    logger.info(f"[Step 1/6] Copying dataset to Weka...")
+    weka_path = copy_dataset(
+        config.source_path, config.name, config.source_groups, config.untar_source,
+    )
+    logger.info(f"[Step 1/6] Copy complete: {weka_path}")
 
-    # Step 0a: Load dataset config (prefer dataset.json from model config
-    # folder, fall back to config.json from dataset folder)
+    # Ensure config.json exists in the dataset folder (copy dataset.json
+    # from model config dir if missing — they have the same content)
+    _ensure_config_json(weka_path, config.olmoearth_run_config_path)
+
+    # Copy model.yaml to the dataset folder so it's canonically accessible
+    # at eval time without depending on the original source location
+    _copy_model_yaml(weka_path, config.olmoearth_run_config_path)
+
+    # Step 0a: Load dataset config from the dataset folder
     logger.info(f"[Step 0a] Loading dataset config...")
-    dataset_json_path = UPath(config.olmoearth_run_config_path) / "dataset.json"
-    config_json_path = UPath(dataset_folder) / "config.json"
-    if dataset_json_path.exists():
-        logger.info(f"[Step 0a] Using dataset.json from {config.olmoearth_run_config_path}")
-        with dataset_json_path.open() as f:
-            dataset_dict = json.load(f)
-    else:
-        logger.info(f"[Step 0a] dataset.json not found, falling back to config.json")
-        with config_json_path.open() as f:
-            dataset_dict = json.load(f)
+    config_json_path = UPath(weka_path) / "config.json"
+    with config_json_path.open() as f:
+        dataset_dict = json.load(f)
     logger.info(f"[Step 0a] Parsing dataset config...")
     dataset_config = DatasetConfig.model_validate(dataset_dict)
     logger.info(f"[Step 0a] Dataset config loaded successfully")
 
-    # Step 0b: Load model config
-    logger.info(f"[Step 0b] Loading model.yaml...")
-    model_config_path = UPath(config.olmoearth_run_config_path) / "model.yaml"
-    with model_config_path.open() as f:
+    # Step 0b: Load and validate model config from the canonical weka location
+    logger.info(f"[Step 0b] Loading and validating model.yaml with rslearn...")
+    model_yaml_path = Path(weka_path) / "model.yaml"
+    with open(model_yaml_path) as f:
         model_config = yaml.safe_load(f)
-    logger.info(f"[Step 0b] Model config loaded successfully")
+    # Validate that rslearn can parse the model config (inputs, task, etc.)
+    from olmoearth_pretrain.evals.datasets.rslearn_builder import load_runtime_config
+    runtime_config = load_runtime_config(str(model_yaml_path), weka_path)
+    logger.info(f"[Step 0b] Model config loaded and validated successfully")
 
     # Step 0c: Extract modalities from dataset config
     logger.info(f"[Step 0c] Extracting modalities from dataset config...")
@@ -899,16 +972,6 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     label_values = [str(i) for i in range(num_classes)]
     logger.info(f"[Step 0d] Task: {task_name}, num_classes: {num_classes}")
 
-
-
-    # Step 1: Copy dataset to Weka (skip if already extracted via untar_source)
-    if weka_path is None:
-        logger.info(f"[Step 1/6] Copying dataset to Weka...")
-        weka_path = copy_dataset(config.source_path, config.name, config.source_groups)
-        logger.info(f"[Step 1/6] Copy complete")
-    else:
-        logger.info(f"[Step 1/6] Already extracted to {weka_path}, skipping copy")
-
     # Step 2: Scan windows and determine existing splits
     logger.info(f"[Step 2/6] Scanning windows and determining splits...")
     splits = scan_windows_and_splits(
@@ -943,7 +1006,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     # Step 6: Compute normalization stats (from copied dataset, use train for stats)
     logger.info(f"[Step 6/6] Computing normalization stats from train split...")
     norm_stats = compute_band_stats_from_model_config(
-        model_config_path=str(model_config_path),
+        model_config_path=str(model_yaml_path),
         source_path=weka_path,
         groups=config.source_groups,
         tags={EVAL_SPLIT_TAG_KEY: str(SplitName.TRAIN)},
@@ -963,7 +1026,6 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         name=config.name,
         source_path=config.source_path,
         weka_path=weka_path,
-        model_config_path=config.olmoearth_run_config_path,
         task_type=task_type,
         num_classes=num_classes,
         classes=label_values,

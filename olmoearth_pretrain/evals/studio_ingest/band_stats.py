@@ -187,6 +187,9 @@ def compute_band_stats(
                 else:
                     continue
 
+                # Ensure data is on CPU for stats computation
+                x = x.cpu()
+
                 # Convert Sentinel-1 to dB scale
                 if modality == DataModality.SENTINEL1.name:
                     x = convert_to_db(x)

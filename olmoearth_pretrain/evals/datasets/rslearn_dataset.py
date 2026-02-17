@@ -416,7 +416,7 @@ def from_registry_entry(
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
     Uses jsonargparse to build ModelDataset directly from model.yaml.
-    Requires entry.model_config_path to be set.
+    Requires model.yaml at entry.weka_path/model.yaml (set during ingestion).
 
     Uses the split tags written during ingestion to filter windows by default.
 
@@ -436,7 +436,7 @@ def from_registry_entry(
         Configured RslearnToOlmoEarthDataset instance.
 
     Raises:
-        ValueError: If entry.model_config_path is not set.
+        ValueError: If entry has no weka_path.
 
     Example:
         from olmoearth_pretrain.evals.studio_ingest import get_dataset_entry
@@ -447,17 +447,17 @@ def from_registry_entry(
     import logging
     log = logging.getLogger(__name__)
 
-    if not entry.model_config_path:
-        raise ValueError(
-            f"Registry entry '{entry.name}' has no model_config_path. "
-            "Cannot build dataset without model.yaml. "
-            "Re-ingest with olmoearth_run_config_path set."
-        )
-
-    # Use weka_path (copied dataset with split tags) if available, else source_path
     dataset_path = entry.weka_path if entry.weka_path else entry.source_path
     if not dataset_path:
         raise ValueError(f"Entry '{entry.name}' has no weka_path or source_path.")
+
+    if not entry.weka_path:
+        raise ValueError(
+            f"Registry entry '{entry.name}' has no weka_path. "
+            "model.yaml must be at weka_path/model.yaml. Run migrate_model_yaml or re-ingest."
+        )
+
+    model_yaml_path = f"{entry.weka_path}/model.yaml"
 
     # Use override if provided, otherwise use modalities from entry
     if input_modalities_override:
@@ -498,7 +498,6 @@ def from_registry_entry(
     # Load runtime config and build dataset
     from olmoearth_pretrain.evals.datasets.rslearn_builder import load_runtime_config
 
-    model_yaml_path = f"{entry.model_config_path}/model.yaml"
     log.info(f"Loading RuntimeConfig from {model_yaml_path}")
     runtime_config = load_runtime_config(model_yaml_path, dataset_path)
 

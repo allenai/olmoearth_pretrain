@@ -41,8 +41,6 @@ from olmoearth_pretrain.data.constants import ModalitySpec
 from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.evals.task_types import SplitName, SplitType, TaskType
 
-DEFAULT_TARGET_PROPERTY = "category"
-
 
 # =============================================================================
 # Config Instantiation
@@ -136,7 +134,6 @@ class EvalDatasetEntry:
 
         # === Paths (source of truth) ===
         source_path: Path to rslearn dataset (has config.json)
-        model_config_path: Path to model.yaml (rslearn training config)
 
         # === Task Configuration (needed for EvalDatasetConfig) ===
         task_type: One of "classification", "regression", "segmentation"
@@ -171,10 +168,14 @@ class EvalDatasetEntry:
     name: str
 
     # Paths (source of truth for runtime loading)
-    source_path: str = ""  # Original source path (e.g., GCS)
-    weka_path: str = ""  # Copied dataset path on Weka
-    model_config_path: str = ""  # Path to model.yaml
+    source_path: str  # Original source path (e.g., GCS)
+    weka_path: str  # Copied dataset path on Weka
 
+    # Task configuration (needed for EvalDatasetConfig)
+    task_type: str
+    num_classes: int | None = None
+    is_multilabel: bool = False
+    classes: list[str] | None = None  # Optional class names
     # Split configuration
     train_split: str = "train"
     val_split: str = "val"
@@ -183,18 +184,13 @@ class EvalDatasetEntry:
     split_tag_key: str = "eval_split"  # Tag key used for split filtering
     split_stats: dict[str, dict[str, Any]] = field(default_factory=dict)  # Per-split sample counts
 
-    # Task configuration (needed for EvalDatasetConfig)
-    task_type: str = "classification"  # "classification", "regression", "segmentation"
-    num_classes: int | None = None
-    is_multilabel: bool = False
-    classes: list[str] | None = None  # Optional class names
 
     # Modality configuration
     modalities: list[str] = field(default_factory=list)
     imputes: list[tuple[str, str]] = field(default_factory=list)
 
     # Sizing
-    window_size: int = 64
+    window_size: int = 64 # TOD: we should be reading this in
     timeseries: bool = False
 
     # Normalization
@@ -239,13 +235,17 @@ class EvalDatasetEntry:
         if self.classes is not None and self.num_classes is None:
             self.num_classes = len(self.classes)
 
+    @property
+    def model_yaml_path(self) -> str:
+        """Get the path to the model.yaml file."""
+        return f"{self.weka_path}/model.yaml"
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "name": self.name,
             "source_path": self.source_path,
             "weka_path": self.weka_path,
-            "model_config_path": self.model_config_path,
             "task_type": self.task_type,
             "num_classes": self.num_classes,
             "is_multilabel": self.is_multilabel,
@@ -278,7 +278,6 @@ class EvalDatasetEntry:
             name=data["name"],
             source_path=data.get("source_path", ""),
             weka_path=data.get("weka_path", ""),
-            model_config_path=data.get("model_config_path", ""),
             task_type=data.get("task_type", TaskType.CLASSIFICATION),
             num_classes=data.get("num_classes"),
             is_multilabel=is_multilabel,
