@@ -213,12 +213,12 @@ OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_inge
 
 In olmoearth projects I can find these configs
 - nandi
-    "NANDI_DIR": "/weka/dfive-default/rslearn-eai/datasets/crop/kenya_nandi/20250625", /weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/awf
 
     bash
-`NAME=nandi_crop SOURCE=/weka/dfive-default/rslearn-eai/datasets/crop/kenya_nandi/20250625 CONFIG=/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/nandi && OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest --name "$NAME" --source "$SOURCE" --olmoearth-run-config-path "$CONFIG" --register --overwrite > "${NAME}_ingest.out" 2>&1 &`
+`OLMOEARTH_INGEST_WORKERS=16 NAME=nandi_crop SOURCE=/weka/dfive-default/rslearn-eai/datasets/crop/kenya_nandi/20250625 CONFIG=/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/nandi && OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest --name "$NAME" --source "$SOURCE" --olmoearth-run-config-path "$CONFIG" --register --overwrite > "${NAME}_ingest.out" 2>&1 &`
     "AWF_DIR": "/weka/dfive-default/rslearn-eai/datasets/crop/awf_2023", "/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/nandi"
 - awf
+`OLMOEARTH_INGEST_WORKERS=16 NAME=awf_lulc SOURCE=/weka/dfive-default/rslearn-eai/datasets/crop/awf_2023 CONFIG=/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/awf && OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest --name "$NAME" --source "$SOURCE" --olmoearth-run-config-path "$CONFIG" --register --overwrite > "${NAME}_ingest.out" 2>&1 &`
 
 Soon but needs more thoughts
 - worldcover subsample?
