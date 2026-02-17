@@ -207,34 +207,54 @@ class OlmoEarthDataLoader(DataLoaderBase):
         indices = np.concatenate(indices_list)
         return indices
 
+    # Threshold below which we keep indices in memory to avoid file I/O and barrier sync.
+    _IN_MEMORY_INDICES_THRESHOLD = 50_000
+
     def build_and_save_global_indices(self, in_memory: bool = False) -> None:
         """Build and save global indices."""
-        if in_memory:
+        use_in_memory = in_memory or (
+            self.total_unique_size <= self._IN_MEMORY_INDICES_THRESHOLD
+        )
+        if use_in_memory:
+            # Build on every rank; no file, no barrier. Avoids empty-file and barrier deadlock.
             self._global_indices = self._build_global_indices()
+            if self.fs_local_rank == 0:
+                logger.info(
+                    f"Using in-memory global indices (size={self.total_unique_size})"
+                )
         else:
             self._global_indices = None
             if self.fs_local_rank == 0:
                 # Either load from file or build and save to file
-                if self._global_indices_file.is_file():
+                existing_file = self._global_indices_file.is_file()
+                existing_non_empty = (
+                    existing_file and self._global_indices_file.stat().st_size > 0
+                )
+                if existing_non_empty:
                     logger.info(
                         f"Using existing global indices file for seed {self.seed} and epoch {self.epoch}"  # type: ignore
                         f"at:\n'{self._global_indices_file}'"
                     )
                 else:
+                    if existing_file:
+                        logger.warning(
+                            "Global indices file exists but is empty or invalid, rebuilding..."
+                        )
+                        self._global_indices_file.unlink()
                     global_indices = self._build_global_indices()
                     assert (
-                        len(global_indices) < np.iinfo(np.int32).max
+                        len(global_indices) < np.iinfo(np.uint32).max
                     )  # Note: OLMo uses uint32
                     with memmap_to_write(
                         self._global_indices_file,
                         shape=global_indices.shape,
-                        dtype=np.int32,
+                        dtype=np.uint32,
                     ) as global_indices_mmap:
                         global_indices_mmap[:] = global_indices
                     logger.info(
                         f"Global data order indices saved to:\n'{self._global_indices_file}'"
                     )
-        barrier()
+            barrier()
 
     def reshuffle(self, epoch: int | None = None, in_memory: bool = False) -> None:
         """Reshuffle the data."""
@@ -254,6 +274,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
         if not self._global_indices_file.is_file():
             raise RuntimeError(
                 f"Missing global indices file {self._global_indices_file}, did you forget to call 'reshuffle()'?"
+            )
+        if self._global_indices_file.stat().st_size == 0:
+            raise RuntimeError(
+                f"Global indices file is empty: {self._global_indices_file}. "
+                "Delete it (or use a fresh work_dir) and run again so it can be rebuilt."
             )
         return np.memmap(self._global_indices_file, mode="r", dtype=np.uint32)
 
