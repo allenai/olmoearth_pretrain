@@ -66,6 +66,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        max_samples: int | None = None,
     ):
         """Initialize the dataset.
 
@@ -91,6 +92,8 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            max_samples: If set, cap the dataset to at most this many samples (applied after
+                dataset_percentage). Useful for quick debugging or memory-leak experiments.
 
         Returns:
             None
@@ -108,6 +111,7 @@ class OlmoEarthDataset(Dataset):
         self.normalize = normalize
         self.dataset_percentage = dataset_percentage
         self.seed = seed
+        self.max_samples = max_samples
         if self.normalize:
             self.normalizer_predefined = Normalizer(Strategy.PREDEFINED)
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
@@ -273,6 +277,14 @@ class OlmoEarthDataset(Dataset):
         self.sample_indices = np.arange(num_samples)
         self._filter_sample_indices_for_training()
         self._filter_sample_indices_by_dataset_percentage()
+        if self.max_samples is not None and len(self.sample_indices) > self.max_samples:
+            rng = get_rng(self.seed)
+            self.sample_indices = rng.choice(
+                self.sample_indices, size=self.max_samples, replace=False
+            )
+            logger.info(
+                f"Capped to max_samples={self.max_samples}; dataset has {len(self.sample_indices)} samples"
+            )
         self.latlon_distribution = self.latlon_distribution[self.sample_indices]
 
     def get_geographic_distribution(self) -> np.ndarray:
@@ -587,6 +599,7 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    max_samples: int | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

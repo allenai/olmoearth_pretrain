@@ -12,6 +12,11 @@ from typing import Any
 
 import numpy as np
 import torch
+
+try:
+    import psutil
+except ImportError:
+    psutil = None  # type: ignore[assignment]
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
@@ -44,6 +49,80 @@ from olmoearth_pretrain.nn.flexi_vit import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
 logger = logging.getLogger(__name__)
+
+
+def _log_resource_usage(
+    prefix: str,
+    eval_name: str | None = None,
+    eval_index: int | None = None,
+    step: int | None = None,
+    trainer: Trainer | None = None,
+) -> None:
+    """Log disk, process memory, and GPU memory for debugging leaks / No space left on device.
+
+    Call before and after each evaluation to see if usage grows across evals.
+    """
+    parts: list[str] = [prefix]
+    if eval_index is not None:
+        parts.append(f"eval_run#{eval_index}")
+    if step is not None:
+        parts.append(f"step={step}")
+    if eval_name:
+        parts.append(f"task={eval_name}")
+    label = " ".join(parts)
+
+    # Disk (errno 28 is often disk full)
+    try:
+        for path_name, path in [
+            ("cwd", os.getcwd()),
+            ("tmp", "/tmp"),
+            ("save_folder", getattr(trainer, "save_folder", None) or ""),
+        ]:
+            if path and os.path.exists(path):
+                try:
+                    du = os.statvfs(path) if not psutil else psutil.disk_usage(path)
+                    if psutil:
+                        free_gb = du.free / (1024**3)
+                        total_gb = du.total / (1024**3)
+                    else:
+                        free_gb = (du.f_bavail * du.f_frsize) / (1024**3)
+                        total_gb = (du.f_blocks * du.f_frsize) / (1024**3)
+                    logger.info(
+                        f"[resource] {label} disk {path_name}: "
+                        f"free={free_gb:.2f} GB, total={total_gb:.2f} GB"
+                    )
+                except OSError as e:
+                    logger.warning(f"[resource] {label} disk {path_name}: {e}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[resource] {label} disk: {e}")
+
+    # Process memory (RSS = resident set, VMS = virtual)
+    if psutil is not None:
+        try:
+            proc = psutil.Process()
+            mem = proc.memory_info()
+            rss_gb = mem.rss / (1024**3)
+            vms_gb = mem.vms / (1024**3)
+            logger.info(
+                f"[resource] {label} process: RSS={rss_gb:.2f} GB, VMS={vms_gb:.2f} GB"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[resource] {label} process: {e}")
+
+    # GPU memory
+    if torch.cuda.is_available():
+        try:
+            for i in range(torch.cuda.device_count()):
+                allocated = torch.cuda.memory_allocated(i) / (1024**3)
+                reserved = torch.cuda.memory_reserved(i) / (1024**3)
+                max_allocated = torch.cuda.max_memory_allocated(i) / (1024**3)
+                logger.info(
+                    f"[resource] {label} cuda:{i}: "
+                    f"allocated={allocated:.2f} GB, reserved={reserved:.2f} GB, "
+                    f"max_allocated={max_allocated:.2f} GB"
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[resource] {label} cuda: {e}")
 
 
 def _seed_worker(worker_id: int, base_seed: int) -> None:
@@ -514,6 +593,8 @@ class DownstreamEvaluatorCallback(Callback):
     run_on_test: bool = False
     n_bootstrap: int = 0
     bootstrap_seed: int = 42
+    # Incremented each _perform_eval for resource logging (memory/disk leak debugging)
+    _eval_run_count: int = field(default=0, repr=False)
 
     def _check_supported_modalities(self, evaluator: DownstreamEvaluator) -> bool:
         """Check if the evaluator is supported by the model."""
@@ -699,9 +780,24 @@ class DownstreamEvaluatorCallback(Callback):
 
     def _perform_eval(self, evaluator: DownstreamEvaluator) -> EvalTaskResult:
         """Run the evaluator."""
+        self._eval_run_count += 1
+        _log_resource_usage(
+            "BEFORE",
+            eval_name=evaluator.evaluation_name,
+            eval_index=self._eval_run_count,
+            step=getattr(self, "step", None),
+            trainer=self.trainer,
+        )
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
         start_time = time.monotonic()
         result = evaluator.val()
+        _log_resource_usage(
+            "AFTER",
+            eval_name=evaluator.evaluation_name,
+            eval_index=self._eval_run_count,
+            step=getattr(self, "step", None),
+            trainer=self.trainer,
+        )
         val_result = result.val_result
         test_result = result.test_result
         bootstrap_stats = result.bootstrap_stats
