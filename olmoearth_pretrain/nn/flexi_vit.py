@@ -252,7 +252,7 @@ class TokensAndMasks(NamedTuple):
             return x_for_pooling.max(dim=1).values
         elif pooling_type == PoolingType.MEAN:
             num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
-            logger.debug(f"num_encoded_tokens: {num_encoded_tokens}")
+            logger.debug("num_encoded_tokens: %s", num_encoded_tokens)
             if (num_encoded_tokens == 0).any():
                 raise ValueError(
                     f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
@@ -462,7 +462,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         patch_size: int,
     ) -> tuple[Tensor, Tensor]:
         """Apply embedding to a modality."""
-        logger.debug(f"applying embedding to modality:{modality}")
+        logger.debug("applying embedding to modality:%s", modality)
         masked_modality_name = input_data.get_masked_modality_name(modality)
         modality_mask = getattr(input_data, masked_modality_name)
         modality_data = getattr(input_data, modality)
@@ -722,7 +722,7 @@ class ReconstructorConfig(Config):
         kwargs["supported_modalities"] = self.supported_modalities
         kwargs.pop("decoder_config")
         kwargs["decoder"] = self.decoder_config.build()
-        logger.info(f"Predictor kwargs: {kwargs}")
+        logger.info("Predictor kwargs: %s", kwargs)
         return Reconstructor(**kwargs)
 
 
@@ -842,12 +842,14 @@ class CompositeEncodings(nn.Module):
             Tensor with encodings applied based on modality type
         """
         logger.debug(
-            f"use_modality_encodings: {use_modality_encodings}, use_temporal_encodings: {use_temporal_encodings}"
+            "use_modality_encodings: %s, use_temporal_encodings: %s",
+            use_modality_encodings,
+            use_temporal_encodings,
         )
         # TODO: Improve this implementation it is quite bad
 
         modality = Modality.get(modality_name)
-        logger.debug(f"Applying encodings to modality {modality}")
+        logger.debug("Applying encodings to modality %s", modality)
         if not use_modality_encodings and use_temporal_encodings:
             b, h, w, t, _ = modality_tokens.shape
             ein_string, ein_dict = (
@@ -994,7 +996,7 @@ class FlexiVitBase(nn.Module):
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [x.name for x in supported_modalities]
-        logger.info(f"modalities being used by model: {self.supported_modality_names}")
+        logger.info("modalities being used by model: %s", self.supported_modality_names)
 
         self.max_sequence_length = max_sequence_length
         self._base_tokenization_config = tokenization_config or TokenizationConfig()
@@ -2159,7 +2161,7 @@ class EncoderConfig(Config):
         # supported_modality_names is replaced by supported_modalities
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
-        logger.info(f"Encoder kwargs: {kwargs}")
+        logger.info("Encoder kwargs: %s", kwargs)
         return Encoder(**kwargs)
 
 
@@ -2205,5 +2207,5 @@ class PredictorConfig(Config):
         # supported_modality_names is replaced by supported_modalities
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
-        logger.info(f"Predictor kwargs: {kwargs}")
+        logger.info("Predictor kwargs: %s", kwargs)
         return Predictor(**kwargs)

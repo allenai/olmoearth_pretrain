@@ -596,7 +596,8 @@ class EncodeEarlyAttnPool(Encoder):
         token_norm_stats = None
         if self.has_register_tokens and register_tokens is not None:
             tokens, register_tokens = self.pop_register_tokens(tokens)
-            token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
+            if self.log_token_norm_stats:
+                token_norm_stats = self.get_token_norm_stats(tokens, register_tokens)
 
         if exit_ids_seq is not None:
             # this should only ever be called by the target encoder,

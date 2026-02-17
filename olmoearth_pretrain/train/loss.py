@@ -410,6 +410,9 @@ class ModalityPatchDiscriminationLossNew(Loss):
     ) -> Tensor | None:
         """Compute patch discrimination loss for a single modality in parallel.
 
+        Uses sort-based token reordering instead of boolean indexing to avoid
+        GPU→CPU sync points from nonzero() calls.
+
         Args:
             all_preds: Predictions tensor of shape (batch, tokens, dim)
             all_masks: Mask tensor of shape (batch, tokens)
@@ -418,102 +421,65 @@ class ModalityPatchDiscriminationLossNew(Loss):
         Returns:
             The computed loss value for this modality, or None if no valid tokens.
         """
-        # Get counts per sample
         decoder_mask = all_masks == MaskValue.DECODER.value
         count = decoder_mask.sum(dim=-1)  # (batch,)
 
-        # Filter out samples with no decoded values
+        # Filter to samples with decoder tokens (batch-dim indexing, cheap)
         valid_samples = count > 0
         if not valid_samples.any():
             return None
 
         count = count[valid_samples]
-        batch_size = count.shape[0]
-        max_count = count.max().item()
+        all_preds = all_preds[valid_samples]
+        all_targets = all_targets[valid_samples]
+        decoder_mask = decoder_mask[valid_samples]
+        batch_size, num_tokens, dim = all_preds.shape
 
-        if max_count == 0:
-            return None
+        # Sort tokens so decoder tokens come first, preserving relative order.
+        # This avoids boolean indexing (which triggers nonzero/GPU sync).
+        _, sort_indices = decoder_mask.long().sort(dim=1, descending=True, stable=True)
+        sort_expanded = sort_indices.unsqueeze(-1).expand(-1, -1, dim)
+        sorted_preds = all_preds.gather(1, sort_expanded)
+        sorted_targets = all_targets.gather(1, sort_expanded)
 
-        # Flatten masks for indexing
-        flat_masks = all_masks[valid_samples].flatten()
-        flat_preds = all_preds[valid_samples].reshape(-1, all_preds.shape[-1])
-        flat_targets = all_targets[valid_samples].reshape(-1, all_targets.shape[-1])
-
-        # Get only decoder tokens
-        decoder_indices = flat_masks == MaskValue.DECODER.value
-        pred_decoder = flat_preds[decoder_indices]  # (total_tokens, dim)
-        target_decoder = flat_targets[decoder_indices]  # (total_tokens, dim)
+        # Validity mask: first count[b] positions per sample are decoder tokens
+        range_tensor = torch.arange(num_tokens, device=count.device)
+        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(1)  # (batch, num_tokens)
 
         if self.pred2unit:
-            pred_mu = pred_decoder.mean(0, keepdims=True)
-            pred_std = pred_decoder.std(0, keepdims=True)
-            pred_decoder = (pred_decoder - pred_mu) / (pred_std + 1e-4)
+            # Global mean/std across all decoder tokens (matches original flat behavior)
+            mask_float = valid_mask.unsqueeze(-1).float()  # (batch, tokens, 1)
+            total_decoder = mask_float.sum()
+            pred_mu = (sorted_preds * mask_float).sum(dim=(0, 1), keepdim=True) / total_decoder
+            centered = sorted_preds - pred_mu
+            pred_var = (centered**2 * mask_float).sum(dim=(0, 1), keepdim=True) / (
+                total_decoder - 1
+            )
+            pred_std = pred_var.sqrt()
+            sorted_preds = (sorted_preds - pred_mu) / (pred_std + 1e-4)
 
-        pred_decoder = F.normalize(pred_decoder, p=2, dim=-1)
-        target_decoder = F.normalize(target_decoder, p=2, dim=-1)
+        sorted_preds = F.normalize(sorted_preds, p=2, dim=-1)
+        sorted_targets = F.normalize(sorted_targets, p=2, dim=-1)
 
-        # Pad to (batch, max_count, dim)
-        dim = pred_decoder.shape[-1]
-        pred_padded = torch.zeros(
-            batch_size,
-            max_count,
-            dim,
-            device=pred_decoder.device,
-            dtype=pred_decoder.dtype,
-        )
-        target_padded = torch.zeros(
-            batch_size,
-            max_count,
-            dim,
-            device=target_decoder.device,
-            dtype=target_decoder.dtype,
-        )
+        # Compute scores: (batch, num_tokens, num_tokens)
+        scores = torch.bmm(sorted_preds, sorted_targets.transpose(1, 2)) / self.tau
 
-        # Create indices for scattering
-        # batch_indices: which batch each token belongs to
-        batch_indices = torch.repeat_interleave(
-            torch.arange(batch_size, device=count.device), count
-        )
-        # position_indices: position within each batch
-        position_indices = torch.cat(
-            [torch.arange(c, device=count.device) for c in count]
-        )
-
-        pred_padded[batch_indices, position_indices] = pred_decoder
-        target_padded[batch_indices, position_indices] = target_decoder
-
-        # Compute scores: (batch, max_count, max_count)
-        scores = torch.bmm(pred_padded, target_padded.transpose(1, 2)) / self.tau
-
-        # Create validity mask for rows and columns
-        # valid_mask[b, i] = True if position i is valid for batch b
-        range_tensor = torch.arange(max_count, device=count.device)
-        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(
-            1
-        )  # (batch, max_count)
-
-        # Mask out invalid positions in scores (set to large negative)
-        # For rows that are invalid, we'll skip them in loss
-        # For columns that are invalid, set to -inf so they don't contribute to softmax
-        col_mask = valid_mask.unsqueeze(1).expand(
-            -1, max_count, -1
-        )  # (batch, max_count, max_count)
+        # Mask out non-decoder columns with -inf so they don't affect softmax
+        col_mask = valid_mask.unsqueeze(1).expand_as(scores)
         scores = scores.masked_fill(~col_mask, -torch.finfo(scores.dtype).max)
 
-        # Labels are diagonal: each position i should match position i
-        labels = range_tensor.unsqueeze(0).expand(batch_size, -1)  # (batch, max_count)
+        # Labels: diagonal (decoder token i should match decoder token i)
+        labels = range_tensor.unsqueeze(0).expand(batch_size, -1)
 
-        # Compute cross entropy per position
-        # scores: (batch, max_count, max_count), labels: (batch, max_count)
+        # Cross entropy per position
         loss_per_pos = F.cross_entropy(
-            scores.reshape(-1, max_count),
+            scores.reshape(-1, num_tokens),
             labels.reshape(-1),
             reduction="none",
-        ) * (self.tau * 2)  # (batch * max_count,)
-        loss_per_pos = loss_per_pos.reshape(batch_size, max_count)
+        ) * (self.tau * 2)
+        loss_per_pos = loss_per_pos.reshape(batch_size, num_tokens)
 
-        # Only average over valid positions per sample, then average over samples
-        # Sum losses for valid positions, divide by count
+        # Average over valid positions per sample, then over samples
         valid_mask_float = valid_mask.float()
         loss_per_sample = (loss_per_pos * valid_mask_float).sum(dim=1) / count.float()
         loss = loss_per_sample.mean()
