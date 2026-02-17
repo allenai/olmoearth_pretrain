@@ -64,6 +64,7 @@ def build_train_module_config(common: CommonComponents):
     # Remove FSDP, use autocast instead
     config.dp_config = None
     config.autocast_precision = DType.bfloat16
+    config.compile_model = True
     # Smaller microbatch for single GPU
     config.rank_microbatch_size = 128
     return config
