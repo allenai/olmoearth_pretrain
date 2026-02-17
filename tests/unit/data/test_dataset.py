@@ -308,6 +308,119 @@ class TestOlmoEarthDataset:
         assert not np.array_equal(dataset1.sample_indices, dataset2.sample_indices)
 
 
+class TestComputeNDVI:
+    """Test NDVI computation in OlmoEarthDataset."""
+
+    @pytest.fixture
+    def tmp_h5py_dir(self, tmp_path: Path) -> UPath:
+        """Create a temporary h5py directory."""
+        h5py_dir = tmp_path / "h5py_data"
+        h5py_dir.mkdir()
+        return UPath(h5py_dir)
+
+    @pytest.fixture
+    def dataset(self, tmp_h5py_dir: UPath) -> OlmoEarthDataset:
+        """Create a dataset instance for testing."""
+        return OlmoEarthDataset(
+            h5py_dir=tmp_h5py_dir,
+            training_modalities=["sentinel2_l2a", "ndvi"],
+            dtype=np.float32,
+            normalize=False,
+        )
+
+    def test_compute_ndvi_basic(self, dataset: OlmoEarthDataset) -> None:
+        """Test NDVI computation with normal reflectance values."""
+        h, w, t = 4, 4, 3
+        num_s2_bands = Modality.SENTINEL2_L2A.num_bands  # 12
+        s2_data = np.random.uniform(0.01, 1.0, (h, w, t, num_s2_bands)).astype(
+            np.float32
+        )
+        # B04 (Red) at index 2, B08 (NIR) at index 3
+        red = s2_data[..., 2]
+        nir = s2_data[..., 3]
+        expected_ndvi = (nir - red) / (nir + red)
+
+        ndvi, missing_modalities = dataset._compute_ndvi(s2_data, ["ndvi"])
+        assert ndvi.shape == (h, w, t, 1)
+        np.testing.assert_allclose(ndvi[..., 0], expected_ndvi, atol=1e-6)
+        assert "ndvi" not in missing_modalities
+
+    def test_compute_ndvi_missing_red(self, dataset: OlmoEarthDataset) -> None:
+        """Test that NDVI is MISSING_VALUE when B04 (Red) is missing."""
+        h, w, t = 4, 4, 2
+        num_s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_data = np.random.uniform(0.01, 1.0, (h, w, t, num_s2_bands)).astype(
+            np.float32
+        )
+        # Set B04 to MISSING_VALUE for the first timestep
+        s2_data[:, :, 0, 2] = MISSING_VALUE
+
+        ndvi, _ = dataset._compute_ndvi(s2_data, [])
+        # First timestep should be all MISSING_VALUE
+        assert np.all(ndvi[:, :, 0, 0] == MISSING_VALUE)
+        # Second timestep should be computed normally
+        assert np.all(ndvi[:, :, 1, 0] != MISSING_VALUE)
+
+    def test_compute_ndvi_missing_nir(self, dataset: OlmoEarthDataset) -> None:
+        """Test that NDVI is MISSING_VALUE when B08 (NIR) is missing."""
+        h, w, t = 4, 4, 2
+        num_s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_data = np.random.uniform(0.01, 1.0, (h, w, t, num_s2_bands)).astype(
+            np.float32
+        )
+        # Set B08 to MISSING_VALUE for all timesteps at a specific pixel
+        s2_data[1, 2, :, 3] = MISSING_VALUE
+
+        ndvi, _ = dataset._compute_ndvi(s2_data, [])
+        # That pixel should be MISSING_VALUE for all timesteps
+        assert np.all(ndvi[1, 2, :, 0] == MISSING_VALUE)
+        # Other pixels should be computed normally
+        assert ndvi[0, 0, 0, 0] != MISSING_VALUE
+
+    def test_compute_ndvi_both_bands_missing(self, dataset: OlmoEarthDataset) -> None:
+        """Test that NDVI is MISSING_VALUE when both B04 and B08 are missing."""
+        h, w, t = 2, 2, 1
+        num_s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_data = np.full((h, w, t, num_s2_bands), MISSING_VALUE, dtype=np.float32)
+
+        ndvi, _ = dataset._compute_ndvi(s2_data, [])
+        assert np.all(ndvi == MISSING_VALUE)
+
+    def test_compute_ndvi_zero_denominator(self, dataset: OlmoEarthDataset) -> None:
+        """Test NDVI is 0 when NIR + Red = 0 (both bands are zero)."""
+        h, w, t = 2, 2, 1
+        num_s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_data = np.zeros((h, w, t, num_s2_bands), dtype=np.float32)
+
+        ndvi, _ = dataset._compute_ndvi(s2_data, [])
+        assert np.all(ndvi == 0.0)
+
+    def test_compute_ndvi_removes_from_missing_modalities(
+        self, dataset: OlmoEarthDataset
+    ) -> None:
+        """Test that _compute_ndvi removes 'ndvi' from missing_modalities."""
+        h, w, t = 2, 2, 1
+        num_s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_data = np.random.uniform(0.01, 1.0, (h, w, t, num_s2_bands)).astype(
+            np.float32
+        )
+        _, updated_missing = dataset._compute_ndvi(s2_data, ["ndvi", "sentinel1"])
+        assert "ndvi" not in updated_missing
+        assert "sentinel1" in updated_missing
+
+    def test_compute_ndvi_values_bounded(self, dataset: OlmoEarthDataset) -> None:
+        """Test that computed NDVI values are in [-1, 1] for non-missing pixels."""
+        h, w, t = 8, 8, 4
+        num_s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_data = np.random.uniform(0.01, 1.0, (h, w, t, num_s2_bands)).astype(
+            np.float32
+        )
+
+        ndvi, _ = dataset._compute_ndvi(s2_data, [])
+        assert np.all(ndvi >= -1.0)
+        assert np.all(ndvi <= 1.0)
+
+
 def test_helios_dataset_config_deprecation_warning(tmp_path: Path) -> None:
     """Ensure the legacy HeliosDatasetConfig emits a deprecation warning."""
     module = importlib.import_module("helios.data.dataset")
