@@ -239,8 +239,10 @@ def compute_supervision_loss(
         total_loss: Weighted sum of per-modality losses.
         per_modality_losses: Dict of unweighted per-modality loss values (detached).
     """
-    device = next(iter(predictions.values())).device
-    total_loss = torch.zeros([], device=device)
+    first_pred = next(iter(predictions.values()))
+    device = first_pred.device
+    dtype = first_pred.dtype
+    total_loss = torch.zeros([], device=device, dtype=dtype)
     per_modality_losses: dict[str, Tensor] = {}
 
     for name, pred in predictions.items():
@@ -297,7 +299,7 @@ def _classification_loss(
 
     pred_flat = pred[valid_mask]  # [N, num_classes]
     target_flat = target_indices[valid_mask]  # [N]
-    return F.cross_entropy(pred_flat, target_flat)
+    return F.cross_entropy(pred_flat.float(), target_flat).to(pred.dtype)
 
 
 def _binary_classification_loss(
@@ -309,7 +311,9 @@ def _binary_classification_loss(
     valid_expanded = valid_mask.unsqueeze(-1).expand_as(pred)
     pred_flat = pred[valid_expanded]
     target_flat = raw_target[valid_expanded]
-    return F.binary_cross_entropy_with_logits(pred_flat, target_flat.float())
+    return F.binary_cross_entropy_with_logits(
+        pred_flat.float(), target_flat.float()
+    ).to(pred.dtype)
 
 
 def _regression_loss(
@@ -321,4 +325,4 @@ def _regression_loss(
     valid_expanded = valid_mask.unsqueeze(-1).expand_as(pred)
     pred_flat = pred[valid_expanded]
     target_flat = raw_target[valid_expanded]
-    return F.mse_loss(pred_flat, target_flat.float())
+    return F.mse_loss(pred_flat.float(), target_flat.float()).to(pred.dtype)
