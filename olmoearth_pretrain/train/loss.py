@@ -391,9 +391,6 @@ class ModalityPatchDiscriminationLossVec(Loss):
         Args:
             tau: the softmax temperature
             pred2unit: whether to standardize the predictions using batch statistics
-            mask_other_samples: whether to apply the contrastive loss drawing samples
-                from within a sample (True) or using all other instances in a batch (False).
-                If this is False, then this is the AllDisc loss from the Galileo paper
             weight: the weight to apply to this loss
             modality_weights: the weights to apply to each modality
         """
@@ -407,7 +404,7 @@ class ModalityPatchDiscriminationLossVec(Loss):
         all_preds: Tensor,
         all_masks: Tensor,
         all_targets: Tensor,
-    ) -> Tensor | None:
+    ) -> Tensor:
         """Compute patch discrimination loss for a single modality in parallel.
 
         Uses sort-based token reordering and pure masking to avoid all
@@ -419,7 +416,7 @@ class ModalityPatchDiscriminationLossVec(Loss):
             all_targets: Targets tensor of shape (batch, tokens, dim)
 
         Returns:
-            The computed loss value for this modality, or None if no valid tokens.
+            The computed loss value for this modality. Zero if no decoder tokens are present.
         """
         batch_size, num_tokens, dim = all_preds.shape
         decoder_mask = all_masks == MaskValue.DECODER.value
@@ -432,11 +429,9 @@ class ModalityPatchDiscriminationLossVec(Loss):
         sorted_preds = all_preds.gather(1, sort_expanded)
         sorted_targets = all_targets.gather(1, sort_expanded)
 
-        # Validity mask: first count[b] positions per sample are decoder tokens
+        # Validity mask: first count[b] positions per sample are decoder tokens.
         range_tensor = torch.arange(num_tokens, device=count.device)
-        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(
-            1
-        )  # (batch, num_tokens)
+        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(1)  # (batch, num_tokens)
 
         if self.pred2unit:
             # Global mean/std across all decoder tokens (matches original flat behavior)

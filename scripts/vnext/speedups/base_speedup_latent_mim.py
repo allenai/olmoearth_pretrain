@@ -19,8 +19,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "official"))
 
-# Reuse the model config (flash attn + linear patch embed) from the contrastive script
-from base_speedup import build_model_config  # noqa: E402
 from olmo_core.config import DType  # noqa: E402
 from olmo_core.distributed.parallel.data_parallel import (  # noqa: E402
     DataParallelConfig,
@@ -38,6 +36,9 @@ from script import (  # noqa: E402
 
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig  # noqa: E402
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402
+from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS  # noqa: E402
+from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig  # noqa: E402
+from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
 from olmoearth_pretrain.train.loss import LossConfig  # noqa: E402
 from olmoearth_pretrain.train.train_module.latent_mim import (  # noqa: E402
     LatentMIMTrainModuleConfig,
@@ -47,6 +48,35 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
+
+
+def build_model_config(common: CommonComponents) -> LatentMIMConfig:
+    """Base model config with speed optimizations: flash attention + linear patch embed."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        use_flash_attn=True,
+        use_linear_patch_embed=True,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        use_flash_attn=True,
+    )
+    return LatentMIMConfig(encoder_config=encoder_config, decoder_config=decoder_config)
 
 
 def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleConfig:

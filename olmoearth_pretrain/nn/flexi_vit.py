@@ -253,6 +253,8 @@ class TokensAndMasks(NamedTuple):
         elif pooling_type == PoolingType.MEAN:
             num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
             logger.debug("num_encoded_tokens: %s", num_encoded_tokens)
+            # No zero-count guard here — the previous `any()` check triggered a GPU→CPU
+            # sync on every step. Callers are expected to ensure at least one encoded token.
             return x_for_pooling.sum(dim=1) / num_encoded_tokens
         else:
             raise ValueError(f"Invalid pooling type: {pooling_type}")
@@ -843,8 +845,6 @@ class CompositeEncodings(nn.Module):
             use_modality_encodings,
             use_temporal_encodings,
         )
-        # TODO: Improve this implementation it is quite bad
-
         modality = Modality.get(modality_name)
         logger.debug("Applying encodings to modality %s", modality)
         if not use_modality_encodings and use_temporal_encodings:

@@ -119,3 +119,37 @@ Example: henryh/per-modality-output-projection
 ## Domain Context
 - This is a geospatial foundation model project (PyTorch)
 - Expert-level Python, PyTorch, and geospatial ML expected
+
+## Configuration & Experiment Architecture
+
+### Config Pattern
+All configurable components follow a `Config → build()` pattern:
+- Configs are `@dataclass` subclasses of `Config` (from `olmoearth_pretrain/config.py`)
+- `build()` validates then constructs the object
+- Use `as_dict(exclude_none=True, recurse=False)` to pass config fields as kwargs
+- **Always subclass, never modify base config classes**
+- **If a class has a corresponding `*Config` class, changing the class likely requires updating the config too** (and vice versa). They're tightly coupled — always check both.
+
+### Experiment Scripts
+Scripts live in `scripts/official/`. Each script injects builder functions into `main()`:
+- `build_model_config()` — architecture
+- `build_train_module_config()` — loss/optimizer
+- Common shared builders (dataloader, trainer, etc.) live in `scripts/official/script.py`
+- `scripts/official/base.py` is the canonical template to copy from
+
+### Launch vs Train
+Running a script with `launch` submits a Beaker job; Beaker then re-runs the same script with `train`. The entrypoint handling this is `olmoearth_pretrain/internal/experiment.py`.
+
+```bash
+# Always dry-run first to validate config
+python3 scripts/official/your_script.py dry_run run_name local
+
+# Launch to Beaker
+python3 scripts/official/your_script.py launch run_name ai2/jupiter \
+  --launch.num_gpus=8 \
+  --trainer.callbacks.wandb.project=YYYY_MM_DD_experiment_name
+```
+
+CLI overrides use dotlist notation: `--model.encoder_config.depth=24`
+
+**⚠️ Always commit and push before launching — Beaker pulls from the repo, so local changes won't be included.**

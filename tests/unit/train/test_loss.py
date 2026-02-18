@@ -12,7 +12,7 @@ from olmoearth_pretrain.train.loss import (
     InfoNCELoss,
     L1Loss,
     L2Loss,
-    ModalityPatchDiscriminationLossNew,
+    ModalityPatchDiscriminationLossVec,
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
 )
@@ -262,8 +262,11 @@ def _modality_patch_disc_reference(
         target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
 
         if pred2unit:
+            n = pred.shape[1]
             pred_mu = pred.mean(1, keepdims=True)
-            pred_std = pred.std(1, keepdims=True)
+            # clamp denominator to match the Vec impl (avoids NaN when n=1)
+            pred_var = ((pred - pred_mu) ** 2).sum(1, keepdim=True) / max(n - 1, 1)
+            pred_std = pred_var.sqrt()
             pred = (pred - pred_mu) / (pred_std + 1e-4)
 
         pred = F.normalize(pred, p=2, dim=-1)
@@ -316,7 +319,7 @@ def test_modality_patch_disc_parallelized_matches_sequential() -> None:
         latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
     )
 
-    loss_parallel = ModalityPatchDiscriminationLossNew()
+    loss_parallel = ModalityPatchDiscriminationLossVec()
     parallel_loss = loss_parallel.compute(preds, targets)
     reference_loss = _modality_patch_disc_reference(preds, targets)
 
@@ -346,7 +349,7 @@ def test_modality_patch_disc_parallelized_uneven_tokens() -> None:
         latlon_mask=latlon_mask,
     )
 
-    loss_parallel = ModalityPatchDiscriminationLossNew()
+    loss_parallel = ModalityPatchDiscriminationLossVec()
     parallel_loss = loss_parallel.compute(preds, targets)
     reference_loss = _modality_patch_disc_reference(preds, targets)
 
@@ -377,7 +380,7 @@ def test_modality_patch_disc_parallelized_with_missing_samples() -> None:
         latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
     )
 
-    loss_parallel = ModalityPatchDiscriminationLossNew()
+    loss_parallel = ModalityPatchDiscriminationLossVec()
     parallel_loss = loss_parallel.compute(preds, targets)
     reference_loss = _modality_patch_disc_reference(preds, targets)
 
@@ -386,7 +389,11 @@ def test_modality_patch_disc_parallelized_with_missing_samples() -> None:
 
 
 def test_modality_patch_disc_parallelized_pred2unit() -> None:
-    """Test parallelized loss with pred2unit=True."""
+    """Test parallelized loss with pred2unit=True and uniform masks.
+
+    All tokens are decoder tokens so there is no masking to exercise, but this
+    validates that the global-stats normalisation path runs correctly.
+    """
     b, t_h, t_w, t, d = 5, 4, 4, 2, 8
 
     torch.manual_seed(789)
@@ -403,7 +410,45 @@ def test_modality_patch_disc_parallelized_pred2unit() -> None:
         latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
     )
 
-    loss_parallel = ModalityPatchDiscriminationLossNew(pred2unit=True)
+    loss_parallel = ModalityPatchDiscriminationLossVec(pred2unit=True)
+    parallel_loss = loss_parallel.compute(preds, targets)
+    reference_loss = _modality_patch_disc_reference(preds, targets, pred2unit=True)
+
+    logger.info(f"parallel_loss: {parallel_loss}, reference_loss: {reference_loss}")
+    assert torch.isclose(parallel_loss, reference_loss, rtol=1e-4, atol=1e-6)
+
+
+def test_modality_patch_disc_parallelized_pred2unit_uneven_tokens() -> None:
+    """Test pred2unit=True combined with uneven decoder token counts.
+
+    This exercises the masked-mean/variance path in the Vec implementation:
+    the global statistics must be computed only over valid (decoder) tokens
+    across the padded batch tensor, not over all positions.  Without masking,
+    the padding values would corrupt the normalisation stats and the result
+    would diverge from the sequential reference.
+    """
+    b, t_h, t_w, t, d = 5, 4, 4, 2, 8
+
+    torch.manual_seed(101)
+    s2_mask = torch.randint(0, 3, (b, t_h, t_w, t))
+    # Force first sample to have no s2 decoder tokens so the zero-count branch is hit.
+    s2_mask[0] = MaskValue.ONLINE_ENCODER.value
+    latlon_mask = torch.randint(0, 3, (b, 1))
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=latlon_mask,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=s2_mask,
+        latlon=torch.randn((b, 1, d)),
+        latlon_mask=latlon_mask,
+    )
+
+    loss_parallel = ModalityPatchDiscriminationLossVec(pred2unit=True)
     parallel_loss = loss_parallel.compute(preds, targets)
     reference_loss = _modality_patch_disc_reference(preds, targets, pred2unit=True)
 

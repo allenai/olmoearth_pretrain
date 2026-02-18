@@ -26,6 +26,7 @@ The weights are converted to pth file from distributed checkpoint like this:
     torch.save(model.state_dict(), "OlmoEarth-v1-Nano.pth")
 """
 
+import copy
 import json
 from enum import StrEnum
 from os import PathLike
@@ -117,8 +118,6 @@ def patch_legacy_encoder_config(config_dict: dict) -> dict:
     """
     enc = config_dict.get("model", {}).get("encoder_config", {})
     if isinstance(enc, dict) and "use_linear_patch_embed" not in enc:
-        import copy
-
         config_dict = copy.deepcopy(config_dict)
         config_dict["model"]["encoder_config"]["use_linear_patch_embed"] = False
     return config_dict

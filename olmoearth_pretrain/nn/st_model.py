@@ -1518,6 +1518,7 @@ class STEncoderConfig(Config):
     layer_attention_modes: list[str] | None = None
     fuse_using_cross_attn: bool = True
     tokenization_config: TokenizationConfig | None = None
+    use_linear_patch_embed: bool = True
 
     def validate(self) -> None:
         """Validate the configuration."""
