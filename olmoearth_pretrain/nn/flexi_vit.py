@@ -502,10 +502,6 @@ class MultiModalPatchEmbeddings(nn.Module):
         """Check if any data is seen by the encoder."""
         return (MaskValue.ONLINE_ENCODER.value == modality_mask).any()
 
-    def apply_compile(self) -> None:
-        """Apply torch.compile to the model."""
-        self.compile(dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
-
     def forward(
         self,
         input_data: MaskedOlmoEarthSample,
@@ -1704,13 +1700,9 @@ class Encoder(FlexiVitBase):
 
     def apply_compile(self) -> None:
         """Apply torch.compile to the model."""
-        # self.compile(mode="max-autotune", dynamic=False, fullgraph=True)
         logger.info("Compiling blocks")
-        # torch.compile(self.blocks, dynamic=False, mode="max-autotune", fullgraph=True)
-        # individual block compile is still a lot slower
         for block in self.blocks:
             block.apply_compile()
-        # torch.compile(self.patch_embeddings, dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
 
 
 class PredictorBase(FlexiVitBase):
