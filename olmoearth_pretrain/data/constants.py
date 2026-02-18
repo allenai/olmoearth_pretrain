@@ -485,6 +485,14 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    NDVI = ModalitySpec(
+        name="ndvi",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["ndvi"], 16)],
+        is_multitemporal=True,
+        ignore_when_parsing=True,  # computed from S2 L2A, not loaded from file
+    )
+
     @classmethod
     def get(self, name: str) -> ModalitySpec:
         """Get the ModalitySpec with the specified name."""
