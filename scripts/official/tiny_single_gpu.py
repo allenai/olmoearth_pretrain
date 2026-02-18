@@ -66,14 +66,13 @@ def build_train_module_config(common: CommonComponents):
     config.autocast_precision = DType.bfloat16
     config.compile_model = True
     # Smaller microbatch for single GPU
-    config.rank_microbatch_size = 128
+    config.rank_microbatch_size = 256
     return config
 
 
 def build_dataloader_config(common: CommonComponents):
     """Build dataloader config with smaller batch size for single GPU."""
     config = build_dataloader_config_base(common)
-    config.global_batch_size = 128
     return config
 
 

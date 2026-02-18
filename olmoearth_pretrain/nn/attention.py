@@ -17,7 +17,6 @@ except ImportError:
 
 logger = getLogger(__name__)
 
-
 @torch._dynamo.disable()
 def dispatch_flash_attn(
     q: torch.Tensor,
