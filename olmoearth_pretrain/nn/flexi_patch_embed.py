@@ -32,6 +32,7 @@ class FlexiPatchEmbed(nn.Module):
         bias: bool = True,
         interpolation: str = "bicubic",
         antialias: bool = True,
+        use_linear_patch_embed: bool = True,
     ) -> None:
         """2D image to patch embedding w/ flexible patch sizes.
 
@@ -46,127 +47,134 @@ class FlexiPatchEmbed(nn.Module):
             norm_layer: Optional normalization layer
             bias: Whether to use bias in convolution
             interpolation: Resize interpolation type
-            antialias: Whether to apply antialiasing resizing (TODO: Add a link or more info)
+            antialias: Whether to apply antialiasing resizing
+            use_linear_patch_embed: If True, use nn.Linear (reshape + matmul via cuBLAS GEMM).
+                If False, use nn.Conv2d (required to load checkpoints trained before this flag existed).
         """
         super().__init__()
 
         self.embedding_size = embedding_size
+        self.use_linear_patch_embed = use_linear_patch_embed
 
         self.modality_spec = modality_spec
         self.patch_size = self.to_2tuple(
             patch_size_at_16 * modality_spec.image_tile_size_factor
         )
 
-        # Use Linear instead of Conv2d — kernel_size == stride means the conv is just
-        # a reshape + matmul. Linear hits cuBLAS GEMM (always fast on TensorCores)
-        # whereas Conv2d with small in_chans and large kernels hits slow cuDNN paths.
-        self.proj = nn.Linear(
-            in_chans * self.patch_size[0] * self.patch_size[1],
-            embedding_size,
-            bias=bias,
-        )
+        p_h, p_w = self.patch_size
+        if use_linear_patch_embed:
+            # Reshape patches to (p1 p2 c) then project — hits cuBLAS GEMM (always fast
+            # on TensorCores) vs Conv2d which hits slow cuDNN paths for small in_chans.
+            self.proj = nn.Linear(in_chans * p_h * p_w, embedding_size, bias=bias)
+        else:
+            self.proj = nn.Conv2d(
+                in_chans, embedding_size, kernel_size=self.patch_size, stride=self.patch_size, bias=bias
+            )
         self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
-
-        # Flexi specific attributes
         self.interpolation = interpolation
         self.antialias = antialias
 
     @staticmethod
     def to_2tuple(x: Any) -> Any:
-        """Convert a value to a 2-tuple by either converting an iterable or repeating a scalar.
-
-        This is used to handle patch sizes that can be specified either as:
-        - A single integer (e.g. 16) which gets converted to (16, 16) for square patches
-        - A tuple/list of 2 integers (e.g. (16, 32)) for rectangular patches
-
-        Args:
-            x: Value to convert to a 2-tuple. Can be an iterable (list/tuple) of 2 elements,
-               or a single value to repeat twice.
-
-        Returns:
-            A 2-tuple containing either the original iterable values or the input repeated twice.
-        """
+        """Convert a scalar or 2-element iterable to a (h, w) tuple."""
         if isinstance(x, Iterable) and not isinstance(x, str):
             assert len(list(x)) == 2, "x must be a 2-tuple"
             return tuple(x)
         return (x, x)
 
+    def _resolve_patch_size(
+        self, patch_size: int | tuple[int, int] | None
+    ) -> tuple[int, int]:
+        """Resolve the effective patch size, applying the modality tile size factor."""
+        if not patch_size:
+            return self.patch_size
+        if isinstance(patch_size, tuple):
+            patch_size = (
+                patch_size[0] * self.modality_spec.image_tile_size_factor,
+                patch_size[1] * self.modality_spec.image_tile_size_factor,
+            )
+        else:
+            patch_size = patch_size * self.modality_spec.image_tile_size_factor
+        resolved = self.to_2tuple(patch_size)
+        assert isinstance(resolved, tuple) and len(resolved) == 2
+        return resolved
+
+    def _project_linear(
+        self,
+        x: Tensor,
+        h_patches: int,
+        w_patches: int,
+        batch_size: int,
+        has_time_dim: bool,
+        num_timesteps: int,
+    ) -> Tensor:
+        """Project patches using nn.Linear (reshape → cuBLAS GEMM → reshape)."""
+        p_h, p_w = self.patch_size
+        x = rearrange(x, "b c (h p1) (w p2) -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w)
+        x = self.proj(x)
+        if has_time_dim:
+            return rearrange(
+                x, "(b t) (h w) d -> b h w t d",
+                b=batch_size, t=num_timesteps, h=h_patches, w=w_patches,
+            )
+        return rearrange(x, "b (h w) d -> b h w d", h=h_patches, w=w_patches)
+
+    def _project_conv(
+        self,
+        x: Tensor,
+        batch_size: int,
+        has_time_dim: bool,
+        num_timesteps: int,
+    ) -> Tensor:
+        """Project patches using nn.Conv2d (for loading pre-linear checkpoints)."""
+        x = self.proj(x)  # b c h w -> b d h_out w_out
+        if has_time_dim:
+            _, d, h, w = x.shape
+            return rearrange(
+                x, "(b t) d h w -> b h w t d",
+                b=batch_size, t=num_timesteps, h=h, w=w,
+            )
+        return rearrange(x, "b d h w -> b h w d")
+
     def forward(
         self,
         x: Tensor,
         patch_size: int | tuple[int, int] | None = None,
-    ) -> Tensor | tuple[Tensor, tuple[int, int]]:
+    ) -> Tensor:
         """Forward pass for the FlexiPatchEmbed module.
 
         Args:
             x: Input tensor with shape [b, h, w, (t), c]
-            patch_size: Patch size to use for the embedding. If None, the base patch size
-                will be used, at an image_tile_size_factor of 16
+            patch_size: Patch size to use for the embedding. If None, uses the base patch size.
         """
-        # x has input shape [b, h, w, (t), c]
-        # log to make sure we are not running deterministic algorithms
         batch_size = x.shape[0]
-        has_time_dimension = False
-        num_timesteps = 0  # ignored if has_time_dimension is False
+        has_time_dim = len(x.shape) == 5
+        num_timesteps = x.shape[3] if has_time_dim else 0
 
-        if len(x.shape) == 5:
-            has_time_dimension = True
-            num_timesteps = x.shape[3]
+        if has_time_dim:
             x = rearrange(x, "b h w t c -> (b t) c h w")
         else:
             x = rearrange(x, "b h w c -> b c h w")
 
-        if not patch_size:
-            # During evaluation use base patch size if not specified
-            patch_size = self.patch_size
-        else:
-            if isinstance(patch_size, tuple):
-                patch_size = (
-                    patch_size[0] * self.modality_spec.image_tile_size_factor,
-                    patch_size[1] * self.modality_spec.image_tile_size_factor,
-                )
-            else:
-                patch_size = patch_size * self.modality_spec.image_tile_size_factor
-        patch_size = self.to_2tuple(patch_size)
-        assert isinstance(patch_size, tuple) and len(patch_size) == 2, (
-            "patch_size must be a 2-tuple"
-        )
-        # Resize input so that the base patch_size tiles evenly
+        patch_size = self._resolve_patch_size(patch_size)
+
         if patch_size != self.patch_size:
             shape = x.shape[-2:]
             new_shape = (
                 shape[0] // patch_size[0] * self.patch_size[0],
                 shape[1] // patch_size[1] * self.patch_size[1],
             )
-            x = F.interpolate(
-                x,
-                size=new_shape,
-                mode=self.interpolation,
-                antialias=self.antialias,
-            )
-        # Reshape non-overlapping patches into tokens and project with Linear
-        # (equivalent to Conv2d with kernel_size == stride, but uses fast cuBLAS GEMM)
+            x = F.interpolate(x, size=new_shape, mode=self.interpolation, antialias=self.antialias)
+
         p_h, p_w = self.patch_size
-        h_patches = x.shape[2] // p_h
-        w_patches = x.shape[3] // p_w
-        x = rearrange(x, "b c (h p1) (w p2) -> b (h w) (p1 p2 c)", p1=p_h, p2=p_w)
-        x = self.proj(x)
-        # Reshape back to spatial layout: b, h, w, (t,) d
-        if has_time_dimension:
-            x = rearrange(
-                x,
-                "(b t) (h w) d -> b h w t d",
-                b=batch_size,
-                t=num_timesteps,
-                h=h_patches,
-                w=w_patches,
-            )
+        h_patches, w_patches = x.shape[2] // p_h, x.shape[3] // p_w
+
+        if self.use_linear_patch_embed:
+            x = self._project_linear(x, h_patches, w_patches, batch_size, has_time_dim, num_timesteps)
         else:
-            x = rearrange(x, "b (h w) d -> b h w d", h=h_patches, w=w_patches)
+            x = self._project_conv(x, batch_size, has_time_dim, num_timesteps)
 
-        x = self.norm(x)
-
-        return x
+        return self.norm(x)
 
 
 class FlexiPatchReconstruction(nn.Module):
@@ -207,26 +215,12 @@ class FlexiPatchReconstruction(nn.Module):
             bias=bias,
         )
         self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
-
-        # Flexi specific attributes
         self.interpolation = interpolation
         self.antialias = antialias
 
     @staticmethod
     def to_2tuple(x: Any) -> Any:
-        """Convert a value to a 2-tuple by either converting an iterable or repeating a scalar.
-
-        This is used to handle patch sizes that can be specified either as:
-        - A single integer (e.g. 16) which gets converted to (16, 16) for square patches
-        - A tuple/list of 2 integers (e.g. (16, 32)) for rectangular patches
-
-        Args:
-            x: Value to convert to a 2-tuple. Can be an iterable (list/tuple) of 2 elements,
-               or a single value to repeat twice.
-
-        Returns:
-            A 2-tuple containing either the original iterable values or the input repeated twice.
-        """
+        """Convert a scalar or 2-element iterable to a (h, w) tuple."""
         if isinstance(x, Iterable) and not isinstance(x, str):
             assert len(list(x)) == 2, "x must be a 2-tuple"
             return tuple(x)
