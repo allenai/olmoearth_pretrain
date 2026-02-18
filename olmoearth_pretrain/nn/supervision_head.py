@@ -184,13 +184,14 @@ def _pool_and_upsample_encoder_features(
 
         pooled = _masked_mean_over_t_bs(tokens, encoder_mask)  # [B, P_H, P_W, D]
 
+        orig_dtype = pooled.dtype
         pooled = rearrange(pooled, "b h w d -> b d h w")
         pooled = F.interpolate(
             pooled.float(),
             size=(target_h, target_w),
             mode="bilinear",
             align_corners=False,
-        )
+        ).to(orig_dtype)
         pooled = rearrange(pooled, "b d h w -> b h w d")
         upsampled.append(pooled)
 
