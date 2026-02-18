@@ -118,6 +118,7 @@ def patch_legacy_encoder_config(config_dict: dict) -> dict:
     enc = config_dict.get("model", {}).get("encoder_config", {})
     if isinstance(enc, dict) and "use_linear_patch_embed" not in enc:
         import copy
+
         config_dict = copy.deepcopy(config_dict)
         config_dict["model"]["encoder_config"]["use_linear_patch_embed"] = False
     return config_dict

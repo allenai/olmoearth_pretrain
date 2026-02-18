@@ -25,8 +25,6 @@ from script import (  # noqa: E402
     build_visualize_config,
 )
 
-from olmo_core.config import DType  # noqa: E402
-
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS  # noqa: E402
 from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig  # noqa: E402

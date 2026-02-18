@@ -8,7 +8,6 @@ import logging
 from collections.abc import Iterable
 from typing import Any
 
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
@@ -68,7 +67,11 @@ class FlexiPatchEmbed(nn.Module):
             self.proj = nn.Linear(in_chans * p_h * p_w, embedding_size, bias=bias)
         else:
             self.proj = nn.Conv2d(
-                in_chans, embedding_size, kernel_size=self.patch_size, stride=self.patch_size, bias=bias
+                in_chans,
+                embedding_size,
+                kernel_size=self.patch_size,
+                stride=self.patch_size,
+                bias=bias,
             )
         self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
         self.interpolation = interpolation
@@ -114,8 +117,12 @@ class FlexiPatchEmbed(nn.Module):
         x = self.proj(x)
         if has_time_dim:
             return rearrange(
-                x, "(b t) (h w) d -> b h w t d",
-                b=batch_size, t=num_timesteps, h=h_patches, w=w_patches,
+                x,
+                "(b t) (h w) d -> b h w t d",
+                b=batch_size,
+                t=num_timesteps,
+                h=h_patches,
+                w=w_patches,
             )
         return rearrange(x, "b (h w) d -> b h w d", h=h_patches, w=w_patches)
 
@@ -131,8 +138,12 @@ class FlexiPatchEmbed(nn.Module):
         if has_time_dim:
             _, d, h, w = x.shape
             return rearrange(
-                x, "(b t) d h w -> b h w t d",
-                b=batch_size, t=num_timesteps, h=h, w=w,
+                x,
+                "(b t) d h w -> b h w t d",
+                b=batch_size,
+                t=num_timesteps,
+                h=h,
+                w=w,
             )
         return rearrange(x, "b d h w -> b h w d")
 
@@ -164,13 +175,17 @@ class FlexiPatchEmbed(nn.Module):
                 shape[0] // patch_size[0] * self.patch_size[0],
                 shape[1] // patch_size[1] * self.patch_size[1],
             )
-            x = F.interpolate(x, size=new_shape, mode=self.interpolation, antialias=self.antialias)
+            x = F.interpolate(
+                x, size=new_shape, mode=self.interpolation, antialias=self.antialias
+            )
 
         p_h, p_w = self.patch_size
         h_patches, w_patches = x.shape[2] // p_h, x.shape[3] // p_w
 
         if self.use_linear_patch_embed:
-            x = self._project_linear(x, h_patches, w_patches, batch_size, has_time_dim, num_timesteps)
+            x = self._project_linear(
+                x, h_patches, w_patches, batch_size, has_time_dim, num_timesteps
+            )
         else:
             x = self._project_conv(x, batch_size, has_time_dim, num_timesteps)
 

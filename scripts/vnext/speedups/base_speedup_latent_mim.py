@@ -19,17 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "official"))
 
-from script import (  # noqa: E402
-    build_common_components,
-    build_dataset_config,
-    build_trainer_config,
-    build_visualize_config,
-    get_masking_config,
-)
-
 # Reuse the model config (flash attn + linear patch embed) from the contrastive script
 from base_speedup import build_model_config  # noqa: E402
-
 from olmo_core.config import DType  # noqa: E402
 from olmo_core.distributed.parallel.data_parallel import (  # noqa: E402
     DataParallelConfig,
@@ -37,6 +28,13 @@ from olmo_core.distributed.parallel.data_parallel import (  # noqa: E402
 )
 from olmo_core.optim import AdamWConfig  # noqa: E402
 from olmo_core.optim.scheduler import CosWithWarmup  # noqa: E402
+from script import (  # noqa: E402
+    build_common_components,
+    build_dataset_config,
+    build_trainer_config,
+    build_visualize_config,
+    get_masking_config,
+)
 
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig  # noqa: E402
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402

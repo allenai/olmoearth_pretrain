@@ -34,8 +34,8 @@ from torch.optim import Optimizer
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
 from olmoearth_pretrain.data.transform import TransformConfig
+from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.train.loss import LossConfig
 

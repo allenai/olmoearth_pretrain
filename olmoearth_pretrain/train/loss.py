@@ -370,7 +370,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
 
 
 @LOSS_REGISTRY.register("modality_patch_discrimination_new_vec")
-class ModalityPatchDiscriminationLossNew(Loss):
+class ModalityPatchDiscriminationLossVec(Loss):
     """Loss function for per-modality patch discrimination task.
 
     This is a fully parallelized implementation with no for loops over samples.
@@ -434,13 +434,17 @@ class ModalityPatchDiscriminationLossNew(Loss):
 
         # Validity mask: first count[b] positions per sample are decoder tokens
         range_tensor = torch.arange(num_tokens, device=count.device)
-        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(1)  # (batch, num_tokens)
+        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(
+            1
+        )  # (batch, num_tokens)
 
         if self.pred2unit:
             # Global mean/std across all decoder tokens (matches original flat behavior)
             mask_float = valid_mask.unsqueeze(-1).float()  # (batch, tokens, 1)
             total_decoder = mask_float.sum().clamp(min=1)
-            pred_mu = (sorted_preds * mask_float).sum(dim=(0, 1), keepdim=True) / total_decoder
+            pred_mu = (sorted_preds * mask_float).sum(
+                dim=(0, 1), keepdim=True
+            ) / total_decoder
             centered = sorted_preds - pred_mu
             pred_var = (centered**2 * mask_float).sum(dim=(0, 1), keepdim=True) / (
                 total_decoder - 1
@@ -475,7 +479,9 @@ class ModalityPatchDiscriminationLossNew(Loss):
 
         # Zero out invalid positions, average per sample, then over valid samples only
         valid_mask_float = valid_mask.float()
-        loss_per_sample = (loss_per_pos * valid_mask_float).sum(dim=1) / count.float().clamp(min=1)
+        loss_per_sample = (loss_per_pos * valid_mask_float).sum(
+            dim=1
+        ) / count.float().clamp(min=1)
         loss = loss_per_sample.sum() / num_valid.float().clamp(min=1)
 
         return loss

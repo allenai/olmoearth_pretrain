@@ -548,7 +548,6 @@ If running command on a local machine ie from a session, you can use the [b]loca
 
     cmd = SubCmd(cmd)
     cmd.prepare_environment()
-    import torch
 
     if cmd == SubCmd.benchmark or cmd == SubCmd.launch_benchmark:
         if inference_benchmarking_config_builder is None:
