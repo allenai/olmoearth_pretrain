@@ -848,6 +848,8 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     enabled: bool = True
     # Override eval_interval for all tasks when set (avoids per-task overrides that can break config merge).
     eval_interval_override: Duration | None = None
+    # Override num_workers for all eval task DataLoaders when set (e.g. 0 to avoid worker crashes).
+    eval_num_workers_override: int | None = None
     # Whether to run the evaluators on startup
     eval_on_startup: bool = False
     # Whether to cancel the training after the first evaluation
@@ -933,11 +935,15 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             self.verify_input_modalities(task, config)
             # Sort to ensure consistent order
             task.input_modalities.sort()
-            # Apply callback-level eval_interval override to all tasks if set
+            # Apply callback-level overrides to all tasks if set
             task_to_use = task
             if self.eval_interval_override is not None:
                 task_to_use = replace(
-                    task, eval_interval=self.eval_interval_override
+                    task_to_use, eval_interval=self.eval_interval_override
+                )
+            if self.eval_num_workers_override is not None:
+                task_to_use = replace(
+                    task_to_use, num_workers=self.eval_num_workers_override
                 )
             logger.info(f"Adding {evaluation_name} with eval mode {task_to_use.eval_mode}")
             evaluators.append(

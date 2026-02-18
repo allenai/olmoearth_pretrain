@@ -38,6 +38,7 @@ from olmoearth_pretrain.data.dataset import (
     OlmoEarthSample,
 )
 from olmoearth_pretrain.data.transform import Transform, TransformConfig
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskingConfig, MaskingStrategy
 
@@ -740,6 +741,86 @@ class OlmoEarthDataLoaderConfig(Config):
             num_masked_views=self.num_masked_views,
             tokenization_config=self.tokenization_config,
         )
+
+
+def adapt_torchgeo_sample_to_olmoearth(
+    sample: dict[str, Any],
+    patch_size: int,
+    *,
+    default_modality: str | None = None,
+) -> tuple[MaskedOlmoEarthSample, int]:
+    """Convert a TorchGeo-style sample dict into a MaskedOlmoEarthSample for the model.
+
+    Use this when feeding data from a TorchGeo Dataset/DataLoader (e.g. RandomGeoSampler
+    + stack_samples) into OlmoEarth training or evaluation.
+
+    The sample dict can contain any keys matching :class:`MaskedOlmoEarthSample` field
+    names, and optionally ``image``: if present and ``default_modality`` is set, that
+    tensor is used as the only modality with an all-visible mask. TorchGeo typically
+    returns image as (B, C, H, W); use channels-last (B, H, W, C) or permute before
+    calling. If ``timestamps`` is missing, a dummy tensor of shape (batch_size, 1, 3)
+    is used.
+
+    Args:
+        sample: Dict of tensors/arrays (e.g. from a TorchGeo dataset).
+        patch_size: Patch size to pass to the model (e.g. 8).
+        default_modality: If sample has ``image``, map it to this modality name
+            (e.g. ``"sentinel2_l2a"``, ``"naip"``). Must be a valid modality field name.
+
+    Returns:
+        Tuple of (MaskedOlmoEarthSample, patch_size) for model(olmo_sample, patch_size).
+    """
+    field_set = set(MaskedOlmoEarthSample._fields)
+    kwargs: dict[str, Any] = {}
+    for key in field_set:
+        if key in sample:
+            val = sample[key]
+            if isinstance(val, np.ndarray) and not isinstance(val, torch.Tensor):
+                val = torch.from_numpy(np.asarray(val)).float()
+            kwargs[key] = val
+
+    if "image" in sample and default_modality is not None:
+        if default_modality not in field_set:
+            raise ValueError(
+                f"default_modality={default_modality!r} is not a MaskedOlmoEarthSample field."
+            )
+        if default_modality.endswith("_mask"):
+            raise ValueError(
+                "default_modality must be a data field (e.g. sentinel2_l2a), not a mask key."
+            )
+        img = sample["image"]
+        if isinstance(img, np.ndarray) and not isinstance(img, torch.Tensor):
+            img = torch.from_numpy(np.asarray(img)).float()
+        mask_name = MaskedOlmoEarthSample.get_masked_modality_name(default_modality)
+        batch = img.shape[0]
+        if img.ndim == 4:  # (B, H, W, C)
+            mask = torch.full(
+                (batch, img.shape[1], img.shape[2], 1),
+                float(MaskValue.ONLINE_ENCODER.value),
+                dtype=img.dtype,
+                device=img.device,
+            )
+        else:  # (B, H, W, T, C)
+            mask = torch.full(
+                (batch, img.shape[1], img.shape[2], img.shape[3], 1),
+                float(MaskValue.ONLINE_ENCODER.value),
+                dtype=img.dtype,
+                device=img.device,
+            )
+        kwargs[default_modality] = img
+        kwargs[mask_name] = mask
+
+    if "timestamps" not in kwargs or kwargs["timestamps"] is None:
+        batch_size = 1
+        for key in ("sentinel2_l2a", "sentinel1", "image"):
+            if key in sample:
+                t = sample[key]
+                if hasattr(t, "shape") and len(t.shape) >= 1:
+                    batch_size = int(t.shape[0])
+                    break
+        kwargs["timestamps"] = torch.zeros(batch_size, 1, 3, dtype=torch.float32)
+
+    return (MaskedOlmoEarthSample(**kwargs), patch_size)
 
 
 HeliosDataLoader = _deprecated_class_alias(
