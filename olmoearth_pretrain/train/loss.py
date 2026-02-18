@@ -369,7 +369,7 @@ class ModalityPatchDiscriminationLossNew(Loss):
         return self.weight * total_loss
 
 
-@LOSS_REGISTRY.register("modality_patch_discrimination_new_vec")
+@LOSS_REGISTRY.register("modality_patch_discrimination_vec")
 class ModalityPatchDiscriminationLossVec(Loss):
     """Loss function for per-modality patch discrimination task.
 
@@ -507,8 +507,6 @@ class ModalityPatchDiscriminationLossVec(Loss):
             loss = self._compute_modality_loss_parallel(
                 all_preds, all_masks, all_targets
             )
-            if loss is None:
-                continue
             if self.modality_weights is not None:
                 loss = loss * self.modality_weights[modality]
             total_loss += loss

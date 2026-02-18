@@ -87,7 +87,7 @@ def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleC
         masking_config=get_masking_config(common),
         loss_config=LossConfig(
             loss_config={
-                "type": "modality_patch_discrimination_new_vec",
+                "type": "modality_patch_discrimination_vec",
                 "tau": 0.1,
             }
         ),

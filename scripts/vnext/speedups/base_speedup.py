@@ -17,18 +17,27 @@ from pathlib import Path
 # Allow importing from scripts/official/
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "official"))
 
+from olmo_core.config import DType  # noqa: E402
+from olmo_core.distributed.parallel.data_parallel import (  # noqa: E402
+    DataParallelConfig,
+    DataParallelType,
+)
+from olmo_core.optim import AdamWConfig  # noqa: E402
+from olmo_core.optim.scheduler import CosWithWarmup  # noqa: E402
 from script import (  # noqa: E402
     build_common_components,
     build_dataloader_config,
     build_dataset_config,
     build_trainer_config,
     build_visualize_config,
+    get_masking_config,
 )
 
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS  # noqa: E402
 from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig  # noqa: E402
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
+from olmoearth_pretrain.train.loss import LossConfig  # noqa: E402
 from olmoearth_pretrain.train.train_module.contrastive_latentmim import (  # noqa: E402
     ContrastiveLatentMIMTrainModuleConfig,
 )
@@ -71,12 +80,28 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 def build_train_module_config(
     common: CommonComponents,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Train module config with torch.compile and bf16 autocast enabled."""
-    from script import build_train_module_config as _base
-
-    config = _base(common)
-    config.compile_model = True
-    return config
+    """Two-view contrastive train module with all speed opts: fused Adam, vec loss, compile."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=True),
+        rank_microbatch_size=32,
+        masking_config=get_masking_config(common),
+        loss_config=LossConfig(
+            loss_config={
+                "type": "modality_patch_discrimination_vec",
+                "tau": 0.1,
+            }
+        ),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+        compile_model=True,
+    )
 
 
 if __name__ == "__main__":
