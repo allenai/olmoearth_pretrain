@@ -107,6 +107,8 @@ class TokensAndMasks(NamedTuple):
     wri_canopy_height_map_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
+    ndvi: Tensor | None = None
+    ndvi_mask: Tensor | None = None
 
     @property
     def device(self) -> torch.device:
