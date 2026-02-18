@@ -20,8 +20,20 @@ Experiments investigating S2 bandset configurations and cross-spectral learning 
 | 12 | `two_bandset_midlayer_merged_cross_random_masked_neg` | 2 bandsets S2 (10m+20m) / Landsat single, merge after layer 3, unmerge in decoder |
 | 13 | `single_bandset_no60m_random_band_dropout_cross_random_masked_neg` | single bandset S2 (no 60m: 10 bands) + random band dropout ~ Uniform(0, 0.3) |
 | 14 | `single_bandset_all12_random_band_dropout_cross_random_masked_neg` | single bandset S2 (all 12) + random band dropout ~ Uniform(0, 0.3) |
+| 15 | `single_bandset_all12_random_band_dropout_era5_random_decode_masked_neg` | single bandset S2 (all 12) + random band dropout ~ Uniform(0, 0.3) + ERA5 decode-only + random_with_decode masking |
 
 ## Launch Commands
+
+### Experiment 15: Single bandset S2 (all 12) + random band dropout + ERA5 decode-only + random_with_decode
+
+```bash
+EXPERIMENT=single_bandset_all12_random_band_dropout_era5_random_decode_masked_neg \
+  python scripts/vnext/2026_02_08_masked_neg/single_bandset_masked_neg.py launch \
+  single_bandset_all12_random_band_dropout_era5_random_decode_masked_neg ai2/jupiter \
+  launch.num_gpus=8 \
+  'launch.clusters=[ai2/jupiter,ai2/ceres,ai2/titan]' \
+  trainer.callbacks.wandb.project=2026_02_08_masked_neg
+```
 
 ### Experiment 14: Single bandset S2 (all 12) + random band dropout
 
