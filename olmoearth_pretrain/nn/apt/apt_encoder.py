@@ -625,8 +625,9 @@ class APTEncoderWrapper(nn.Module):
             logger.debug("APT requires masking; overriding fast_pass=True -> False")
             fast_pass = False
 
-        # we need to get the patchified tokens normally for all the modalities and then the other tokens for the APT modality
-        # we also will neeed the positions for the apt modality so that we can properly handle the composite encodings for it
+        # Force patchification at the APT base_patch_size so the token grid
+        # aligns with the partitioner's coordinate system.
+        patch_size = self.apt_config.partitioner.base_patch_size
 
         # Get image data for APT modality: [B, H, W, T, C]
         apt_modality_data = getattr(x, self.apt_modality)

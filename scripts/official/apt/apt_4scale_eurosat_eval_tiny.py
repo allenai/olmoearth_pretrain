@@ -221,6 +221,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ft_batch_size=32,
             epochs=50,
             eval_interval=Duration.steps(1),
+            patch_size=1,
             use_apt=True,
             apt_modality="sentinel2_l2a",
             apt_config=apt_config,
