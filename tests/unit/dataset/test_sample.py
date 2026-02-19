@@ -9,7 +9,12 @@ import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import BandSet, Modality, ModalitySpec
-from olmoearth_pretrain.data.dataset import OlmoEarthSample
+from olmoearth_pretrain.data.dataset import (
+    OlmoEarthSample,
+    _get_max_t_within_token_budget,
+    subset_sample_cutmix,
+    subset_sample_default,
+)
 from olmoearth_pretrain.dataset.parse import (
     GridTile,
     ModalityImage,
@@ -27,8 +32,8 @@ CRS = "EPSG:32610"
 
 def test_all_attrs_have_bands() -> None:
     """Test all attributes are described in attribute_to_bands."""
-    for attribute_name in OlmoEarthSample._fields:
-        _ = OlmoEarthSample.num_bands(attribute_name)
+    for f_name in OlmoEarthSample._fields:
+        _ = OlmoEarthSample.num_bands(f_name)
 
 
 @pytest.fixture
@@ -159,8 +164,12 @@ def test_default_subsetting() -> None:
         sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
         timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
     )
-    subsetted_sample = sample.subset_default(
-        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
+    subsetted_sample = subset_sample_default(
+        sample,
+        patch_size=4,
+        max_tokens_per_instance=100,
+        sampled_hw_p=4,
+        current_length=12,
     )
 
     # 16 / 4 = 4 tokens along the height and width dimension
@@ -184,11 +193,19 @@ def test_cutmix_subsetting() -> None:
         sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
         timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
     )
-    default_subsetted_sample = sample.subset_default(
-        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
+    default_subsetted_sample = subset_sample_default(
+        sample,
+        patch_size=4,
+        max_tokens_per_instance=100,
+        sampled_hw_p=4,
+        current_length=12,
     )
-    cutmix_subsetted_sample = sample.subset_cutmix(
-        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
+    cutmix_subsetted_sample = subset_sample_cutmix(
+        sample,
+        patch_size=4,
+        max_tokens_per_instance=100,
+        sampled_hw_p=4,
+        current_length=12,
     )
     print(default_subsetted_sample)
     print(cutmix_subsetted_sample)
@@ -215,7 +232,8 @@ def test_subsetting_worldcover_too() -> None:
         worldcover=torch.ones((h, w, OlmoEarthSample.num_bands("worldcover"))),
         timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
     )
-    subsetted_sample = sample.subset_default(
+    subsetted_sample = subset_sample_default(
+        sample,
         patch_size=4,
         max_tokens_per_instance=100,
         sampled_hw_p=4,
@@ -240,8 +258,12 @@ def test_subsetting_with_tokenization_config() -> None:
 
     # Default: sentinel2_l2a has 3 band sets
     # tokens_per_timestep = 4*4*3 = 48, max_t = floor(100/48) = 2
-    default_subsetted = sample.subset_default(
-        patch_size=4, max_tokens_per_instance=100, sampled_hw_p=4, current_length=12
+    default_subsetted = subset_sample_default(
+        sample,
+        patch_size=4,
+        max_tokens_per_instance=100,
+        sampled_hw_p=4,
+        current_length=12,
     )
     assert default_subsetted.time == 2
 
@@ -255,7 +277,8 @@ def test_subsetting_with_tokenization_config() -> None:
         }
     )
     # tokens_per_timestep = 4*4*1 = 16, max_t = floor(100/16) = 6
-    config_subsetted = sample.subset_default(
+    config_subsetted = subset_sample_default(
+        sample,
         patch_size=4,
         max_tokens_per_instance=100,
         sampled_hw_p=4,
@@ -274,8 +297,8 @@ def test_get_max_t_within_token_budget_with_tokenization_config() -> None:
     )
 
     # Default: 3 band sets -> tokens_per_timestep = 4*4*3 = 48
-    max_t_default = sample._get_max_t_within_token_budget(
-        h_w_p=4, max_tokens_per_instance=100
+    max_t_default = _get_max_t_within_token_budget(
+        sample, h_w_p=4, max_tokens_per_instance=100
     )
     assert max_t_default == 2
 
@@ -288,7 +311,7 @@ def test_get_max_t_within_token_budget_with_tokenization_config() -> None:
             )
         }
     )
-    max_t_config = sample._get_max_t_within_token_budget(
-        h_w_p=4, max_tokens_per_instance=100, tokenization_config=config
+    max_t_config = _get_max_t_within_token_budget(
+        sample, h_w_p=4, max_tokens_per_instance=100, tokenization_config=config
     )
     assert max_t_config == 6

@@ -235,7 +235,7 @@ class MAETrainModule(OlmoEarthTrainModule):
                 microbatch_masked = masked_microbatches[microbatch_idx]
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} "
-                    f"with batch size {microbatch_masked.timestamps.shape[0]}"
+                    f"with batch size {microbatch_masked.batch_size}"
                 )
                 masked_batch = microbatch_masked.to_device(self.device)
 

@@ -76,6 +76,7 @@ def test_pastis_dataset_initialization(mock_pastis_data: Path) -> None:
     # Check shapes
     assert sample.sentinel2_l2a.shape[2] == 12  # 12 timestamps
     assert sample.sentinel1.shape[2] == 12  # 12 timestamps
+    assert sample.timestamps is not None
     assert sample.timestamps[0].equal(torch.tensor([1, 8, 2018], dtype=torch.long))
     assert label.shape == (64, 64)  # Label should be 64x64
 

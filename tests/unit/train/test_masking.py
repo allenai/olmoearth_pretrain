@@ -78,7 +78,7 @@ def test_random_masking_and_unmask() -> None:
     worldcover_value: int = worldcover_patch[0, 0]
     assert (worldcover_patch == worldcover_value).all()
     # check that each modality has the right masking ratio
-    for modality_name in masked_sample._fields:
+    for modality_name in MaskedOlmoEarthSample._fields:
         if modality_name.endswith("mask"):
             unmasked_modality_name = masked_sample.get_unmasked_modality_name(
                 modality_name
@@ -106,7 +106,7 @@ def test_random_masking_and_unmask() -> None:
             )
 
     unmasked_sample = masked_sample.unmask()
-    for modality_name in unmasked_sample._fields:
+    for modality_name in MaskedOlmoEarthSample._fields:
         if modality_name.endswith("mask"):
             mask = getattr(unmasked_sample, modality_name)
             if mask is not None:
@@ -139,7 +139,7 @@ def test_space_structure_masking_and_unmask() -> None:
         patch_size=4,
     )
     # check that each modality has the right masking ratio
-    for modality_name in masked_sample._fields:
+    for modality_name in MaskedOlmoEarthSample._fields:
         if modality_name.endswith("mask"):
             unmasked_modality_name = masked_sample.get_unmasked_modality_name(
                 modality_name
@@ -167,7 +167,7 @@ def test_space_structure_masking_and_unmask() -> None:
             )
 
     unmasked_sample = masked_sample.unmask()
-    for modality_name in unmasked_sample._fields:
+    for modality_name in MaskedOlmoEarthSample._fields:
         if modality_name.endswith("mask"):
             mask = getattr(unmasked_sample, modality_name)
             if mask is not None:
@@ -202,7 +202,7 @@ def test_time_structure_masking_and_unmask() -> None:
         patch_size=patch_size,
     )
     # check that each modality has the right masking ratio
-    for modality_name in masked_sample._fields:
+    for modality_name in MaskedOlmoEarthSample._fields:
         if modality_name.endswith("mask"):
             unmasked_modality_name = masked_sample.get_unmasked_modality_name(
                 modality_name
@@ -230,7 +230,7 @@ def test_time_structure_masking_and_unmask() -> None:
             )
 
     unmasked_sample = masked_sample.unmask()
-    for modality_name in unmasked_sample._fields:
+    for modality_name in MaskedOlmoEarthSample._fields:
         if modality_name.endswith("mask"):
             mask = getattr(unmasked_sample, modality_name)
             if mask is not None:
@@ -288,7 +288,7 @@ def test_time_with_missing_timesteps_structure_masking_and_unmask() -> None:
     for i in range(b):
         # for every sample check that at least 1 modality is present at each timestep
         timestamp_present_mask = torch.zeros((t), dtype=torch.bool)
-        for modality_name in masked_sample._fields:
+        for modality_name in MaskedOlmoEarthSample._fields:
             if modality_name.endswith("mask"):
                 mask = getattr(masked_sample, modality_name)
                 unmasked_modality_name = masked_sample.get_unmasked_modality_name(
@@ -307,7 +307,7 @@ def test_time_with_missing_timesteps_structure_masking_and_unmask() -> None:
         assert timestamp_present_mask.any(), f"Sample {i} has no present modalities"
 
     unmasked_sample = masked_sample.unmask()
-    for modality_name in unmasked_sample._fields:
+    for modality_name in MaskedOlmoEarthSample._fields:
         if modality_name.endswith("mask"):
             mask = getattr(unmasked_sample, modality_name)
             if mask is not None:

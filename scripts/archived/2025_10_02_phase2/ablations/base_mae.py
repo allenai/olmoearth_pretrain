@@ -35,11 +35,11 @@ from olmoearth_pretrain.internal.experiment import (
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
 from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
-    PoolingType,
     PredictorConfig,
     ReconstructorConfig,
 )
 from olmoearth_pretrain.nn.mae import MAEConfig
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthSpeedMonitorCallback,

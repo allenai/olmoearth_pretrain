@@ -53,7 +53,7 @@ def get_sample_data_for_histogram(
         for modality in sample.modalities:
             if modality == "timestamps" or modality == "latlon":
                 continue
-            modality_data = sample.as_dict(ignore_nones=True)[modality]
+            modality_data = sample.as_dict()[modality]
             if modality_data is None:
                 continue
             modality_spec = Modality.get(modality)
