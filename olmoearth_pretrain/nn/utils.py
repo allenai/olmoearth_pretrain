@@ -29,18 +29,21 @@ def unpack_encoder_output(
 def get_cumulative_sequence_lengths(seq_lengths: torch.Tensor) -> torch.Tensor:
     """Get the cumulative sequence lengths of a tensor.
 
+    Zero-length sequences are preserved so that cu_seqlens_q and cu_seqlens_k
+    stay aligned in cross-attention (flash_attn_varlen_func requires both to
+    have the same number of entries).
+
     Args:
         seq_lengths (torch.Tensor): The sequence lengths of a tensor.
 
     Returns:
-        torch.Tensor: The cumulative sequence lengths of a tensor.
+        torch.Tensor: The cumulative sequence lengths of a tensor with shape
+            (len(seq_lengths) + 1,).
     """
     return torch.cat(
         [
             torch.tensor([0], dtype=torch.int32, device=seq_lengths.device),
-            torch.cumsum(
-                seq_lengths.masked_select(seq_lengths != 0), 0, dtype=torch.int32
-            ),
+            torch.cumsum(seq_lengths, 0, dtype=torch.int32),
         ]
     )
 
