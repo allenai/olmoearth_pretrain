@@ -27,7 +27,7 @@ To install dependencies with uv, run:
 ```bash
 git clone git@github.com:allenai/olmoearth_pretrain.git
 cd olmoearth_pretrain
-uv sync --locked --all-groups --python 3.12
+uv sync --locked --all-extras --python 3.12
 # only necessary for development
 uv tool install pre-commit --with pre-commit-uv --force-reinstall
 ```
@@ -97,14 +97,14 @@ Detailed instructions on how to replicate our evaluations is available here:
 Tests can be run with different dependency configurations using `uv run`:
 
 ```bash
-# Full test suite (all dependencies - flash attn including olmo-core)
-uv run --all-groups --no-group flash-attn pytest tests/
+# Full test suite (all dependencies except flash-attn, including olmo-core)
+uv run --extra training --extra beaker --extra dataset-creation --extra dev --extra eval pytest tests/
 
 # Model loading tests with full deps (with olmo-core)
-uv run --all-groups --no-group flash-attn pytest tests_minimal_deps/
+uv run --extra training --extra beaker --extra dataset-creation --extra dev --extra eval pytest tests_minimal_deps/
 
 # Model loading tests with minimal deps only (no olmo-core)
-uv run --group dev pytest tests_minimal_deps/
+uv run --extra dev pytest tests_minimal_deps/
 ```
 
 The `tests_minimal_deps/` directory contains tests that verify model loading works both with and without `olmo-core` installed. These run twice in CI to ensure compatibility.
