@@ -1,11 +1,11 @@
 """Evaluate the base model on segmentation tasks with LinearProbe vs InterpolateLinearProbe.
 
 Usage:
-    python scripts/official/eval_seg_probe_comparison.py evaluate \
-        --run_name=eval-seg-probe-comparison \
-        --save_folder=/path/to/checkpoint/dir
+    torchrun scripts/archived/2026_02_19_eval_changes/eval_seg_probe_comparison.py \
+        evaluate eval-seg-probe-comparison local \
+        --trainer.load_path=CHECKPOINT_DIR
 
-The save_folder should point to the directory containing the base model checkpoint.
+The load_path should point to the directory containing the base model checkpoint.
 """
 
 import logging

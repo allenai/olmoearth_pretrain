@@ -1,11 +1,11 @@
 """Evaluate the base model on classification tasks: baseline vs use_center_token.
 
 Usage:
-    python scripts/official/eval_cls_center_token.py evaluate \
-        --run_name=eval-cls-center-token \
-        --save_folder=/path/to/checkpoint/dir
+    torchrun scripts/archived/2026_02_19_eval_changes/eval_cls_center_token.py \
+        evaluate eval-center-token-comparison local \
+        --trainer.load_path=CHECKPOINT_DIR
 
-The save_folder should point to the directory containing the base model checkpoint.
+The load_path should point to the directory containing the base model checkpoint.
 """
 
 import logging
