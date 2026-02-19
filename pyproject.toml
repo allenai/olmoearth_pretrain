@@ -137,6 +137,9 @@ eval = [
 flash-attn = [
     "flash-attn>=2.4.0",
 ]
+"all-no-flash" = [
+    "olmoearth-pretrain[training,beaker,dataset-creation,dev,eval]",
+]
 
 [tool.uv.extra-build-dependencies]
 flash-attn = [{ requirement = "torch", match-runtime = true }]

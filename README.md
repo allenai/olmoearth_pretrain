@@ -98,10 +98,10 @@ Tests can be run with different dependency configurations using `uv run`:
 
 ```bash
 # Full test suite (all dependencies except flash-attn, including olmo-core)
-uv run --extra training --extra beaker --extra dataset-creation --extra dev --extra eval pytest tests/
+uv run --extra all-no-flash pytest tests/
 
 # Model loading tests with full deps (with olmo-core)
-uv run --extra training --extra beaker --extra dataset-creation --extra dev --extra eval pytest tests_minimal_deps/
+uv run --extra all-no-flash pytest tests_minimal_deps/
 
 # Model loading tests with minimal deps only (no olmo-core)
 uv run --extra dev pytest tests_minimal_deps/
