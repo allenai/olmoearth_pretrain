@@ -51,7 +51,7 @@ SUPERVISION_MODALITY_CONFIGS = {
     "worldcover": SupervisionModalityConfig(
         task_type=SupervisionTaskType.CLASSIFICATION,
         num_output_channels=11,
-        weight=0.1,
+        weight=1.0,
         class_values=WORLDCOVER_CLASS_VALUES,
     ),
     "srtm": SupervisionModalityConfig(
@@ -62,7 +62,7 @@ SUPERVISION_MODALITY_CONFIGS = {
     "openstreetmap_raster": SupervisionModalityConfig(
         task_type=SupervisionTaskType.BINARY_CLASSIFICATION,
         num_output_channels=30,
-        weight=0.1,
+        weight=1.0,
     ),
     "wri_canopy_height_map": SupervisionModalityConfig(
         task_type=SupervisionTaskType.REGRESSION,
@@ -77,7 +77,7 @@ SUPERVISION_MODALITY_CONFIGS = {
     "worldcereal": SupervisionModalityConfig(
         task_type=SupervisionTaskType.BINARY_CLASSIFICATION,
         num_output_channels=8,
-        weight=0.1,
+        weight=1.0,
     ),
 }
 
