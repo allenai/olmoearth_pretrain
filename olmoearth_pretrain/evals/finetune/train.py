@@ -228,12 +228,18 @@ def run_finetune_eval(
                         )
                 loss = loss_fn(logits, label)
                 if wandb_logger is not None:
-                    wandb_logger.log(
-                        {
-                            f"{task_name}_step": epoch * num_batches + i,
-                            f"{task_name}/train_loss": loss.item(),
-                        }
-                    )
+                    log_dict = {
+                        f"{task_name}_step": epoch * num_batches + i,
+                        f"{task_name}/train_loss": loss.item(),
+                    }
+                    # Log APT scale distribution if backbone is APT-wrapped
+                    from olmoearth_pretrain.nn.apt.apt_encoder import APTEncoderWrapper
+
+                    _bb = ft.backbone
+                    if isinstance(_bb, APTEncoderWrapper):
+                        for k, v in _bb.get_batch_scale_stats().items():
+                            log_dict[f"{task_name}/{k}"] = v
+                    wandb_logger.log(log_dict)
                 logger.info(
                     f"Finetune Epoch [{epoch + 1}/{epochs}] Step [{i + 1}/{len(train_loader)}] Loss: {loss.item():.4f}"
                 )

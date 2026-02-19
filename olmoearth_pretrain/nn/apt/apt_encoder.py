@@ -450,8 +450,14 @@ class APTEncoderWrapper(nn.Module):
         self.total_tokens = 0
         self.total_uniform_tokens = 0
         self.num_samples = 0
-        self.all_entropy_scores: list[float] = []  # Collect scores for distribution analysis
-        self.log_entropy_distribution_every: int = 10  # Log distribution every N samples
+        self.all_entropy_scores: list[float] = []
+        self.log_entropy_distribution_every: int = 10
+
+        # Per-batch scale distribution (populated each forward pass)
+        self._batch_scale_counts: dict[int, int] = {}
+        self._batch_total_tokens: int = 0
+        self._batch_image_hw: tuple[int, int] = (0, 0)
+        self._batch_num_partitions: int = 0
 
         # Convert base Encoder -> APTEncoder with pretrained weights
         self._load_encoder_into_apt_encoder()
@@ -631,6 +637,9 @@ class APTEncoderWrapper(nn.Module):
         #TODO: THis is a slow and bad implementation, we need to improve it
         # Run APT partitioning and embedding per sample
         batch_patch_descs = []
+        batch_scale_counts: dict[int, int] = {}
+        batch_total_tokens = 0
+
         for bi in range(b):
             sample_image = apt_modality_data[bi]  # [H, W, T, C]
 
@@ -638,20 +647,20 @@ class APTEncoderWrapper(nn.Module):
             patch_descs = []
 
             for ti in range(t):
-                # Cast to float32 before numpy (numpy doesn't support bfloat16)
                 #TODO: we should not be doign this here anyways so lets just leave it
                 frame = sample_image[:, :, ti, :].cpu().float().numpy()  # [H, W, C]
-                # Use configured bands for scoring (scorer handles band selection internally)
                 patches = self.partitioner.partition(frame, timestep=ti)
                 patch_descs.append(patches)
 
-                # Collect entropy scores for distribution analysis
                 if patches:
                     self.all_entropy_scores.extend([p.score for p in patches])
 
-                # Log detailed patch info for first few samples
-                if self.num_samples < 5 and ti == 0 and patches:
+                # Track per-scale counts for this batch
+                for p in patches:
+                    batch_scale_counts[p.scale] = batch_scale_counts.get(p.scale, 0) + 1
+                batch_total_tokens += len(patches)
 
+                if self.num_samples < 5 and ti == 0 and patches:
                     scale_counts = {}
                     for p in patches:
                         scale_counts[p.scale] = scale_counts.get(p.scale, 0) + 1
@@ -664,7 +673,6 @@ class APTEncoderWrapper(nn.Module):
                         f"sizes={[self.partitioner.base_patch_size * (2**s) for s in scale_counts.keys()]}"
                     )
 
-                    # Update stats
                     self.total_tokens += len(patches)
                     uniform_count = (h // self.partitioner.base_patch_size) * (
                         w // self.partitioner.base_patch_size
@@ -673,6 +681,11 @@ class APTEncoderWrapper(nn.Module):
 
             batch_patch_descs.append(patch_descs)
 
+        # Store batch-level scale distribution for external logging
+        self._batch_scale_counts = batch_scale_counts
+        self._batch_total_tokens = batch_total_tokens
+        self._batch_image_hw = (h, w)
+        self._batch_num_partitions = b * t  # total partition calls this batch
 
         self.num_samples += b
 
@@ -705,6 +718,36 @@ class APTEncoderWrapper(nn.Module):
             token_exit_cfg=token_exit_cfg,
             fast_pass=fast_pass,
         )
+
+    def get_batch_scale_stats(self) -> dict[str, float]:
+        """Get per-scale token distribution for the last forward batch.
+
+        Returns dict with keys like:
+          apt/pct_scale_0 (1px), apt/pct_scale_1 (2px), ...
+          apt/total_tokens, apt/token_ratio_vs_p4
+        """
+        if self._batch_total_tokens == 0:
+            return {}
+
+        base = self.apt_config.partitioner.base_patch_size
+        stats: dict[str, float] = {}
+        for scale, count in sorted(self._batch_scale_counts.items()):
+            psize = base * (2 ** scale)
+            pct = count / self._batch_total_tokens
+            stats[f"apt/pct_p{psize}"] = pct
+            stats[f"apt/count_p{psize}"] = count
+
+        stats["apt/total_tokens"] = self._batch_total_tokens
+
+        # Compare vs uniform patch-4: how many tokens would p4 produce for same batch?
+        h, w = self._batch_image_hw
+        n = self._batch_num_partitions  # b * t
+        if h > 0 and w > 0 and n > 0:
+            uniform_p4_total = n * (h // 4) * (w // 4)
+            stats["apt/uniform_p4_tokens"] = uniform_p4_total
+            stats["apt/token_ratio_vs_p4"] = self._batch_total_tokens / max(1, uniform_p4_total)
+
+        return stats
 
     def get_apt_stats(self) -> dict[str, float]:
         """Get APT token reduction statistics."""

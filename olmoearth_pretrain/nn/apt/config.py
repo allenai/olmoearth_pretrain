@@ -309,3 +309,44 @@ class APTConfig(Config):
         config.masking.encode_ratio = 1.0
         config.masking.decode_ratio = 0.0
         return config
+
+    @classmethod
+    def default_s2_finetune_config_4scale(cls) -> "APTConfig":
+        """Get 4-scale APT config for Sentinel-2 finetuning.
+
+        Scales: [1, 2, 4, 8] pixel patches with avg-init conv downsampling.
+        3 thresholds control splitting at each level:
+          thresholds[0] -> 2px→1px, thresholds[1] -> 4px→2px, thresholds[2] -> 8px→4px
+
+        Returns:
+            APTConfig with 4 scales, masking disabled, average conv init
+        """
+        config = cls(
+            scorer=APTScorerConfig(
+                scorer_type=ScorerType.ENTROPY,
+                num_bins=32,
+                bands=[Modality.SENTINEL2_L2A.band_order.index(band) for band in ["B02", "B03", "B04"]],
+                normalize=True,
+            ),
+            partitioner=APTPartitionerConfig(
+                base_patch_size=1,
+                num_scales=4,  # Scales: 1, 2, 4, 8
+                thresholds=[0.3, 0.5, 0.8],
+            ),
+            embed=APTEmbedConfig(
+                embedding_size=768,
+                base_patch_size=1,
+                num_scales=4,
+                conv_init="average",
+            ),
+            transform=APTTransformConfig(modality_name="sentinel2_l2a"),
+            masking=APTMaskingConfig(
+                apt_modalities=["sentinel2_l2a"],
+                encode_ratio=1.0,
+                decode_ratio=0.0,
+            ),
+            apt_modalities=["sentinel2_l2a"],
+            enabled=True,
+            disable_masking=True,
+        )
+        return config
