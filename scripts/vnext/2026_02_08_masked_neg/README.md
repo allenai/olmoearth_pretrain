@@ -22,6 +22,7 @@ Experiments investigating S2 bandset configurations and cross-spectral learning 
 | 14 | `single_bandset_all12_random_band_dropout_cross_random_masked_neg` | single bandset S2 (all 12) + random band dropout ~ Uniform(0, 0.3) |
 | 15 | `single_bandset_all12_random_band_dropout_era5_random_decode_masked_neg` | single bandset S2 (all 12) + random band dropout ~ Uniform(0, 0.3) + ERA5 decode-only + random_with_decode masking |
 | 16 | `single_bandset_all12_random_band_dropout_era5_cross_random_masked_neg` | single bandset S2 (all 12) + random band dropout ~ Uniform(0, 0.3) + ERA5 decode-only + modality_cross_random masking |
+| 17 | `single_bandset_all12_random_band_dropout_random_decode_masked_neg` | single bandset S2 (all 12) + random band dropout ~ Uniform(0, 0.3) + random_with_decode masking |
 
 ## Launch Commands
 

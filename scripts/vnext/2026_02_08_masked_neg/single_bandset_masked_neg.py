@@ -17,6 +17,7 @@ Fifteen experiments:
 14. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + modality_cross_random masking + masked neg loss
 15. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + ERA5 decode-only + masked neg loss
 16. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + modality_cross_random masking + ERA5 decode-only + masked neg loss
+17. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + masked neg loss
 """
 
 import copy
@@ -1192,6 +1193,62 @@ def build_dataloader_exp16(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 17: single bandset (all 12 bands) + random band dropout + random_with_decode masking
+# ============================================================
+
+
+def build_common_exp17(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp17."""
+    return _build_common(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp17(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp17."""
+    return _build_train_module(common, "random_with_decode")
+
+
+def build_model_exp17(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp17 with random band dropout (rate ~ Uniform(0, 0.3)), all 12 bands."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
+
+
+def build_dataloader_exp17(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp17."""
+    return _build_dataloader(common, "random_with_decode")
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -1291,6 +1348,12 @@ EXPERIMENTS = {
         build_model_exp16,
         build_train_module_exp16,
         build_dataloader_exp16,
+    ),
+    "single_bandset_all12_random_band_dropout_random_decode_masked_neg": (
+        build_common_exp17,
+        build_model_exp17,
+        build_train_module_exp17,
+        build_dataloader_exp17,
     ),
 }
 
