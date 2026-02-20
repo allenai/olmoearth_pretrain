@@ -157,6 +157,11 @@ def build_launch_config(
     if finetune is not None:
         logger.info(f"Propagating finetune tag to experiment: {finetune}")
         env_vars.append(BeakerEnvVar(name="FINETUNE", value=finetune))
+    # Propagate the experiment key to the experiment if set
+    experiment = os.environ.get("EXPERIMENT")
+    if experiment is not None:
+        logger.info(f"Propagating experiment key to experiment: {experiment}")
+        env_vars.append(BeakerEnvVar(name="EXPERIMENT", value=experiment))
 
     return OlmoEarthBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",

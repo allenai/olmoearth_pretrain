@@ -373,6 +373,8 @@ class MultiModalPatchEmbeddings(nn.Module):
         max_patch_size: int,
         embedding_size: int,
         tokenization_config: TokenizationConfig | None = None,
+        band_dropout_rate: float = 0.0,
+        random_band_dropout: bool = False,
     ):
         """Initialize the patch embeddings.
 
@@ -382,12 +384,21 @@ class MultiModalPatchEmbeddings(nn.Module):
             max_patch_size: Maximum size of patches
             embedding_size: Size of embeddings
             tokenization_config: Optional config for custom band groupings
+            band_dropout_rate: Probability of dropping each band channel during training.
+                When > 0, randomly zeroes out bands before the patch embedding Conv2d,
+                forcing the model to learn cross-spectral representations. Only active
+                during training (self.training=True). Default: 0.0 (no dropout).
+            random_band_dropout: If True, sample the dropout rate per forward call from
+                Uniform(0, band_dropout_rate). This reduces train-inference mismatch
+                and acts as stronger augmentation. Default: False (fixed rate).
         """
         super().__init__()
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
         self.supported_modality_names = supported_modality_names
         self.tokenization_config = tokenization_config or TokenizationConfig()
+        self.band_dropout_rate = band_dropout_rate
+        self.random_band_dropout = random_band_dropout
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -490,6 +501,40 @@ class MultiModalPatchEmbeddings(nn.Module):
             patchified_data = torch.index_select(
                 modality_data, -1, getattr(self, buffer_name)
             )
+
+            # Band dropout: randomly zero out channels before embedding to force
+            # cross-spectral learning when using single-bandset tokenization.
+            if self.training and self.band_dropout_rate > 0.0:
+                num_bands = patchified_data.shape[-1]
+                if num_bands > 1:
+                    batch_size = patchified_data.shape[0]
+                    if self.random_band_dropout:
+                        # Sample rate from Uniform(0, band_dropout_rate)
+                        rate = (
+                            torch.rand(1, device=patchified_data.device).item()
+                            * self.band_dropout_rate
+                        )
+                    else:
+                        rate = self.band_dropout_rate
+                    keep_mask = (
+                        torch.rand(batch_size, num_bands, device=patchified_data.device)
+                        >= rate
+                    )
+                    # Ensure at least 1 band kept per sample
+                    no_bands_kept = ~keep_mask.any(dim=1)
+                    if no_bands_kept.any():
+                        rand_idx = torch.randint(
+                            num_bands, (no_bands_kept.sum(),), device=keep_mask.device
+                        )
+                        keep_mask[no_bands_kept, rand_idx] = True
+                    # Broadcast: [B, 1, 1, ..., num_bands]
+                    view_shape = (
+                        [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
+                    )
+                    patchified_data = patchified_data * keep_mask.view(*view_shape).to(
+                        patchified_data.dtype
+                    )
+
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
             ]
@@ -1215,6 +1260,8 @@ class Encoder(FlexiVitBase):
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        band_dropout_rate: float = 0.0,
+        random_band_dropout: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1241,6 +1288,8 @@ class Encoder(FlexiVitBase):
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
             tokenization_config: Optional config for custom band groupings
+            band_dropout_rate: Probability of dropping each band channel during training.
+            random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1267,11 +1316,15 @@ class Encoder(FlexiVitBase):
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
+        self.band_dropout_rate = band_dropout_rate
+        self.random_band_dropout = random_band_dropout
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
             self.embedding_size,
             tokenization_config=self.tokenization_config,
+            band_dropout_rate=self.band_dropout_rate,
+            random_band_dropout=self.random_band_dropout,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -1279,6 +1332,7 @@ class Encoder(FlexiVitBase):
             aggregate_then_project=aggregate_then_project,
         )
         self.norm = nn.LayerNorm(self.embedding_size)
+
         self.apply(self._init_weights)
 
         if frozen_patch_embeddings:
@@ -1557,6 +1611,7 @@ class Encoder(FlexiVitBase):
             input_res,
         )
         tokens_dict.update(original_masks_dict)
+
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
@@ -1676,6 +1731,7 @@ class Encoder(FlexiVitBase):
             raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
 
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
+
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
@@ -1698,6 +1754,7 @@ class Encoder(FlexiVitBase):
 
         if not fast_pass:
             output_dict["project_aggregated"] = self.project_and_aggregate(output)
+
         return output_dict
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
@@ -1793,6 +1850,7 @@ class PredictorBase(FlexiVitBase):
 
         self.input_norm = nn.LayerNorm(encoder_embedding_size)
         self.norm = nn.LayerNorm(decoder_embedding_size)
+
         self.apply(self._init_weights)
 
     def add_masks(self, x: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -2064,6 +2122,7 @@ class Predictor(PredictorBase):
             TokensAndMasks containing the predicted tokens and their masks
         """
         decoder_emedded_dict = x.as_dict(return_none=False)
+
         # Apply Input Norms and encoder to decoder embeds to each modality
         available_modalities = x.modalities
         modalities_to_process = get_modalities_to_process(
@@ -2135,6 +2194,8 @@ class EncoderConfig(Config):
     qk_norm: bool = False
     log_token_norm_stats: bool = False
     tokenization_config: TokenizationConfig | None = None
+    band_dropout_rate: float = 0.0
+    random_band_dropout: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
