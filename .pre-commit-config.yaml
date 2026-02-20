@@ -1,4 +1,3 @@
-exclude_types: ["*.geojson"]
 ci:
   autofix_prs: false
   autoupdate_branch: ""
@@ -21,7 +20,7 @@ repos:
       - id: check-docstring-first
       - id: check-added-large-files
         args: ["--maxkb=2000"]
-        exclude: wheels/*
+        exclude: ^wheels/
       - id: check-ast
       - id: check-byte-order-marker
       - id: check-executables-have-shebangs
