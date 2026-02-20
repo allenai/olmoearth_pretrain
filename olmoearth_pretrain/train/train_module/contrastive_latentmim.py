@@ -208,7 +208,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
-        total_batch_con = torch.tensor(0.0, device=self.device)
+        total_batch_con = torch.zeros([], device=self.device)
 
         # Unpack batch
         patch_size = batch[0]

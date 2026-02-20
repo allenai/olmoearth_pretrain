@@ -186,9 +186,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         name=common.run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
-        enabled=True,  # set to False to avoid wandb errors
+        enabled=True,
     )
-    # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
@@ -252,9 +251,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
-        .with_callback(
-            "beaker", BeakerCallback()
-        )  # this shoukd not be here, but for now it is
+        .with_callback("beaker", BeakerCallback())
         .with_callback(
             "checkpointer",
             CheckpointerCallback(
