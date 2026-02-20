@@ -150,28 +150,27 @@ class SupervisionHead(nn.Module):
                 dtype=next(self.parameters()).dtype,
             )
 
-        # Always call every head to keep FSDP collectives in sync.
-        # Head is applied at patch resolution, then upsampled to target res.
+        # Always call every head and include in output to keep FSDP
+        # collectives in sync during both forward AND backward passes.
+        # Heads whose targets are absent will get a zero-gradient contribution
+        # via compute_supervision_loss (0 * output.sum()).
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
-            # Apply head at patch resolution: [B, P_H, P_W, D] -> [B, P_H, P_W, C]
-            output = head(pooled_features)
+            output = head(pooled_features)  # [B, P_H, P_W, C]
 
             raw_target = getattr(batch, sup_name, None)
-            if raw_target is None:
-                continue
-
-            target_h, target_w = raw_target.shape[1], raw_target.shape[2]
-            if output.shape[1] != target_h or output.shape[2] != target_w:
-                orig_dtype = output.dtype
-                output = rearrange(output, "b h w c -> b c h w")
-                output = F.interpolate(
-                    output.float(),
-                    size=(target_h, target_w),
-                    mode="bilinear",
-                    align_corners=False,
-                ).to(orig_dtype)
-                output = rearrange(output, "b c h w -> b h w c")
+            if raw_target is not None:
+                target_h, target_w = raw_target.shape[1], raw_target.shape[2]
+                if output.shape[1] != target_h or output.shape[2] != target_w:
+                    orig_dtype = output.dtype
+                    output = rearrange(output, "b h w c -> b c h w")
+                    output = F.interpolate(
+                        output.float(),
+                        size=(target_h, target_w),
+                        mode="bilinear",
+                        align_corners=False,
+                    ).to(orig_dtype)
+                    output = rearrange(output, "b c h w -> b h w c")
 
             predictions[sup_name] = output
 
@@ -260,13 +259,22 @@ def compute_supervision_loss(
 
     for name, pred in predictions.items():
         cfg = modality_configs[name]
-        raw_target = getattr(batch, name)
+        raw_target = getattr(batch, name, None)
+
+        # Even when the target is absent or fully missing, we add a
+        # zero-contributing term so that gradients flow through every
+        # head on every rank (required by FSDP).
+        if raw_target is None:
+            total_loss = total_loss + 0 * pred.sum()
+            continue
+
         # raw_target: [B, H, W, 1, num_bands] -> squeeze T dim
         raw_target = raw_target[:, :, :, 0, :]  # [B, H, W, num_bands]
 
         valid_mask = _build_valid_mask(raw_target)
 
         if not valid_mask.any():
+            total_loss = total_loss + 0 * pred.sum()
             per_modality_losses[name] = torch.zeros([], device=device)
             continue
 

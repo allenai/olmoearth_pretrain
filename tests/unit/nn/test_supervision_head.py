@@ -142,16 +142,17 @@ class TestSupervisionHead:
         assert "worldcover" in preds
         assert preds["worldcover"].shape == (B, H_PIX, W_PIX, 11)
 
-    def test_missing_target_skipped(
+    def test_missing_target_still_produces_output(
         self, worldcover_config: dict[str, SupervisionModalityConfig]
     ) -> None:
-        """Modalities absent from the batch produce no predictions."""
+        """Heads always run (for FSDP), even when target is absent."""
         head = SupervisionHead(worldcover_config, embedding_dim=D)
         latent = _make_encoder_latent()
         timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
         batch = MaskedOlmoEarthSample(timestamps=timestamps)
         preds = head(latent, batch)
-        assert len(preds) == 0
+        assert "worldcover" in preds
+        assert preds["worldcover"].requires_grad
 
     def test_regression_head(self) -> None:
         """Regression head produces [B, H, W, 1] output."""
