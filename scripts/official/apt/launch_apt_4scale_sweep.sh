@@ -19,16 +19,18 @@ CLUSTERS_OVERRIDE='--launch.clusters=["ai2/titan","ai2/saturn-cirrascale","ai2/j
 
 # Threshold combos: [2→1, 4→2, 8→4]
 # All keep thresholds[0] high (rare 1px), vary coarser splits
-THRESHOLD_NAMES=("mostly8"       "mix84"         "balanced"      "fine_detail")
-THRESHOLD_VALUES=("3.0,2.5,1.5"  "3.0,2.0,1.0"  "3.0,2.0,0.6"  "2.0,1.5,0.5")
-# Expected ratio:   ~0.3           ~0.5            ~0.7            ~0.9
+THRESHOLD_NAMES="mostly8 mix84 balanced fine_detail"
+THRESHOLD_mostly8="3.0,2.5,1.5"
+THRESHOLD_mix84="3.0,2.0,1.0"
+THRESHOLD_balanced="3.0,2.0,0.6"
+THRESHOLD_fine_detail="2.0,1.5,0.5"
+# Expected ratio:   ~0.3    ~0.5     ~0.7       ~0.9
 
-declare -A DATASETS=(
-    ["eurosat"]="m_eurosat_finetune"
-    ["mados"]="mados_finetune"
-    ["so2sat"]="m_so2sat_finetune"
-    ["bigearthnet"]="m_bigearthnet_finetune"
-)
+DATASETS="eurosat mados so2sat bigearthnet"
+TASK_eurosat="m_eurosat_finetune"
+TASK_mados="mados_finetune"
+TASK_so2sat="m_so2sat_finetune"
+TASK_bigearthnet="m_bigearthnet_finetune"
 
 SCRIPT_DIR="scripts/official/apt"
 
@@ -47,12 +49,14 @@ echo "4-Scale APT Sweep — sub-1 token ratio targets"
 echo "Mode: $MODE"
 echo "=============================================="
 
-for dataset in eurosat mados so2sat bigearthnet; do
-    task_name="${DATASETS[$dataset]}"
+for dataset in $DATASETS; do
+    # Look up task name via variable indirection
+    task_var="TASK_${dataset}"
+    task_name="${!task_var}"
 
-    for i in "${!THRESHOLD_NAMES[@]}"; do
-        thresh_name="${THRESHOLD_NAMES[$i]}"
-        thresh_val="${THRESHOLD_VALUES[$i]}"
+    for thresh_name in $THRESHOLD_NAMES; do
+        thresh_var="THRESHOLD_${thresh_name}"
+        thresh_val="${!thresh_var}"
         run_name="4scale_${dataset}_${thresh_name}"
         script="${SCRIPT_DIR}/apt_4scale_${dataset}_eval_tiny.py"
 
@@ -67,4 +71,4 @@ for dataset in eurosat mados so2sat bigearthnet; do
 done
 
 echo ""
-echo "Done! ${#DATASETS[@]} datasets x ${#THRESHOLD_NAMES[@]} combos = $(( ${#DATASETS[@]} * ${#THRESHOLD_NAMES[@]} )) runs"
+echo "Done! 4 datasets x 4 combos = 16 runs"
