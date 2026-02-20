@@ -17,7 +17,6 @@ except ImportError:
 
 logger = getLogger(__name__)
 
-
 @torch._dynamo.disable()
 def dispatch_flash_attn(
     q: torch.Tensor,
@@ -556,4 +555,4 @@ class Block(nn.Module):
 
     def apply_compile(self) -> None:
         """Apply torch.compile to the model."""
-        self.compile(dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
+        self.compile(dynamic=True)

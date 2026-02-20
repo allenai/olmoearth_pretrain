@@ -254,11 +254,7 @@ class TokensAndMasks(NamedTuple):
             return x_for_pooling.max(dim=1).values
         elif pooling_type == PoolingType.MEAN:
             num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
-            logger.debug(f"num_encoded_tokens: {num_encoded_tokens}")
-            if (num_encoded_tokens == 0).any():
-                raise ValueError(
-                    f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
-                )
+            logger.debug("num_encoded_tokens: %s", num_encoded_tokens)
             return x_for_pooling.sum(dim=1) / num_encoded_tokens
         else:
             raise ValueError(f"Invalid pooling type: {pooling_type}")
@@ -464,7 +460,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         patch_size: int,
     ) -> tuple[Tensor, Tensor]:
         """Apply embedding to a modality."""
-        logger.debug(f"applying embedding to modality:{modality}")
+        logger.debug("applying embedding to modality:%s", modality)
         masked_modality_name = input_data.get_masked_modality_name(modality)
         modality_mask = getattr(input_data, masked_modality_name)
         modality_data = getattr(input_data, modality)
@@ -724,7 +720,7 @@ class ReconstructorConfig(Config):
         kwargs["supported_modalities"] = self.supported_modalities
         kwargs.pop("decoder_config")
         kwargs["decoder"] = self.decoder_config.build()
-        logger.info(f"Predictor kwargs: {kwargs}")
+        logger.info("Predictor kwargs: %s", kwargs)
         return Reconstructor(**kwargs)
 
 
@@ -844,12 +840,14 @@ class CompositeEncodings(nn.Module):
             Tensor with encodings applied based on modality type
         """
         logger.debug(
-            f"use_modality_encodings: {use_modality_encodings}, use_temporal_encodings: {use_temporal_encodings}"
+            "use_modality_encodings: %s, use_temporal_encodings: %s",
+            use_modality_encodings,
+            use_temporal_encodings,
         )
         # TODO: Improve this implementation it is quite bad
 
         modality = Modality.get(modality_name)
-        logger.debug(f"Applying encodings to modality {modality}")
+        logger.debug("Applying encodings to modality %s", modality)
         if not use_modality_encodings and use_temporal_encodings:
             b, h, w, t, _ = modality_tokens.shape
             ein_string, ein_dict = (
@@ -996,7 +994,7 @@ class FlexiVitBase(nn.Module):
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
         self.supported_modality_names = [x.name for x in supported_modalities]
-        logger.info(f"modalities being used by model: {self.supported_modality_names}")
+        logger.info("modalities being used by model: %s", self.supported_modality_names)
 
         self.max_sequence_length = max_sequence_length
         self._base_tokenization_config = tokenization_config or TokenizationConfig()
@@ -1370,28 +1368,22 @@ class Encoder(FlexiVitBase):
         assert x.shape[1] > 0, (
             "x must have at least one token we should not mask all tokens"
         )
-        masked_tokens = repeat(
-            torch.zeros_like(x[0, 0, :]), "d -> b t d", b=x.shape[0], t=indices.shape[1]
-        )
-        full_mask = torch.cat(
-            (
-                mask,
-                torch.zeros(
-                    (x.shape[0], indices.shape[1] - x.shape[1]),
-                    device=x.device,
-                    dtype=mask.dtype,
-                ),
-            ),
-            dim=-1,
-        )
-        # can't set value on leaf variable
-        out = masked_tokens.clone()
-        # put tokens in full masked tensor (at the first N positions in every row)
-        out[full_mask] = x[mask]
-        # then move them to their original positions
-        out = out.scatter(1, indices[:, :, None].expand_as(out), out)
-        full_mask = full_mask.scatter(1, indices.expand_as(full_mask), full_mask)
-        # Values that were masked out are not returned but the values that are still there are returned to the original positions
+        batch, num_kept, dim = x.shape
+        num_total = indices.shape[1]
+
+        # Zero out non-masked tokens, pad to full length, then scatter to original positions.
+        # This avoids boolean indexing (which triggers nonzero/GPU sync).
+        x_active = x * mask.unsqueeze(-1).to(x.dtype)
+        padded = x_active.new_zeros(batch, num_total, dim)
+        padded[:, :num_kept] = x_active
+
+        out = padded.new_zeros(batch, num_total, dim)
+        out.scatter_(1, indices[:, :, None].expand_as(padded), padded)
+
+        full_mask = mask.new_zeros(batch, num_total)
+        full_mask[:, :num_kept] = mask
+        full_mask = full_mask.scatter(1, indices, full_mask)
+
         return out, full_mask
 
     def create_exit_seqs(
@@ -2161,7 +2153,7 @@ class EncoderConfig(Config):
         # supported_modality_names is replaced by supported_modalities
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
-        logger.info(f"Encoder kwargs: {kwargs}")
+        logger.info("Encoder kwargs: %s", kwargs)
         return Encoder(**kwargs)
 
 
@@ -2207,5 +2199,5 @@ class PredictorConfig(Config):
         # supported_modality_names is replaced by supported_modalities
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
-        logger.info(f"Predictor kwargs: {kwargs}")
+        logger.info("Predictor kwargs: %s", kwargs)
         return Predictor(**kwargs)
