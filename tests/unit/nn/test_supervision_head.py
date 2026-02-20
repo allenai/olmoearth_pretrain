@@ -13,7 +13,7 @@ from olmoearth_pretrain.nn.supervision_head import (
     SupervisionTaskType,
     _build_valid_mask,
     _masked_mean_over_t_bs,
-    _pool_and_upsample_encoder_features,
+    _pool_encoder_features,
     compute_supervision_loss,
 )
 
@@ -84,20 +84,20 @@ class TestMaskedMeanOverTBS:
         assert torch.allclose(result, torch.full((B, P_H, P_W, D), 2.0))
 
 
-class TestPoolAndUpsampleEncoderFeatures:
-    """Test _pool_and_upsample_encoder_features."""
+class TestPoolEncoderFeatures:
+    """Test _pool_encoder_features."""
 
     def test_basic(self) -> None:
-        """Single modality upsampled to target resolution."""
+        """Single modality pooled at patch resolution."""
         latent = _make_encoder_latent()
-        result = _pool_and_upsample_encoder_features(latent, H_PIX, W_PIX)
+        result = _pool_encoder_features(latent)
         assert result is not None
-        assert result.shape == (B, H_PIX, W_PIX, D)
+        assert result.shape == (B, P_H, P_W, D)
 
     def test_no_encoded_tokens_returns_none(self) -> None:
         """All MISSING tokens yield None."""
         latent = _make_encoder_latent(mask_value=MaskValue.MISSING.value)
-        result = _pool_and_upsample_encoder_features(latent, H_PIX, W_PIX)
+        result = _pool_encoder_features(latent)
         assert result is None
 
     def test_multiple_modalities(self) -> None:
@@ -112,9 +112,9 @@ class TestPoolAndUpsampleEncoderFeatures:
                 (B, P_H, P_W, T, 1), MaskValue.ONLINE_ENCODER.value
             ),
         )
-        result = _pool_and_upsample_encoder_features(latent, H_PIX, W_PIX)
+        result = _pool_encoder_features(latent)
         assert result is not None
-        assert result.shape == (B, H_PIX, W_PIX, D)
+        assert result.shape == (B, P_H, P_W, D)
 
 
 class TestSupervisionHead:

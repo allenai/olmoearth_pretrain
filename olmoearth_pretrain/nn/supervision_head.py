@@ -87,14 +87,14 @@ class SupervisionHeadConfig(Config):
 
 
 class SupervisionHead(nn.Module):
-    """Per-modality linear heads applied to spatially-upsampled encoder features.
+    """Per-modality linear heads on pooled encoder features.
 
     Forward path:
       1. For each encoded spatial modality in the encoder output, compute a masked
          mean over T and BandSets (only ONLINE_ENCODER tokens) -> ``[B, P_H, P_W, D]``
-      2. Bilinear-upsample each to the target pixel resolution and average across
-         encoded modalities -> ``[B, H, W, D]``
-      3. Per-supervised-modality linear head -> ``[B, H, W, C]``
+      2. Average across contributing modalities -> ``[B, P_H, P_W, D]``
+      3. Per-supervised-modality linear head -> ``[B, P_H, P_W, C]``
+      4. Bilinear-upsample C channels to target pixel resolution -> ``[B, H, W, C]``
     """
 
     def __init__(
@@ -128,77 +128,69 @@ class SupervisionHead(nn.Module):
         Returns:
             Dictionary mapping supervised modality name -> predictions ``[B, H, W, C]``.
         """
-        # Determine batch size from any available modality in the latent
-        batch_size: int = 0
-        for modality_name in latent.modalities:
-            t = getattr(latent, modality_name)
-            if t is not None:
-                batch_size = t.shape[0]
-                break
-
-        # Pool encoder features and upsample to each unique target resolution.
-        # We collect all target resolutions first (from batch data or from the
-        # modality spec as fallback) so we can build the feature maps.
-        target_sizes: dict[str, tuple[int, int]] = {}
-        for sup_name in self.heads:
-            raw_target = getattr(batch, sup_name, None)
-            if raw_target is not None:
-                target_sizes[sup_name] = (raw_target.shape[1], raw_target.shape[2])
-            else:
-                modality_spec = Modality.get(sup_name)
-                tile_size = modality_spec.get_expected_tile_size()
-                target_sizes[sup_name] = (tile_size, tile_size)
-
-        combined_features: dict[tuple[int, int], Tensor] = {}
-        for res_key in set(target_sizes.values()):
-            feat = _pool_and_upsample_encoder_features(latent, res_key[0], res_key[1])
-            if feat is not None:
-                combined_features[res_key] = feat
+        # Pool encoder features at patch resolution (no upsampling yet).
+        pooled_features = _pool_encoder_features(latent)
 
         # Fallback: if no encoded spatial modalities exist, create zeros so
         # that every head still executes its forward pass (required by FSDP).
-        if not combined_features:
+        if pooled_features is None:
             first_head = next(iter(self.heads.values()))
-            in_features = first_head.in_features
-            for res_key in set(target_sizes.values()):
-                combined_features[res_key] = torch.zeros(
-                    batch_size,
-                    res_key[0],
-                    res_key[1],
-                    in_features,
-                    device=next(self.parameters()).device,
-                    dtype=next(self.parameters()).dtype,
-                )
+            batch_size = 1
+            for modality_name in latent.modalities:
+                t = getattr(latent, modality_name)
+                if t is not None:
+                    batch_size = t.shape[0]
+                    break
+            pooled_features = torch.zeros(
+                batch_size,
+                1,
+                1,
+                first_head.in_features,
+                device=next(self.parameters()).device,
+                dtype=next(self.parameters()).dtype,
+            )
 
         # Always call every head to keep FSDP collectives in sync.
+        # Head is applied at patch resolution, then upsampled to target res.
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
-            res_key = target_sizes[sup_name]
-            output = head(combined_features[res_key])
-            # Only include in predictions if the raw target actually exists;
-            # absent targets will not contribute to the loss.
-            if getattr(batch, sup_name, None) is not None:
-                predictions[sup_name] = output
+            # Apply head at patch resolution: [B, P_H, P_W, D] -> [B, P_H, P_W, C]
+            output = head(pooled_features)
+
+            raw_target = getattr(batch, sup_name, None)
+            if raw_target is None:
+                continue
+
+            target_h, target_w = raw_target.shape[1], raw_target.shape[2]
+            if output.shape[1] != target_h or output.shape[2] != target_w:
+                orig_dtype = output.dtype
+                output = rearrange(output, "b h w c -> b c h w")
+                output = F.interpolate(
+                    output.float(),
+                    size=(target_h, target_w),
+                    mode="bilinear",
+                    align_corners=False,
+                ).to(orig_dtype)
+                output = rearrange(output, "b c h w -> b h w c")
+
+            predictions[sup_name] = output
 
         return predictions
 
 
-def _pool_and_upsample_encoder_features(
+def _pool_encoder_features(
     latent: TokensAndMasks,
-    target_h: int,
-    target_w: int,
 ) -> Tensor | None:
-    """Pool encoder tokens across T/BandSets and upsample to target resolution.
+    """Pool encoder tokens across T/BandSets at patch resolution.
 
     For each spatial modality with ONLINE_ENCODER tokens:
       - Masked mean over T and BandSets -> ``[B, P_H, P_W, D]``
-      - Bilinear upsample to ``(target_h, target_w)``
     Then average across contributing modalities.
 
     Returns:
-        ``[B, target_h, target_w, D]`` or None if no encoded spatial modalities.
+        ``[B, P_H, P_W, D]`` or None if no encoded spatial modalities.
     """
-    upsampled: list[Tensor] = []
+    pooled_list: list[Tensor] = []
     for modality_name in latent.modalities:
         modality_spec = Modality.get(modality_name)
         if not modality_spec.is_spatial:
@@ -212,23 +204,14 @@ def _pool_and_upsample_encoder_features(
         if not encoder_mask.any():
             continue
 
-        pooled = _masked_mean_over_t_bs(tokens, encoder_mask)  # [B, P_H, P_W, D]
+        pooled_list.append(
+            _masked_mean_over_t_bs(tokens, encoder_mask)
+        )  # [B, P_H, P_W, D]
 
-        orig_dtype = pooled.dtype
-        pooled = rearrange(pooled, "b h w d -> b d h w")
-        pooled = F.interpolate(
-            pooled.float(),
-            size=(target_h, target_w),
-            mode="bilinear",
-            align_corners=False,
-        ).to(orig_dtype)
-        pooled = rearrange(pooled, "b d h w -> b h w d")
-        upsampled.append(pooled)
-
-    if not upsampled:
+    if not pooled_list:
         return None
 
-    return torch.stack(upsampled).mean(dim=0)
+    return torch.stack(pooled_list).mean(dim=0)
 
 
 def _masked_mean_over_t_bs(tokens: Tensor, mask: Tensor) -> Tensor:
