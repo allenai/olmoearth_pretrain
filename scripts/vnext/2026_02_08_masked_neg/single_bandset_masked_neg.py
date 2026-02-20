@@ -1,18 +1,11 @@
 """Single bandset experiments with masked-negatives loss.
 
-Fifteen experiments:
+Experiments:
 1. modality_cross_random masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
 2. random_with_decode masking + single bandset S2 (all 12 bands) / Landsat + masked neg loss
-3. modality_cross_random masking + single bandset S2 (no 60m: 10 bands) / Landsat + masked neg loss
-4. modality_cross_random masking + single bandset S2 (10m only: 4 bands) / Landsat + masked neg loss
 5. modality_cross_random masking + single bandset S2 (all 12) / Landsat + masked neg loss + band dropout 0.3
 6. modality_cross_random masking + single bandset S2 (all 12) / Landsat + masked neg loss + band dropout 0.5
-7. random_with_decode masking + single bandset S2/Landsat + ERA5 decode-only (1 bandset) + masked neg loss
 8. modality_cross_random masking + 2 bandsets S2 (10m+20m) / Landsat single + masked neg loss
-9. merged 3 bandsets S2 / Landsat + modality_cross_random masking + masked neg loss (merge before transformer, unmerge in decoder)
-10. mid-layer merged 3 bandsets S2 / Landsat + modality_cross_random masking + masked neg loss (merge after layer 3, unmerge in decoder)
-11. default 3 bandsets S2 / 2 bandsets Landsat set via TokenizationConfig + modality_cross_random masking + masked neg loss (sanity check)
-12. mid-layer merged 2 bandsets S2 (10m+20m) / Landsat single + modality_cross_random masking + masked neg loss (combines exp 8 + 10)
 13. single bandset S2 (no 60m: 10 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + modality_cross_random masking + masked neg loss
 14. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + modality_cross_random masking + masked neg loss
 15. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + ERA5 decode-only + masked neg loss
@@ -120,12 +113,6 @@ S2_SINGLE_BANDSET_NO_60M = ModalityTokenization(
     ]
 )
 
-S2_SINGLE_BANDSET_10M_ONLY = ModalityTokenization(
-    band_groups=[
-        ["B02", "B03", "B04", "B08"],
-    ]
-)
-
 S2_TWO_BANDSETS_10M_20M = ModalityTokenization(
     band_groups=[
         ["B02", "B03", "B04", "B08"],
@@ -136,22 +123,6 @@ S2_TWO_BANDSETS_10M_20M = ModalityTokenization(
 LANDSAT_SINGLE_BANDSET = ModalityTokenization(
     band_groups=[
         ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
-    ]
-)
-
-# Default bandsets (matching ModalitySpec defaults) — for verification
-S2_THREE_BANDSETS_DEFAULT = ModalityTokenization(
-    band_groups=[
-        ["B02", "B03", "B04", "B08"],
-        ["B05", "B06", "B07", "B8A", "B11", "B12"],
-        ["B01", "B09"],
-    ]
-)
-
-LANDSAT_TWO_BANDSETS_DEFAULT = ModalityTokenization(
-    band_groups=[
-        ["B8"],
-        ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
     ]
 )
 
@@ -326,64 +297,6 @@ build_model_exp2 = _build_model
 
 
 # ============================================================
-# Experiment 3: modality_cross_random + single_bandset bandsets (no B01/B09)
-# ============================================================
-
-
-def build_common_exp3(
-    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
-) -> CommonComponents:
-    """Build common components for exp3."""
-    return _build_common(
-        script, cmd, run_name, cluster, overrides, s2_config=S2_SINGLE_BANDSET_NO_60M
-    )
-
-
-def build_train_module_exp3(
-    common: CommonComponents,
-) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build train module for exp3."""
-    return _build_train_module(common, "modality_cross_random")
-
-
-def build_dataloader_exp3(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Build dataloader for exp3."""
-    return _build_dataloader(common, "modality_cross_random")
-
-
-build_model_exp3 = _build_model
-
-
-# ============================================================
-# Experiment 4: modality_cross_random + 10m bands only (no 20m/60m)
-# ============================================================
-
-
-def build_common_exp4(
-    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
-) -> CommonComponents:
-    """Build common components for exp4."""
-    return _build_common(
-        script, cmd, run_name, cluster, overrides, s2_config=S2_SINGLE_BANDSET_10M_ONLY
-    )
-
-
-def build_train_module_exp4(
-    common: CommonComponents,
-) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build train module for exp4."""
-    return _build_train_module(common, "modality_cross_random")
-
-
-def build_dataloader_exp4(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Build dataloader for exp4."""
-    return _build_dataloader(common, "modality_cross_random")
-
-
-build_model_exp4 = _build_model
-
-
-# ============================================================
 # Experiment 5: modality_cross_random + single_bandset + band dropout (0.3)
 # ============================================================
 
@@ -445,9 +358,7 @@ def build_model_exp6(common: CommonComponents) -> LatentMIMConfig:
     return _build_model(common, band_dropout_rate=BAND_DROPOUT_RATE_HIGH)
 
 
-# ============================================================
-# Experiment 7: random_with_decode + single_bandset + ERA5 decode-only
-# ============================================================
+# --- ERA5 masking/loss configs (used by exps 15, 16) ---
 
 
 def _masking_config_era5(
@@ -490,57 +401,6 @@ def _loss_config_era5() -> LossConfig:
     )
 
 
-def build_common_exp7(
-    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
-) -> CommonComponents:
-    """Build common components for exp7 (ERA5 decode-only)."""
-    common = _build_common(script, cmd, run_name, cluster, overrides)
-    common.training_modalities = common.training_modalities + [Modality.ERA5_10.name]
-    return common
-
-
-def build_train_module_exp7(
-    common: CommonComponents,
-) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build train module for exp7 (ERA5 decode-only)."""
-    return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
-        rank_microbatch_size=32,
-        masking_config=_masking_config_era5(common.tokenization_config),
-        loss_config=_loss_config_era5(),
-        contrastive_config=_contrastive_config(),
-        token_exit_cfg={modality: 0 for modality in common.training_modalities},
-        max_grad_norm=1.0,
-        scheduler=CosWithWarmup(warmup_steps=8000),
-        ema_decay=(1.0, 1.0),
-        dp_config=DataParallelConfig(
-            name=DataParallelType.fsdp,
-            param_dtype=DType.bfloat16,
-            reduce_dtype=DType.float32,
-        ),
-    )
-
-
-def build_dataloader_exp7(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Build dataloader for exp7 (ERA5 decode-only)."""
-    return OlmoEarthDataLoaderConfig(
-        num_workers=16,
-        global_batch_size=512,
-        token_budget=2250,
-        prefetch_factor=4,
-        sampled_hw_p_list=list(range(1, 13)),
-        min_patch_size=MIN_PATCH_SIZE,
-        max_patch_size=MAX_PATCH_SIZE,
-        work_dir=common.save_folder,
-        seed=3622,
-        num_masked_views=2,
-        masking_config=_masking_config_era5(common.tokenization_config),
-    )
-
-
-build_model_exp7 = _build_model
-
-
 # ============================================================
 # Experiment 8: modality_cross_random + 2 bandsets S2 (10m+20m) / Landsat single
 # ============================================================
@@ -568,342 +428,6 @@ def build_dataloader_exp8(common: CommonComponents) -> OlmoEarthDataLoaderConfig
 
 
 build_model_exp8 = _build_model
-
-
-# ============================================================
-# Experiment 9: merged 3 bandsets S2/Landsat + modality_cross_random masking
-# ============================================================
-
-
-def build_common_exp9(
-    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
-) -> CommonComponents:
-    """Build common components for exp9 (merged bandsets, default 3-bandset tokenization)."""
-    common = build_common_components_base(script, cmd, run_name, cluster, overrides)
-    # Use default tokenization (3 bandsets for S2, 2 for Landsat) — merge happens in model
-    return common
-
-
-def build_train_module_exp9(
-    common: CommonComponents,
-) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build train module for exp9 (merged bandsets with modality_cross_random masking)."""
-    return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
-        rank_microbatch_size=32,
-        masking_config=_masking_config(
-            "modality_cross_random", common.tokenization_config
-        ),
-        loss_config=_loss_config(),
-        contrastive_config=_contrastive_config(),
-        token_exit_cfg={modality: 0 for modality in common.training_modalities},
-        max_grad_norm=1.0,
-        scheduler=CosWithWarmup(warmup_steps=8000),
-        ema_decay=(1.0, 1.0),
-        dp_config=DataParallelConfig(
-            name=DataParallelType.fsdp,
-            param_dtype=DType.bfloat16,
-            reduce_dtype=DType.float32,
-        ),
-    )
-
-
-def build_model_exp9(common: CommonComponents) -> LatentMIMConfig:
-    """Build model for exp9 with merge_bandsets + unmerge_bandsets."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-    encoder_config = EncoderConfig(
-        embedding_size=model_size["encoder_embedding_size"],
-        num_heads=model_size["encoder_num_heads"],
-        depth=model_size["encoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        supported_modality_names=common.training_modalities,
-        max_patch_size=MAX_PATCH_SIZE,
-        drop_path=0.1,
-        max_sequence_length=12,
-        tokenization_config=common.tokenization_config,
-        merge_bandsets=True,
-    )
-    decoder_config = PredictorConfig(
-        encoder_embedding_size=model_size["encoder_embedding_size"],
-        decoder_embedding_size=model_size["decoder_embedding_size"],
-        depth=model_size["decoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        num_heads=model_size["decoder_num_heads"],
-        supported_modality_names=common.training_modalities,
-        max_sequence_length=12,
-        tokenization_config=common.tokenization_config,
-        unmerge_bandsets=True,
-    )
-    return LatentMIMConfig(
-        encoder_config=encoder_config,
-        decoder_config=decoder_config,
-    )
-
-
-def build_dataloader_exp9(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Build dataloader for exp9 (merged bandsets, modality_cross_random masking)."""
-    return OlmoEarthDataLoaderConfig(
-        num_workers=16,
-        global_batch_size=512,
-        token_budget=2250,
-        prefetch_factor=4,
-        sampled_hw_p_list=list(range(1, 13)),
-        min_patch_size=MIN_PATCH_SIZE,
-        max_patch_size=MAX_PATCH_SIZE,
-        work_dir=common.save_folder,
-        seed=3622,
-        num_masked_views=2,
-        masking_config=_masking_config(
-            "modality_cross_random", common.tokenization_config
-        ),
-    )
-
-
-# ============================================================
-# Experiment 10: mid-layer merged 3 bandsets S2/Landsat + modality_cross_random masking
-# ============================================================
-
-MERGE_AFTER_LAYER = 3  # merge after 4 early layers of cross-bandset attention
-
-
-def build_common_exp10(
-    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
-) -> CommonComponents:
-    """Build common components for exp10 (mid-layer merged bandsets)."""
-    common = build_common_components_base(script, cmd, run_name, cluster, overrides)
-    # Use default tokenization (3 bandsets for S2, 2 for Landsat) — merge happens mid-transformer
-    return common
-
-
-def build_train_module_exp10(
-    common: CommonComponents,
-) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build train module for exp10 (mid-layer merge with modality_cross_random masking)."""
-    return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
-        rank_microbatch_size=32,
-        masking_config=_masking_config(
-            "modality_cross_random", common.tokenization_config
-        ),
-        loss_config=_loss_config(),
-        contrastive_config=_contrastive_config(),
-        token_exit_cfg={modality: 0 for modality in common.training_modalities},
-        max_grad_norm=1.0,
-        scheduler=CosWithWarmup(warmup_steps=8000),
-        ema_decay=(1.0, 1.0),
-        dp_config=DataParallelConfig(
-            name=DataParallelType.fsdp,
-            param_dtype=DType.bfloat16,
-            reduce_dtype=DType.float32,
-        ),
-    )
-
-
-def build_model_exp10(common: CommonComponents) -> LatentMIMConfig:
-    """Build model for exp10 with mid-layer merge_bandsets + unmerge_bandsets."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-    encoder_config = EncoderConfig(
-        embedding_size=model_size["encoder_embedding_size"],
-        num_heads=model_size["encoder_num_heads"],
-        depth=model_size["encoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        supported_modality_names=common.training_modalities,
-        max_patch_size=MAX_PATCH_SIZE,
-        drop_path=0.1,
-        max_sequence_length=12,
-        tokenization_config=common.tokenization_config,
-        merge_bandsets=True,
-        merge_after_layer=MERGE_AFTER_LAYER,
-    )
-    decoder_config = PredictorConfig(
-        encoder_embedding_size=model_size["encoder_embedding_size"],
-        decoder_embedding_size=model_size["decoder_embedding_size"],
-        depth=model_size["decoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        num_heads=model_size["decoder_num_heads"],
-        supported_modality_names=common.training_modalities,
-        max_sequence_length=12,
-        tokenization_config=common.tokenization_config,
-        unmerge_bandsets=True,
-    )
-    return LatentMIMConfig(
-        encoder_config=encoder_config,
-        decoder_config=decoder_config,
-    )
-
-
-def build_dataloader_exp10(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Build dataloader for exp10 (mid-layer merged bandsets, modality_cross_random)."""
-    return OlmoEarthDataLoaderConfig(
-        num_workers=16,
-        global_batch_size=512,
-        token_budget=2250,
-        prefetch_factor=4,
-        sampled_hw_p_list=list(range(1, 13)),
-        min_patch_size=MIN_PATCH_SIZE,
-        max_patch_size=MAX_PATCH_SIZE,
-        work_dir=common.save_folder,
-        seed=3622,
-        num_masked_views=2,
-        masking_config=_masking_config(
-            "modality_cross_random", common.tokenization_config
-        ),
-    )
-
-
-# ============================================================
-# Experiment 11: default 3 bandsets S2 / 2 bandsets Landsat via TokenizationConfig + modality_cross_random
-# ============================================================
-
-
-def _tokenization_config_default_bandsets() -> TokenizationConfig:
-    return TokenizationConfig(
-        overrides={
-            "sentinel2_l2a": S2_THREE_BANDSETS_DEFAULT,
-            "landsat": LANDSAT_TWO_BANDSETS_DEFAULT,
-        }
-    )
-
-
-def build_common_exp11(
-    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
-) -> CommonComponents:
-    """Build common components for exp11 (default bandsets via tokenization config)."""
-    common = build_common_components_base(script, cmd, run_name, cluster, overrides)
-    common.tokenization_config = _tokenization_config_default_bandsets()
-    return common
-
-
-def build_train_module_exp11(
-    common: CommonComponents,
-) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build train module for exp11."""
-    return ContrastiveLatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
-        rank_microbatch_size=32,
-        masking_config=_masking_config(
-            "modality_cross_random", common.tokenization_config
-        ),
-        loss_config=_loss_config(),
-        contrastive_config=_contrastive_config(),
-        token_exit_cfg={modality: 0 for modality in common.training_modalities},
-        max_grad_norm=1.0,
-        scheduler=CosWithWarmup(warmup_steps=8000),
-        ema_decay=(1.0, 1.0),
-        dp_config=DataParallelConfig(
-            name=DataParallelType.fsdp,
-            param_dtype=DType.bfloat16,
-            reduce_dtype=DType.float32,
-        ),
-    )
-
-
-def build_model_exp11(common: CommonComponents) -> LatentMIMConfig:
-    """Build model for exp11 (default bandsets via tokenization config)."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-    encoder_config = EncoderConfig(
-        embedding_size=model_size["encoder_embedding_size"],
-        num_heads=model_size["encoder_num_heads"],
-        depth=model_size["encoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        supported_modality_names=common.training_modalities,
-        max_patch_size=MAX_PATCH_SIZE,
-        drop_path=0.1,
-        max_sequence_length=12,
-        tokenization_config=common.tokenization_config,
-    )
-    decoder_config = PredictorConfig(
-        encoder_embedding_size=model_size["encoder_embedding_size"],
-        decoder_embedding_size=model_size["decoder_embedding_size"],
-        depth=model_size["decoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        num_heads=model_size["decoder_num_heads"],
-        supported_modality_names=common.training_modalities,
-        max_sequence_length=12,
-        tokenization_config=common.tokenization_config,
-    )
-    return LatentMIMConfig(
-        encoder_config=encoder_config,
-        decoder_config=decoder_config,
-    )
-
-
-def build_dataloader_exp11(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Build dataloader for exp11."""
-    return OlmoEarthDataLoaderConfig(
-        num_workers=16,
-        global_batch_size=512,
-        token_budget=2250,
-        prefetch_factor=4,
-        sampled_hw_p_list=list(range(1, 13)),
-        min_patch_size=MIN_PATCH_SIZE,
-        max_patch_size=MAX_PATCH_SIZE,
-        work_dir=common.save_folder,
-        seed=3622,
-        num_masked_views=2,
-        masking_config=_masking_config(
-            "modality_cross_random", common.tokenization_config
-        ),
-    )
-
-
-# ============================================================
-# Experiment 12: mid-layer merged 2 bandsets S2 (10m+20m) / Landsat single + modality_cross_random
-# ============================================================
-
-
-def build_common_exp12(
-    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
-) -> CommonComponents:
-    """Build common components for exp12 (2 S2 bandsets with mid-layer merge)."""
-    return _build_common(
-        script, cmd, run_name, cluster, overrides, s2_config=S2_TWO_BANDSETS_10M_20M
-    )
-
-
-def build_train_module_exp12(
-    common: CommonComponents,
-) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build train module for exp12."""
-    return _build_train_module(common, "modality_cross_random")
-
-
-def build_model_exp12(common: CommonComponents) -> LatentMIMConfig:
-    """Build model for exp12 with 2 S2 bandsets + mid-layer merge/unmerge."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-    encoder_config = EncoderConfig(
-        embedding_size=model_size["encoder_embedding_size"],
-        num_heads=model_size["encoder_num_heads"],
-        depth=model_size["encoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        supported_modality_names=common.training_modalities,
-        max_patch_size=MAX_PATCH_SIZE,
-        drop_path=0.1,
-        max_sequence_length=12,
-        tokenization_config=common.tokenization_config,
-        merge_bandsets=True,
-        merge_after_layer=MERGE_AFTER_LAYER,
-    )
-    decoder_config = PredictorConfig(
-        encoder_embedding_size=model_size["encoder_embedding_size"],
-        decoder_embedding_size=model_size["decoder_embedding_size"],
-        depth=model_size["decoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        num_heads=model_size["decoder_num_heads"],
-        supported_modality_names=common.training_modalities,
-        max_sequence_length=12,
-        tokenization_config=common.tokenization_config,
-        unmerge_bandsets=True,
-    )
-    return LatentMIMConfig(
-        encoder_config=encoder_config,
-        decoder_config=decoder_config,
-    )
-
-
-def build_dataloader_exp12(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Build dataloader for exp12."""
-    return _build_dataloader(common, "modality_cross_random")
 
 
 RANDOM_BAND_DROPOUT_MAX_RATE = 0.3
@@ -1265,19 +789,7 @@ EXPERIMENTS = {
         build_train_module_exp2,
         build_dataloader_exp2,
     ),
-    "single_bandset_no60m_cross_random_masked_neg": (
-        build_common_exp3,
-        build_model_exp3,
-        build_train_module_exp3,
-        build_dataloader_exp3,
-    ),
-    "single_bandset_10m_only_cross_random_masked_neg": (
-        build_common_exp4,
-        build_model_exp4,
-        build_train_module_exp4,
-        build_dataloader_exp4,
-    ),
-    "single_bandset_band_dropout_cross_random_masked_neg": (
+    "single_bandset_band_dropout_0.3_cross_random_masked_neg": (
         build_common_exp5,
         build_model_exp5,
         build_train_module_exp5,
@@ -1289,41 +801,11 @@ EXPERIMENTS = {
         build_train_module_exp6,
         build_dataloader_exp6,
     ),
-    "single_bandset_era5_decode_only_masked_neg": (
-        build_common_exp7,
-        build_model_exp7,
-        build_train_module_exp7,
-        build_dataloader_exp7,
-    ),
     "two_bandset_cross_random_masked_neg": (
         build_common_exp8,
         build_model_exp8,
         build_train_module_exp8,
         build_dataloader_exp8,
-    ),
-    "merged_bandsets_cross_random_masked_neg": (
-        build_common_exp9,
-        build_model_exp9,
-        build_train_module_exp9,
-        build_dataloader_exp9,
-    ),
-    "midlayer_merged_bandsets_cross_random_masked_neg": (
-        build_common_exp10,
-        build_model_exp10,
-        build_train_module_exp10,
-        build_dataloader_exp10,
-    ),
-    "default_bandsets_via_tokenconfig_cross_random_masked_neg": (
-        build_common_exp11,
-        build_model_exp11,
-        build_train_module_exp11,
-        build_dataloader_exp11,
-    ),
-    "two_bandset_midlayer_merged_cross_random_masked_neg": (
-        build_common_exp12,
-        build_model_exp12,
-        build_train_module_exp12,
-        build_dataloader_exp12,
     ),
     "single_bandset_random_band_dropout_cross_random_masked_neg": (
         build_common_exp13,
