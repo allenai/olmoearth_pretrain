@@ -116,6 +116,11 @@ class SupervisionHead(nn.Module):
     ) -> dict[str, Tensor]:
         """Produce per-supervised-modality predictions at pixel resolution.
 
+        Under FSDP the linear heads are sharded across ranks, so every rank
+        **must** call every head's forward pass even when a target modality is
+        absent from the local batch. We achieve this by always running every
+        head and only including results whose targets actually exist.
+
         Args:
             latent: Encoder output ``TokensAndMasks``.
             batch: The original batch (used to determine target spatial dims).
@@ -123,32 +128,57 @@ class SupervisionHead(nn.Module):
         Returns:
             Dictionary mapping supervised modality name -> predictions ``[B, H, W, C]``.
         """
-        # Step 1+2: build a combined spatial feature map from all encoded modalities,
-        # cached by target resolution so we only upsample once per unique (H, W).
-        combined_features: dict[tuple[int, int], Tensor] = {}
+        # Determine batch size from any available modality in the latent
+        batch_size: int = 0
+        for modality_name in latent.modalities:
+            t = getattr(latent, modality_name)
+            if t is not None:
+                batch_size = t.shape[0]
+                break
+
+        # Pool encoder features and upsample to each unique target resolution.
+        # We collect all target resolutions first (from batch data or from the
+        # modality spec as fallback) so we can build the feature maps.
+        target_sizes: dict[str, tuple[int, int]] = {}
         for sup_name in self.heads:
             raw_target = getattr(batch, sup_name, None)
-            if raw_target is None:
-                continue
-            target_h, target_w = raw_target.shape[1], raw_target.shape[2]
-            res_key = (target_h, target_w)
-            if res_key in combined_features:
-                continue
-            feat = _pool_and_upsample_encoder_features(latent, target_h, target_w)
+            if raw_target is not None:
+                target_sizes[sup_name] = (raw_target.shape[1], raw_target.shape[2])
+            else:
+                modality_spec = Modality.get(sup_name)
+                tile_size = modality_spec.get_expected_tile_size()
+                target_sizes[sup_name] = (tile_size, tile_size)
+
+        combined_features: dict[tuple[int, int], Tensor] = {}
+        for res_key in set(target_sizes.values()):
+            feat = _pool_and_upsample_encoder_features(latent, res_key[0], res_key[1])
             if feat is not None:
                 combined_features[res_key] = feat
 
-        # Step 3: apply per-modality heads
+        # Fallback: if no encoded spatial modalities exist, create zeros so
+        # that every head still executes its forward pass (required by FSDP).
+        if not combined_features:
+            first_head = next(iter(self.heads.values()))
+            in_features = first_head.in_features
+            for res_key in set(target_sizes.values()):
+                combined_features[res_key] = torch.zeros(
+                    batch_size,
+                    res_key[0],
+                    res_key[1],
+                    in_features,
+                    device=next(self.parameters()).device,
+                    dtype=next(self.parameters()).dtype,
+                )
+
+        # Always call every head to keep FSDP collectives in sync.
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
-            raw_target = getattr(batch, sup_name, None)
-            if raw_target is None:
-                continue
-            target_h, target_w = raw_target.shape[1], raw_target.shape[2]
-            res_key = (target_h, target_w)
-            if res_key not in combined_features:
-                continue
-            predictions[sup_name] = head(combined_features[res_key])
+            res_key = target_sizes[sup_name]
+            output = head(combined_features[res_key])
+            # Only include in predictions if the raw target actually exists;
+            # absent targets will not contribute to the loss.
+            if getattr(batch, sup_name, None) is not None:
+                predictions[sup_name] = output
 
         return predictions
 
