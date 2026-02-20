@@ -92,6 +92,9 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
+    # Use the center spatial patch embedding instead of pooling across all patches
+    # for classification tasks. Has no effect on segmentation tasks.
+    use_center_token: bool = False
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
     norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
@@ -152,6 +155,7 @@ class DownstreamEvaluator:
         self.partition = task.partition
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
+        self.use_center_token = task.use_center_token
         self.select_final_test_miou_based_on_epoch_of_max_val_miou = (
             task.select_final_test_miou_based_on_epoch_of_max_val_miou
         )
@@ -280,6 +284,7 @@ class DownstreamEvaluator:
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
+            "use_center_token": self.use_center_token,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
