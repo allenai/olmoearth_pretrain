@@ -7,11 +7,13 @@ import torch
 from einops import repeat
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     Encoder,
     EncoderConfig,
     FlexiVitBase,
+    MultiModalPatchEmbeddings,
     PoolingType,
     Predictor,
     PredictorConfig,
@@ -811,4 +813,140 @@ class TestProjectionAndAggregation:
                 _ = layer(t_and_m)
 
 
-# TODO: write a unit test for the FlexiPatchEmbeddings
+class TestMultiModalPatchEmbeddings:
+    """Unit tests for the MultiModalPatchEmbeddings class."""
+
+    def test_missing_modality_gets_fake_inputs(self) -> None:
+        """Test that missing modalities get fake inputs with all-MISSING masks.
+
+        This ensures all per-modality encoder parameters are touched on all ranks
+        during distributed training, avoiding NCCL sync errors.
+        """
+        # Create embeddings for S2 and S1, but only provide S2 data
+        supported_modality_names = ["sentinel2_l2a", "sentinel1"]
+        patch_embeddings = MultiModalPatchEmbeddings(
+            supported_modality_names=supported_modality_names,
+            max_patch_size=8,
+            embedding_size=16,
+        )
+
+        # Create input with only sentinel2_l2a (sentinel1 is missing)
+        B, H, W, T = 2, 16, 16, 3
+        s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_band_sets = Modality.SENTINEL2_L2A.num_band_sets
+
+        sentinel2_l2a = torch.randn(B, H, W, T, s2_bands)
+        sentinel2_l2a_mask = torch.full(
+            (B, H, W, T, s2_band_sets),
+            fill_value=MaskValue.ONLINE_ENCODER.value,
+            dtype=torch.float32,
+        )
+        timestamps = torch.tensor(
+            [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
+        )
+        timestamps = repeat(timestamps, "t d -> b t d", b=B)
+
+        masked_sample = MaskedOlmoEarthSample(
+            timestamps=timestamps,
+            sentinel2_l2a=sentinel2_l2a,
+            sentinel2_l2a_mask=sentinel2_l2a_mask,
+            # sentinel1 is intentionally missing
+        )
+
+        # Run forward
+        patch_size = 2
+        output = patch_embeddings.forward(masked_sample, patch_size=patch_size)
+
+        # Verify both modalities are in output
+        assert "sentinel2_l2a" in output, "sentinel2_l2a should be in output"
+        assert "sentinel2_l2a_mask" in output, "sentinel2_l2a_mask should be in output"
+        assert "sentinel1" in output, "sentinel1 should be in output (fake input)"
+        assert "sentinel1_mask" in output, "sentinel1_mask should be in output"
+
+        # Verify sentinel1 has all-MISSING masks
+        s1_mask = output["sentinel1_mask"]
+        assert (s1_mask == MaskValue.MISSING.value).all(), (
+            "Missing modality should have all-MISSING mask values"
+        )
+
+        # Verify sentinel2_l2a tokens have correct shape
+        s2_tokens = output["sentinel2_l2a"]
+        expected_h = H // patch_size
+        expected_w = W // patch_size
+        assert s2_tokens.shape == (
+            B,
+            expected_h,
+            expected_w,
+            T,
+            s2_band_sets,
+            16,
+        ), f"S2 tokens shape mismatch: {s2_tokens.shape}"
+
+        # Verify sentinel1 tokens have correct shape
+        s1_tokens = output["sentinel1"]
+        s1_band_sets = Modality.SENTINEL1.num_band_sets
+        assert s1_tokens.shape == (
+            B,
+            expected_h,
+            expected_w,
+            T,
+            s1_band_sets,
+            16,
+        ), f"S1 tokens shape mismatch: {s1_tokens.shape}"
+
+    def test_all_modalities_present(self) -> None:
+        """Test that when all modalities are present, they're processed normally."""
+        supported_modality_names = ["sentinel2_l2a", "latlon"]
+        patch_embeddings = MultiModalPatchEmbeddings(
+            supported_modality_names=supported_modality_names,
+            max_patch_size=8,
+            embedding_size=16,
+        )
+
+        B, H, W, T = 2, 16, 16, 3
+        s2_bands = Modality.SENTINEL2_L2A.num_bands
+        s2_band_sets = Modality.SENTINEL2_L2A.num_band_sets
+        latlon_bands = Modality.LATLON.num_bands
+        latlon_band_sets = Modality.LATLON.num_band_sets
+
+        sentinel2_l2a = torch.randn(B, H, W, T, s2_bands)
+        sentinel2_l2a_mask = torch.full(
+            (B, H, W, T, s2_band_sets),
+            fill_value=MaskValue.ONLINE_ENCODER.value,
+            dtype=torch.float32,
+        )
+        latlon = torch.randn(B, latlon_bands)
+        latlon_mask = torch.full(
+            (B, latlon_band_sets),
+            fill_value=MaskValue.ONLINE_ENCODER.value,
+            dtype=torch.float32,
+        )
+        timestamps = torch.tensor(
+            [[15, 7, 2023], [15, 8, 2023], [15, 9, 2023]], dtype=torch.long
+        )
+        timestamps = repeat(timestamps, "t d -> b t d", b=B)
+
+        masked_sample = MaskedOlmoEarthSample(
+            timestamps=timestamps,
+            sentinel2_l2a=sentinel2_l2a,
+            sentinel2_l2a_mask=sentinel2_l2a_mask,
+            latlon=latlon,
+            latlon_mask=latlon_mask,
+        )
+
+        patch_size = 2
+        output = patch_embeddings.forward(masked_sample, patch_size=patch_size)
+
+        # Verify both modalities are in output
+        assert "sentinel2_l2a" in output
+        assert "latlon" in output
+
+        # Verify masks are NOT all-MISSING (they should be ONLINE_ENCODER)
+        s2_mask = output["sentinel2_l2a_mask"]
+        assert (s2_mask == MaskValue.ONLINE_ENCODER.value).all()
+
+        latlon_mask_out = output["latlon_mask"]
+        assert (latlon_mask_out == MaskValue.ONLINE_ENCODER.value).all()
+
+
+# TODO: write more unit tests for the FlexiPatchEmbeddings

@@ -54,6 +54,50 @@ def return_modalities_from_dict(
     ]
 
 
+def get_never_encoded_bandsets(
+    input_data: MaskedOlmoEarthSample,
+    supported_modality_names: list[str],
+    tokenization_config: "TokenizationConfig",
+) -> set[tuple[str, int]]:
+    """Determine which modality bandsets are never encoded across the batch.
+
+    This is used to identify bandsets that need fake inputs passed through
+    the encoder to ensure all parameters are touched during distributed training,
+    avoiding NCCL sync errors.
+
+    Args:
+        input_data: The masked sample containing modality data and masks.
+        supported_modality_names: List of modality names to check.
+        tokenization_config: Config for getting bandset information.
+
+    Returns:
+        Set of (modality_name, bandset_index) tuples that are never encoded.
+    """
+    never_encoded: set[tuple[str, int]] = set()
+
+    for modality in supported_modality_names:
+        mask_name = input_data.get_masked_modality_name(modality)
+        mask = getattr(input_data, mask_name, None)
+        num_bandsets = tokenization_config.get_num_bandsets(modality)
+
+        if mask is None:
+            # Modality not present - all bandsets are never encoded
+            for bandset_idx in range(num_bandsets):
+                never_encoded.add((modality, bandset_idx))
+            continue
+
+        # Mask shape: [..., num_band_sets] where last dim is bandset
+        for bandset_idx in range(num_bandsets):
+            bandset_mask = mask[..., bandset_idx]
+            # Check if any token in batch has ONLINE_ENCODER value
+            has_encoded = (bandset_mask == MaskValue.ONLINE_ENCODER.value).any()
+
+            if not has_encoded:
+                never_encoded.add((modality, bandset_idx))
+
+    return never_encoded
+
+
 class PoolingType(StrEnum):
     """Strategy for pooling the tokens."""
 
@@ -457,51 +501,52 @@ class MultiModalPatchEmbeddings(nn.Module):
                 }
             )
 
-    def apply_embedding_to_modality(
+    def patchify_modality_bandset(
         self,
-        modality: str,
-        input_data: MaskedOlmoEarthSample,
+        modality_data: Tensor,
+        modality_mask: Tensor,
+        modality_name: str,
         patch_size: int,
+        bandset_idx: int,
     ) -> tuple[Tensor, Tensor]:
-        """Apply embedding to a modality."""
-        logger.debug(f"applying embedding to modality:{modality}")
-        masked_modality_name = input_data.get_masked_modality_name(modality)
-        modality_mask = getattr(input_data, masked_modality_name)
-        modality_data = getattr(input_data, modality)
+        """Apply embedding to a single bandset of a modality.
 
-        modality_spec = Modality.get(modality)
-        num_band_sets = self.tokenization_config.get_num_bandsets(modality)
+        Args:
+            modality_data: The raw modality data tensor.
+            modality_mask: The mask tensor for this modality.
+            modality_name: Name of the modality.
+            patch_size: Patch size to use.
+            bandset_idx: Index of the bandset to process.
 
-        modality_tokens, modality_masks = [], []
-        for idx in range(num_band_sets):
-            modality_specific_kwargs = {}
-            if not modality_spec.is_spatial:
-                # static in time
-                token_mask = modality_mask[..., idx]
-            else:
-                token_mask = modality_mask[
-                    :,
-                    0 :: patch_size * modality_spec.image_tile_size_factor,
-                    0 :: patch_size * modality_spec.image_tile_size_factor,
-                    ...,
-                    idx,
-                ]
-                modality_specific_kwargs = {"patch_size": patch_size}
+        Returns:
+            Tuple of (patchified_tokens, token_mask) for this bandset.
+        """
+        modality_spec = Modality.get(modality_name)
 
-            buffer_name = self._get_buffer_name(modality, idx)
-            patchified_data = torch.index_select(
-                modality_data, -1, getattr(self, buffer_name)
-            )
-            embedding_module = self.per_modality_embeddings[modality][
-                self._get_embedding_module_name(modality, idx)
+        modality_specific_kwargs = {}
+        if not modality_spec.is_spatial:
+            # static in time
+            token_mask = modality_mask[..., bandset_idx]
+        else:
+            token_mask = modality_mask[
+                :,
+                0 :: patch_size * modality_spec.image_tile_size_factor,
+                0 :: patch_size * modality_spec.image_tile_size_factor,
+                ...,
+                bandset_idx,
             ]
-            patchified_data = embedding_module(
-                patchified_data, **modality_specific_kwargs
-            )
+            modality_specific_kwargs = {"patch_size": patch_size}
 
-            modality_tokens.append(patchified_data)
-            modality_masks.append(token_mask)
-        return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
+        buffer_name = self._get_buffer_name(modality_name, bandset_idx)
+        patchified_data = torch.index_select(
+            modality_data, -1, getattr(self, buffer_name)
+        )
+        embedding_module = self.per_modality_embeddings[modality_name][
+            self._get_embedding_module_name(modality_name, bandset_idx)
+        ]
+        patchified_data = embedding_module(patchified_data, **modality_specific_kwargs)
+
+        return patchified_data, token_mask
 
     @staticmethod
     def is_any_data_seen_by_encoder(modality_mask: Tensor) -> bool:
@@ -511,6 +556,64 @@ class MultiModalPatchEmbeddings(nn.Module):
     def apply_compile(self) -> None:
         """Apply torch.compile to the model."""
         self.compile(dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
+
+    def _create_fake_modality_input(
+        self,
+        modality: str,
+        batch_size: int,
+        height: int,
+        width: int,
+        time: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[Tensor, Tensor]:
+        """Create fake input data for a modality.
+
+        Returns data in full modality format so it can be processed by
+        patchify_modality_bandset the same way as real data. This ensures
+        that encoder parameters are touched on all ranks during distributed
+        training, avoiding NCCL sync errors.
+
+        Args:
+            modality: Name of the modality to create fake inputs for.
+            batch_size: Batch size.
+            height: Height dimension (at base resolution).
+            width: Width dimension (at base resolution).
+            time: Number of timesteps.
+            device: Device to create tensors on.
+            dtype: Data type for the tensors.
+
+        Returns:
+            Tuple of (data, mask) in full modality format with all-MISSING mask.
+        """
+        modality_spec = Modality.get(modality)
+        num_bandsets = self.tokenization_config.get_num_bandsets(modality)
+
+        data_shape: tuple[int, ...]
+        mask_shape: tuple[int, ...]
+        if modality_spec.is_spacetime_varying:
+            h = height * modality_spec.image_tile_size_factor
+            w = width * modality_spec.image_tile_size_factor
+            data_shape = (batch_size, h, w, time, modality_spec.num_bands)
+            mask_shape = (batch_size, h, w, time, num_bandsets)
+        elif modality_spec.is_space_only_varying:
+            h = height * modality_spec.image_tile_size_factor
+            w = width * modality_spec.image_tile_size_factor
+            data_shape = (batch_size, h, w, 1, modality_spec.num_bands)
+            mask_shape = (batch_size, h, w, 1, num_bandsets)
+        elif modality_spec.is_time_only_varying:
+            data_shape = (batch_size, time, modality_spec.num_bands)
+            mask_shape = (batch_size, time, num_bandsets)
+        else:
+            # Static modality (e.g., latlon)
+            data_shape = (batch_size, modality_spec.num_bands)
+            mask_shape = (batch_size, num_bandsets)
+
+        fake_data = torch.zeros(data_shape, device=device, dtype=dtype)
+        fake_mask = torch.full(
+            mask_shape, fill_value=MaskValue.MISSING.value, device=device, dtype=dtype
+        )
+        return fake_data, fake_mask
 
     def forward(
         self,
@@ -528,18 +631,86 @@ class MultiModalPatchEmbeddings(nn.Module):
         [1, 1, 0, 0]
         [1, 1, 0, 0]
         for the H, W dimensions
+
+        Note: This method always processes ALL supported modalities, even if they
+        are missing from the input. For missing modalities or bandsets that are
+        never encoded, fake inputs with all-MISSING masks are passed through the
+        encoders. This ensures all per-modality encoder parameters are touched on
+        all ranks during distributed training, avoiding NCCL sync errors.
         """
-        output_dict = {}
-        modalities_to_process = get_modalities_to_process(
-            input_data.modalities, self.supported_modality_names
+        # Determine which bandsets are never encoded across the batch
+        never_encoded = get_never_encoded_bandsets(
+            input_data, self.supported_modality_names, self.tokenization_config
         )
-        for modality in modalities_to_process:
-            modality_tokens, modality_masks = self.apply_embedding_to_modality(
-                modality, input_data, patch_size
-            )
-            output_dict[modality] = modality_tokens
+
+        output_dict = {}
+
+        # Get reference dimensions from input data for creating fake inputs
+        batch_size = input_data.timestamps.shape[0]
+        time = input_data.timestamps.shape[1]
+        device = input_data.timestamps.device
+        dtype = torch.float32  # Default dtype for fake data
+
+        # Find a spatial modality to get height/width and dtype
+        height, width = None, None
+        for mod_name in input_data.modalities:
+            mod_data = getattr(input_data, mod_name)
+            if mod_data is not None:
+                mod_spec = Modality.get(mod_name)
+                if mod_spec.is_spatial and len(mod_data.shape) >= 4:
+                    height = mod_data.shape[1] // mod_spec.image_tile_size_factor
+                    width = mod_data.shape[2] // mod_spec.image_tile_size_factor
+                    dtype = mod_data.dtype
+                    device = mod_data.device
+                    break
+
+        # Default dimensions if no spatial modality found
+        if height is None or width is None:
+            height, width = 16, 16
+
+        # Process ALL supported modalities at the bandset level
+        for modality in self.supported_modality_names:
+            num_bandsets = self.tokenization_config.get_num_bandsets(modality)
+            modality_tokens_list: list[Tensor] = []
+            modality_masks_list: list[Tensor] = []
+
+            for bandset_idx in range(num_bandsets):
+                if (modality, bandset_idx) in never_encoded:
+                    # Bandset is never encoded - create fake inputs
+                    logger.debug(
+                        f"Creating fake inputs for modality={modality}, bandset={bandset_idx}"
+                    )
+                    modality_data, modality_mask = self._create_fake_modality_input(
+                        modality=modality,
+                        batch_size=batch_size,
+                        height=height,
+                        width=width,
+                        time=time,
+                        device=device,
+                        dtype=dtype,
+                    )
+                else:
+                    # Bandset has data to encode - use real data
+                    modality_data = getattr(input_data, modality)
+                    modality_mask = getattr(
+                        input_data, input_data.get_masked_modality_name(modality)
+                    )
+
+                # Process this bandset
+                tokens, masks = self.patchify_modality_bandset(
+                    modality_data=modality_data,
+                    modality_mask=modality_mask,
+                    modality_name=modality,
+                    patch_size=patch_size,
+                    bandset_idx=bandset_idx,
+                )
+                modality_tokens_list.append(tokens)
+                modality_masks_list.append(masks)
+
+            output_dict[modality] = torch.stack(modality_tokens_list, dim=-2)
             modality_mask_name = input_data.get_masked_modality_name(modality)
-            output_dict[modality_mask_name] = modality_masks
+            output_dict[modality_mask_name] = torch.stack(modality_masks_list, dim=-1)
+
         return output_dict
 
 
