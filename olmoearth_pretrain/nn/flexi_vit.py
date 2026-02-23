@@ -506,42 +506,19 @@ class MultiModalPatchEmbeddings(nn.Module):
                 modality_data, -1, getattr(self, buffer_name)
             )
 
-            # Band dropout: randomly zero out channels before embedding to force
-            # cross-spectral learning when using single-bandset tokenization.
-            apply_dropout = (
-                self.band_dropout_modalities is None
-                or modality in self.band_dropout_modalities
-            )
-            if self.training and self.band_dropout_rate > 0.0 and apply_dropout:
+            # Check if we should apply band dropout for this bandset
+            if self.training and self.band_dropout_rate > 0.0:
                 num_bands = patchified_data.shape[-1]
+                # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
-                    batch_size = patchified_data.shape[0]
                     if self.random_band_dropout:
-                        # Sample rate from Uniform(0, band_dropout_rate)
                         rate = (
                             torch.rand(1, device=patchified_data.device).item()
                             * self.band_dropout_rate
                         )
                     else:
                         rate = self.band_dropout_rate
-                    keep_mask = (
-                        torch.rand(batch_size, num_bands, device=patchified_data.device)
-                        >= rate
-                    )
-                    # Ensure at least 1 band kept per sample
-                    no_bands_kept = ~keep_mask.any(dim=1)
-                    if no_bands_kept.any():
-                        rand_idx = torch.randint(
-                            num_bands, (no_bands_kept.sum(),), device=keep_mask.device
-                        )
-                        keep_mask[no_bands_kept, rand_idx] = True
-                    # Broadcast: [B, 1, 1, ..., num_bands]
-                    view_shape = (
-                        [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
-                    )
-                    patchified_data = patchified_data * keep_mask.view(*view_shape).to(
-                        patchified_data.dtype
-                    )
+                    patchified_data = self._apply_band_dropout(patchified_data, rate)
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
@@ -553,6 +530,33 @@ class MultiModalPatchEmbeddings(nn.Module):
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
+
+    @staticmethod
+    def _apply_band_dropout(patchified_data: Tensor, rate: float) -> Tensor:
+        """Randomly zero out band channels to force cross-spectral learning.
+
+        Args:
+            patchified_data: Input tensor with bands in the last dimension.
+            rate: Probability of dropping each band (per sample).
+
+        Returns:
+            Tensor with randomly zeroed bands, at least 1 band kept per sample.
+        """
+        num_bands = patchified_data.shape[-1]
+        batch_size = patchified_data.shape[0]
+        keep_mask = (
+            torch.rand(batch_size, num_bands, device=patchified_data.device) >= rate
+        )
+        # If no bands are kept, randomly select one band to keep
+        no_bands_kept = ~keep_mask.any(dim=1)
+        if no_bands_kept.any():
+            rand_idx = torch.randint(
+                num_bands, (no_bands_kept.sum(),), device=keep_mask.device
+            )
+            keep_mask[no_bands_kept, rand_idx] = True
+        # Broadcast: [B, 1, 1, ..., num_bands]
+        view_shape = [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
+        return patchified_data * keep_mask.view(*view_shape).to(patchified_data.dtype)
 
     @staticmethod
     def is_any_data_seen_by_encoder(modality_mask: Tensor) -> bool:

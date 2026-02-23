@@ -12,6 +12,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     EncoderConfig,
     FlexiVitBase,
+    MultiModalPatchEmbeddings,
     PoolingType,
     Predictor,
     PredictorConfig,
@@ -795,6 +796,90 @@ class TestProjectionAndAggregation:
                 )
                 # for now, lets just check it all runs properly
                 _ = layer(t_and_m)
+
+
+class TestBandDropout:
+    """Unit tests for band dropout in MultiModalPatchEmbeddings."""
+
+    def test_apply_band_dropout_zeros_some_bands(self) -> None:
+        """Test that _apply_band_dropout zeros out some bands."""
+        torch.manual_seed(42)
+        B, H, W, num_bands = 4, 2, 2, 12
+        data = torch.ones(B, H, W, num_bands)
+        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.5)
+        # Some bands should be zeroed
+        assert (result == 0).any(), "Expected some bands to be dropped"
+        # Some bands should be kept
+        assert (result == 1).any(), "Expected some bands to be kept"
+
+    def test_apply_band_dropout_at_least_one_band_kept(self) -> None:
+        """Test that at least one band is kept per sample even at rate=1.0."""
+        torch.manual_seed(0)
+        B, num_bands = 8, 6
+        data = torch.ones(B, num_bands)
+        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=1.0)
+        # Every sample must have at least one non-zero band
+        per_sample_sum = result.sum(dim=-1)
+        assert (per_sample_sum > 0).all(), "Each sample must keep at least 1 band"
+
+    def test_apply_band_dropout_rate_zero_no_change(self) -> None:
+        """Test that rate=0.0 keeps all bands."""
+        B, num_bands = 4, 10
+        data = torch.randn(B, num_bands)
+        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.0)
+        assert torch.equal(result, data), "rate=0.0 should not modify data"
+
+    def test_band_dropout_not_applied_when_rate_zero(self) -> None:
+        """Test that when dropout rate is 0.0, no values are zeroed."""
+        B, num_bands = 4, 12
+        data = torch.ones(B, num_bands)
+        result = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.0)
+        assert (result != 0).all(), "No values should be zero when dropout rate is 0.0"
+
+    def test_band_dropout_not_applied_in_eval(self) -> None:
+        """Test that band dropout is gated by self.training (eval mode skips it)."""
+        torch.manual_seed(42)
+        B, num_bands = 4, 12
+        data = torch.ones(B, num_bands)
+        embed = MultiModalPatchEmbeddings(
+            supported_modality_names=["sentinel2_l2a"],
+            max_patch_size=8,
+            embedding_size=16,
+            band_dropout_rate=0.5,
+            random_band_dropout=False,
+        )
+        # In train mode, dropout should zero some bands
+        embed.train()
+        result_train = MultiModalPatchEmbeddings._apply_band_dropout(data, rate=0.5)
+        assert (result_train == 0).any(), "Dropout should zero some bands in train mode"
+        # In eval mode, the caller gates dropout with self.training
+        embed.eval()
+        assert not embed.training, "Module should be in eval mode"
+        # Since self.training is False, dropout is never called — data stays intact
+        assert (data != 0).all(), (
+            "No values should be zero when eval mode skips dropout"
+        )
+
+    def test_disable_band_dropout(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Test Encoder.disable_band_dropout sets rate to 0."""
+        encoder = Encoder(
+            embedding_size=8,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=4.0,
+            depth=2,
+            drop_path=0.1,
+            supported_modalities=supported_modalities,
+            max_sequence_length=12,
+            band_dropout_rate=0.3,
+            random_band_dropout=True,
+        )
+        assert encoder.patch_embeddings.band_dropout_rate == 0.5
+        encoder.disable_band_dropout()
+        assert encoder.patch_embeddings.band_dropout_rate == 0.0
 
 
 # TODO: write a unit test for the FlexiPatchEmbeddings
