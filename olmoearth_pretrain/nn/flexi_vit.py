@@ -514,35 +514,34 @@ class MultiModalPatchEmbeddings(nn.Module):
             )
             if self.training and self.band_dropout_rate > 0.0 and apply_dropout:
                 num_bands = patchified_data.shape[-1]
-                if num_bands == 1:
-                    continue
-                batch_size = patchified_data.shape[0]
-                if self.random_band_dropout:
-                    # Sample rate from Uniform(0, band_dropout_rate)
-                    rate = (
-                        torch.rand(1, device=patchified_data.device).item()
-                        * self.band_dropout_rate
+                if num_bands > 1:
+                    batch_size = patchified_data.shape[0]
+                    if self.random_band_dropout:
+                        # Sample rate from Uniform(0, band_dropout_rate)
+                        rate = (
+                            torch.rand(1, device=patchified_data.device).item()
+                            * self.band_dropout_rate
+                        )
+                    else:
+                        rate = self.band_dropout_rate
+                    keep_mask = (
+                        torch.rand(batch_size, num_bands, device=patchified_data.device)
+                        >= rate
                     )
-                else:
-                    rate = self.band_dropout_rate
-                keep_mask = (
-                    torch.rand(batch_size, num_bands, device=patchified_data.device)
-                    >= rate
-                )
-                # Ensure at least 1 band kept per sample
-                no_bands_kept = ~keep_mask.any(dim=1)
-                if no_bands_kept.any():
-                    rand_idx = torch.randint(
-                        num_bands, (no_bands_kept.sum(),), device=keep_mask.device
+                    # Ensure at least 1 band kept per sample
+                    no_bands_kept = ~keep_mask.any(dim=1)
+                    if no_bands_kept.any():
+                        rand_idx = torch.randint(
+                            num_bands, (no_bands_kept.sum(),), device=keep_mask.device
+                        )
+                        keep_mask[no_bands_kept, rand_idx] = True
+                    # Broadcast: [B, 1, 1, ..., num_bands]
+                    view_shape = (
+                        [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
                     )
-                    keep_mask[no_bands_kept, rand_idx] = True
-                # Broadcast: [B, 1, 1, ..., num_bands]
-                view_shape = (
-                    [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
-                )
-                patchified_data = patchified_data * keep_mask.view(*view_shape).to(
-                    patchified_data.dtype
-                )
+                    patchified_data = patchified_data * keep_mask.view(*view_shape).to(
+                        patchified_data.dtype
+                    )
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
