@@ -375,6 +375,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         tokenization_config: TokenizationConfig | None = None,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
+        band_dropout_modalities: list[str] | None = None,
     ):
         """Initialize the patch embeddings.
 
@@ -391,6 +392,8 @@ class MultiModalPatchEmbeddings(nn.Module):
             random_band_dropout: If True, sample the dropout rate per forward call from
                 Uniform(0, band_dropout_rate). This reduces train-inference mismatch
                 and acts as stronger augmentation. Default: False (fixed rate).
+            band_dropout_modalities: If provided, only apply band dropout to these
+                modalities. If None, apply to all modalities. Default: None.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -399,6 +402,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.tokenization_config = tokenization_config or TokenizationConfig()
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
+        self.band_dropout_modalities = band_dropout_modalities
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -504,36 +508,41 @@ class MultiModalPatchEmbeddings(nn.Module):
 
             # Band dropout: randomly zero out channels before embedding to force
             # cross-spectral learning when using single-bandset tokenization.
-            if self.training and self.band_dropout_rate > 0.0:
+            apply_dropout = (
+                self.band_dropout_modalities is None
+                or modality in self.band_dropout_modalities
+            )
+            if self.training and self.band_dropout_rate > 0.0 and apply_dropout:
                 num_bands = patchified_data.shape[-1]
-                if num_bands > 1:
-                    batch_size = patchified_data.shape[0]
-                    if self.random_band_dropout:
-                        # Sample rate from Uniform(0, band_dropout_rate)
-                        rate = (
-                            torch.rand(1, device=patchified_data.device).item()
-                            * self.band_dropout_rate
-                        )
-                    else:
-                        rate = self.band_dropout_rate
-                    keep_mask = (
-                        torch.rand(batch_size, num_bands, device=patchified_data.device)
-                        >= rate
+                if num_bands == 1:
+                    continue
+                batch_size = patchified_data.shape[0]
+                if self.random_band_dropout:
+                    # Sample rate from Uniform(0, band_dropout_rate)
+                    rate = (
+                        torch.rand(1, device=patchified_data.device).item()
+                        * self.band_dropout_rate
                     )
-                    # Ensure at least 1 band kept per sample
-                    no_bands_kept = ~keep_mask.any(dim=1)
-                    if no_bands_kept.any():
-                        rand_idx = torch.randint(
-                            num_bands, (no_bands_kept.sum(),), device=keep_mask.device
-                        )
-                        keep_mask[no_bands_kept, rand_idx] = True
-                    # Broadcast: [B, 1, 1, ..., num_bands]
-                    view_shape = (
-                        [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
+                else:
+                    rate = self.band_dropout_rate
+                keep_mask = (
+                    torch.rand(batch_size, num_bands, device=patchified_data.device)
+                    >= rate
+                )
+                # Ensure at least 1 band kept per sample
+                no_bands_kept = ~keep_mask.any(dim=1)
+                if no_bands_kept.any():
+                    rand_idx = torch.randint(
+                        num_bands, (no_bands_kept.sum(),), device=keep_mask.device
                     )
-                    patchified_data = patchified_data * keep_mask.view(*view_shape).to(
-                        patchified_data.dtype
-                    )
+                    keep_mask[no_bands_kept, rand_idx] = True
+                # Broadcast: [B, 1, 1, ..., num_bands]
+                view_shape = (
+                    [batch_size] + [1] * (patchified_data.dim() - 2) + [num_bands]
+                )
+                patchified_data = patchified_data * keep_mask.view(*view_shape).to(
+                    patchified_data.dtype
+                )
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
@@ -1262,6 +1271,7 @@ class Encoder(FlexiVitBase):
         tokenization_config: TokenizationConfig | None = None,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
+        band_dropout_modalities: list[str] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1290,6 +1300,8 @@ class Encoder(FlexiVitBase):
             tokenization_config: Optional config for custom band groupings
             band_dropout_rate: Probability of dropping each band channel during training.
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
+            band_dropout_modalities: If provided, only apply band dropout to these
+                modalities. If None, apply to all modalities. Default: None.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1318,6 +1330,7 @@ class Encoder(FlexiVitBase):
         self.embedding_size = embedding_size
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
+        self.band_dropout_modalities = band_dropout_modalities
         self.patch_embeddings = MultiModalPatchEmbeddings(
             self.supported_modality_names,
             self.max_patch_size,
@@ -1325,6 +1338,7 @@ class Encoder(FlexiVitBase):
             tokenization_config=self.tokenization_config,
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
+            band_dropout_modalities=self.band_dropout_modalities,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -2196,6 +2210,7 @@ class EncoderConfig(Config):
     tokenization_config: TokenizationConfig | None = None
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
+    band_dropout_modalities: list[str] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -2205,6 +2220,15 @@ class EncoderConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
+        if self.band_dropout_modalities is not None:
+            unknown = set(self.band_dropout_modalities) - set(
+                self.supported_modality_names
+            )
+            if unknown:
+                raise ValueError(
+                    f"band_dropout_modalities contains modalities not in "
+                    f"supported_modality_names: {unknown}"
+                )
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
 

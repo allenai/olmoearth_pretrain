@@ -100,6 +100,13 @@ ONLY_DECODE_MODALITIES = [
     Modality.WORLDCEREAL.name,
 ]
 
+# Only apply band dropout to spectral modalities (not maps).
+BAND_DROPOUT_MODALITIES = [
+    Modality.SENTINEL2_L2A.name,
+    Modality.SENTINEL1.name,
+    Modality.LANDSAT.name,
+]
+
 
 def _tokenization_config() -> TokenizationConfig:
     return TokenizationConfig(
@@ -320,6 +327,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         tokenization_config=common.tokenization_config,
         band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
         random_band_dropout=True,
+        band_dropout_modalities=BAND_DROPOUT_MODALITIES,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
