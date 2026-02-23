@@ -15,7 +15,7 @@ import multiprocessing
 from datetime import UTC, datetime
 
 import tqdm
-from rslearn.dataset import Window
+from rslearn.dataset import Dataset, Window
 from rslearn.utils.mp import star_imap_unordered
 from rslearn.utils.vector_format import GeojsonCoordinateMode, GeojsonVectorFormat
 from upath import UPath
@@ -36,14 +36,13 @@ LAYER_NAME = "openstreetmap"
 RESOLUTION = 10
 
 
-def convert_openstreetmap(window_path: UPath, olmoearth_path: UPath) -> None:
+def convert_openstreetmap(window: Window, olmoearth_path: UPath) -> None:
     """Add OpenStreetMap data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
-        window_path: the rslearn window directory to read data from.
+        window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
-    window = Window.load(window_path)
     layer_datas = window.load_layer_datas()
 
     if LAYER_NAME not in layer_datas:
@@ -127,15 +126,14 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    ds_path = UPath(args.ds_path)
+    dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
-    metadata_fnames = ds_path.glob("windows/*/*/metadata.json")
     jobs = []
-    for metadata_fname in metadata_fnames:
+    for window in dataset.load_windows(workers=args.workers, show_progress=True):
         jobs.append(
             dict(
-                window_path=metadata_fname.parent,
+                window=window,
                 olmoearth_path=olmoearth_path,
             )
         )
