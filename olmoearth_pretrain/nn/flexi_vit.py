@@ -1355,6 +1355,10 @@ class Encoder(FlexiVitBase):
         if self.has_register_tokens:
             self._init_register_tokens()
 
+    def disable_band_dropout(self) -> None:
+        """Disable band dropout (e.g. for target/EMA encoder)."""
+        self.patch_embeddings.band_dropout_rate = 0.0
+
     def _init_register_tokens(self) -> None:
         """Initialize the register tokens."""
         nn.init.xavier_uniform_(self.register_tokens)
