@@ -11,8 +11,8 @@ from olmoearth_pretrain.train.loss import (
     InfoNCELoss,
     L1Loss,
     L2Loss,
+    ModalityPatchDiscriminationMaskedNegatives,
     PatchDiscriminationLoss,
-    PatchDiscriminationLossNew,
 )
 from olmoearth_pretrain.train.masking import MaskValue
 
@@ -68,55 +68,6 @@ def test_adjusted_patch_disc_loss_comparison() -> None:
     )
 
     assert loss_hard >= loss_easy or abs(loss_hard - loss_easy) < 1e-3
-
-
-def test_if_old_and_new_loss_are_the_same() -> None:
-    """Test that the old and new patch discrimination loss are the same."""
-    b, t_h, t_w, t, d = 5, 4, 4, 2, 2
-    preds = TokensAndMasks(
-        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
-        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
-        latlon=torch.randn((b, 1, d)),
-        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
-    )
-    targets = TokensAndMasks(
-        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
-        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
-        latlon=torch.randn((b, 1, d)),
-        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
-    )
-    loss_old = PatchDiscriminationLoss()
-    loss_new = PatchDiscriminationLossNew()
-    old_loss = loss_old.compute(preds, targets)
-    new_loss = loss_new.compute(preds, targets)
-    logger.info(f"old_loss: {old_loss}, new_loss: {new_loss}")
-    assert torch.isclose(old_loss, new_loss)
-
-
-def test_if_old_and_new_loss_are_the_same_uneven_number_of_decoder_tokens() -> None:
-    """Test that the old and new patch discrimination loss are the same."""
-    b, t_h, t_w, t, d = 5, 4, 4, 2, 2
-
-    s2_preds_mask = torch.randint(0, 3, (b, t_h, t_w, t))
-
-    preds = TokensAndMasks(
-        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
-        sentinel2_l2a_mask=s2_preds_mask,
-        latlon=torch.randn((b, 1, d)),
-        latlon_mask=torch.ones((b, 1)) * MaskValue.DECODER.value,
-    )
-    targets = TokensAndMasks(
-        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
-        sentinel2_l2a_mask=torch.zeros((b, t_h, t_w, t)),
-        latlon=torch.randn((b, 1, d)),
-        latlon_mask=torch.zeros((b, 1)),
-    )
-    loss_old = PatchDiscriminationLoss()
-    loss_new = PatchDiscriminationLossNew()
-    old_loss = loss_old.compute(preds, targets)
-    new_loss = loss_new.compute(preds, targets)
-    logger.info(f"old_loss: {old_loss}, new_loss: {new_loss}")
-    assert torch.isclose(old_loss, new_loss)
 
 
 def test_patch_disc_loss_averaged_over_batch_size() -> None:
@@ -238,3 +189,36 @@ def test_infonce_loss() -> None:
     loss = InfoNCELoss(weight=0.1)
     w_loss_value = loss.compute(torch.ones((b, d)), torch.zeros((b, d)))
     assert 0.1 * loss_value == w_loss_value
+
+
+def test_modality_patch_discrimination_masked_negatives() -> None:
+    """Test that masked negatives loss runs and masks identical-target negatives."""
+    b, t_h, t_w, t, d = 4, 2, 2, 2, 8
+
+    # Create targets where some tokens share the same embedding (e.g. same class)
+    target_s2 = torch.randn((b, t_h, t_w, t, d))
+    # Make first two spatial tokens identical per sample to trigger masking
+    target_s2[:, 0, 0, :, :] = target_s2[:, 0, 1, :, :]
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=target_s2,
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+
+    loss = ModalityPatchDiscriminationMaskedNegatives(tau=0.1)
+    loss_value = loss.compute(preds, targets)
+    assert loss_value > 0
+
+    # Without masking (set threshold impossibly high so nothing is masked)
+    loss_no_mask = ModalityPatchDiscriminationMaskedNegatives(
+        tau=0.1, same_target_threshold=2.0
+    )
+    loss_no_mask_value = loss_no_mask.compute(preds, targets)
+    assert loss_no_mask_value > 0
+
+    # Masking removes false negatives from denominator, so loss should be lower
+    assert loss_value < loss_no_mask_value
