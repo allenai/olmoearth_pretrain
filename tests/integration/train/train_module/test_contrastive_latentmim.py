@@ -216,3 +216,119 @@ def test_train_batch_with_missing_modalities(
         logger.info(mock_trainer._metrics)
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/PatchDisc"])
         check_loss_is_a_reasonable_value(mock_trainer._metrics["train/InfoNCE"])
+
+
+def _run_train_batch_and_get_loss(
+    model: LatentMIM,
+    config: ContrastiveLatentMIMTrainModuleConfig,
+    batch: dict,
+) -> float:
+    """Run a single train_batch and return the ModalityPatchDisc loss value.
+
+    Saves and restores model weights so successive calls see identical parameters.
+    """
+    import copy
+
+    saved_state = copy.deepcopy(model.state_dict())
+    torch.manual_seed(42)
+    try:
+        train_module = config.build(model, device="cpu")
+        with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+            mock_trainer = MockTrainer()
+            on_attach_mock = MagicMock(return_value=None)
+            train_module.on_attach = on_attach_mock  # type: ignore
+            train_module._attach_trainer(mock_trainer)
+            train_module.train_batch(batch)
+        patch_disc_key = [k for k in mock_trainer._metrics if "PatchDisc" in k]
+        assert patch_disc_key, f"No PatchDisc metric found in {list(mock_trainer._metrics.keys())}"
+        return mock_trainer._metrics[patch_disc_key[0]]
+    finally:
+        model.load_state_dict(saved_state)
+
+
+def test_new_vs_vec_loss_through_train_module(
+    samples_without_missing_modalities: list[tuple[int, OlmoEarthSample]],
+    latent_mim_model: LatentMIM,
+    optim_config: AdamWConfig,
+    set_random_seeds: None,
+) -> None:
+    """End-to-end: modality_patch_discrimination_new and vec produce same loss through train module."""
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    batch = collate_double_masked_batched(
+        samples_without_missing_modalities,
+        transform=None,
+        masking_strategy=masking_strategy,
+        masking_strategy_b=None,
+    )
+
+    token_exit_cfg = {modality: 0 for modality in Modality.names()}
+
+    def _make_config(loss_type: str) -> ContrastiveLatentMIMTrainModuleConfig:
+        return ContrastiveLatentMIMTrainModuleConfig(
+            optim_config=optim_config,
+            rank_microbatch_size=3,
+            loss_config=LossConfig(loss_config={"type": loss_type, "tau": 0.1}),
+            contrastive_config=LossConfig(
+                loss_config={"type": "InfoNCE", "weight": 0.1}
+            ),
+            masking_config=MaskingConfig(strategy_config={"type": "random"}),
+            token_exit_cfg=token_exit_cfg,
+            ema_decay=(0.996, 1.0),
+            max_grad_norm=1.0,
+        )
+
+    loss_new = _run_train_batch_and_get_loss(
+        latent_mim_model, _make_config("modality_patch_discrimination_new"), batch
+    )
+    loss_vec = _run_train_batch_and_get_loss(
+        latent_mim_model, _make_config("modality_patch_discrimination_vec"), batch
+    )
+
+    logger.info(f"loss_new={loss_new}, loss_vec={loss_vec}")
+    assert abs(loss_new - loss_vec) < 1e-4, (
+        f"Loss mismatch through train module: new={loss_new}, vec={loss_vec}"
+    )
+
+
+def test_new_vs_vec_loss_with_missing_modalities(
+    samples_with_missing_modalities: list[tuple[int, OlmoEarthSample]],
+    latent_mim_model: LatentMIM,
+    optim_config: AdamWConfig,
+    set_random_seeds: None,
+) -> None:
+    """End-to-end with missing modalities: new and vec losses must match."""
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    batch = collate_double_masked_batched(
+        samples_with_missing_modalities,
+        transform=None,
+        masking_strategy=masking_strategy,
+        masking_strategy_b=None,
+    )
+
+    token_exit_cfg = {modality: 0 for modality in Modality.names()}
+
+    def _make_config(loss_type: str) -> ContrastiveLatentMIMTrainModuleConfig:
+        return ContrastiveLatentMIMTrainModuleConfig(
+            optim_config=optim_config,
+            rank_microbatch_size=3,
+            loss_config=LossConfig(loss_config={"type": loss_type, "tau": 0.1}),
+            contrastive_config=LossConfig(
+                loss_config={"type": "InfoNCE", "weight": 0.1}
+            ),
+            masking_config=MaskingConfig(strategy_config={"type": "random"}),
+            token_exit_cfg=token_exit_cfg,
+            ema_decay=(0.996, 1.0),
+            max_grad_norm=1.0,
+        )
+
+    loss_new = _run_train_batch_and_get_loss(
+        latent_mim_model, _make_config("modality_patch_discrimination_new"), batch
+    )
+    loss_vec = _run_train_batch_and_get_loss(
+        latent_mim_model, _make_config("modality_patch_discrimination_vec"), batch
+    )
+
+    logger.info(f"loss_new={loss_new}, loss_vec={loss_vec}")
+    assert abs(loss_new - loss_vec) < 1e-4, (
+        f"Loss mismatch with missing modalities: new={loss_new}, vec={loss_vec}"
+    )
