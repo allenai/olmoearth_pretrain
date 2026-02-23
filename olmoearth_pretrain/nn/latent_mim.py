@@ -50,9 +50,6 @@ class LatentMIM(nn.Module, DistributedMixins):
         # Disable band dropout on target encoder so it always sees full spectral info.
         if hasattr(self.target_encoder, "patch_embeddings"):
             self.target_encoder.patch_embeddings.band_dropout_rate = 0.0
-        # Disable bandset merging on target encoder (keep modules for EMA alignment).
-        if hasattr(self.target_encoder, "merge_enabled"):
-            self.target_encoder.merge_enabled = False
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int

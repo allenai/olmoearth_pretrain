@@ -1,4 +1,4 @@
-# Single Bandset / Merged Bandset Experiments
+# Single Bandset Experiments
 
 Experiments investigating S2 bandset configurations and cross-spectral learning strategies with masked-negatives loss.
 
@@ -8,17 +8,10 @@ Experiments investigating S2 bandset configurations and cross-spectral learning 
 |---|-----|-------------|
 | 1 | `single_bandset_cross_random_masked_neg` | modality_cross_random + single bandset S2 (all 12) / Landsat |
 | 2 | `single_bandset_random_decode_masked_neg` | random_with_decode + single bandset S2 (all 12) / Landsat |
-| 3 | `single_bandset_no60m_cross_random_masked_neg` | modality_cross_random + single bandset S2 (no 60m: 10 bands) / Landsat |
-| 4 | `single_bandset_10m_only_cross_random_masked_neg` | modality_cross_random + single bandset S2 (10m only: 4 bands) / Landsat |
-| 5 | `single_bandset_band_dropout_cross_random_masked_neg` | modality_cross_random + single bandset S2 + band dropout 0.3 |
+| 5 | `single_bandset_band_dropout_0.3_cross_random_masked_neg` | modality_cross_random + single bandset S2 + band dropout 0.3 |
 | 6 | `single_bandset_band_dropout_0.5_cross_random_masked_neg` | modality_cross_random + single bandset S2 + band dropout 0.5 |
-| 7 | `single_bandset_era5_decode_only_masked_neg` | random_with_decode + single bandset S2/Landsat + ERA5 decode-only |
 | 8 | `two_bandset_cross_random_masked_neg` | modality_cross_random + 2 bandsets S2 (10m+20m) / Landsat single |
-| 9 | `merged_bandsets_cross_random_masked_neg` | 3 bandsets S2 / 2 bandsets Landsat, merge before transformer, unmerge in decoder |
-| 10 | `midlayer_merged_bandsets_cross_random_masked_neg` | 3 bandsets S2 / 2 bandsets Landsat, merge after layer 3, unmerge in decoder |
-| 11 | `default_bandsets_via_tokenconfig_cross_random_masked_neg` | default 3 bandsets S2 / 2 bandsets Landsat via TokenizationConfig (sanity check) |
-| 12 | `two_bandset_midlayer_merged_cross_random_masked_neg` | 2 bandsets S2 (10m+20m) / Landsat single, merge after layer 3, unmerge in decoder |
-| 13 | `single_bandset_no60m_random_band_dropout_cross_random_masked_neg` | single bandset S2 (no 60m: 10 bands) + random band dropout ~ Uniform(0, 0.3) |
+| 13 | `single_bandset_random_band_dropout_cross_random_masked_neg` | single bandset S2 (no 60m: 10 bands) + random band dropout ~ Uniform(0, 0.3) |
 | 14 | `single_bandset_all12_random_band_dropout_cross_random_masked_neg` | single bandset S2 (all 12) + random band dropout ~ Uniform(0, 0.3) |
 | 15 | `single_bandset_all12_random_band_dropout_era5_random_decode_masked_neg` | single bandset S2 (all 12) + random band dropout ~ Uniform(0, 0.3) + ERA5 decode-only + random_with_decode masking |
 | 16 | `single_bandset_all12_random_band_dropout_era5_cross_random_masked_neg` | single bandset S2 (all 12) + random band dropout ~ Uniform(0, 0.3) + ERA5 decode-only + modality_cross_random masking |
@@ -58,21 +51,6 @@ EXPERIMENT=single_bandset_all12_random_band_dropout_cross_random_masked_neg \
   'launch.clusters=[ai2/jupiter,ai2/ceres,ai2/titan]' \
   trainer.callbacks.wandb.project=2026_02_08_masked_neg
 ```
-
-<!-- ## Architecture: Bandset Merge/Unmerge
-
-### Motivation
-
-Switching S2 from 3 bandsets to 1 caused EuroSat performance drop while other tasks were unaffected. The hypothesis is that a single `Conv2d` over all 12 bands loses resolution-aware spatial structure (10m/20m/60m bands have different native resolutions and kernel sizes). The merge approach preserves per-resolution patch embeddings while reducing sequence length.
-
-### Files changed
-
-| File | What |
-|------|------|
-| `olmoearth_pretrain/nn/bandset_merge.py` | New `BandsetMerge` and `BandsetUnmerge` modules |
-| `olmoearth_pretrain/nn/flexi_vit.py` | `Encoder`: `merge_bandsets`, `merge_after_layer` params + mid-layer merge logic; `Predictor`: `unmerge_bandsets` param |
-| `olmoearth_pretrain/nn/latent_mim.py` | Sets `target_encoder.merge_enabled = False` after deepcopy |
-| `tests/unit/nn/test_bandset_merge.py` | Unit tests for merge/unmerge modules, encoder, predictor, LatentMIM | -->
 
 ---
 
