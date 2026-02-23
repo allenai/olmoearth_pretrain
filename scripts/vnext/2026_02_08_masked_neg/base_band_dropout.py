@@ -1,8 +1,8 @@
-"""Base script for single bandset + random band dropout + masked-negatives loss.
+"""Base script for single bandset + random band dropout + random with decode masking + masked-negatives loss.
 
 - Single bandset S2 (all 12 bands) / Landsat (all 11 bands)
 - Random band dropout (rate ~ Uniform(0, 0.3))
-- Modality cross random masking
+- Random with decode masking
 - Masked negatives patch discrimination loss
 """
 
@@ -115,11 +115,10 @@ def _masking_config(
 ) -> MaskingConfig:
     return MaskingConfig(
         strategy_config={
-            "type": "modality_cross_random",
+            "type": "random_with_decode",
             "encode_ratio": 0.5,
             "decode_ratio": 0.5,
             "only_decode_modalities": ONLY_DECODE_MODALITIES,
-            "allow_encoding_decoding_same_bandset": True,
         },
         tokenization_config=tokenization_config,
     )
