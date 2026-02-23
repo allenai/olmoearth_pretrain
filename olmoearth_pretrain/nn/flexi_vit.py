@@ -507,7 +507,11 @@ class MultiModalPatchEmbeddings(nn.Module):
             )
 
             # Check if we should apply band dropout for this bandset
-            if self.training and self.band_dropout_rate > 0.0:
+            apply_dropout = (
+                self.band_dropout_modalities is None
+                or modality in self.band_dropout_modalities
+            )
+            if self.training and apply_dropout and self.band_dropout_rate > 0.0:
                 num_bands = patchified_data.shape[-1]
                 # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
