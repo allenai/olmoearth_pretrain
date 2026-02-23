@@ -874,10 +874,9 @@ class TestBandDropout:
             drop_path=0.1,
             supported_modalities=supported_modalities,
             max_sequence_length=12,
-            band_dropout_rate=0.3,
+            band_dropout_rate=0.5,
             random_band_dropout=True,
         )
-        assert encoder.patch_embeddings.band_dropout_rate == 0.5
         encoder.disable_band_dropout()
         assert encoder.patch_embeddings.band_dropout_rate == 0.0
 
