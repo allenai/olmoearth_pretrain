@@ -12,6 +12,7 @@ Experiments:
 16. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + modality_cross_random masking + ERA5 decode-only + masked neg loss
 17. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + masked neg loss
 18. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + NDVI decode-only + masked neg loss
+19. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + NDVI + ERA5 decode-only + masked neg loss
 """
 
 import copy
@@ -66,6 +67,10 @@ ONLY_DECODE_MODALITIES = [
 
 ONLY_DECODE_MODALITIES_WITH_ERA5 = ONLY_DECODE_MODALITIES + [Modality.ERA5_10.name]
 ONLY_DECODE_MODALITIES_WITH_NDVI = ONLY_DECODE_MODALITIES + [Modality.NDVI.name]
+ONLY_DECODE_MODALITIES_WITH_NDVI_AND_ERA5 = ONLY_DECODE_MODALITIES + [
+    Modality.NDVI.name,
+    Modality.ERA5_10.name,
+]
 
 _LOSS_CONFIG_DICT = {
     "type": "modality_patch_discrimination_masked_negatives",
@@ -429,6 +434,31 @@ def _loss_config_ndvi() -> LossConfig:
             "tau": 0.1,
             "same_target_threshold": 0.999,
             "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES_WITH_NDVI,
+        }
+    )
+
+
+def _masking_config_ndvi_era5(
+    tokenization_config: TokenizationConfig | None = None,
+) -> MaskingConfig:
+    return MaskingConfig(
+        strategy_config={
+            "type": "random_with_decode",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "only_decode_modalities": ONLY_DECODE_MODALITIES_WITH_NDVI_AND_ERA5,
+        },
+        tokenization_config=tokenization_config,
+    )
+
+
+def _loss_config_ndvi_era5() -> LossConfig:
+    return LossConfig(
+        loss_config={
+            "type": "modality_patch_discrimination_masked_negatives",
+            "tau": 0.1,
+            "same_target_threshold": 0.999,
+            "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES_WITH_NDVI_AND_ERA5,
         }
     )
 
@@ -892,6 +922,96 @@ def build_dataloader_exp18(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 19: exp 18 + ERA5 decode-only
+# single bandset (all 12 bands) + random band dropout + random_with_decode + NDVI + ERA5 decode-only
+# ============================================================
+
+
+def build_common_exp19(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp19 (exp18 + ERA5 decode-only)."""
+    common = _build_common(script, cmd, run_name, cluster, overrides)
+    common.training_modalities = common.training_modalities + [
+        Modality.NDVI.name,
+        Modality.ERA5_10.name,
+    ]
+    common.tokenization_config = _tokenization_config(include_ndvi=True)
+    return common
+
+
+def build_train_module_exp19(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp19 (random_with_decode + NDVI + ERA5 decode-only)."""
+    return ContrastiveLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=32,
+        masking_config=_masking_config_ndvi_era5(common.tokenization_config),
+        loss_config=_loss_config_ndvi_era5(),
+        contrastive_config=_contrastive_config(),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp19(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp19 with random band dropout, all 12 bands + NDVI + ERA5."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
+
+
+def build_dataloader_exp19(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp19 (random_with_decode + NDVI + ERA5 decode-only)."""
+    return OlmoEarthDataLoaderConfig(
+        num_workers=16,
+        global_batch_size=512,
+        token_budget=2250,
+        prefetch_factor=4,
+        sampled_hw_p_list=list(range(1, 13)),
+        min_patch_size=MIN_PATCH_SIZE,
+        max_patch_size=MAX_PATCH_SIZE,
+        work_dir=common.save_folder,
+        seed=3622,
+        num_masked_views=2,
+        masking_config=_masking_config_ndvi_era5(common.tokenization_config),
+    )
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -961,6 +1081,12 @@ EXPERIMENTS = {
         build_model_exp18,
         build_train_module_exp18,
         build_dataloader_exp18,
+    ),
+    "single_bandset_all12_random_band_dropout_ndvi_era5_random_decode_masked_neg": (
+        build_common_exp19,
+        build_model_exp19,
+        build_train_module_exp19,
+        build_dataloader_exp19,
     ),
 }
 
