@@ -485,6 +485,14 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    EUROCROPS = ModalitySpec(
+        name="eurocrops",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["B1"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     @classmethod
     def get(self, name: str) -> ModalitySpec:
         """Get the ModalitySpec with the specified name."""
