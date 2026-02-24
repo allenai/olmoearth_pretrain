@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from enum import Enum
 from math import floor
-from typing import Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import numpy as np
 import torch
@@ -14,6 +14,9 @@ from torch.distributed.tensor import distribute_tensor
 
 from olmoearth_pretrain.data.constants import MISSING_VALUE, TIMESTAMPS, Modality
 from olmoearth_pretrain.types import ArrayTensor
+
+if TYPE_CHECKING:
+    from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 
 
 class OlmoEarthSample(NamedTuple):
@@ -44,6 +47,7 @@ class OlmoEarthSample(NamedTuple):
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
     ndvi: ArrayTensor | None = None  # [B, H, W, T, 1]
+    eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
@@ -280,7 +284,10 @@ class OlmoEarthSample(NamedTuple):
         )
 
     def _get_max_t_within_token_budget(
-        self, h_w_p: int, max_tokens_per_instance: int
+        self,
+        h_w_p: int,
+        max_tokens_per_instance: int,
+        tokenization_config: TokenizationConfig | None = None,
     ) -> int:
         """Find max t possible when subsetting.
 
@@ -297,16 +304,21 @@ class OlmoEarthSample(NamedTuple):
             if attribute == "timestamps":
                 continue
             modality_spec = Modality.get(attribute)
+            num_band_sets = (
+                tokenization_config.get_num_bandsets(attribute)
+                if tokenization_config is not None
+                else modality_spec.num_band_sets
+            )
             if modality_spec.is_spacetime_varying:
                 # for now, lets assume fixed resolution
-                time_multiply_tokens += (h_w_p**2) * modality_spec.num_band_sets
+                time_multiply_tokens += (h_w_p**2) * num_band_sets
             elif modality_spec.is_space_only_varying:
                 # for now, lets assume fixed resolution
-                used_tokens += (h_w_p**2) * modality_spec.num_band_sets
+                used_tokens += (h_w_p**2) * num_band_sets
             elif modality_spec.is_time_only_varying:
-                time_multiply_tokens += modality_spec.num_band_sets
+                time_multiply_tokens += num_band_sets
             elif modality_spec.is_static_in_space_and_time:
-                used_tokens += modality_spec.num_band_sets
+                used_tokens += num_band_sets
         if time_multiply_tokens == 0:
             # no time-varying inputs, so our return value of t
             # doesn't matter
@@ -364,6 +376,7 @@ class OlmoEarthSample(NamedTuple):
         sampled_hw_p: int,
         current_length: int,
         missing_timesteps_masks: dict[str, Any] = {},
+        tokenization_config: TokenizationConfig | None = None,
     ) -> OlmoEarthSample:
         """Subset a OlmoEarthSample using default rectangular cropping.
 
@@ -375,6 +388,7 @@ class OlmoEarthSample(NamedTuple):
             sampled_hw_p: The number of tokens in the height and width dimensions.
             current_length: The current maximum sequence length of the sample.
             missing_timesteps_masks: A dictionary of missing timesteps masks.
+            tokenization_config: Optional tokenization config for custom band groupings.
 
         Returns:
             A subsetted OlmoEarthSample with rectangular cropping applied.
@@ -382,7 +396,7 @@ class OlmoEarthSample(NamedTuple):
         if max_tokens_per_instance is None:
             return self
         max_t = self._get_max_t_within_token_budget(
-            sampled_hw_p, max_tokens_per_instance
+            sampled_hw_p, max_tokens_per_instance, tokenization_config
         )
         valid_start_ts = self._get_valid_start_ts(
             missing_timesteps_masks, max_t, current_length
@@ -437,6 +451,7 @@ class OlmoEarthSample(NamedTuple):
         sampled_hw_p: int,
         current_length: int,
         missing_timesteps_masks: dict[str, Any] = {},
+        tokenization_config: TokenizationConfig | None = None,
     ) -> OlmoEarthSample:
         """Subset a OlmoEarthSample using CutMix patch sampling.
 
@@ -448,6 +463,7 @@ class OlmoEarthSample(NamedTuple):
             sampled_hw_p: The number of tokens in the height and width dimensions.
             current_length: The current maximum sequence length of the sample.
             missing_timesteps_masks: A dictionary of missing timesteps masks.
+            tokenization_config: Optional tokenization config for custom band groupings.
 
         Returns:
             A subsetted OlmoEarthSample with CutMix patch sampling applied.
@@ -455,7 +471,7 @@ class OlmoEarthSample(NamedTuple):
         if max_tokens_per_instance is None:
             return self
         max_t = self._get_max_t_within_token_budget(
-            sampled_hw_p, max_tokens_per_instance
+            sampled_hw_p, max_tokens_per_instance, tokenization_config
         )
         valid_start_ts = self._get_valid_start_ts(
             missing_timesteps_masks, max_t, current_length
@@ -601,6 +617,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     era5_10_mask: ArrayTensor | None = None
     ndvi: ArrayTensor | None = None
     ndvi_mask: ArrayTensor | None = None
+    eurocrops: ArrayTensor | None = None
+    eurocrops_mask: ArrayTensor | None = None
 
     def as_dict(self, return_none: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.

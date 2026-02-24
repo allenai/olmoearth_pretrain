@@ -1,10 +1,4 @@
-"""Base script for single bandset + random band dropout + masked-negatives loss.
-
-- Single bandset S2 (all 12 bands) / Landsat (all 11 bands)
-- Random band dropout (rate ~ Uniform(0, 0.3))
-- Modality cross random masking
-- Masked negatives patch discrimination loss
-"""
+"""Trying to prototype fitting everything into olmo core."""
 
 import logging
 
@@ -25,7 +19,9 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
+from upath import UPath
 
+from olmoearth_pretrain.data.concat import OlmoEarthConcatDatasetConfig
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig
 from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig
@@ -40,14 +36,11 @@ from olmoearth_pretrain.internal.experiment import (
 )
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
 from olmoearth_pretrain.nn.flexi_vit import (
-    PoolingType,
-)
-from olmoearth_pretrain.nn.flexihelios import (
     EncoderConfig,
+    PoolingType,
     PredictorConfig,
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
-from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthSpeedMonitorCallback,
@@ -64,69 +57,14 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
-RANDOM_BAND_DROPOUT_MAX_RATE = 0.3
-
-S2_SINGLE_BANDSET = ModalityTokenization(
-    band_groups=[
-        [
-            "B02",
-            "B03",
-            "B04",
-            "B08",
-            "B05",
-            "B06",
-            "B07",
-            "B8A",
-            "B11",
-            "B12",
-            "B01",
-            "B09",
-        ],
-    ]
-)
-
-LANDSAT_SINGLE_BANDSET = ModalityTokenization(
-    band_groups=[
-        ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
-    ]
-)
-
-ONLY_DECODE_MODALITIES = [
-    Modality.WORLDCOVER.name,
-    Modality.SRTM.name,
-    Modality.OPENSTREETMAP_RASTER.name,
-    Modality.WRI_CANOPY_HEIGHT_MAP.name,
-    Modality.CDL.name,
-    Modality.WORLDCEREAL.name,
-]
-
-
-def _tokenization_config() -> TokenizationConfig:
-    return TokenizationConfig(
-        overrides={
-            "sentinel2_l2a": S2_SINGLE_BANDSET,
-            "landsat": LANDSAT_SINGLE_BANDSET,
-        }
-    )
-
-
-def _masking_config(
-    tokenization_config: TokenizationConfig | None = None,
-) -> MaskingConfig:
-    return MaskingConfig(
-        strategy_config={
-            "type": "modality_cross_random",
-            "encode_ratio": 0.5,
-            "decode_ratio": 0.5,
-            "only_decode_modalities": ONLY_DECODE_MODALITIES,
-            "allow_encoding_decoding_same_bandset": True,
-        },
-        tokenization_config=tokenization_config,
-    )
 
 
 def build_common_components(
-    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+    script: str,
+    cmd: SubCmd,
+    run_name: str,
+    cluster: str,
+    overrides: list[str],
 ) -> CommonComponents:
     """Build the common components for an experiment."""
     config = build_common_components_default(script, cmd, run_name, cluster, overrides)
@@ -141,8 +79,64 @@ def build_common_components(
         Modality.CDL.name,
         Modality.WORLDCEREAL.name,
     ]
-    config.tokenization_config = _tokenization_config()
+    # TODO: This is not working for local evaluation
+    # config.launch.num_gpus = 8
     return config
+
+
+def get_masking_config(common: CommonComponents) -> MaskingConfig:
+    """Get the masking configuration for the experiment.
+
+    Args:
+        common: Common experiment components containing optional tokenization_config.
+    """
+    return MaskingConfig(
+        strategy_config={
+            "type": "modality_cross_random",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "allow_encoding_decoding_same_bandset": True,
+            "only_decode_modalities": [
+                Modality.WORLDCOVER.name,
+                Modality.SRTM.name,
+                Modality.OPENSTREETMAP_RASTER.name,
+                Modality.WRI_CANOPY_HEIGHT_MAP.name,
+                Modality.CDL.name,
+                Modality.WORLDCEREAL.name,
+            ],
+        },
+        tokenization_config=common.tokenization_config,
+    )
+
+
+def build_model_config(common: CommonComponents) -> LatentMIMConfig:
+    """Build the model config for an experiment."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+    )
+    model_config = LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
+    return model_config
 
 
 def build_train_module_config(
@@ -151,14 +145,12 @@ def build_train_module_config(
     """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
-        rank_microbatch_size=32,
-        masking_config=_masking_config(common.tokenization_config),
+        rank_microbatch_size=16,
+        masking_config=get_masking_config(common),
         loss_config=LossConfig(
             loss_config={
-                "type": "modality_patch_discrimination_masked_negatives",
+                "type": "modality_patch_discrimination_new",
                 "tau": 0.1,
-                "same_target_threshold": 0.999,
-                "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
             }
         ),
         contrastive_config=LossConfig(
@@ -181,27 +173,33 @@ def build_train_module_config(
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
     """Build the dataloader config for an experiment."""
+    # things should be set during building
+
     return OlmoEarthDataLoaderConfig(
         num_workers=16,
         global_batch_size=512,
         token_budget=2250,
         prefetch_factor=4,
-        sampled_hw_p_list=list(range(1, 13)),
+        sampled_hw_p_list=list(range(1, 13)),  # try only temporal tokens
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
-        num_masked_views=2,
-        masking_config=_masking_config(common.tokenization_config),
+        num_masked_views=2,  # ContrastiveLatentMIM needs 2 views
+        masking_config=get_masking_config(common),
+        # masking_config_b is not set, so both views use the same strategy
     )
 
 
 def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     """Build the dataset config for an experiment."""
-    return OlmoEarthDatasetConfig(
-        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
-        training_modalities=common.training_modalities,
-    )
+    dataset_configs = [
+        OlmoEarthDatasetConfig(
+            h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling_subset_1k/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/3996",
+            training_modalities=common.training_modalities,
+        ),
+    ]
+    return OlmoEarthConcatDatasetConfig(dataset_configs=dataset_configs)
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
@@ -211,7 +209,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2026_02_08_masked_neg"
+    WANDB_PROJECT = "2026_02_06_subset_1k"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -219,25 +217,18 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         name=common.run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
-        enabled=True,
+        enabled=True,  # set to False to avoid wandb errors
     )
+    # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
             embedding_batch_size=128,
-            num_workers=0,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(4000),
-        ),
-        "m_so2sat": DownstreamTaskConfig(
-            dataset="m-so2sat",
-            embedding_batch_size=128,
             num_workers=8,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
-            eval_interval=Duration.steps(20000),
+            eval_interval=Duration.steps(4000),
         ),
         "mados": DownstreamTaskConfig(
             dataset="mados",
@@ -261,6 +252,54 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.steps(20000),
             input_modalities=[Modality.SENTINEL2_L2A.name],
             epochs=50,
+        ),
+        "m_so2sat": DownstreamTaskConfig(
+            dataset="m-so2sat",
+            embedding_batch_size=128,
+            num_workers=8,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            eval_interval=Duration.steps(20000),
+        ),
+        "nandi_sentinel2": DownstreamTaskConfig(
+            dataset="nandi",
+            embedding_batch_size=128,
+            num_workers=0,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            input_layers=["sentinel2"],
+            eval_interval=Duration.steps(20000),
+        ),
+        "awf_sentinel2": DownstreamTaskConfig(
+            dataset="awf",
+            embedding_batch_size=128,
+            num_workers=0,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            input_layers=["sentinel2"],
+            eval_interval=Duration.steps(20000),
+        ),
+        "awf_sentinel1": DownstreamTaskConfig(
+            dataset="awf",
+            embedding_batch_size=128,
+            num_workers=0,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            input_modalities=[Modality.SENTINEL1.name],
+            input_layers=["sentinel1_ascending"],
+            eval_interval=Duration.steps(20000),
+        ),
+        "awf_landsat": DownstreamTaskConfig(
+            dataset="awf",
+            embedding_batch_size=128,
+            num_workers=0,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            input_modalities=[Modality.LANDSAT.name],
+            input_layers=["landsat"],
+            eval_interval=Duration.steps(20000),
         ),
     }
     trainer_config = (
@@ -300,43 +339,9 @@ def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig
     """Build the visualize config for an experiment."""
     return OlmoEarthVisualizeConfig(
         num_samples=None,
-        output_dir=str(f"{common.save_folder}/visualizations"),
+        output_dir=str(UPath(common.save_folder) / "visualizations"),
         std_multiplier=2.0,
     )
-
-
-def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """Build the model config for an experiment."""
-    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
-
-    encoder_config = EncoderConfig(
-        embedding_size=model_size["encoder_embedding_size"],
-        num_heads=model_size["encoder_num_heads"],
-        depth=model_size["encoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        supported_modality_names=common.training_modalities,
-        max_patch_size=MAX_PATCH_SIZE,
-        drop_path=0.1,
-        max_sequence_length=12,
-        tokenization_config=common.tokenization_config,
-        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
-        random_band_dropout=True,
-    )
-    decoder_config = PredictorConfig(
-        encoder_embedding_size=model_size["encoder_embedding_size"],
-        decoder_embedding_size=model_size["decoder_embedding_size"],
-        depth=model_size["decoder_depth"],
-        mlp_ratio=model_size["mlp_ratio"],
-        num_heads=model_size["decoder_num_heads"],
-        supported_modality_names=common.training_modalities,
-        max_sequence_length=12,
-        tokenization_config=common.tokenization_config,
-    )
-    model_config = LatentMIMConfig(
-        encoder_config=encoder_config,
-        decoder_config=decoder_config,
-    )
-    return model_config
 
 
 if __name__ == "__main__":

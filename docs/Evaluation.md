@@ -95,7 +95,7 @@ If you would like to evaluate the models against the Breizhcrops dataset, breizh
 ### 2. Run a dry run to inspect the commands
 
 ```bash
-python -m olmoearth_pretrain/internal/full_eval_sweep \
+python -m olmoearth_pretrain.internal.full_eval_sweep \
   --cluster=local \
   --checkpoint_path=/your/path/to/OlmoEarth-v1-Base \
   --module_path=scripts/official/base.py \
@@ -274,7 +274,7 @@ python -m olmoearth_pretrain.internal.full_eval_sweep_finetune \
 ## Monitoring & Outputs
 
 - **W&B logging:** Both scripts default to `EVAL_WANDB_PROJECT`. Override with `--project_name` or disable W&B via `--trainer.callbacks.wandb.enabled=False`.
-- **Inspecting results:** Use [`scripts/get_max_eval_metrics_from_wandb.py`](../scripts/get_max_eval_metrics_from_wandb.py) to pull the best metric per task across runs.
+- **Inspecting results:** Use [`scripts/tools/get_max_eval_metrics_from_wandb.py`](../scripts/tools/get_max_eval_metrics_from_wandb.py) to pull the best metric per task across runs.
 
 ---
 

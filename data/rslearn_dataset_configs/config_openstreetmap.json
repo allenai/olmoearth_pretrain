@@ -2,405 +2,407 @@
   "layers": {
     "openstreetmap": {
       "data_source": {
-        "bounds_fname": "source_data/openstreetmap/pbf_bounds.json",
-        "categories": {
-          "aerialway_pylon": {
-            "tag_conditions": {
-              "aerialway": [
-                "pylon"
-              ]
+        "class_path": "rslearn.data_sources.openstreetmap.OpenStreetMap",
+        "init_args": {
+          "bounds_fname": "source_data/openstreetmap/pbf_bounds.json",
+          "categories": {
+            "aerialway_pylon": {
+              "tag_conditions": {
+                "aerialway": [
+                  "pylon"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Point"
-          },
-          "aerodrome": {
-            "feature_types": [
-              "way",
-              "relation"
-            ],
-            "tag_conditions": {
-              "aeroway": [
-                "aerodrome"
-              ]
+            "aerodrome": {
+              "feature_types": [
+                "way",
+                "relation"
+              ],
+              "tag_conditions": {
+                "aeroway": [
+                  "aerodrome"
+                ]
+              },
+              "to_geometry": "Polygon"
             },
-            "to_geometry": "Polygon"
-          },
-          "airstrip": {
-            "feature_types": [
-              "way"
-            ],
-            "tag_conditions": {
-              "aeroway": [
-                "airstrip"
-              ]
+            "airstrip": {
+              "feature_types": [
+                "way"
+              ],
+              "tag_conditions": {
+                "aeroway": [
+                  "airstrip"
+                ]
+              },
+              "to_geometry": "LineString"
             },
-            "to_geometry": "LineString"
-          },
-          "amenity_fuel": {
-            "feature_types": [
-              "way",
-              "relation"
-            ],
-            "tag_conditions": {
-              "amenity": [
-                "fuel"
-              ]
+            "amenity_fuel": {
+              "feature_types": [
+                "way",
+                "relation"
+              ],
+              "tag_conditions": {
+                "amenity": [
+                  "fuel"
+                ]
+              },
+              "to_geometry": "Polygon"
             },
-            "to_geometry": "Polygon"
-          },
-          "building": {
-            "feature_types": [
-              "way",
-              "relation"
-            ],
-            "tag_conditions": {
-              "building": []
+            "building": {
+              "feature_types": [
+                "way",
+                "relation"
+              ],
+              "tag_conditions": {
+                "building": []
+              },
+              "tag_properties": {
+                "building": "building"
+              },
+              "to_geometry": "Polygon"
             },
-            "tag_properties": {
-              "building": "building"
+            "chimney": {
+              "tag_conditions": {
+                "man_made": [
+                  "chimney"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Polygon"
-          },
-          "chimney": {
-            "tag_conditions": {
-              "man_made": [
-                "chimney"
-              ]
+            "communications_tower": {
+              "tag_conditions": {
+                "man_made": [
+                  "communications_tower"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Point"
-          },
-          "communications_tower": {
-            "tag_conditions": {
-              "man_made": [
-                "communications_tower"
-              ]
+            "crane": {
+              "tag_conditions": {
+                "man_made": [
+                  "crane"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Point"
-          },
-          "crane": {
-            "tag_conditions": {
-              "man_made": [
-                "crane"
-              ]
+            "flagpole": {
+              "tag_conditions": {
+                "man_made": [
+                  "flagpole"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Point"
-          },
-          "flagpole": {
-            "tag_conditions": {
-              "man_made": [
-                "flagpole"
-              ]
+            "fountain": {
+              "tag_conditions": {
+                "amenity": [
+                  "fountain"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Point"
-          },
-          "fountain": {
-            "tag_conditions": {
-              "amenity": [
-                "fountain"
-              ]
+            "generator_wind": {
+              "tag_conditions": {
+                "generator:source": [
+                  "wind"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Point"
-          },
-          "generator_wind": {
-            "tag_conditions": {
-              "generator:source": [
-                "wind"
-              ]
+            "helipad": {
+              "tag_conditions": {
+                "aeroway": [
+                  "helipad"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Point"
-          },
-          "helipad": {
-            "tag_conditions": {
-              "aeroway": [
-                "helipad"
-              ]
+            "highway": {
+              "feature_types": [
+                "way"
+              ],
+              "tag_conditions": {
+                "highway": []
+              },
+              "tag_properties": {
+                "highway": "highway"
+              },
+              "to_geometry": "LineString"
             },
-            "to_geometry": "Point"
-          },
-          "highway": {
-            "feature_types": [
-              "way"
-            ],
-            "tag_conditions": {
-              "highway": []
+            "leisure": {
+              "feature_types": [
+                "way",
+                "relation"
+              ],
+              "tag_conditions": {
+                "leisure": []
+              },
+              "tag_properties": {
+                "leisure": "leisure"
+              },
+              "to_geometry": "Polygon"
             },
-            "tag_properties": {
-              "highway": "highway"
+            "lighthouse": {
+              "tag_conditions": {
+                "man_made": [
+                  "lighthouse"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "LineString"
-          },
-          "leisure": {
-            "feature_types": [
-              "way",
-              "relation"
-            ],
-            "tag_conditions": {
-              "leisure": []
+            "obelisk": {
+              "tag_conditions": {
+                "man_made": [
+                  "obelisk"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "tag_properties": {
-              "leisure": "leisure"
+            "observatory": {
+              "tag_conditions": {
+                "man_made": [
+                  "observatory"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Polygon"
-          },
-          "lighthouse": {
-            "tag_conditions": {
-              "man_made": [
-                "lighthouse"
-              ]
+            "parking": {
+              "feature_types": [
+                "way",
+                "relation"
+              ],
+              "tag_conditions": {
+                "amenity": [
+                  "parking"
+                ]
+              },
+              "to_geometry": "Polygon"
             },
-            "to_geometry": "Point"
-          },
-          "obelisk": {
-            "tag_conditions": {
-              "man_made": [
-                "obelisk"
-              ]
+            "petroleum_well": {
+              "tag_conditions": {
+                "man_made": [
+                  "petroleum_well"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Point"
-          },
-          "observatory": {
-            "tag_conditions": {
-              "man_made": [
-                "observatory"
-              ]
+            "power_plant": {
+              "feature_types": [
+                "way",
+                "relation"
+              ],
+              "tag_conditions": {
+                "power": [
+                  "plant"
+                ]
+              },
+              "tag_properties": {
+                "plant:source": "plant:source"
+              },
+              "to_geometry": "Polygon"
             },
-            "to_geometry": "Point"
-          },
-          "parking": {
-            "feature_types": [
-              "way",
-              "relation"
-            ],
-            "tag_conditions": {
-              "amenity": [
-                "parking"
-              ]
+            "power_substation": {
+              "feature_types": [
+                "way",
+                "relation"
+              ],
+              "tag_conditions": {
+                "power": [
+                  "substation"
+                ]
+              },
+              "to_geometry": "Polygon"
             },
-            "to_geometry": "Polygon"
-          },
-          "petroleum_well": {
-            "tag_conditions": {
-              "man_made": [
-                "petroleum_well"
-              ]
+            "power_tower": {
+              "tag_conditions": {
+                "power": [
+                  "tower"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Point"
-          },
-          "power_plant": {
-            "feature_types": [
-              "way",
-              "relation"
-            ],
-            "tag_conditions": {
-              "power": [
-                "plant"
-              ]
+            "river": {
+              "feature_types": [
+                "way",
+                "relation"
+              ],
+              "tag_conditions": {
+                "waterway": [
+                  "river"
+                ]
+              },
+              "tag_properties": {
+                "waterway": "waterway"
+              }
             },
-            "tag_properties": {
-              "plant:source": "plant:source"
+            "runway": {
+              "feature_types": [
+                "way"
+              ],
+              "tag_conditions": {
+                "aeroway": [
+                  "runway"
+                ]
+              },
+              "to_geometry": "LineString"
             },
-            "to_geometry": "Polygon"
-          },
-          "power_substation": {
-            "feature_types": [
-              "way",
-              "relation"
-            ],
-            "tag_conditions": {
-              "power": [
-                "substation"
-              ]
+            "satellite_dish": {
+              "tag_conditions": {
+                "man_made": [
+                  "satellite_dish"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Polygon"
-          },
-          "power_tower": {
-            "tag_conditions": {
-              "power": [
-                "tower"
-              ]
+            "silo": {
+              "tag_conditions": {
+                "man_made": [
+                  "silo"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "to_geometry": "Point"
-          },
-          "river": {
-            "feature_types": [
-              "way",
-              "relation"
-            ],
-            "tag_conditions": {
-              "waterway": [
-                "river"
-              ]
+            "storage_tank": {
+              "tag_conditions": {
+                "man_made": [
+                  "storage_tank"
+                ]
+              },
+              "to_geometry": "Point"
             },
-            "tag_properties": {
-              "waterway": "waterway"
+            "taxiway": {
+              "feature_types": [
+                "way"
+              ],
+              "tag_conditions": {
+                "aeroway": [
+                  "taxiway"
+                ]
+              },
+              "to_geometry": "LineString"
+            },
+            "water_tower": {
+              "tag_conditions": {
+                "man_mode": [
+                  "water_tower"
+                ]
+              },
+              "to_geometry": "Point"
+            },
+            "works": {
+              "feature_types": [
+                "way",
+                "relation"
+              ],
+              "tag_conditions": {
+                "man_made": [
+                  "works"
+                ]
+              },
+              "to_geometry": "Polygon"
             }
           },
-          "runway": {
-            "feature_types": [
-              "way"
-            ],
-            "tag_conditions": {
-              "aeroway": [
-                "runway"
-              ]
-            },
-            "to_geometry": "LineString"
-          },
-          "satellite_dish": {
-            "tag_conditions": {
-              "man_made": [
-                "satellite_dish"
-              ]
-            },
-            "to_geometry": "Point"
-          },
-          "silo": {
-            "tag_conditions": {
-              "man_made": [
-                "silo"
-              ]
-            },
-            "to_geometry": "Point"
-          },
-          "storage_tank": {
-            "tag_conditions": {
-              "man_made": [
-                "storage_tank"
-              ]
-            },
-            "to_geometry": "Point"
-          },
-          "taxiway": {
-            "feature_types": [
-              "way"
-            ],
-            "tag_conditions": {
-              "aeroway": [
-                "taxiway"
-              ]
-            },
-            "to_geometry": "LineString"
-          },
-          "water_tower": {
-            "tag_conditions": {
-              "man_mode": [
-                "water_tower"
-              ]
-            },
-            "to_geometry": "Point"
-          },
-          "works": {
-            "feature_types": [
-              "way",
-              "relation"
-            ],
-            "tag_conditions": {
-              "man_made": [
-                "works"
-              ]
-            },
-            "to_geometry": "Polygon"
-          }
+          "pbf_fnames": [
+            "source_data/openstreetmap/afghanistan-latest.osm.pbf",
+            "source_data/openstreetmap/africa-latest.osm.pbf",
+            "source_data/openstreetmap/albania-latest.osm.pbf",
+            "source_data/openstreetmap/andorra-latest.osm.pbf",
+            "source_data/openstreetmap/antarctica-latest.osm.pbf",
+            "source_data/openstreetmap/armenia-latest.osm.pbf",
+            "source_data/openstreetmap/australia-oceania-latest.osm.pbf",
+            "source_data/openstreetmap/austria-latest.osm.pbf",
+            "source_data/openstreetmap/azerbaijan-latest.osm.pbf",
+            "source_data/openstreetmap/azores-latest.osm.pbf",
+            "source_data/openstreetmap/bangladesh-latest.osm.pbf",
+            "source_data/openstreetmap/belarus-latest.osm.pbf",
+            "source_data/openstreetmap/belgium-latest.osm.pbf",
+            "source_data/openstreetmap/bhutan-latest.osm.pbf",
+            "source_data/openstreetmap/bosnia-herzegovina-latest.osm.pbf",
+            "source_data/openstreetmap/bulgaria-latest.osm.pbf",
+            "source_data/openstreetmap/cambodia-latest.osm.pbf",
+            "source_data/openstreetmap/canada-latest.osm.pbf",
+            "source_data/openstreetmap/central-america-latest.osm.pbf",
+            "source_data/openstreetmap/china-latest.osm.pbf",
+            "source_data/openstreetmap/croatia-latest.osm.pbf",
+            "source_data/openstreetmap/cyprus-latest.osm.pbf",
+            "source_data/openstreetmap/czech-republic-latest.osm.pbf",
+            "source_data/openstreetmap/denmark-latest.osm.pbf",
+            "source_data/openstreetmap/east-timor-latest.osm.pbf",
+            "source_data/openstreetmap/estonia-latest.osm.pbf",
+            "source_data/openstreetmap/faroe-islands-latest.osm.pbf",
+            "source_data/openstreetmap/finland-latest.osm.pbf",
+            "source_data/openstreetmap/france-latest.osm.pbf",
+            "source_data/openstreetmap/gcc-states-latest.osm.pbf",
+            "source_data/openstreetmap/georgia-latest.osm.pbf",
+            "source_data/openstreetmap/germany-latest.osm.pbf",
+            "source_data/openstreetmap/greece-latest.osm.pbf",
+            "source_data/openstreetmap/greenland-latest.osm.pbf",
+            "source_data/openstreetmap/guernsey-jersey-latest.osm.pbf",
+            "source_data/openstreetmap/hungary-latest.osm.pbf",
+            "source_data/openstreetmap/iceland-latest.osm.pbf",
+            "source_data/openstreetmap/india-latest.osm.pbf",
+            "source_data/openstreetmap/indonesia-latest.osm.pbf",
+            "source_data/openstreetmap/iran-latest.osm.pbf",
+            "source_data/openstreetmap/iraq-latest.osm.pbf",
+            "source_data/openstreetmap/ireland-and-northern-ireland-latest.osm.pbf",
+            "source_data/openstreetmap/isle-of-man-latest.osm.pbf",
+            "source_data/openstreetmap/israel-and-palestine-latest.osm.pbf",
+            "source_data/openstreetmap/italy-latest.osm.pbf",
+            "source_data/openstreetmap/japan-latest.osm.pbf",
+            "source_data/openstreetmap/jordan-latest.osm.pbf",
+            "source_data/openstreetmap/kazakhstan-latest.osm.pbf",
+            "source_data/openstreetmap/kosovo-latest.osm.pbf",
+            "source_data/openstreetmap/kyrgyzstan-latest.osm.pbf",
+            "source_data/openstreetmap/laos-latest.osm.pbf",
+            "source_data/openstreetmap/latvia-latest.osm.pbf",
+            "source_data/openstreetmap/lebanon-latest.osm.pbf",
+            "source_data/openstreetmap/liechtenstein-latest.osm.pbf",
+            "source_data/openstreetmap/lithuania-latest.osm.pbf",
+            "source_data/openstreetmap/luxembourg-latest.osm.pbf",
+            "source_data/openstreetmap/macedonia-latest.osm.pbf",
+            "source_data/openstreetmap/malaysia-singapore-brunei-latest.osm.pbf",
+            "source_data/openstreetmap/maldives-latest.osm.pbf",
+            "source_data/openstreetmap/malta-latest.osm.pbf",
+            "source_data/openstreetmap/mexico-latest.osm.pbf",
+            "source_data/openstreetmap/moldova-latest.osm.pbf",
+            "source_data/openstreetmap/monaco-latest.osm.pbf",
+            "source_data/openstreetmap/mongolia-latest.osm.pbf",
+            "source_data/openstreetmap/montenegro-latest.osm.pbf",
+            "source_data/openstreetmap/myanmar-latest.osm.pbf",
+            "source_data/openstreetmap/nepal-latest.osm.pbf",
+            "source_data/openstreetmap/netherlands-latest.osm.pbf",
+            "source_data/openstreetmap/north-korea-latest.osm.pbf",
+            "source_data/openstreetmap/norway-latest.osm.pbf",
+            "source_data/openstreetmap/pakistan-latest.osm.pbf",
+            "source_data/openstreetmap/philippines-latest.osm.pbf",
+            "source_data/openstreetmap/poland-latest.osm.pbf",
+            "source_data/openstreetmap/portugal-latest.osm.pbf",
+            "source_data/openstreetmap/romania-latest.osm.pbf",
+            "source_data/openstreetmap/russia-latest.osm.pbf",
+            "source_data/openstreetmap/serbia-latest.osm.pbf",
+            "source_data/openstreetmap/slovakia-latest.osm.pbf",
+            "source_data/openstreetmap/slovenia-latest.osm.pbf",
+            "source_data/openstreetmap/south-america-latest.osm.pbf",
+            "source_data/openstreetmap/south-korea-latest.osm.pbf",
+            "source_data/openstreetmap/spain-latest.osm.pbf",
+            "source_data/openstreetmap/sri-lanka-latest.osm.pbf",
+            "source_data/openstreetmap/sweden-latest.osm.pbf",
+            "source_data/openstreetmap/switzerland-latest.osm.pbf",
+            "source_data/openstreetmap/syria-latest.osm.pbf",
+            "source_data/openstreetmap/taiwan-latest.osm.pbf",
+            "source_data/openstreetmap/tajikistan-latest.osm.pbf",
+            "source_data/openstreetmap/thailand-latest.osm.pbf",
+            "source_data/openstreetmap/turkey-latest.osm.pbf",
+            "source_data/openstreetmap/turkmenistan-latest.osm.pbf",
+            "source_data/openstreetmap/ukraine-latest.osm.pbf",
+            "source_data/openstreetmap/united-kingdom-latest.osm.pbf",
+            "source_data/openstreetmap/us-latest.osm.pbf",
+            "source_data/openstreetmap/uzbekistan-latest.osm.pbf",
+            "source_data/openstreetmap/vietnam-latest.osm.pbf",
+            "source_data/openstreetmap/yemen-latest.osm.pbf"
+          ]
         },
-        "name": "rslearn.data_sources.openstreetmap.OpenStreetMap",
-        "pbf_fnames": [
-          "source_data/openstreetmap/afghanistan-latest.osm.pbf",
-          "source_data/openstreetmap/africa-latest.osm.pbf",
-          "source_data/openstreetmap/albania-latest.osm.pbf",
-          "source_data/openstreetmap/andorra-latest.osm.pbf",
-          "source_data/openstreetmap/antarctica-latest.osm.pbf",
-          "source_data/openstreetmap/armenia-latest.osm.pbf",
-          "source_data/openstreetmap/australia-oceania-latest.osm.pbf",
-          "source_data/openstreetmap/austria-latest.osm.pbf",
-          "source_data/openstreetmap/azerbaijan-latest.osm.pbf",
-          "source_data/openstreetmap/azores-latest.osm.pbf",
-          "source_data/openstreetmap/bangladesh-latest.osm.pbf",
-          "source_data/openstreetmap/belarus-latest.osm.pbf",
-          "source_data/openstreetmap/belgium-latest.osm.pbf",
-          "source_data/openstreetmap/bhutan-latest.osm.pbf",
-          "source_data/openstreetmap/bosnia-herzegovina-latest.osm.pbf",
-          "source_data/openstreetmap/bulgaria-latest.osm.pbf",
-          "source_data/openstreetmap/cambodia-latest.osm.pbf",
-          "source_data/openstreetmap/canada-latest.osm.pbf",
-          "source_data/openstreetmap/central-america-latest.osm.pbf",
-          "source_data/openstreetmap/china-latest.osm.pbf",
-          "source_data/openstreetmap/croatia-latest.osm.pbf",
-          "source_data/openstreetmap/cyprus-latest.osm.pbf",
-          "source_data/openstreetmap/czech-republic-latest.osm.pbf",
-          "source_data/openstreetmap/denmark-latest.osm.pbf",
-          "source_data/openstreetmap/east-timor-latest.osm.pbf",
-          "source_data/openstreetmap/estonia-latest.osm.pbf",
-          "source_data/openstreetmap/faroe-islands-latest.osm.pbf",
-          "source_data/openstreetmap/finland-latest.osm.pbf",
-          "source_data/openstreetmap/france-latest.osm.pbf",
-          "source_data/openstreetmap/gcc-states-latest.osm.pbf",
-          "source_data/openstreetmap/georgia-latest.osm.pbf",
-          "source_data/openstreetmap/germany-latest.osm.pbf",
-          "source_data/openstreetmap/greece-latest.osm.pbf",
-          "source_data/openstreetmap/greenland-latest.osm.pbf",
-          "source_data/openstreetmap/guernsey-jersey-latest.osm.pbf",
-          "source_data/openstreetmap/hungary-latest.osm.pbf",
-          "source_data/openstreetmap/iceland-latest.osm.pbf",
-          "source_data/openstreetmap/india-latest.osm.pbf",
-          "source_data/openstreetmap/indonesia-latest.osm.pbf",
-          "source_data/openstreetmap/iran-latest.osm.pbf",
-          "source_data/openstreetmap/iraq-latest.osm.pbf",
-          "source_data/openstreetmap/ireland-and-northern-ireland-latest.osm.pbf",
-          "source_data/openstreetmap/isle-of-man-latest.osm.pbf",
-          "source_data/openstreetmap/israel-and-palestine-latest.osm.pbf",
-          "source_data/openstreetmap/italy-latest.osm.pbf",
-          "source_data/openstreetmap/japan-latest.osm.pbf",
-          "source_data/openstreetmap/jordan-latest.osm.pbf",
-          "source_data/openstreetmap/kazakhstan-latest.osm.pbf",
-          "source_data/openstreetmap/kosovo-latest.osm.pbf",
-          "source_data/openstreetmap/kyrgyzstan-latest.osm.pbf",
-          "source_data/openstreetmap/laos-latest.osm.pbf",
-          "source_data/openstreetmap/latvia-latest.osm.pbf",
-          "source_data/openstreetmap/lebanon-latest.osm.pbf",
-          "source_data/openstreetmap/liechtenstein-latest.osm.pbf",
-          "source_data/openstreetmap/lithuania-latest.osm.pbf",
-          "source_data/openstreetmap/luxembourg-latest.osm.pbf",
-          "source_data/openstreetmap/macedonia-latest.osm.pbf",
-          "source_data/openstreetmap/malaysia-singapore-brunei-latest.osm.pbf",
-          "source_data/openstreetmap/maldives-latest.osm.pbf",
-          "source_data/openstreetmap/malta-latest.osm.pbf",
-          "source_data/openstreetmap/mexico-latest.osm.pbf",
-          "source_data/openstreetmap/moldova-latest.osm.pbf",
-          "source_data/openstreetmap/monaco-latest.osm.pbf",
-          "source_data/openstreetmap/mongolia-latest.osm.pbf",
-          "source_data/openstreetmap/montenegro-latest.osm.pbf",
-          "source_data/openstreetmap/myanmar-latest.osm.pbf",
-          "source_data/openstreetmap/nepal-latest.osm.pbf",
-          "source_data/openstreetmap/netherlands-latest.osm.pbf",
-          "source_data/openstreetmap/north-korea-latest.osm.pbf",
-          "source_data/openstreetmap/norway-latest.osm.pbf",
-          "source_data/openstreetmap/pakistan-latest.osm.pbf",
-          "source_data/openstreetmap/philippines-latest.osm.pbf",
-          "source_data/openstreetmap/poland-latest.osm.pbf",
-          "source_data/openstreetmap/portugal-latest.osm.pbf",
-          "source_data/openstreetmap/romania-latest.osm.pbf",
-          "source_data/openstreetmap/russia-latest.osm.pbf",
-          "source_data/openstreetmap/serbia-latest.osm.pbf",
-          "source_data/openstreetmap/slovakia-latest.osm.pbf",
-          "source_data/openstreetmap/slovenia-latest.osm.pbf",
-          "source_data/openstreetmap/south-america-latest.osm.pbf",
-          "source_data/openstreetmap/south-korea-latest.osm.pbf",
-          "source_data/openstreetmap/spain-latest.osm.pbf",
-          "source_data/openstreetmap/sri-lanka-latest.osm.pbf",
-          "source_data/openstreetmap/sweden-latest.osm.pbf",
-          "source_data/openstreetmap/switzerland-latest.osm.pbf",
-          "source_data/openstreetmap/syria-latest.osm.pbf",
-          "source_data/openstreetmap/taiwan-latest.osm.pbf",
-          "source_data/openstreetmap/tajikistan-latest.osm.pbf",
-          "source_data/openstreetmap/thailand-latest.osm.pbf",
-          "source_data/openstreetmap/turkey-latest.osm.pbf",
-          "source_data/openstreetmap/turkmenistan-latest.osm.pbf",
-          "source_data/openstreetmap/ukraine-latest.osm.pbf",
-          "source_data/openstreetmap/united-kingdom-latest.osm.pbf",
-          "source_data/openstreetmap/us-latest.osm.pbf",
-          "source_data/openstreetmap/uzbekistan-latest.osm.pbf",
-          "source_data/openstreetmap/vietnam-latest.osm.pbf",
-          "source_data/openstreetmap/yemen-latest.osm.pbf"
-        ],
         "query_config": {
           "max_matches": 16
         }

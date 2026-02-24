@@ -67,6 +67,7 @@ def build_common_components(
         Modality.WRI_CANOPY_HEIGHT_MAP.name,
         Modality.CDL.name,
         Modality.WORLDCEREAL.name,
+        Modality.EUROCROPS.name,
     ]
     return config
 
@@ -90,6 +91,7 @@ def get_masking_config(common: CommonComponents) -> MaskingConfig:
                 Modality.WRI_CANOPY_HEIGHT_MAP.name,
                 Modality.CDL.name,
                 Modality.WORLDCEREAL.name,
+                Modality.EUROCROPS.name,
             ],
         },
         tokenization_config=common.tokenization_config,
@@ -99,13 +101,7 @@ def get_masking_config(common: CommonComponents) -> MaskingConfig:
 def build_train_module_config(
     common: CommonComponents,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build the train module config for an experiment.
-
-    Args:
-        common: Common experiment components.
-    """
-    # The train module still needs the masking_config for reference (e.g., for metric
-    # naming), but the actual masking happens in the dataloader workers.
+    """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
         rank_microbatch_size=32,
@@ -134,39 +130,29 @@ def build_train_module_config(
     )
 
 
-def build_dataloader_config(
-    common: CommonComponents,
-) -> OlmoEarthDataLoaderConfig:
-    """Build the dataloader config for an experiment.
+def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build the dataloader config for an experiment."""
+    # things should be set during building
 
-    Masking is performed in the dataloader workers (CPU) instead of in the train module
-    (GPU). This improves throughput by offloading CPU-bound masking operations to
-    dataloader workers.
-
-    Args:
-        common: Common experiment components.
-    """
     return OlmoEarthDataLoaderConfig(
-        num_workers=12,
+        num_workers=16,
         global_batch_size=512,
         token_budget=2250,
-        prefetch_factor=2,
+        prefetch_factor=4,
         sampled_hw_p_list=list(range(1, 13)),  # try only temporal tokens
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
-        num_masked_views=2,  # ContrastiveLatentMIM needs 2 views
+        num_masked_views=2,
         masking_config=get_masking_config(common),
-        # masking_config_b is not set, so both views use the same strategy
-        tokenization_config=common.tokenization_config,
     )
 
 
 def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     """Build the dataset config for an experiment."""
     return OlmoEarthDatasetConfig(
-        h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
+        h5py_dir="/weka/dfive-default/helios/dataset/eurocrops_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_eurocrops_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/646212",
         training_modalities=common.training_modalities,
     )
 
@@ -178,7 +164,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2025_10_02_phase2"
+    WANDB_PROJECT = "2026_02_04_eurocrops"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)

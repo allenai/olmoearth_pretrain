@@ -48,8 +48,8 @@ class LatentMIM(nn.Module, DistributedMixins):
         for p in self.target_encoder.parameters():
             p.requires_grad = False
         # Disable band dropout on target encoder so it always sees full spectral info.
-        if hasattr(self.target_encoder, "patch_embeddings"):
-            self.target_encoder.patch_embeddings.band_dropout_rate = 0.0
+        if hasattr(self.target_encoder, "disable_band_dropout"):
+            self.target_encoder.disable_band_dropout()
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int

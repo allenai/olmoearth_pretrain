@@ -10,7 +10,10 @@
         }
       ],
       "data_source": {
-        "name": "rslearn.data_sources.earthdata_srtm.SRTM"
+        "class_path": "rslearn.data_sources.hf_srtm.SRTM",
+        "init_args": {
+          "cache_dir": "cache/srtm"
+        }
       },
       "resampling_method": "nearest",
       "type": "raster"

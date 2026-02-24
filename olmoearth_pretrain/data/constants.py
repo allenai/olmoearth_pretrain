@@ -485,12 +485,22 @@ class Modality:
         ignore_when_parsing=False,
     )
 
-    NDVI = ModalitySpec(
-        name="ndvi",
+    NDVI = (
+        ModalitySpec(
+            name="ndvi",
+            tile_resolution_factor=16,
+            band_sets=[BandSet(["ndvi"], 16)],
+            is_multitemporal=True,
+            ignore_when_parsing=True,  # computed from S2 L2A, not loaded from file
+        ),
+    )
+
+    EUROCROPS = ModalitySpec(
+        name="eurocrops",
         tile_resolution_factor=16,
-        band_sets=[BandSet(["ndvi"], 16)],
-        is_multitemporal=True,
-        ignore_when_parsing=True,  # computed from S2 L2A, not loaded from file
+        band_sets=[BandSet(["B1"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
     )
 
     @classmethod

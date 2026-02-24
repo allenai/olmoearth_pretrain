@@ -35,16 +35,18 @@
         }
       ],
       "data_source": {
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
         "query_config": {
           "max_matches": 8,
           "space_mode": "INTERSECTS"
-        },
-        "sort_by": "cloud_cover",
-        "use_rtree_index": true
+        }
       },
       "type": "raster"
     },
@@ -83,14 +85,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "-180d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "-180d"
       },
       "type": "raster"
     },
@@ -129,14 +133,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "-150d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "-150d"
       },
       "type": "raster"
     },
@@ -175,14 +181,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "-120d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "-120d"
       },
       "type": "raster"
     },
@@ -221,14 +229,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "-90d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "-90d"
       },
       "type": "raster"
     },
@@ -267,14 +277,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "-60d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "-60d"
       },
       "type": "raster"
     },
@@ -313,14 +325,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "-30d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "-30d"
       },
       "type": "raster"
     },
@@ -359,14 +373,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "0d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "0d"
       },
       "type": "raster"
     },
@@ -405,14 +421,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "30d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "30d"
       },
       "type": "raster"
     },
@@ -451,14 +469,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "60d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "60d"
       },
       "type": "raster"
     },
@@ -497,14 +517,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "90d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "90d"
       },
       "type": "raster"
     },
@@ -543,14 +565,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "120d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "120d"
       },
       "type": "raster"
     },
@@ -589,14 +613,16 @@
         }
       ],
       "data_source": {
+        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
         "duration": "30d",
-        "harmonize": true,
-        "index_cache_dir": "cache/sentinel2",
-        "modality": "L1C",
-        "name": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "sort_by": "cloud_cover",
-        "time_offset": "150d",
-        "use_rtree_index": true
+        "init_args": {
+          "harmonize": true,
+          "index_cache_dir": "cache/sentinel2",
+          "modality": "L1C",
+          "sort_by": "cloud_cover",
+          "use_rtree_index": true
+        },
+        "time_offset": "150d"
       },
       "type": "raster"
     }

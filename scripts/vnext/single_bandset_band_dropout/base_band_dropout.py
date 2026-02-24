@@ -1,4 +1,10 @@
-"""Trying to prototype fitting everything into olmo core."""
+"""Base script for single bandset + random band dropout + random with decode masking + masked-negatives loss.
+
+- Single bandset S2 (all 12 bands) / Landsat (all 11 bands)
+- Random band dropout (rate ~ Uniform(0, 0.3))
+- Random with decode masking
+- Masked negatives patch discrimination loss
+"""
 
 import logging
 
@@ -30,10 +36,18 @@ from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     OlmoEarthVisualizeConfig,
     SubCmd,
+    main,
 )
+from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
 from olmoearth_pretrain.nn.flexi_vit import (
     PoolingType,
 )
+from olmoearth_pretrain.nn.flexihelios import (
+    EncoderConfig,
+    PredictorConfig,
+)
+from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthSpeedMonitorCallback,
@@ -50,6 +64,71 @@ logger = logging.getLogger(__name__)
 
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
+RANDOM_BAND_DROPOUT_MAX_RATE = 0.3
+
+S2_SINGLE_BANDSET = ModalityTokenization(
+    band_groups=[
+        [
+            "B02",
+            "B03",
+            "B04",
+            "B08",
+            "B05",
+            "B06",
+            "B07",
+            "B8A",
+            "B11",
+            "B12",
+            "B01",
+            "B09",
+        ],
+    ]
+)
+
+LANDSAT_SINGLE_BANDSET = ModalityTokenization(
+    band_groups=[
+        ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
+    ]
+)
+
+ONLY_DECODE_MODALITIES = [
+    Modality.WORLDCOVER.name,
+    Modality.SRTM.name,
+    Modality.OPENSTREETMAP_RASTER.name,
+    Modality.WRI_CANOPY_HEIGHT_MAP.name,
+    Modality.CDL.name,
+    Modality.WORLDCEREAL.name,
+]
+
+# Only apply band dropout to spectral modalities (not maps).
+BAND_DROPOUT_MODALITIES = [
+    Modality.SENTINEL2_L2A.name,
+    Modality.SENTINEL1.name,
+    Modality.LANDSAT.name,
+]
+
+
+def _tokenization_config() -> TokenizationConfig:
+    return TokenizationConfig(
+        overrides={
+            "sentinel2_l2a": S2_SINGLE_BANDSET,
+            "landsat": LANDSAT_SINGLE_BANDSET,
+        }
+    )
+
+
+def _masking_config(
+    tokenization_config: TokenizationConfig | None = None,
+) -> MaskingConfig:
+    return MaskingConfig(
+        strategy_config={
+            "type": "random_with_decode",
+            "encode_ratio": 0.5,
+            "decode_ratio": 0.5,
+            "only_decode_modalities": ONLY_DECODE_MODALITIES,
+        },
+        tokenization_config=tokenization_config,
+    )
 
 
 def build_common_components(
@@ -68,52 +147,24 @@ def build_common_components(
         Modality.CDL.name,
         Modality.WORLDCEREAL.name,
     ]
+    config.tokenization_config = _tokenization_config()
     return config
-
-
-def get_masking_config(common: CommonComponents) -> MaskingConfig:
-    """Get the masking configuration for the experiment.
-
-    Args:
-        common: Common experiment components containing optional tokenization_config.
-    """
-    return MaskingConfig(
-        strategy_config={
-            "type": "modality_cross_random",
-            "encode_ratio": 0.5,
-            "decode_ratio": 0.5,
-            "allow_encoding_decoding_same_bandset": True,
-            "only_decode_modalities": [
-                Modality.WORLDCOVER.name,
-                Modality.SRTM.name,
-                Modality.OPENSTREETMAP_RASTER.name,
-                Modality.WRI_CANOPY_HEIGHT_MAP.name,
-                Modality.CDL.name,
-                Modality.WORLDCEREAL.name,
-            ],
-        },
-        tokenization_config=common.tokenization_config,
-    )
 
 
 def build_train_module_config(
     common: CommonComponents,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
-    """Build the train module config for an experiment.
-
-    Args:
-        common: Common experiment components.
-    """
-    # The train module still needs the masking_config for reference (e.g., for metric
-    # naming), but the actual masking happens in the dataloader workers.
+    """Build the train module config for an experiment."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
         rank_microbatch_size=32,
-        masking_config=get_masking_config(common),
+        masking_config=_masking_config(common.tokenization_config),
         loss_config=LossConfig(
             loss_config={
-                "type": "modality_patch_discrimination_new",
+                "type": "modality_patch_discrimination_masked_negatives",
                 "tau": 0.1,
+                "same_target_threshold": 0.999,
+                "mask_negatives_for_modalities": ONLY_DECODE_MODALITIES,
             }
         ),
         contrastive_config=LossConfig(
@@ -134,32 +185,20 @@ def build_train_module_config(
     )
 
 
-def build_dataloader_config(
-    common: CommonComponents,
-) -> OlmoEarthDataLoaderConfig:
-    """Build the dataloader config for an experiment.
-
-    Masking is performed in the dataloader workers (CPU) instead of in the train module
-    (GPU). This improves throughput by offloading CPU-bound masking operations to
-    dataloader workers.
-
-    Args:
-        common: Common experiment components.
-    """
+def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build the dataloader config for an experiment."""
     return OlmoEarthDataLoaderConfig(
-        num_workers=12,
+        num_workers=16,
         global_batch_size=512,
         token_budget=2250,
-        prefetch_factor=2,
-        sampled_hw_p_list=list(range(1, 13)),  # try only temporal tokens
+        prefetch_factor=4,
+        sampled_hw_p_list=list(range(1, 13)),
         min_patch_size=MIN_PATCH_SIZE,
         max_patch_size=MAX_PATCH_SIZE,
         work_dir=common.save_folder,
         seed=3622,
-        num_masked_views=2,  # ContrastiveLatentMIM needs 2 views
-        masking_config=get_masking_config(common),
-        # masking_config_b is not set, so both views use the same strategy
-        tokenization_config=common.tokenization_config,
+        num_masked_views=2,
+        masking_config=_masking_config(common.tokenization_config),
     )
 
 
@@ -178,7 +217,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
     WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2025_10_02_phase2"
+    WANDB_PROJECT = "2026_02_08_masked_neg"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
@@ -186,9 +225,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         name=common.run_name,
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
-        enabled=True,  # set to False to avoid wandb errors
+        enabled=True,
     )
-    # Safe to collect everys tep for now
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
@@ -252,9 +290,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
-        .with_callback(
-            "beaker", BeakerCallback()
-        )  # this shoukd not be here, but for now it is
+        .with_callback("beaker", BeakerCallback())
         .with_callback(
             "checkpointer",
             CheckpointerCallback(
@@ -272,4 +308,51 @@ def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig
         num_samples=None,
         output_dir=str(f"{common.save_folder}/visualizations"),
         std_multiplier=2.0,
+    )
+
+
+def build_model_config(common: CommonComponents) -> LatentMIMConfig:
+    """Build the model config for an experiment."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+        band_dropout_modalities=BAND_DROPOUT_MODALITIES,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    model_config = LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+    )
+    return model_config
+
+
+if __name__ == "__main__":
+    main(
+        common_components_builder=build_common_components,
+        model_config_builder=build_model_config,
+        train_module_config_builder=build_train_module_config,
+        dataset_config_builder=build_dataset_config,
+        dataloader_config_builder=build_dataloader_config,
+        trainer_config_builder=build_trainer_config,
+        visualize_config_builder=build_visualize_config,
     )
