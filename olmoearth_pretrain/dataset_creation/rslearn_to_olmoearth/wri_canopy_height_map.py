@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 import numpy as np
 import tqdm
-from rslearn.dataset import Window
+from rslearn.dataset import Dataset, Window
 from rslearn.utils.mp import star_imap_unordered
 from upath import UPath
 
@@ -25,14 +25,13 @@ END_TIME = datetime(2021, 1, 1, tzinfo=UTC)
 LAYER_NAME = "wri_canopy_height_map"
 
 
-def convert_chm(window_path: UPath, olmoearth_path: UPath) -> None:
+def convert_chm(window: Window, olmoearth_path: UPath) -> None:
     """Add WRI CHM data for this window to the OlmoEarth Pretrain dataset.
 
     Args:
-        window_path: the rslearn window directory to read data from.
+        window: the rslearn window to read data from.
         olmoearth_path: OlmoEarth Pretrain dataset path to write to.
     """
-    window = Window.load(window_path)
     window_metadata = get_window_metadata(window)
 
     if not window.is_layer_completed(LAYER_NAME):
@@ -113,15 +112,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    ds_path = UPath(args.ds_path)
+    dataset = Dataset(UPath(args.ds_path))
     olmoearth_path = UPath(args.olmoearth_path)
 
-    metadata_fnames = ds_path.glob("windows/res_10/*/metadata.json")
     jobs = []
-    for metadata_fname in metadata_fnames:
+    for window in dataset.load_windows(
+        workers=args.workers, show_progress=True, groups=["res_10"]
+    ):
         jobs.append(
             dict(
-                window_path=metadata_fname.parent,
+                window=window,
                 olmoearth_path=olmoearth_path,
             )
         )

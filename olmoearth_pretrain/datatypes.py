@@ -45,6 +45,7 @@ class OlmoEarthSample(NamedTuple):
     wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
     # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
+    eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
 
     # TODO: Add unit tests for this
     def shape(self, attribute: str, mask: bool = False) -> Sequence[int]:
@@ -612,6 +613,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     wri_canopy_height_map_mask: ArrayTensor | None = None
     era5_10: ArrayTensor | None = None
     era5_10_mask: ArrayTensor | None = None
+    eurocrops: ArrayTensor | None = None
+    eurocrops_mask: ArrayTensor | None = None
 
     def as_dict(self, return_none: bool = True) -> dict[str, Any]:
         """Convert the namedtuple to a dictionary.

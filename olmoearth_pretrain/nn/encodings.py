@@ -56,7 +56,7 @@ def get_2d_sincos_pos_encoding(grid: torch.Tensor, encoding_dim: int) -> torch.T
 
 
 def get_2d_sincos_pos_encoding_with_resolution(
-    grid_size: int,
+    grid_size: int | tuple[int, int],
     res: torch.Tensor,
     encoding_dim: int,
     device: torch.device,
@@ -65,7 +65,8 @@ def get_2d_sincos_pos_encoding_with_resolution(
     """Get 2D sin cos position encoding for a given grid of positions with resolution.
 
     Args:
-        grid_size: int of the grid height and width
+        grid_size: Grid size. If an int, uses a square grid (H=W=grid_size). If a
+            tuple, interpreted as (H, W).
         res: array of size n, representing the resolution of a pixel (say, in meters),
                 where n is the number of spatial dimensions
         encoding_dim: output dimension for each position
@@ -75,8 +76,13 @@ def get_2d_sincos_pos_encoding_with_resolution(
         encoding: position encoding for the given grid: size (H*W, D)
     """
     # TODO: What happens when the res array is bigger than 1?
-    grid_h = torch.arange(grid_size, device=device)
-    grid_w = torch.arange(grid_size, device=device)
+    if isinstance(grid_size, tuple):
+        grid_h_size, grid_w_size = grid_size
+    else:
+        grid_h_size = grid_w_size = grid_size
+
+    grid_h = torch.arange(grid_h_size, device=device)
+    grid_w = torch.arange(grid_w_size, device=device)
     grid = torch.meshgrid(grid_w, grid_h, indexing="xy")  # (h_grid, w_grid)
     grid = torch.stack(grid, dim=0)  # 2 x h x w
 
