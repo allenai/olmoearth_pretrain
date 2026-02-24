@@ -14,6 +14,7 @@ Experiments:
 18. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + NDVI decode-only + masked neg loss
 19. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + NDVI + ERA5 decode-only + masked neg loss
 20. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_time_with_decode masking + NDVI + ERA5 decode-only + masked neg loss
+21. exp 20 + decoder supervision on decode-only spatial modalities (worldcover, srtm, osm, canopy height, cdl, worldcereal, ndvi)
 """
 
 import copy
@@ -42,6 +43,11 @@ from olmoearth_pretrain.internal.experiment import CommonComponents, SubCmd, mai
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
 from olmoearth_pretrain.nn.flexihelios import EncoderConfig, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.supervision_head import (
+    SupervisionHeadConfig,
+    SupervisionModalityConfig,
+    SupervisionTaskType,
+)
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
@@ -1121,6 +1127,110 @@ def build_dataloader_exp20(common: CommonComponents) -> OlmoEarthDataLoaderConfi
     )
 
 
+# --- Supervision configs for decode-only spatial modalities ---
+
+WORLDCOVER_CLASS_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
+
+SUPERVISION_MODALITY_CONFIGS = {
+    "worldcover": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.CLASSIFICATION,
+        num_output_channels=11,
+        weight=0.1,
+        class_values=WORLDCOVER_CLASS_VALUES,
+    ),
+    "srtm": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.REGRESSION,
+        num_output_channels=1,
+        weight=1.0,
+    ),
+    "openstreetmap_raster": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.BINARY_CLASSIFICATION,
+        num_output_channels=30,
+        weight=0.1,
+    ),
+    "wri_canopy_height_map": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.REGRESSION,
+        num_output_channels=1,
+        weight=1.0,
+    ),
+    "cdl": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.REGRESSION,
+        num_output_channels=1,
+        weight=1.0,
+    ),
+    "worldcereal": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.BINARY_CLASSIFICATION,
+        num_output_channels=8,
+        weight=0.1,
+    ),
+    "ndvi": SupervisionModalityConfig(
+        task_type=SupervisionTaskType.REGRESSION,
+        num_output_channels=1,
+        weight=1.0,
+    ),
+}
+
+
+# ============================================================
+# Experiment 21: exp 20 + decoder supervision on decode-only spatial modalities
+# ============================================================
+
+
+def build_common_exp21(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp21 (exp20 + decoder supervision)."""
+    return build_common_exp20(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp21(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp21 (exp20 + decoder supervision)."""
+    return build_train_module_exp20(common)
+
+
+def build_model_exp21(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp21: exp20 + decoder supervision head."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    supervision_head_config = SupervisionHeadConfig(
+        modality_configs=SUPERVISION_MODALITY_CONFIGS,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        supervision_head_config=supervision_head_config,
+    )
+
+
+def build_dataloader_exp21(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp21 (same as exp20)."""
+    return build_dataloader_exp20(common)
+
+
 # ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
@@ -1203,6 +1313,12 @@ EXPERIMENTS = {
         build_model_exp20,
         build_train_module_exp20,
         build_dataloader_exp20,
+    ),
+    "single_bandset_all12_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_decoder_supervision": (
+        build_common_exp21,
+        build_model_exp21,
+        build_train_module_exp21,
+        build_dataloader_exp21,
     ),
 }
 
