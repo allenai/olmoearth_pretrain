@@ -915,3 +915,140 @@ def test_new_vs_vec_multiple_modalities() -> None:
     assert torch.isclose(loss_new, loss_vec, rtol=1e-4, atol=1e-6), (
         f"multi-modality: new={loss_new.item()}, vec={loss_vec.item()}"
     )
+
+
+def test_new_vs_vec_all_training_modalities() -> None:
+    """New vs Vec with all 4 training modalities at realistic dimensions."""
+    for seed in range(50):
+        torch.manual_seed(seed)
+        b, t_h, t_w, t, d = 32, 4, 4, 3, 128
+
+        s2_mask = torch.randint(0, 4, (b, t_h, t_w, t))
+        s1_mask = torch.randint(0, 4, (b, t_h, t_w, t))
+        wc_mask = torch.randint(0, 4, (b, t_h, t_w, 1))
+        ll_mask = torch.randint(0, 4, (b, 1))
+
+        preds = TokensAndMasks(
+            sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+            sentinel2_l2a_mask=s2_mask,
+            sentinel1=torch.randn((b, t_h, t_w, t, d)),
+            sentinel1_mask=s1_mask,
+            worldcover=torch.randn((b, t_h, t_w, 1, d)),
+            worldcover_mask=wc_mask,
+            latlon=torch.randn((b, 1, d)),
+            latlon_mask=ll_mask,
+        )
+        targets = TokensAndMasks(
+            sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+            sentinel2_l2a_mask=s2_mask,
+            sentinel1=torch.randn((b, t_h, t_w, t, d)),
+            sentinel1_mask=s1_mask,
+            worldcover=torch.randn((b, t_h, t_w, 1, d)),
+            worldcover_mask=wc_mask,
+            latlon=torch.randn((b, 1, d)),
+            latlon_mask=ll_mask,
+        )
+        loss_new = ModalityPatchDiscriminationLossNew().compute(preds, targets)
+        loss_vec = ModalityPatchDiscriminationLossVec().compute(preds, targets)
+        assert torch.isclose(loss_new, loss_vec, rtol=1e-4, atol=1e-6), (
+            f"seed={seed}: new={loss_new.item()}, vec={loss_vec.item()}"
+        )
+
+
+def test_new_vs_vec_wildly_uneven_decoder_counts() -> None:
+    """Stress test: some samples have 1 decoder token, others have many."""
+    b, d = 16, 64
+    for seed in range(30):
+        torch.manual_seed(seed)
+        t_h, t_w, t = 4, 4, 3
+
+        n_tokens = t_h * t_w * t
+        s2_mask = torch.zeros((b, n_tokens), dtype=torch.long)
+        for i in range(b):
+            num_decoder = torch.randint(1, n_tokens, (1,)).item()
+            perm = torch.randperm(n_tokens)
+            s2_mask[i, perm[:num_decoder]] = MaskValue.DECODER.value
+        s2_mask[0, :] = MaskValue.DECODER.value
+        s2_mask[1, :] = MaskValue.ONLINE_ENCODER.value
+        s2_mask[1, 0] = MaskValue.DECODER.value
+        s2_mask = s2_mask.reshape(b, t_h, t_w, t)
+
+        preds = TokensAndMasks(
+            sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+            sentinel2_l2a_mask=s2_mask,
+        )
+        targets = TokensAndMasks(
+            sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+            sentinel2_l2a_mask=s2_mask,
+        )
+        loss_new = ModalityPatchDiscriminationLossNew().compute(preds, targets)
+        loss_vec = ModalityPatchDiscriminationLossVec().compute(preds, targets)
+        assert torch.isclose(loss_new, loss_vec, rtol=1e-4, atol=1e-6), (
+            f"seed={seed}: new={loss_new.item()}, vec={loss_vec.item()}"
+        )
+
+
+def test_new_vs_vec_gradients_all_modalities() -> None:
+    """Gradient comparison with all 4 modalities."""
+    b, t_h, t_w, t, d = 8, 4, 4, 2, 64
+    for seed in [0, 42, 123, 999]:
+        torch.manual_seed(seed)
+        s2_mask = torch.randint(0, 4, (b, t_h, t_w, t))
+        s1_mask = torch.randint(0, 4, (b, t_h, t_w, t))
+        wc_mask = torch.randint(0, 4, (b, t_h, t_w, 1))
+        ll_mask = torch.randint(0, 4, (b, 1))
+
+        s2_data = torch.randn((b, t_h, t_w, t, d))
+        s1_data = torch.randn((b, t_h, t_w, t, d))
+        wc_data = torch.randn((b, t_h, t_w, 1, d))
+        ll_data = torch.randn((b, 1, d))
+        s2_tgt = torch.randn((b, t_h, t_w, t, d))
+        s1_tgt = torch.randn((b, t_h, t_w, t, d))
+        wc_tgt = torch.randn((b, t_h, t_w, 1, d))
+        ll_tgt = torch.randn((b, 1, d))
+
+        # New path
+        s2_n = s2_data.clone().requires_grad_(True)
+        s1_n = s1_data.clone().requires_grad_(True)
+        preds_n = TokensAndMasks(
+            sentinel2_l2a=s2_n, sentinel2_l2a_mask=s2_mask,
+            sentinel1=s1_n, sentinel1_mask=s1_mask,
+            worldcover=wc_data.clone(), worldcover_mask=wc_mask,
+            latlon=ll_data.clone(), latlon_mask=ll_mask,
+        )
+        targets_n = TokensAndMasks(
+            sentinel2_l2a=s2_tgt.clone(), sentinel2_l2a_mask=s2_mask,
+            sentinel1=s1_tgt.clone(), sentinel1_mask=s1_mask,
+            worldcover=wc_tgt.clone(), worldcover_mask=wc_mask,
+            latlon=ll_tgt.clone(), latlon_mask=ll_mask,
+        )
+        loss_n = ModalityPatchDiscriminationLossNew().compute(preds_n, targets_n)
+        loss_n.backward()
+
+        # Vec path
+        s2_v = s2_data.clone().requires_grad_(True)
+        s1_v = s1_data.clone().requires_grad_(True)
+        preds_v = TokensAndMasks(
+            sentinel2_l2a=s2_v, sentinel2_l2a_mask=s2_mask,
+            sentinel1=s1_v, sentinel1_mask=s1_mask,
+            worldcover=wc_data.clone(), worldcover_mask=wc_mask,
+            latlon=ll_data.clone(), latlon_mask=ll_mask,
+        )
+        targets_v = TokensAndMasks(
+            sentinel2_l2a=s2_tgt.clone(), sentinel2_l2a_mask=s2_mask,
+            sentinel1=s1_tgt.clone(), sentinel1_mask=s1_mask,
+            worldcover=wc_tgt.clone(), worldcover_mask=wc_mask,
+            latlon=ll_tgt.clone(), latlon_mask=ll_mask,
+        )
+        loss_v = ModalityPatchDiscriminationLossVec().compute(preds_v, targets_v)
+        loss_v.backward()
+
+        assert torch.isclose(loss_n, loss_v, rtol=1e-4, atol=1e-6), (
+            f"seed={seed}: loss new={loss_n.item()} vec={loss_v.item()}"
+        )
+        assert torch.allclose(s2_n.grad, s2_v.grad, rtol=1e-4, atol=1e-6), (
+            f"seed={seed}: s2 grad max diff={(s2_n.grad - s2_v.grad).abs().max().item()}"
+        )
+        assert torch.allclose(s1_n.grad, s1_v.grad, rtol=1e-4, atol=1e-6), (
+            f"seed={seed}: s1 grad max diff={(s1_n.grad - s1_v.grad).abs().max().item()}"
+        )
