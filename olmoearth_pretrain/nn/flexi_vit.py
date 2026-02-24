@@ -144,6 +144,24 @@ class TokensAndMasks(NamedTuple):
                     return_dict[field] = val
         return return_dict
 
+    def exclude_modalities(self, modality_names: list[str]) -> "TokensAndMasks":
+        """Return a new TokensAndMasks with the specified modalities set to None.
+
+        Args:
+            modality_names: List of modality names to exclude.
+
+        Returns:
+            A new TokensAndMasks with excluded modalities (and their masks) set to None.
+        """
+        updates: dict[str, None] = {}
+        for name in modality_names:
+            if hasattr(self, name):
+                updates[name] = None
+            mask_name = self.get_masked_modality_name(name)
+            if hasattr(self, mask_name):
+                updates[mask_name] = None
+        return self._replace(**updates)
+
     @property
     def modalities(self) -> list[str]:
         """Return all data fields."""
