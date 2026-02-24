@@ -271,7 +271,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
     ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, _, reconstructed, extra_metrics = self.model(
+            latent, decoded, _, reconstructed, extra_metrics, _ = self.model(
                 batch, patch_size
             )
 
