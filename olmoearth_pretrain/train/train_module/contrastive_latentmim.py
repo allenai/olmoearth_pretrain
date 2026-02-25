@@ -340,7 +340,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 sup_loss, per_modality_losses = compute_supervision_loss(
                     supervision_preds,
                     batch,
-                    self.model.supervision_head.modality_configs,
+                    self.model.supervision_head,
                 )
                 loss = loss + sup_loss
                 for mod_name, mod_loss in per_modality_losses.items():

@@ -1,8 +1,10 @@
 """Supervision heads for direct supervision of decode-only modalities.
 
 Applied to decoder output: pool T and BandSets (over all non-MISSING tokens),
-combine across modalities, bilinearly upsample to pixel resolution,
-then per-modality linear heads produce predictions.
+combine across modalities, then per-modality linear heads predict
+max_patch_size x max_patch_size sub-patch grids that are unfolded to pixel
+resolution.  When the actual patch_size < max_patch_size the predictions are
+*downsampled* to match the target -- never upsampled.
 
 Unlike supervision-v2 which operates on encoder output, this version operates
 on decoder output to avoid pressuring the encoder to encode spatial details
@@ -78,15 +80,18 @@ class SupervisionHeadConfig(Config):
 
     modality_configs: dict[str, SupervisionModalityConfig] = field(default_factory=dict)
 
-    def build(self, embedding_dim: int) -> SupervisionHead:
+    def build(self, embedding_dim: int, max_patch_size: int) -> SupervisionHead:
         """Build the supervision head.
 
         Args:
             embedding_dim: Dimension of the decoder output embeddings.
+            max_patch_size: Maximum patch size; each token predicts a
+                max_patch_size x max_patch_size sub-patch grid.
         """
         return SupervisionHead(
             modality_configs=self.modality_configs,
             embedding_dim=embedding_dim,
+            max_patch_size=max_patch_size,
         )
 
 
@@ -97,21 +102,37 @@ class SupervisionHead(nn.Module):
       1. For each spatial modality in the decoder output, compute a masked
          mean over T and BandSets (only non-MISSING tokens) -> [B, P_H, P_W, D]
       2. Average across contributing modalities -> [B, P_H, P_W, D]
-      3. Per-supervised-modality linear head -> [B, P_H, P_W, C]
-      4. Bilinear-upsample C channels to target pixel resolution -> [B, H, W, C]
+      3. Per-supervised-modality linear head predicting max_patch_size^2 * C
+         values per token -> [B, P_H, P_W, max_ps^2 * C]
+      4. Unfold to [B, P_H * max_ps, P_W * max_ps, C]
+      5. Downsample to target pixel resolution when prediction > target.
     """
 
     def __init__(
         self,
         modality_configs: dict[str, SupervisionModalityConfig],
         embedding_dim: int,
+        max_patch_size: int,
     ) -> None:
         """Initialize the supervision head."""
         super().__init__()
         self.modality_configs = modality_configs
+        self.max_patch_size = max_patch_size
         self.heads = nn.ModuleDict()
         for name, cfg in modality_configs.items():
-            self.heads[name] = nn.Linear(embedding_dim, cfg.num_output_channels)
+            out_dim = cfg.num_output_channels * max_patch_size * max_patch_size
+            self.heads[name] = nn.Linear(embedding_dim, out_dim)
+
+        for name, cfg in modality_configs.items():
+            if cfg.class_values is not None:
+                self.register_buffer(
+                    f"_class_values_{name}",
+                    torch.tensor(cfg.class_values, dtype=torch.float32),
+                )
+
+    def get_class_values(self, name: str) -> Tensor:
+        """Retrieve the cached class_values buffer for a modality."""
+        return getattr(self, f"_class_values_{name}")
 
     def forward(
         self,
@@ -151,9 +172,19 @@ class SupervisionHead(nn.Module):
                 dtype=next(self.parameters()).dtype,
             )
 
+        mps = self.max_patch_size
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
-            output = head(pooled_features)  # [B, P_H, P_W, C]
+            num_channels = self.modality_configs[sup_name].num_output_channels
+            raw = head(pooled_features)  # [B, P_H, P_W, mps^2 * C]
+
+            output = rearrange(
+                raw,
+                "b ph pw (c i j) -> b (ph i) (pw j) c",
+                c=num_channels,
+                i=mps,
+                j=mps,
+            )  # [B, P_H*mps, P_W*mps, C]
 
             raw_target = getattr(batch, sup_name, None)
             if raw_target is not None:
@@ -235,19 +266,20 @@ def _masked_mean_over_t_bs(tokens: Tensor, mask: Tensor) -> Tensor:
 def compute_supervision_loss(
     predictions: dict[str, Tensor],
     batch: MaskedOlmoEarthSample,
-    modality_configs: dict[str, SupervisionModalityConfig],
+    supervision_head: SupervisionHead,
 ) -> tuple[Tensor, dict[str, Tensor]]:
     """Compute the combined supervision loss across all supervised modalities.
 
     Args:
         predictions: Per-modality predictions from SupervisionHead.forward.
         batch: The original batch containing raw pixel targets.
-        modality_configs: Per-modality supervision configurations.
+        supervision_head: The supervision head (used for configs and cached buffers).
 
     Returns:
         total_loss: Weighted sum of per-modality losses.
         per_modality_losses: Dict of unweighted per-modality loss values (detached).
     """
+    modality_configs = supervision_head.modality_configs
     first_pred = next(iter(predictions.values()))
     device = first_pred.device
     dtype = first_pred.dtype
@@ -273,7 +305,8 @@ def compute_supervision_loss(
             continue
 
         if cfg.task_type == SupervisionTaskType.CLASSIFICATION:
-            loss = _classification_loss(pred, raw_target, valid_mask, cfg)
+            class_values = supervision_head.get_class_values(name)
+            loss = _classification_loss(pred, raw_target, valid_mask, class_values)
         elif cfg.task_type == SupervisionTaskType.BINARY_CLASSIFICATION:
             loss = _binary_classification_loss(pred, raw_target, valid_mask)
         elif cfg.task_type == SupervisionTaskType.REGRESSION:
@@ -296,17 +329,14 @@ def _classification_loss(
     pred: Tensor,
     raw_target: Tensor,
     valid_mask: Tensor,
-    cfg: SupervisionModalityConfig,
+    class_values: Tensor,
 ) -> Tensor:
     """Cross-entropy loss for single-band categorical modalities.
 
     Converts normalized float targets to integer class indices using
-    cfg.class_values as the lookup table (nearest-value matching).
+    class_values as the lookup table (nearest-value matching).
     """
-    assert cfg.class_values is not None
-    class_values = torch.tensor(
-        cfg.class_values, device=pred.device, dtype=raw_target.dtype
-    )
+    class_values = class_values.to(dtype=raw_target.dtype)
     # raw_target: [B, H, W, 1] -> [B, H, W]
     target_vals = raw_target[..., 0]
     distances = (target_vals.unsqueeze(-1) - class_values).abs()

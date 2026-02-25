@@ -141,6 +141,9 @@ class LatentMIM(nn.Module, DistributedMixins):
         logger.info("Applied torch.compile to the decoder")
         self.target_encoder.apply_compile()
         logger.info("Applied torch.compile to the target encoder")
+        if self.supervision_head is not None:
+            self.supervision_head = torch.compile(self.supervision_head)
+            logger.info("Applied torch.compile to the supervision head")
 
 
 @dataclass
@@ -194,6 +197,7 @@ class LatentMIMConfig(Config):
             )
             supervision_head = self.supervision_head_config.build(
                 embedding_dim=embedding_dim,
+                max_patch_size=self.encoder_config.max_patch_size,
             )
         return LatentMIM(
             encoder=encoder,

@@ -18,7 +18,8 @@ from olmoearth_pretrain.nn.supervision_head import (
 )
 
 B, P_H, P_W, T, BS, D = 2, 4, 4, 3, 2, 8
-H_PIX, W_PIX = 32, 32
+MAX_PATCH_SIZE = 8
+H_PIX, W_PIX = P_H * MAX_PATCH_SIZE, P_W * MAX_PATCH_SIZE  # 32, 32
 
 
 def _make_decoder_output(
@@ -139,19 +140,48 @@ class TestSupervisionHead:
     def test_forward_shape(
         self, worldcover_config: dict[str, SupervisionModalityConfig]
     ) -> None:
-        """Predictions have the correct pixel-resolution shape."""
-        head = SupervisionHead(worldcover_config, embedding_dim=D)
+        """Predictions match target resolution (P_H * max_ps == H_PIX)."""
+        head = SupervisionHead(
+            worldcover_config, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
+        )
         decoded = _make_decoder_output()
         batch = _make_batch_with_worldcover()
         preds = head(decoded, batch)
         assert "worldcover" in preds
         assert preds["worldcover"].shape == (B, H_PIX, W_PIX, 11)
 
+    def test_forward_downsample(
+        self, worldcover_config: dict[str, SupervisionModalityConfig]
+    ) -> None:
+        """When prediction > target, output is downsampled to target size."""
+        small_h, small_w = 16, 16
+        head = SupervisionHead(
+            worldcover_config, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
+        )
+        decoded = _make_decoder_output()
+        wc_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
+        wc = torch.tensor(wc_values)[
+            torch.randint(0, len(wc_values), (B, small_h, small_w))
+        ]
+        wc = wc.unsqueeze(-1).unsqueeze(-1)
+        timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
+        batch = MaskedOlmoEarthSample(
+            timestamps=timestamps,
+            worldcover=wc,
+            worldcover_mask=torch.full(
+                (B, small_h, small_w, 1, 1), MaskValue.DECODER.value
+            ),
+        )
+        preds = head(decoded, batch)
+        assert preds["worldcover"].shape == (B, small_h, small_w, 11)
+
     def test_missing_target_still_produces_output(
         self, worldcover_config: dict[str, SupervisionModalityConfig]
     ) -> None:
         """Heads always run (for FSDP), even when target is absent."""
-        head = SupervisionHead(worldcover_config, embedding_dim=D)
+        head = SupervisionHead(
+            worldcover_config, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
+        )
         decoded = _make_decoder_output()
         timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
         batch = MaskedOlmoEarthSample(timestamps=timestamps)
@@ -167,7 +197,7 @@ class TestSupervisionHead:
                 num_output_channels=1,
             ),
         }
-        head = SupervisionHead(cfg, embedding_dim=D)
+        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
         decoded = _make_decoder_output()
         batch = _make_batch_with_srtm()
         preds = head(decoded, batch)
@@ -206,9 +236,12 @@ class TestComputeSupervisionLoss:
                 class_values=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0],
             ),
         }
+        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
         pred = torch.randn(B, H_PIX, W_PIX, 11)
         batch = _make_batch_with_worldcover()
-        total_loss, per_mod = compute_supervision_loss({"worldcover": pred}, batch, cfg)
+        total_loss, per_mod = compute_supervision_loss(
+            {"worldcover": pred}, batch, head
+        )
         assert total_loss.ndim == 0
         assert total_loss > 0
         assert "worldcover" in per_mod
@@ -222,9 +255,10 @@ class TestComputeSupervisionLoss:
                 weight=1.0,
             ),
         }
+        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
         pred = torch.randn(B, H_PIX, W_PIX, 1)
         batch = _make_batch_with_srtm()
-        total_loss, per_mod = compute_supervision_loss({"srtm": pred}, batch, cfg)
+        total_loss, per_mod = compute_supervision_loss({"srtm": pred}, batch, head)
         assert total_loss.ndim == 0
         assert total_loss > 0
         assert "srtm" in per_mod
@@ -237,11 +271,12 @@ class TestComputeSupervisionLoss:
                 num_output_channels=1,
             ),
         }
+        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
         timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
         srtm = torch.full((B, H_PIX, W_PIX, 1, 1), MISSING_VALUE, dtype=torch.float)
         batch = MaskedOlmoEarthSample(timestamps=timestamps, srtm=srtm)
         pred = torch.randn(B, H_PIX, W_PIX, 1)
-        total_loss, per_mod = compute_supervision_loss({"srtm": pred}, batch, cfg)
+        total_loss, per_mod = compute_supervision_loss({"srtm": pred}, batch, head)
         assert total_loss == 0.0
 
     def test_binary_classification_loss(self) -> None:
@@ -252,6 +287,7 @@ class TestComputeSupervisionLoss:
                 num_output_channels=30,
             ),
         }
+        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
         pred = torch.randn(B, H_PIX, W_PIX, 30)
         timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
         osm = torch.randint(0, 2, (B, H_PIX, W_PIX, 1, 30)).float()
@@ -260,7 +296,7 @@ class TestComputeSupervisionLoss:
             openstreetmap_raster=osm,
         )
         total_loss, per_mod = compute_supervision_loss(
-            {"openstreetmap_raster": pred}, batch, cfg
+            {"openstreetmap_raster": pred}, batch, head
         )
         assert total_loss.ndim == 0
         assert "openstreetmap_raster" in per_mod
@@ -296,10 +332,14 @@ class TestSupervisionHeadConfig:
                 ),
             }
         )
-        head = config.build(embedding_dim=D)
+        head = config.build(embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
         assert isinstance(head, SupervisionHead)
         assert "worldcover" in head.heads
         assert "srtm" in head.heads
+        assert head.max_patch_size == MAX_PATCH_SIZE
+        # Linear output dim should be max_ps^2 * num_channels
+        assert head.heads["worldcover"].out_features == MAX_PATCH_SIZE**2 * 11
+        assert head.heads["srtm"].out_features == MAX_PATCH_SIZE**2 * 1
 
     def test_classification_requires_class_values(self) -> None:
         """Classification without class_values raises ValueError."""
