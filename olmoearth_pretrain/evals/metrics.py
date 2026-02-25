@@ -42,7 +42,7 @@ class EvalResult:
     # Which metric enum is primary
     primary_metric: EvalMetric
 
-    # The exact key in `metrics` for the primary metric
+    # The exact key in `metrics` for the primary metric, ie if primary_metric is EvalMetric.CLASS_F1, primary_metric_key may be "f1_class_0"
     primary_metric_key: str
 
     # All metrics as dict (superset including primary)
