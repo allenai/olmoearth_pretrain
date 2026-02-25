@@ -1,6 +1,9 @@
-"""Same as official script except EVAL_TASKS: only tolbi_crop, canada_wildfire_sat_eval_split,
-yemen_crop, geo_ecosystem_annual_test, forest_loss_driver, nigeria_settlement as loop evals
-every 5k steps."""
+"""Same as official script except EVAL_TASKS.
+
+Only tolbi_crop, canada_wildfire_sat_eval_split, yemen_crop,
+geo_ecosystem_annual_test, forest_loss_driver, nigeria_settlement,
+nandi_crop_map, awf_lulc_map as loop evals every 5k steps.
+"""
 
 import logging
 
@@ -58,6 +61,34 @@ MIN_PATCH_SIZE = 1
 LOOP_EVAL_INTERVAL = Duration.steps(5000)
 
 EVAL_TASKS = {
+    "nandi_crop_map": DownstreamTaskConfig(
+        dataset="nandi_crop_map",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=LOOP_EVAL_INTERVAL,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=100,
+        eval_mode=EvalMode.LINEAR_PROBE,
+    ),
+    "awf_lulc_map": DownstreamTaskConfig(
+        dataset="awf_lulc_map",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=LOOP_EVAL_INTERVAL,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=100,
+        eval_mode=EvalMode.LINEAR_PROBE,
+    ),
     "tolbi_crop": DownstreamTaskConfig(
         dataset="tolbi_crop",
         embedding_batch_size=32,
@@ -259,6 +290,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
         enabled=True,
+        upload_dataset_distribution_pre_train=False,
     )
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     trainer_config = (

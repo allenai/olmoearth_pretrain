@@ -23,6 +23,7 @@ This guide explains how we launch evaluations for OlmoEarth checkpoints and base
 5. [Finetune](#finetune-sweep)
 6. [Monitoring & Outputs](#monitoring--outputs)
 7. [Helpful Files](#helpful-files)
+8. [Adding New Eval Datasets (Internal)](#adding-new-eval-datasets-internal)
 
 ---
 
@@ -284,3 +285,39 @@ python -m olmoearth_pretrain.internal.full_eval_sweep_finetune \
 - [`evals/eval_wrapper.py`](../olmoearth_pretrain/evals/eval_wrapper.py): Eval wrapper contract to be able to run evals on various models.
 - [`evals/datasets`](../olmoearth_pretrain/evals/datasets/): Dataset loaders and shared dataset utils.
 - [`evals/datasets/configs.py`](../olmoearth_pretrain/evals/datasets/configs.py): Dataset definitions (paths, splits, normalization) used to build commands.
+
+---
+
+## Adding New Eval Datasets (Internal)
+
+> **AI2 internal only** — requires Weka access.
+
+See **[Adding-Eval-Datasets.md](Adding-Eval-Datasets.md)** for the full step-by-step guide covering:
+- Running the ingest pipeline on a new rslearn dataset
+- What fields in `DownstreamTaskConfig` require user judgment
+- Common errors and how to fix them
+- What a PR adding a new dataset needs to include
+
+---
+
+## Adding New Eval Datasets (Internal)
+
+> **AI2 internal only** — requires Weka access.
+
+See **[Adding-Eval-Datasets.md](Adding-Eval-Datasets.md)** for the full step-by-step guide covering:
+- Running the ingest pipeline on a new rslearn dataset
+- What fields in `DownstreamTaskConfig` require user judgment
+- Common errors and how to fix them
+- What a PR adding a new dataset needs to include
+
+---
+
+## Adding New Eval Datasets (Internal)
+
+> **AI2 internal only** — requires Weka access.
+
+See **[Adding-Eval-Datasets.md](Adding-Eval-Datasets.md)** for the full step-by-step guide covering:
+- Running the ingest pipeline on a new rslearn dataset
+- What fields in `DownstreamTaskConfig` require user judgment
+- Common errors and how to fix them
+- What a PR adding a new dataset needs to include

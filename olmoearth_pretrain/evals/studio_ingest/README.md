@@ -1,226 +1,41 @@
-# Studio Dataset Ingestion (Internal)
+# Studio Dataset Ingestion
 
-> ⚠️ **INTERNAL USE ONLY** - This module is for AI2 internal use to ingest
-> datasets from the Studio platform into OlmoEarth evaluations.
+> **Internal use only.** Requires AI2 Weka access and internal rslearn datasets.
+> See [`docs/Adding-Eval-Datasets.md`](../../../docs/Adding-Eval-Datasets.md) for the full tutorial.
 
-## For External Users
+This module ingests rslearn datasets from Weka/GCS into the OlmoEarth eval registry,
+computing splits and band stats so datasets can be used as linear probe evaluations
+in training loops.
 
-If we publish these evals on HuggingFace, external users can download
-and use them by setting an environment variable:
-
-```bash
-# Set this to your local directory containing downloaded rslearn datasets
-export OLMOEARTH_EVAL_DATASETS=/path/to/downloaded/datasets
-
-# Then use the registry loader as normal
-```
-
-
-Goals:
-1. Mindless to add a new eval to olmoearth pretrain
-2. Possible to discover existing evals not in codebase
-
-3. Well split train/val/test that gives good signal for research
-4. Fast to load
-
-Nice to have
-- Being able to do percentage based splits easily?
--
-
-Notes
-6. Takes a lot fo workers and a really long time to scan for bigger datasets so to use those as in loop evals we want to cache index
-
-## Overview
-
-This module provides tooling to:
-
-1. **Validate** rslearn datasets from Studio/GCS
-2. **Copy** data to Weka storage
-3. **Compute** per-band normalization statistics
-4. **Register** datasets in the eval registry for unified loading
-
-## Requirements
-
-Requires the `ingest` dependency group:
+## Quick reference
 
 ```bash
-uv sync --group ingest
-```
-
-## Steps I have done so far
-1. Found the appropriate path for the tolbi dataset in some gcs bucket (there needs to be a canonical locaiton studio can write datasets to if needed)
-2. I want to run `uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.cli ingest  --name tolbi_crops --source gs://rslearn-eai/datasets/tolbi ` and infer all the neccessary information for the task
-3. Register an eval config and the location of the dataset into whatever the registry is
-4? Actually run the eval with it
-## Quick Start
-
-```bash
-# Ingest a dataset from Studio
-uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.cli ingest \
-    --name lfmc \
-    --display-name "Live Fuel Moisture Content" \
-    --source gs://bucket/path/to/rslearn/dataset \
-    --task-type regression \
-    --modalities sentinel2_l2a sentinel1 \
-    --temporal-range 2022-09-01 2023-09-01 \
-    --property-name lfmc_value
+# Ingest a dataset
+OLMOEARTH_INGEST_WORKERS=16 NAME=my_task \
+  SOURCE=/weka/dfive-default/rslearn-eai/datasets/my_task \
+  CONFIG=/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/my_task
+OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest \
+  --name "$NAME" --source "$SOURCE" --olmoearth-run-config-path "$CONFIG" \
+  --register --overwrite > "${NAME}_ingest.out" 2>&1 &
 
 # List registered datasets
-uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.cli list
+python -m olmoearth_pretrain.evals.studio_ingest.cli list
 
-# Validate a dataset without ingesting
-uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.cli validate \
-    --source gs://bucket/path/to/rslearn/dataset
-
-# Show details for a registered dataset
-uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.cli info --name lfmc
+# Inspect a registered dataset
+python -m olmoearth_pretrain.evals.studio_ingest.cli info --name my_task
 ```
 
-## Registry Location
+## Existing datasets
 
-- **Registry JSON**: `weka://dfive-default/olmoearth/eval_datasets/registry.json`
-- **Dataset Data**: `weka://dfive-default/olmoearth/eval_datasets/{name}/`
+| Name | Task | Modalities |
+|------|------|-----------|
+| `tolbi_crop` | segmentation | sentinel2_l2a |
+| `canada_wildfire_sat_eval_split` | segmentation | sentinel2_l2a |
+| `yemen_crop` | segmentation | sentinel2_l2a |
+| `geo_ecosystem_annual_test` | segmentation | sentinel2_l2a, sentinel1, landsat |
+| `forest_loss_driver` | classification | sentinel2_l2a, sentinel1, landsat |
+| `nigeria_settlement` | segmentation | sentinel2_l2a, sentinel1, landsat |
+| `nandi_crop_map` | segmentation | sentinel2_l2a, sentinel1, landsat |
+| `awf_lulc_map` | segmentation | sentinel2_l2a, sentinel1, landsat |
 
-Each dataset directory contains:
-
-```
-{name}/
-├── metadata.json       # Full dataset configuration
-├── norm_stats.json     # Per-band normalization statistics
-├── train/              # Training split (rslearn format)
-├── val/                # Validation split
-└── test/               # Test split
-```
-
-## Ingestion Workflow
-
-1. **Validate**: Check rslearn dataset structure, verify modalities exist, check splits gather information for the config
-
-Next we need to see what do we need to quickly read this when it is copied over and have a dataset class to be used dependent on the configuration that does not involve having to load all the windows and that bs with the rslearn dataset and potentially is a different format
-
-Goal for today is tolbi and fire through both of these steps
-2. **Register**: Add entry to registry.json, create metadata.json in dataset dir
-3. **Copy**: Copy data from GCS to Weka, preserving rslearn structure (For now we will just stream from gcs)
-4. Then we need to make sure that given the eval info we can load and run that as an eval
-
-
-5. Make sure that we can discover new datasets
-
-`python -m olmoearth_pretrain.internal.full_eval_sweep     --cluster=local     --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000     --module_path=scripts/official/tiny.py     --trainer.callbacks.downstream_evaluator.tasks_to_run="[tolbi_crops]"     --trainer.callbacks.downstream_evaluator.eval_on_startup=True     --trainer.callbacks.downstream_evaluator.cancel_after_first_eval=True     --trainer.callbacks.wandb.enabled=False --defaults_only `
-
-`python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name tolbi_crops     --source gs://rslearn-eai/datasets/tolbi     --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/tolbi_run_data     --groups 20251210     --register     --overwrite  --max-samples=16 `
-
-Do we really want to save all the information in the registry and then rebuild the rslearn dataset or just also save the config needed to build the model dataset and go based on that
-
-incompabilities
-- We should jsut do the task the same way here as much as possible
-- we definitely will need to make test splits aka new splits for all the data
-- dealing with different invalid data etc
-- how do we pick and appropriate workers and batch size for the task
-- What if the dataset is too big
-- Need to auto generate images
-- Variable time lengths means we would potentially want to do use flash attn for inference
-- what should be the process for updating or adding new data to an eval -> I think we should just create a new one rather than overwrite because we want experiments to be comparable
-- if dice loss is used in task we should use it for lienar probing which should help
-
-
-Next steps
-- Get the bigger wildfire split to work
-    - use the right split
-
-From the Cli you should be able to configure what split to use which we will turn into train val test or to create that split ourselves
-/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_fire_sat_full
-
-We want to default to using train val and splitting test when that exists
-Otherwise do that within a specified subset or tag
-
-
-Also we should be able to use tags but I am not sure how those need to be used yet
-test_config:
-      groups: ["val"]
-      tags:
-        oep_eval:
-
-Need to figure out how we are splitting for train val and test without specifying tag
-
-ç
-    - dataset copying
-
-Lets now make sure we can train on the write splits for test
-
-Then launch for full dataset
-- full wildfire one on the specified set
-- tolbi one fully working
-- ecosystem
-- yemen crop
-- worldcover
-- forest loss driver
-- Try adding back support for nandi and awf
-- yemen support
-- Ensuring that we can alll find discover and add these tasks
-
-Tasks to add
-- tolbi
-- mozambique
-- worldcover
-- fields of the world
-- canada wildfire
-
-
-` python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name canada_wildfire_sat_eval_split      --source  /weka/dfive-default/rslearn-eai/datasets/wildfire/canada_fire_sat_full  --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/wildfire_run_data/  --register     --overwrite `
-
-`python -m olmoearth_pretrain.internal.full_eval_sweep     --cluster=local     --checkpoint_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000     --module_path=scripts/official/tiny.py     --trainer.callbacks.downstream_evaluator.tasks_to_run="[canada_wildfire_sat_eval_split]"     --trainer.callbacks.downstream_evaluator.eval_on_startup=True     --trainer.callbacks.downstream_evaluator.cancel_after_first_eval=True     --trainer.callbacks.wandb.enabled=False --defaults_only `
-
-- yemen crop
-    - dataset location `/weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/dataset`
-    - yaml location `/weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/`
-    - command
-     `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name yemen_crop     --source  /weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/dataset --olmoearth-run-config-path /weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/ --register  --overwrite &`
-
-     - need to make sure if we have spatial split and tag based groups we can re split based on the tags not just based on the other things and make sure classes are well represented in both set ups
-- ecosystem - need to test evaluation -- seems good
-    `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name geo_ecosystem_annual_test     --source  /weka/dfive-default/rslearn-eai/datasets/geo_annual/dataset --olmoearth-run-config-path /weka/dfive-default/rslearn-eai/datasets/geo_annual  --register     --overwrite &`
-
-- tolbi crop - need to finish ingestion
-    - --source gs://rslearn-eai/datasets/tolbi     --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/tolbi_run_data     --groups 20251210
-        - command
-     `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name tolbi_crop  --source  gs://rslearn-eai/datasets/tolbi --olmoearth-run-config-path /weka/dfive-default/henryh/helios/helios/tolbi_run_data --register  --overwrite &`
-- forest loss driver - need to finish ingestion issue because the layers have weird naming
-    -- source `/weka/dfive-default/rslearn-eai/datasets/forest_loss_driver/dataset_v1/combined/`
-    -- config `/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/forest_loss_driver`
-    -- command `OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest     --name forest_loss_driver  --source /weka/dfive-default/rslearn-eai/datasets/forest_loss_driver/dataset_v1/combined/ --olmoearth-run-config-path /weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/forest_loss_driver --register  --overwrite > forest_driver_ingest.out 2>&1 &`
-
-### Quick launch template
-
-```bash
-NAME=my_task
-SOURCE=/weka/dfive-default/rslearn-eai/datasets/my_task/dataset
-CONFIG=/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/my_task
-
-OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest \
-    --name "$NAME" \
-    --source "$SOURCE" \
-    --olmoearth-run-config-path "$CONFIG" \
-    --register \
-    --overwrite \
-    > "${NAME}_ingest.out" 2>&1 &
-```
-
-- oil_spill_detection
-    `python3 -m olmoearth_pretrain.evals.studio_ingest.cli  ingest --name oil_spill_detection --source  gs://oil_spill_detection/dataset.tar.gz  --olmoearth-run-config-path gs://oil_spill_detection --untar-source `
--  settlement task
-    -- command: `rm ni`
-
-In olmoearth projects I can find these configs
-- nandi
-
-    bash
-`OLMOEARTH_INGEST_WORKERS=16 NAME=nandi_crop SOURCE=/weka/dfive-default/rslearn-eai/datasets/crop/kenya_nandi/20250625 CONFIG=/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/nandi && OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest --name "$NAME" --source "$SOURCE" --olmoearth-run-config-path "$CONFIG" --register --overwrite > "${NAME}_ingest.out" 2>&1 &`
-    "AWF_DIR": "/weka/dfive-default/rslearn-eai/datasets/crop/awf_2023", "/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/nandi"
-- awf
-`OLMOEARTH_INGEST_WORKERS=16 NAME=awf_lulc SOURCE=/weka/dfive-default/rslearn-eai/datasets/crop/awf_2023 CONFIG=/weka/dfive-default/henryh/helios/olmoearth_projects/olmoearth_run_data/awf && OLMOEARTH_INGEST_WORKERS=16 nohup python -m olmoearth_pretrain.evals.studio_ingest.cli ingest --name "$NAME" --source "$SOURCE" --olmoearth-run-config-path "$CONFIG" --register --overwrite > "${NAME}_ingest.out" 2>&1 &`
-
-Soon but needs more thoughts
-- worldcover subsample?
-- fields of the world subsample?
-- LFMC
+See the full tutorial for how to add a new one.

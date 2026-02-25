@@ -80,7 +80,6 @@ logger = logging.getLogger(__name__)
 EVAL_DATASETS_ENV_VAR = "OLMOEARTH_EVAL_DATASETS"
 
 # Default base path on Weka where all eval datasets are stored (internal)
-# TODO: Confirm this path with the team
 DEFAULT_WEKA_BASE_PATH = "weka://dfive-default/olmoearth/eval_datasets"
 
 # Environment variable for number of workers
@@ -130,7 +129,7 @@ class IngestConfig:
         split_seed: Random seed for reproducible splits
 
         # Normalization
-        num_samples: Number of samples for stats computation (None = all)
+        num_samples: Number of samples for stats computation (default 50k)
 
         # Archive handling
         untar_source: If True, source_path points to a .tar.gz archive on GCS
@@ -152,7 +151,7 @@ class IngestConfig:
     split_seed: int = 42
 
     # Normalization
-    num_samples: int | None = None
+    num_samples: int | None = 50_000
 
     # Archive handling
     untar_source: bool = False
@@ -240,9 +239,7 @@ def _copy_model_yaml(dataset_path: str, model_config_dir: str) -> None:
 
     src = UPath(model_config_dir) / "model.yaml"
     if not src.exists():
-        raise FileNotFoundError(
-            f"model.yaml not found at {model_config_dir}"
-        )
+        raise FileNotFoundError(f"model.yaml not found at {model_config_dir}")
 
     logger.info(f"  Copying model.yaml from {model_config_dir} to dataset folder")
     with src.open("rb") as f:
@@ -270,7 +267,7 @@ def _copy_from_gcs(
     Returns:
         Destination path
     """
-    logger.info(f"  Copy method: gsutil (parallel GCS transfer)")
+    logger.info("  Copy method: gsutil (parallel GCS transfer)")
 
     # Create destination directory
     Path(dest_path).mkdir(parents=True, exist_ok=True)
@@ -285,14 +282,16 @@ def _copy_from_gcs(
             group_dst_parent = f"{dest_path}/windows"
             Path(group_dst_parent).mkdir(parents=True, exist_ok=True)
             logger.info(f"  Running: gsutil -m cp -r {group_src} {group_dst_parent}")
-            subprocess.run(["gsutil", "-m", "cp", "-r", group_src, group_dst_parent], check=True)
+            subprocess.run(
+                ["gsutil", "-m", "cp", "-r", group_src, group_dst_parent], check=True
+            )
     else:
         # Copy entire windows directory
         windows_src = f"{source_path}/windows"
         logger.info(f"  Running: gsutil -m cp -r {windows_src} {dest_path}")
         subprocess.run(["gsutil", "-m", "cp", "-r", windows_src, dest_path], check=True)
 
-    logger.info(f"  gsutil copy complete")
+    logger.info("  gsutil copy complete")
     return dest_path
 
 
@@ -313,7 +312,7 @@ def _copy_from_gcs_tar(
     Returns:
         Path to the extracted dataset directory
     """
-    logger.info(f"  Copy method: gsutil download + tar extract")
+    logger.info("  Copy method: gsutil download + tar extract")
 
     Path(dest_path).mkdir(parents=True, exist_ok=True)
 
@@ -337,7 +336,7 @@ def _copy_from_gcs_tar(
         logger.info(f"  Extracted dataset directory: {dataset_path}")
         return dataset_path
 
-    logger.info(f"  tar extract complete")
+    logger.info("  tar extract complete")
     return dest_path
 
 
@@ -388,7 +387,9 @@ def _copy_local(
     # TODO: remove pv progress bar once copy performance is validated
     has_pv = shutil.which("pv") is not None
 
-    logger.info("  Copy method: streaming tar pipe%s", " (with pv progress)" if has_pv else "")
+    logger.info(
+        "  Copy method: streaming tar pipe%s", " (with pv progress)" if has_pv else ""
+    )
 
     _try_copy_config_json(source_path, dest_path)
 
@@ -431,7 +432,7 @@ def _copy_generic(
     Returns:
         Destination path
     """
-    logger.info(f"  Copy method: UPath (generic, sequential)")
+    logger.info("  Copy method: UPath (generic, sequential)")
 
     source = UPath(source_path)
     dest = UPath(dest_path)
@@ -454,7 +455,7 @@ def _copy_generic(
                     logger.info(f"    Copied group '{group}'")
         else:
             _copy_directory_recursive(windows_src, windows_dst)
-            logger.info(f"    Copied windows directory")
+            logger.info("    Copied windows directory")
 
     return dest_path
 
@@ -484,7 +485,9 @@ def _resolve_dataset_root(path: str) -> str:
     if (p / "windows").exists():
         return path
     # Check for a single nested directory containing windows/
-    subdirs = [d for d in p.iterdir() if d.is_dir() and d.name != ".rslearn_dataset_index"]
+    subdirs = [
+        d for d in p.iterdir() if d.is_dir() and d.name != ".rslearn_dataset_index"
+    ]
     if len(subdirs) == 1 and (subdirs[0] / "windows").exists():
         resolved = str(subdirs[0])
         logger.info(f"  Resolved dataset root to nested directory: {resolved}")
@@ -519,17 +522,17 @@ def copy_dataset(
     """
     dest_path = f"{EVAL_DATASETS_BASE_PATH}/{name}"
 
-    logger.info(f"=== Dataset Copy ===")
+    logger.info("=== Dataset Copy ===")
     logger.info(f"  Source: {source_path}")
     logger.info(f"  Destination: {dest_path}")
     if source_groups:
         logger.info(f"  Filtering to groups: {source_groups}")
     else:
-        logger.info(f"  Copying all groups")
+        logger.info("  Copying all groups")
 
     # Check if destination already exists
     if Path(dest_path).exists():
-        logger.warning(f"  Destination already exists, skipping copy...")
+        logger.warning("  Destination already exists, skipping copy...")
         # For tar extracts, the actual dataset may be in a subdirectory
         return _resolve_dataset_root(dest_path)
 
@@ -594,7 +597,9 @@ def scan_windows_and_splits(
                     break
             if match:
                 filtered_windows.append(window)
-        logger.info(f"  Filtered to {len(filtered_windows)} windows matching tags {source_tags}")
+        logger.info(
+            f"  Filtered to {len(filtered_windows)} windows matching tags {source_tags}"
+        )
         windows = filtered_windows
 
     # Use string keys for consistency
@@ -629,12 +634,13 @@ def create_missing_splits(
     train_val_ratio: float = 0.8,
     seed: int = 42,
 ) -> dict[str, list[tuple[str, str]]]:
-    """Create missing splits using one of three strategies.
+    """Create missing splits using one of four strategies.
 
     Paths:
     1. All splits present (train, val, test) - no action needed
     2. Train and val exist, no test - split val into val+test
-    3. Any other case - pool all windows and resplit randomly into train/val/test
+    3. Train and test exist, no val - split test into val+test
+    4. Any other case - pool all windows and resplit randomly into train/val/test
 
     Args:
         splits: Current split assignments (split_name -> list of (group, window_name) tuples)
@@ -646,6 +652,7 @@ def create_missing_splits(
         Updated splits dict with string keys
     """
     import random
+
     random.seed(seed)
 
     # Make a copy to avoid mutating input, ensure string keys
@@ -655,9 +662,11 @@ def create_missing_splits(
     has_val = bool(splits["val"])
     has_test = bool(splits["test"])
 
-    logger.info(f"Split detection: train={has_train} ({len(splits['train'])}), "
-                f"val={has_val} ({len(splits['val'])}), "
-                f"test={has_test} ({len(splits['test'])})")
+    logger.info(
+        f"Split detection: train={has_train} ({len(splits['train'])}), "
+        f"val={has_val} ({len(splits['val'])}), "
+        f"test={has_test} ({len(splits['test'])})"
+    )
 
     # PATH 1: All splits present - no action needed
     if has_train and has_val and has_test:
@@ -666,17 +675,36 @@ def create_missing_splits(
 
     # PATH 2: Train and val exist, no test - split val into val+test
     if has_train and has_val and not has_test:
-        logger.info("PATH 2: Have train+val, missing test - splitting val into val+test")
+        logger.info(
+            "PATH 2: Have train+val, missing test - splitting val into val+test"
+        )
         val_windows = splits["val"]
         random.shuffle(val_windows)
         split_idx = int(len(val_windows) * val_test_ratio)
         splits["val"] = val_windows[:split_idx]
         splits["test"] = val_windows[split_idx:]
-        logger.info(f"  Split val: {len(splits['val'])} val, {len(splits['test'])} test")
+        logger.info(
+            f"  Split val: {len(splits['val'])} val, {len(splits['test'])} test"
+        )
         return splits
 
-    # PATH 3: Any other case - pool all windows and resplit randomly
-    logger.info("PATH 3: Resplitting all windows randomly into train/val/test")
+    # PATH 3: Train and test exist, no val - split test into val+test
+    if has_train and has_test and not has_val:
+        logger.info(
+            "PATH 3: Have train+test, missing val - splitting test into val+test"
+        )
+        test_windows = splits["test"]
+        random.shuffle(test_windows)
+        split_idx = int(len(test_windows) * val_test_ratio)
+        splits["val"] = test_windows[:split_idx]
+        splits["test"] = test_windows[split_idx:]
+        logger.info(
+            f"  Split test: {len(splits['val'])} val, {len(splits['test'])} test"
+        )
+        return splits
+
+    # PATH 4: Any other case - pool all windows and resplit randomly
+    logger.info("PATH 4: Resplitting all windows randomly into train/val/test")
 
     # Pool all windows from all splits
     all_windows = []
@@ -700,10 +728,12 @@ def create_missing_splits(
     splits["val"] = remaining[:val_end]
     splits["test"] = remaining[val_end:]
 
-    logger.info(f"  Resplit {total} windows: "
-                f"train={len(splits['train'])}, "
-                f"val={len(splits['val'])}, "
-                f"test={len(splits['test'])}")
+    logger.info(
+        f"  Resplit {total} windows: "
+        f"train={len(splits['train'])}, "
+        f"val={len(splits['val'])}, "
+        f"test={len(splits['test'])}"
+    )
 
     return splits
 
@@ -726,7 +756,9 @@ def write_split_tags(
     logger.info(f"  Loading windows for tag writing (workers={NUM_WORKERS})...")
     all_windows = dataset.load_windows(workers=NUM_WORKERS)
     window_map = {(w.group, w.name): w for w in all_windows}
-    logger.info(f"  Loaded {len(all_windows)} windows, will update {total_windows} with split tags")
+    logger.info(
+        f"  Loaded {len(all_windows)} windows, will update {total_windows} with split tags"
+    )
 
     updated_count = 0
     for split_name, window_ids in splits.items():
@@ -746,7 +778,13 @@ def write_split_tags(
             window.save()
 
             # Verify the tag persisted by re-reading metadata.json from disk
-            metadata_path = Path(dataset_path) / "windows" / group_name / window_name / "metadata.json"
+            metadata_path = (
+                Path(dataset_path)
+                / "windows"
+                / group_name
+                / window_name
+                / "metadata.json"
+            )
             with open(metadata_path) as f:
                 saved_meta = json.load(f)
             saved_tag = saved_meta.get("options", {}).get(EVAL_SPLIT_TAG_KEY)
@@ -818,12 +856,12 @@ def _extract_sizing(
         if "crop.Crop" in class_path:
             crop_size = init_args.get("crop_size")
             # Handle tuple case (min, max) - take the min for deterministic eval
-            if isinstance(crop_size, (list, tuple)):
+            if isinstance(crop_size, list | tuple):
                 crop_size = crop_size[0]
         elif "pad.Pad" in class_path:
             pad_size = init_args.get("size")
             # Handle tuple case (min, max) - take the min for deterministic eval
-            if isinstance(pad_size, (list, tuple)):
+            if isinstance(pad_size, list | tuple):
                 pad_size = pad_size[0]
 
     # Fallback: use default_config.patch_size if no Crop transform found
@@ -869,16 +907,19 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         entry = ingest_dataset(config)
         print(f"Ingested {entry.name} with {sum(entry.splits.values())} samples")
     """
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
     logger.info(f"INGEST START: {config.name}")
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
     logger.info(f"Source: {config.source_path}")
     logger.info(f"Model config: {config.olmoearth_run_config_path}")
 
     # Step 1: Copy dataset to Weka
-    logger.info(f"[Step 1/6] Copying dataset to Weka...")
+    logger.info("[Step 1/6] Copying dataset to Weka...")
     weka_path = copy_dataset(
-        config.source_path, config.name, config.source_groups, config.untar_source,
+        config.source_path,
+        config.name,
+        config.source_groups,
+        config.untar_source,
     )
     logger.info(f"[Step 1/6] Copy complete: {weka_path}")
 
@@ -891,33 +932,50 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     _copy_model_yaml(weka_path, config.olmoearth_run_config_path)
 
     # Step 0a: Load dataset config from the dataset folder
-    logger.info(f"[Step 0a] Loading dataset config...")
+    logger.info("[Step 0a] Loading dataset config...")
     config_json_path = UPath(weka_path) / "config.json"
     with config_json_path.open() as f:
         dataset_dict = json.load(f)
-    logger.info(f"[Step 0a] Parsing dataset config...")
+    # Strip the "output" layer before pydantic parsing — its deprecated format
+    # field ({'name': 'geojson'}) triggers a pydantic ValidationError:
+    #   layers.output.format: Extra inputs are not permitted
+    # The output layer has no data_source and is unused during ingest.
+    if "layers" in dataset_dict and "output" in dataset_dict["layers"]:
+        del dataset_dict["layers"]["output"]
+        logger.info("[Step 0a] Stripped 'output' layer (not needed for ingest)")
+        with config_json_path.open("w") as f:
+            json.dump(dataset_dict, f, indent=2)
+        logger.info("[Step 0a] Wrote patched config.json back to disk")
+    logger.info("[Step 0a] Parsing dataset config...")
     dataset_config = DatasetConfig.model_validate(dataset_dict)
-    logger.info(f"[Step 0a] Dataset config loaded successfully")
+    logger.info("[Step 0a] Dataset config loaded successfully")
 
     # Step 0b: Load and validate model config from the canonical weka location
-    logger.info(f"[Step 0b] Loading and validating model.yaml with rslearn...")
+    logger.info("[Step 0b] Loading and validating model.yaml with rslearn...")
     model_yaml_path = Path(weka_path) / "model.yaml"
     with open(model_yaml_path) as f:
         model_config = yaml.safe_load(f)
     # Validate that rslearn can parse the model config (inputs, task, etc.)
     from olmoearth_pretrain.evals.datasets.rslearn_builder import load_runtime_config
-    runtime_config = load_runtime_config(str(model_yaml_path), weka_path)
-    logger.info(f"[Step 0b] Model config loaded and validated successfully")
+
+    load_runtime_config(str(model_yaml_path), weka_path)
+    logger.info("[Step 0b] Model config loaded and validated successfully")
 
     # Step 0c: Extract modalities from dataset config
-    logger.info(f"[Step 0c] Extracting modalities from dataset config...")
+    logger.info("[Step 0c] Extracting modalities from dataset config...")
     modalities = []
     modality_layer_names = []
     max_timesteps_modalities = []
     for layer_name, layer_config in dataset_config.layers.items():
         if layer_config.data_source is None:
             continue
-        olmoearth_modality = rslearn_to_olmoearth(layer_name)
+        try:
+            olmoearth_modality = rslearn_to_olmoearth(layer_name)
+        except KeyError:
+            logger.warning(
+                f"  Skipping layer {layer_name!r}: no OlmoEarth modality mapping"
+            )
+            continue
         modalities.append(olmoearth_modality.name)
         modality_layer_names.append(layer_name)
         query_config = layer_config.data_source.query_config
@@ -925,10 +983,12 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
     num_timesteps = max(max_timesteps_modalities) if max_timesteps_modalities else 1
     timeseries = num_timesteps > 1
-    logger.info(f"[Step 0c] Modalities: {modalities}, timeseries: {timeseries}, num_timesteps: {num_timesteps}")
+    logger.info(
+        f"[Step 0c] Modalities: {modalities}, timeseries: {timeseries}, num_timesteps: {num_timesteps}"
+    )
 
     # Step 0d: Extract and instantiate the rslearn task from model config
-    logger.info(f"[Step 0d] Extracting task from model config...")
+    logger.info("[Step 0d] Extracting task from model config...")
     task_wrapper_config = model_config["data"]["init_args"]["task"]
     task_init_args = task_wrapper_config.get("init_args", {})
 
@@ -946,7 +1006,9 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         task_name = "task"
         task_config = task_wrapper_config
 
-    logger.info(f"[Step 0d] Instantiating task '{task_name}': {task_config['class_path']}")
+    logger.info(
+        f"[Step 0d] Instantiating task '{task_name}': {task_config['class_path']}"
+    )
     rslearn_task = instantiate_from_config(task_config)
 
     # Get num_classes from the task config based on task type
@@ -973,38 +1035,42 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     logger.info(f"[Step 0d] Task: {task_name}, num_classes: {num_classes}")
 
     # Step 2: Scan windows and determine existing splits
-    logger.info(f"[Step 2/6] Scanning windows and determining splits...")
+    logger.info("[Step 2/6] Scanning windows and determining splits...")
     splits = scan_windows_and_splits(
         weka_path,
         source_groups=config.source_groups,
         source_tags=config.source_tags,
     )
-    logger.info(f"[Step 2/6] Scan complete: train={len(splits['train'])}, "
-                f"val={len(splits['val'])}, test={len(splits['test'])}")
+    logger.info(
+        f"[Step 2/6] Scan complete: train={len(splits['train'])}, "
+        f"val={len(splits['val'])}, test={len(splits['test'])}"
+    )
 
     # Step 3: Create missing splits if needed
-    logger.info(f"[Step 3/6] Creating missing splits if needed...")
+    logger.info("[Step 3/6] Creating missing splits if needed...")
     splits = create_missing_splits(
         splits,
         val_test_ratio=config.val_test_split_ratio,
         train_val_ratio=config.train_val_split_ratio,
         seed=config.split_seed,
     )
-    logger.info(f"[Step 3/6] Split creation complete: train={len(splits['train'])}, "
-                f"val={len(splits['val'])}, test={len(splits['test'])}")
+    logger.info(
+        f"[Step 3/6] Split creation complete: train={len(splits['train'])}, "
+        f"val={len(splits['val'])}, test={len(splits['test'])}"
+    )
 
     # Step 4: Write split tags to metadata
-    logger.info(f"[Step 4/6] Writing split tags to window metadata...")
+    logger.info("[Step 4/6] Writing split tags to window metadata...")
     write_split_tags(weka_path, splits)
-    logger.info(f"[Step 4/6] Split tags written")
+    logger.info("[Step 4/6] Split tags written")
 
     # Step 5: Count split statistics
-    logger.info(f"[Step 5/6] Counting split statistics...")
+    logger.info("[Step 5/6] Counting split statistics...")
     split_stats = count_split_stats(splits)
     logger.info(f"[Step 5/6] Stats: {split_stats}")
 
     # Step 6: Compute normalization stats (from copied dataset, use train for stats)
-    logger.info(f"[Step 6/6] Computing normalization stats from train split...")
+    logger.info("[Step 6/6] Computing normalization stats from train split...")
     norm_stats = compute_band_stats_from_model_config(
         model_config_path=str(model_yaml_path),
         source_path=weka_path,
@@ -1012,7 +1078,9 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         tags={EVAL_SPLIT_TAG_KEY: str(SplitName.TRAIN)},
         num_samples=config.num_samples,
     )
-    logger.info(f"[Step 6/6] Normalization stats computed for {len(norm_stats)} modalities")
+    logger.info(
+        f"[Step 6/6] Normalization stats computed for {len(norm_stats)} modalities"
+    )
 
     task_type = rslearn_task_type_to_olmoearth_task_type(rslearn_task)
 
@@ -1021,7 +1089,7 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     default_config = data_init_args.get("default_config", {})
     window_size = default_config.get("patch_size", 64)
 
-    logger.info(f"Creating EvalDatasetEntry...")
+    logger.info("Creating EvalDatasetEntry...")
     entry = EvalDatasetEntry(
         name=config.name,
         source_path=config.source_path,
@@ -1042,13 +1110,15 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         norm_stats=norm_stats,
     )
 
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
     logger.info(f"INGEST COMPLETE: {config.name}")
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
     logger.info(f"  Weka path: {weka_path}")
     logger.info(f"  Task: {task_type}, classes: {num_classes}")
-    logger.info(f"  Splits: train={split_stats.get('train', {}).get('count', 0)}, "
-                f"val={split_stats.get('val', {}).get('count', 0)}, "
-                f"test={split_stats.get('test', {}).get('count', 0)}")
+    logger.info(
+        f"  Splits: train={split_stats.get('train', {}).get('count', 0)}, "
+        f"val={split_stats.get('val', {}).get('count', 0)}, "
+        f"test={split_stats.get('test', {}).get('count', 0)}"
+    )
 
     return entry

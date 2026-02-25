@@ -21,6 +21,7 @@ Usage as library:
     )
 """
 
+import logging
 import os
 import random
 
@@ -30,13 +31,14 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from olmoearth_pretrain.data.constants import Modality as DataModality
-from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.data.utils import convert_to_db
+from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.evals.datasets.rslearn_builder import (
     build_model_dataset_from_config,
     load_runtime_config,
 )
 
+logger = logging.getLogger(__name__)
 # Default to 0 (no multiprocessing), but allow override via env var
 _default_workers = 0
 NUM_WORKERS = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", _default_workers))
@@ -60,7 +62,7 @@ def _resolve_layer_name(layer: str) -> str | None:
         return layer
     for prefix in ("pre_", "post_"):
         if layer.startswith(prefix):
-            stripped = layer[len(prefix):]
+            stripped = layer[len(prefix) :]
             if stripped in RSLEARN_TO_OLMOEARTH:
                 return stripped
     return None
@@ -141,7 +143,20 @@ def compute_band_stats(
         collate_fn=_collate_inputs_only,
     )
 
-    for batch in tqdm(loader, total=len(loader), desc="Computing stats"):
+    skipped_batches = 0
+    loader_iter = iter(loader)
+    pbar = tqdm(total=len(loader), desc="Computing stats")
+    while True:
+        try:
+            batch = next(loader_iter)
+        except StopIteration:
+            break
+        except (ValueError, RuntimeError) as e:
+            logger.warning(f"Skipping batch due to missing/corrupt data: {e}")
+            skipped_batches += 1
+            pbar.update(1)
+            continue
+        pbar.update(1)
         for sample in batch:
             # Handle both (inputs_dict, target) tuples and raw dicts
             inputs_dict = sample[0] if isinstance(sample, tuple) else sample
@@ -153,7 +168,7 @@ def compute_band_stats(
                 x = inputs_dict[modality]
 
                 # Handle RasterImage objects (when passthrough=True in model.yaml)
-                if hasattr(x, 'image'):
+                if hasattr(x, "image"):
                     # RasterImage.image has shape (C, T, H, W)
                     x = x.image
 
@@ -218,9 +233,13 @@ def compute_band_stats(
                     # Online accumulation
                     s["count"] += vals.numel()
                     s["sum"] += vals.sum().item()
-                    s["sumsq"] += (vals ** 2).sum().item()
+                    s["sumsq"] += (vals**2).sum().item()
                     s["min"] = min(s["min"], vals.min().item())
                     s["max"] = max(s["max"], vals.max().item())
+
+    pbar.close()
+    if skipped_batches:
+        logger.warning(f"Skipped {skipped_batches} batches due to missing/corrupt data")
 
     # Finalize: compute mean and std from accumulated values
     out = {}
@@ -240,7 +259,7 @@ def compute_band_stats(
                 var = max(0.0, s["sumsq"] / s["count"] - mean * mean)
                 out[modality][band] = {
                     "mean": mean,
-                    "std": var ** 0.5,
+                    "std": var**0.5,
                     "min": s["min"],
                     "max": s["max"],
                 }
@@ -296,7 +315,9 @@ def compute_band_stats_from_model_config(
 
     # Apply sampling if requested
     if num_samples is not None and num_samples < total_samples:
-        print(f"Sampling {num_samples} of {total_samples} samples for stats computation")
+        print(
+            f"Sampling {num_samples} of {total_samples} samples for stats computation"
+        )
         indices = random.sample(range(total_samples), num_samples)
         model_ds = torch.utils.data.Subset(model_ds, indices)
     else:
