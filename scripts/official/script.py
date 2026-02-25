@@ -178,8 +178,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     METRICS_COLLECT_INTERVAL = 10
     CANCEL_CHECK_INTERVAL = 25
     LOAD_STRATEGY = LoadStrategy.if_available
-    WANDB_USERNAME = "eai-ai2"  # nosec
-    WANDB_PROJECT = "2025_10_02_phase2"
+    WANDB_USERNAME = "prior-ai2"  # nosec
+    WANDB_PROJECT = "olmoearth"
     PERMANENT_SAVE_INTERVAL = 5000
     EPHERMERAL_SAVE_INTERVAL = 250
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
