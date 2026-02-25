@@ -15,6 +15,7 @@ Experiments:
 19. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_with_decode masking + NDVI + ERA5 decode-only + masked neg loss
 20. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_time_with_decode masking + NDVI + ERA5 decode-only + masked neg loss
 21. exp 20 + decoder supervision on decode-only spatial modalities (worldcover, srtm, osm, canopy height, cdl, worldcereal, ndvi)
+22. exp 19 + decoder supervision (same as exp 21 but random_with_decode instead of random_time_with_decode)
 """
 
 import copy
@@ -1232,6 +1233,66 @@ def build_dataloader_exp21(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 22: exp 19 + decoder supervision (random_with_decode instead of random_time_with_decode)
+# ============================================================
+
+
+def build_common_exp22(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp22 (exp19 + decoder supervision)."""
+    return build_common_exp19(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp22(
+    common: CommonComponents,
+) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build train module for exp22 (exp19 + decoder supervision)."""
+    return build_train_module_exp19(common)
+
+
+def build_model_exp22(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp22: exp19 + decoder supervision head."""
+    model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
+    encoder_config = EncoderConfig(
+        embedding_size=model_size["encoder_embedding_size"],
+        num_heads=model_size["encoder_num_heads"],
+        depth=model_size["encoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        supported_modality_names=common.training_modalities,
+        max_patch_size=MAX_PATCH_SIZE,
+        drop_path=0.1,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+        band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
+        random_band_dropout=True,
+    )
+    decoder_config = PredictorConfig(
+        encoder_embedding_size=model_size["encoder_embedding_size"],
+        decoder_embedding_size=model_size["decoder_embedding_size"],
+        depth=model_size["decoder_depth"],
+        mlp_ratio=model_size["mlp_ratio"],
+        num_heads=model_size["decoder_num_heads"],
+        supported_modality_names=common.training_modalities,
+        max_sequence_length=12,
+        tokenization_config=common.tokenization_config,
+    )
+    supervision_head_config = SupervisionHeadConfig(
+        modality_configs=SUPERVISION_MODALITY_CONFIGS,
+    )
+    return LatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        supervision_head_config=supervision_head_config,
+    )
+
+
+def build_dataloader_exp22(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp22 (same as exp19)."""
+    return build_dataloader_exp19(common)
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -1319,6 +1380,12 @@ EXPERIMENTS = {
         build_model_exp21,
         build_train_module_exp21,
         build_dataloader_exp21,
+    ),
+    "single_bandset_all12_random_band_dropout_ndvi_era5_random_decode_masked_neg_decoder_supervision": (
+        build_common_exp22,
+        build_model_exp22,
+        build_train_module_exp22,
+        build_dataloader_exp22,
     ),
 }
 
