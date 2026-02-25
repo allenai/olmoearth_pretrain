@@ -490,20 +490,28 @@ class DownstreamEvaluator:
             raise ValueError(f"Unsupported eval_mode: {self.eval_mode}")
 
 
+def _make_other_prefix(prefix: str) -> str:
+    """Turn 'eval' -> 'eval_other', 'eval/test' -> 'eval_other/test'."""
+    parts = prefix.split("/", 1)
+    parts[0] = parts[0] + "_other"
+    return "/".join(parts)
+
+
 def _log_eval_result_to_wandb(
     wandb_callback: Any, prefix: str, name: str, result: EvalResult
 ) -> None:
     """Log an EvalResult to wandb.
 
     Primary metric goes to {prefix}/{name} (e.g. eval/m_eurosat).
-    Non-primary metrics go to {prefix}_other/{name}/{metric_name}.
+    Non-primary metrics go to eval_other/.../{name}/{metric_name}.
     """
     primary_key = result.primary_metric.value
+    other_prefix = _make_other_prefix(prefix)
     wandb_callback.wandb.log({f"{prefix}/{name}": result.primary})
     for metric_name, metric_value in result.metrics.items():
         if metric_name == primary_key:
             continue
-        wandb_callback.wandb.log({f"{prefix}_other/{name}/{metric_name}": metric_value})
+        wandb_callback.wandb.log({f"{other_prefix}/{name}/{metric_name}": metric_value})
 
 
 def _record_eval_result(
@@ -511,11 +519,12 @@ def _record_eval_result(
 ) -> None:
     """Record an EvalResult to trainer metrics."""
     primary_key = result.primary_metric.value
+    other_prefix = _make_other_prefix(prefix)
     trainer.record_metric(f"{prefix}/{name}", result.primary)
     for metric_name, metric_value in result.metrics.items():
         if metric_name == primary_key:
             continue
-        trainer.record_metric(f"{prefix}_other/{name}/{metric_name}", metric_value)
+        trainer.record_metric(f"{other_prefix}/{name}/{metric_name}", metric_value)
 
 
 @dataclass
