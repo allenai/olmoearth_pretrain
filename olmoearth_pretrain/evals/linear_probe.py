@@ -30,19 +30,18 @@ from olmoearth_pretrain.evals.utils import adjust_learning_rate
 logger = getLogger(__name__)
 
 
-def get_rank_lr(base_lr: float, rank: int, world_size: int) -> float:
-    """Get the learning rate for this rank.
+RANK_MAX_LRS = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 
-    Generates log-spaced LRs centered on base_lr spanning 2 orders of magnitude.
-    E.g., with base_lr=0.01 and world_size=8:
-        LRs = [0.001, 0.00215, 0.00464, 0.01, 0.0215, 0.0464, 0.1, 0.215]
+
+def get_rank_lr(rank: int, world_size: int) -> float | None:
+    """Get the learning rate for this rank from the standard eval sweep LRs.
+
+    Uses the same LRs as eval sweeps: [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
+    Returns None if rank >= len(RANK_MAX_LRS) (rank should not participate).
     """
-    if world_size == 1:
-        return base_lr
-    log_min = math.log10(base_lr) - 1.0
-    log_max = math.log10(base_lr) + 1.0
-    log_lr = log_min + (log_max - log_min) * rank / (world_size - 1)
-    return 10**log_lr
+    if rank >= len(RANK_MAX_LRS):
+        return None
+    return RANK_MAX_LRS[rank]
 
 
 def all_reduce_max(value: float, device: torch.device) -> float:
@@ -174,31 +173,24 @@ def train_and_eval_probe(
             - test_score: EvalResult for test, or None if no test set
             - bootstrap_stats: Bootstrap statistics dict (empty dict if n_bootstrap == 0)
     """
-    # Rank-max LR: each rank uses a different LR, then we take max across ranks
-    # Auto-disable if world_size is too small (need at least 2 ranks for a sweep)
-    # or too large (more than ~20 LRs is excessive for 2 orders of magnitude)
-    MAX_USEFUL_LRS = 20
+    # Rank-max LR: each rank uses a different LR from the standard sweep, then take max
+    # Auto-disable if world_size doesn't match the number of sweep LRs
     use_rank_max = rank_max_lr and is_distributed()
     if use_rank_max:
         rank = get_rank()
         world_size = get_world_size()
-        if world_size < 2:
+        if world_size != len(RANK_MAX_LRS):
             logger.warning(
-                f"rank_max_lr disabled: world_size={world_size} < 2, need multiple ranks"
-            )
-            use_rank_max = False
-        elif world_size > MAX_USEFUL_LRS:
-            logger.warning(
-                f"rank_max_lr disabled: world_size={world_size} > {MAX_USEFUL_LRS}, "
-                "too many ranks for useful LR sweep"
+                f"rank_max_lr disabled: world_size={world_size} != {len(RANK_MAX_LRS)} "
+                f"(number of sweep LRs). Need exactly {len(RANK_MAX_LRS)} ranks."
             )
             use_rank_max = False
 
     if use_rank_max:
-        effective_lr = get_rank_lr(lr, rank, world_size)
+        effective_lr = get_rank_lr(rank, world_size)
         logger.info(
             f"Rank-max LR enabled: rank {rank}/{world_size} using lr={effective_lr:.6f} "
-            f"(base lr={lr})"
+            f"(sweep LRs: {RANK_MAX_LRS})"
         )
     else:
         effective_lr = lr
