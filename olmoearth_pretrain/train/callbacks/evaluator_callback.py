@@ -166,6 +166,7 @@ class DownstreamEvaluator:
         )
         self.quantize_embeddings = task.quantize_embeddings
         self.embedding_dim = task.embedding_dim
+        self.use_dice_loss = task.use_dice_loss
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -218,7 +219,7 @@ class DownstreamEvaluator:
                     probe_type=self.probe_type,
                     lr=self.probe_lr,
                     select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
-                    use_dice_loss=self.task.use_dice_loss,
+                    use_dice_loss=self.use_dice_loss,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
