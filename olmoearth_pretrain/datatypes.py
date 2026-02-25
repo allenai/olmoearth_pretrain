@@ -104,6 +104,7 @@ class OlmoEarthSample(NamedTuple):
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
+    eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
 
     def as_dict(self, include_nones: bool = False) -> dict[str, ArrayTensor | None]:
         """Convert to a dictionary.
@@ -348,40 +349,38 @@ class MaskedOlmoEarthSample(NamedTuple):
     and a mask for each modality named by modality_mask.
     """
 
-    # Modality fields with masks
-    sentinel2_l2a: Tensor | None = None
-    sentinel2_l2a_mask: Tensor | None = None
-    sentinel1: Tensor | None = None
-    sentinel1_mask: Tensor | None = None
-    worldcover: Tensor | None = None
-    worldcover_mask: Tensor | None = None
-    openstreetmap_raster: Tensor | None = None
-    openstreetmap_raster_mask: Tensor | None = None
-    srtm: Tensor | None = None
-    srtm_mask: Tensor | None = None
-    landsat: Tensor | None = None
-    landsat_mask: Tensor | None = None
-    naip: Tensor | None = None
-    naip_mask: Tensor | None = None
-    naip_10: Tensor | None = None
-    naip_10_mask: Tensor | None = None
-    gse: Tensor | None = None
-    gse_mask: Tensor | None = None
-    cdl: Tensor | None = None
-    cdl_mask: Tensor | None = None
-    worldpop: Tensor | None = None
-    worldpop_mask: Tensor | None = None
-    worldcereal: Tensor | None = None
-    worldcereal_mask: Tensor | None = None
-    wri_canopy_height_map: Tensor | None = None
-    wri_canopy_height_map_mask: Tensor | None = None
-    era5_10: Tensor | None = None
-    era5_10_mask: Tensor | None = None
-    latlon: Tensor | None = None
-    latlon_mask: Tensor | None = None
-    timestamps: ArrayTensor | None = (
-        None  # [B, T, D=3], where D=[day, month, year] (months are zero indexed)
-    )
+    sentinel2_l2a: ArrayTensor | None = None
+    sentinel2_l2a_mask: ArrayTensor | None = None
+    sentinel1: ArrayTensor | None = None
+    sentinel1_mask: ArrayTensor | None = None
+    worldcover: ArrayTensor | None = None
+    worldcover_mask: ArrayTensor | None = None
+    latlon: ArrayTensor | None = None  # [B, 2]
+    latlon_mask: ArrayTensor | None = None
+    openstreetmap_raster: ArrayTensor | None = None
+    openstreetmap_raster_mask: ArrayTensor | None = None
+    srtm: ArrayTensor | None = None
+    srtm_mask: ArrayTensor | None = None
+    landsat: ArrayTensor | None = None
+    landsat_mask: ArrayTensor | None = None
+    naip: ArrayTensor | None = None
+    naip_mask: ArrayTensor | None = None
+    naip_10: ArrayTensor | None = None
+    naip_10_mask: ArrayTensor | None = None
+    gse: ArrayTensor | None = None
+    gse_mask: ArrayTensor | None = None
+    cdl: ArrayTensor | None = None
+    cdl_mask: ArrayTensor | None = None
+    worldpop: ArrayTensor | None = None
+    worldpop_mask: ArrayTensor | None = None
+    worldcereal: ArrayTensor | None = None
+    worldcereal_mask: ArrayTensor | None = None
+    wri_canopy_height_map: ArrayTensor | None = None
+    wri_canopy_height_map_mask: ArrayTensor | None = None
+    era5_10: ArrayTensor | None = None
+    era5_10_mask: ArrayTensor | None = None
+    eurocrops: ArrayTensor | None = None
+    eurocrops_mask: ArrayTensor | None = None
 
     def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
         """Convert to a dictionary.
@@ -524,6 +523,8 @@ class TokensAndMasks(NamedTuple):
     era5_10_mask: Tensor | None = None
     latlon: Tensor | None = None
     latlon_mask: Tensor | None = None
+    eurocrops: ArrayTensor | None = None
+    eurocrops_mask: ArrayTensor | None = None
 
     def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
         """Convert to a dictionary.
