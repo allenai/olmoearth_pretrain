@@ -107,7 +107,6 @@ beaker = [
     "rioxarray>=0.19.0",
     "rslearn>=0.0.19",
     "torch>=2.7,<2.8",
-    "tqdm>=4.66.0",
     "universal-pathlib>=0.2.5",
     "wandb>=0.19.0",
 ]
@@ -135,6 +134,7 @@ eval = [
     "timm==1.0.20",
     "torchmetrics==1.7.1",
     "xarray>=2025.10.1",
+    "tqdm>=4.66.0",
 ]
 flash-attn = [
     "flash-attn>=2.4.0",
