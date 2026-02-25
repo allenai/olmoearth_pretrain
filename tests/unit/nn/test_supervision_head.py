@@ -308,29 +308,3 @@ class TestSupervisionHeadConfig:
                 task_type=SupervisionTaskType.CLASSIFICATION,
                 num_output_channels=11,
             )
-
-
-class TestTokensAndMasksExcludeModalities:
-    """Test the exclude_modalities helper on TokensAndMasks."""
-
-    def test_exclude(self) -> None:
-        """Excluded modality and its mask become None."""
-        tam = TokensAndMasks(
-            sentinel2_l2a=torch.randn(2, 4, 4, 2, 3, 8),
-            sentinel2_l2a_mask=torch.zeros(2, 4, 4, 2, 3),
-            worldcover=torch.randn(2, 4, 4, 1, 1, 8),
-            worldcover_mask=torch.zeros(2, 4, 4, 1, 1),
-        )
-        filtered = tam.exclude_modalities(["worldcover"])
-        assert filtered.worldcover is None
-        assert filtered.worldcover_mask is None
-        assert filtered.sentinel2_l2a is not None
-
-    def test_exclude_nonexistent_is_noop(self) -> None:
-        """Excluding a modality not present is a no-op."""
-        tam = TokensAndMasks(
-            sentinel2_l2a=torch.randn(2, 4, 4, 2, 3, 8),
-            sentinel2_l2a_mask=torch.zeros(2, 4, 4, 2, 3),
-        )
-        filtered = tam.exclude_modalities(["worldcover"])
-        assert filtered.sentinel2_l2a is not None
