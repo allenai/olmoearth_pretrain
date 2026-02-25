@@ -1,14 +1,14 @@
 """Supervision heads for direct supervision of decode-only modalities.
 
-Applied to decoder output: pool T and BandSets (over all non-MISSING tokens),
-combine across modalities, then per-modality linear heads predict
-max_patch_size x max_patch_size sub-patch grids that are unfolded to pixel
-resolution.  When the actual patch_size < max_patch_size the predictions are
-*downsampled* to match the target -- never upsampled.
+Each supervision modality uses its own decoder tokens directly (no cross-
+modality pooling).  Decode-only spatial modalities have T=1 and BS=1, so
+the T and BandSet dimensions are indexed directly.  Per-modality linear
+heads predict max_patch_size x max_patch_size sub-patch grids that are
+unfolded to pixel resolution.  When the actual patch_size < max_patch_size
+the predictions are *downsampled* to match the target -- never upsampled.
 
-Unlike supervision-v2 which operates on encoder output, this version operates
-on decoder output to avoid pressuring the encoder to encode spatial details
-at the expense of global semantic features.
+Operates on decoder output to avoid pressuring the encoder to encode spatial
+details at the expense of global semantic features.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from einops import rearrange
 from torch import Tensor
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.data.constants import MISSING_VALUE
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 
 logger = logging.getLogger(__name__)
@@ -96,16 +96,18 @@ class SupervisionHeadConfig(Config):
 
 
 class SupervisionHead(nn.Module):
-    """Per-modality linear heads on pooled decoder features.
+    """Per-modality linear heads on per-modality decoder tokens.
 
-    Forward path:
-      1. For each spatial modality in the decoder output, compute a masked
-         mean over T and BandSets (only non-MISSING tokens) -> [B, P_H, P_W, D]
-      2. Average across contributing modalities -> [B, P_H, P_W, D]
-      3. Per-supervised-modality linear head predicting max_patch_size^2 * C
-         values per token -> [B, P_H, P_W, max_ps^2 * C]
-      4. Unfold to [B, P_H * max_ps, P_W * max_ps, C]
-      5. Downsample to target pixel resolution when prediction > target.
+    Forward path (per supervised modality):
+      1. Grab the modality's own decoder tokens [B, P_H, P_W, T, 1, D]
+         and squeeze BS -> [B, P_H, P_W, T, D]
+      2. Linear head predicting max_patch_size^2 * C values per token
+         (broadcasts over T)
+      3. Unfold to [B, P_H * max_ps, P_W * max_ps, T, C]
+      4. Downsample spatial dims to target pixel resolution when needed.
+
+    For non-multitemporal modalities T=1.  For multitemporal modalities
+    (e.g. NDVI) a separate prediction is produced for each timestep.
     """
 
     def __init__(
@@ -134,6 +136,13 @@ class SupervisionHead(nn.Module):
         """Retrieve the cached class_values buffer for a modality."""
         return getattr(self, f"_class_values_{name}")
 
+    def _get_batch_size(self, decoded: TokensAndMasks) -> int:
+        for modality_name in decoded.modalities:
+            t = getattr(decoded, modality_name)
+            if t is not None:
+                return t.shape[0]
+        return 1
+
     def forward(
         self,
         decoded: TokensAndMasks,
@@ -141,121 +150,63 @@ class SupervisionHead(nn.Module):
     ) -> dict[str, Tensor]:
         """Produce per-supervised-modality predictions at pixel resolution.
 
-        Under FSDP the linear heads are sharded across ranks, so every rank
-        **must** call every head's forward pass even when a target modality is
-        absent from the local batch. We achieve this by always running every
-        head and only including results whose targets actually exist.
+        Each modality head operates on that modality's own decoder tokens.
+        Under FSDP every head must run on every rank, so we use dummy zero
+        features when a modality's tokens are absent from the decoder output.
 
         Args:
             decoded: Decoder output TokensAndMasks.
             batch: The original batch (used to determine target spatial dims).
 
         Returns:
-            Dictionary mapping supervised modality name -> predictions [B, H, W, C].
+            Dictionary mapping supervised modality name to predictions.
+            Shape is [B, H, W, T, C] (T preserved from decoder tokens).
         """
-        pooled_features = _pool_decoder_features(decoded)
-
-        if pooled_features is None:
-            first_head = next(iter(self.heads.values()))
-            batch_size = 1
-            for modality_name in decoded.modalities:
-                t = getattr(decoded, modality_name)
-                if t is not None:
-                    batch_size = t.shape[0]
-                    break
-            pooled_features = torch.zeros(
-                batch_size,
-                1,
-                1,
-                first_head.in_features,
-                device=next(self.parameters()).device,
-                dtype=next(self.parameters()).dtype,
-            )
-
         mps = self.max_patch_size
+        device = next(self.parameters()).device
+        dtype = next(self.parameters()).dtype
+
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
+            tokens = getattr(decoded, sup_name, None)  # [B, P_H, P_W, T, BS, D] | None
+
+            if tokens is not None:
+                features = tokens.mean(dim=-2)  # [B, P_H, P_W, T, D]
+            else:
+                batch_size = self._get_batch_size(decoded)
+                features = torch.zeros(
+                    batch_size, 1, 1, 1, head.in_features, device=device, dtype=dtype
+                )
+
             num_channels = self.modality_configs[sup_name].num_output_channels
-            raw = head(pooled_features)  # [B, P_H, P_W, mps^2 * C]
+            raw = head(features)  # [B, P_H, P_W, T, mps^2 * C]
 
             output = rearrange(
                 raw,
-                "b ph pw (c i j) -> b (ph i) (pw j) c",
+                "b ph pw t (c i j) -> b (ph i) (pw j) t c",
                 c=num_channels,
                 i=mps,
                 j=mps,
-            )  # [B, P_H*mps, P_W*mps, C]
+            )  # [B, P_H*mps, P_W*mps, T, C]
 
             raw_target = getattr(batch, sup_name, None)
             if raw_target is not None:
                 target_h, target_w = raw_target.shape[1], raw_target.shape[2]
                 if output.shape[1] != target_h or output.shape[2] != target_w:
                     orig_dtype = output.dtype
-                    output = rearrange(output, "b h w c -> b c h w")
+                    b, h, w, t, c = output.shape
+                    output = rearrange(output, "b h w t c -> (b t) c h w")
                     output = F.interpolate(
                         output.float(),
                         size=(target_h, target_w),
                         mode="bilinear",
                         align_corners=False,
                     ).to(orig_dtype)
-                    output = rearrange(output, "b c h w -> b h w c")
+                    output = rearrange(output, "(b t) c h w -> b h w t c", b=b, t=t)
 
             predictions[sup_name] = output
 
         return predictions
-
-
-def _pool_decoder_features(
-    decoded: TokensAndMasks,
-) -> Tensor | None:
-    """Pool decoder tokens across T/BandSets at patch resolution.
-
-    For each spatial modality with non-MISSING tokens:
-      - Masked mean over T and BandSets -> [B, P_H, P_W, D]
-    Then average across contributing modalities.
-
-    Returns:
-        [B, P_H, P_W, D] or None if no valid spatial modalities.
-    """
-    pooled_list: list[Tensor] = []
-    for modality_name in decoded.modalities:
-        modality_spec = Modality.get(modality_name)
-        if not modality_spec.is_spatial:
-            continue
-
-        tokens = getattr(decoded, modality_name)  # [B, P_H, P_W, T, BS, D]
-        mask_name = TokensAndMasks.get_masked_modality_name(modality_name)
-        mask = getattr(decoded, mask_name)  # [B, P_H, P_W, T, BS]
-
-        valid_mask = mask != MaskValue.MISSING.value
-        if not valid_mask.any():
-            continue
-
-        pooled_list.append(
-            _masked_mean_over_t_bs(tokens, valid_mask)
-        )  # [B, P_H, P_W, D]
-
-    if not pooled_list:
-        return None
-
-    return torch.stack(pooled_list).mean(dim=0)
-
-
-def _masked_mean_over_t_bs(tokens: Tensor, mask: Tensor) -> Tensor:
-    """Compute masked mean over the T and BandSets dimensions.
-
-    Args:
-        tokens: [B, P_H, P_W, T, BandSets, D]
-        mask: bool [B, P_H, P_W, T, BandSets]
-
-    Returns:
-        [B, P_H, P_W, D]
-    """
-    mask_expanded = mask.unsqueeze(-1)  # [B, P_H, P_W, T, BS, 1]
-    masked_tokens = tokens * mask_expanded
-    summed = masked_tokens.sum(dim=(-3, -2))  # [B, P_H, P_W, D]
-    count = mask.sum(dim=(-2, -1)).unsqueeze(-1).clamp(min=1)  # [B, P_H, P_W, 1]
-    return summed / count
 
 
 # ---------------------------------------------------------------------------
@@ -294,10 +245,8 @@ def compute_supervision_loss(
             total_loss = total_loss + 0 * pred.sum()
             continue
 
-        # raw_target: [B, H, W, 1, num_bands] -> squeeze T dim
-        raw_target = raw_target[:, :, :, 0, :]  # [B, H, W, num_bands]
-
-        valid_mask = _build_valid_mask(raw_target)
+        # raw_target: [B, H, W, T, num_bands] -- keep all timesteps
+        valid_mask = _build_valid_mask(raw_target)  # [B, H, W, T]
 
         if not valid_mask.any():
             total_loss = total_loss + 0 * pred.sum()
