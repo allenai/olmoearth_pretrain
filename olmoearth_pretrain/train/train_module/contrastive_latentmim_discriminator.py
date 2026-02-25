@@ -6,8 +6,7 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
-from olmo_core.distributed.parallel import DataParallelType
-from olmo_core.distributed.parallel.data_parallel import get_dp_mesh
+from olmo_core.distributed.parallel import DataParallelType, get_dp_mesh
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.optim import AdamWConfig, OptimConfig
 from olmo_core.train.common import ReduceType
