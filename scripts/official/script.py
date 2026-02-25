@@ -36,6 +36,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     FullGCCallback,
+    MemoryLoggerCallback,
     OlmoEarthSpeedMonitorCallback,
     OlmoEarthWandBCallback,
 )
@@ -251,6 +252,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ),
         )
         .with_callback("garbage_collector", garbage_collector_callback)
+        .with_callback("memory_logger", MemoryLoggerCallback(interval=10, log_path="memory_log.csv"))
         .with_callback(
             "beaker", BeakerCallback()
         )  # this shoukd not be here, but for now it is
