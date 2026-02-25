@@ -41,10 +41,6 @@ logger = logging.getLogger(__name__)
 # Derived modalities that don't need normalization (already bounded)
 _DERIVED_MODALITIES_SKIP_NORMALIZATION: set[str] = {"ndvi"}
 
-# Band indices within Sentinel-2 L2A band_order for NDVI computation
-_S2_B04_INDEX = 2  # Red
-_S2_B08_INDEX = 3  # NIR
-
 
 class GetItemArgs(NamedTuple):
     """Arguments for the __getitem__ method of the OlmoEarthDataset."""
@@ -328,8 +324,9 @@ class OlmoEarthDataset(Dataset):
         Returns:
             Tuple of (ndvi array [H, W, T, 1], updated missing_modalities).
         """
-        red = s2_data[..., _S2_B04_INDEX]
-        nir = s2_data[..., _S2_B08_INDEX]
+        s2_band_order = Modality.SENTINEL2_L2A.band_order
+        red = s2_data[..., s2_band_order.index("B04")]
+        nir = s2_data[..., s2_band_order.index("B08")]
 
         missing = (red == MISSING_VALUE) | (nir == MISSING_VALUE)
 
