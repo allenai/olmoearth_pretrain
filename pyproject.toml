@@ -29,6 +29,7 @@ include = ["olmoearth_pretrain*", "helios*"]
 "olmoearth_pretrain" = ["py.typed"]
 "olmoearth_pretrain.data.norm_configs" = ["*.json"]
 "olmoearth_pretrain.evals.datasets.config" = ["*.json"]
+"olmoearth_pretrain.evals.studio_ingest" = ["registry.json"]
 
 [tool.ruff]
 fix = true

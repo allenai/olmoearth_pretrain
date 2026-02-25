@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from pathlib import Path
 
 from upath import UPath
 
@@ -52,8 +53,8 @@ logger = logging.getLogger(__name__)
 # Constants
 # =============================================================================
 
-# The canonical location of the registry on Weka
-REGISTRY_PATH = "/weka/dfive-default/olmoearth/eval_datasets/registry/registry.json"
+# Git-tracked registry (source of truth)
+REGISTRY_PATH = Path(__file__).parent / "registry.json"
 
 # Current registry schema version
 # Increment this when making breaking changes to the schema
@@ -69,9 +70,9 @@ class Registry:
     """In-memory representation of the eval dataset registry.
 
     This class provides methods to:
-    - Load the registry from Weka
+    - Load the registry from the git-tracked registry.json
     - Add/update/remove dataset entries
-    - Save the registry back to Weka
+    - Save the registry back to registry.json
     - Query available datasets
 
     Usage:
@@ -108,19 +109,12 @@ class Registry:
 
     @classmethod
     def load(cls, path: str | None = None) -> Registry:
-        """Load registry from Weka.
+        """Load registry from git-tracked registry.json.
 
         Args:
             path: Optional custom path (defaults to REGISTRY_PATH)
-
-        Returns:
-            Registry instance
-
-        Raises:
-            FileNotFoundError: If registry doesn't exist (caller should create)
-            json.JSONDecodeError: If registry is corrupted
         """
-        registry_path = UPath(path or REGISTRY_PATH)
+        registry_path = UPath(path) if path is not None else REGISTRY_PATH
 
         if not registry_path.exists():
             logger.info(f"Registry not found at {registry_path}, creating new registry")
@@ -143,23 +137,17 @@ class Registry:
         )
 
     def save(self, path: str | None = None) -> None:
-        """Save registry to Weka.
-
-        This performs an atomic write by writing to a temp file first,
-        then renaming. This prevents corruption if the write is interrupted.
+        """Save registry to disk.
 
         Args:
             path: Optional custom path (defaults to REGISTRY_PATH)
         """
-        registry_path = UPath(path or REGISTRY_PATH)
+        registry_path = UPath(path) if path is not None else REGISTRY_PATH
 
-        # Ensure parent directory exists
         registry_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Update timestamp
         self.updated_at = datetime.now().isoformat()
 
-        # Serialize
         data = {
             "version": self.version,
             "updated_at": self.updated_at,
@@ -168,11 +156,7 @@ class Registry:
             },
         }
 
-        # Write atomically
-        # TODO: UPath may not support atomic writes on all backends
-        # For now, we just write directly
         logger.info(f"Saving registry to {registry_path}")
-
         with registry_path.open("w") as f:
             json.dump(data, f, indent=2)
 

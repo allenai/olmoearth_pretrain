@@ -291,7 +291,7 @@ EVAL_TASKS = {
         eval_interval=Duration.epochs(10),
         probe_lr=0.001,
         input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "geo_ecosystem_annual_test": DownstreamTaskConfig(
@@ -305,7 +305,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
         input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "forest_loss_driver": DownstreamTaskConfig(
@@ -319,7 +319,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
         input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "nigeria_settlement": DownstreamTaskConfig(
@@ -333,7 +333,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
         input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "nandi_crop_map": DownstreamTaskConfig(
@@ -349,7 +349,7 @@ EVAL_TASKS = {
         input_modalities=[
             Modality.SENTINEL2_L2A.name,
         ],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "awf_lulc_map": DownstreamTaskConfig(
@@ -365,12 +365,12 @@ EVAL_TASKS = {
         input_modalities=[
             Modality.SENTINEL2_L2A.name,
         ],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "oil_spill_detection": DownstreamTaskConfig(
         dataset="oil_spill_detection",
-        embedding_batch_size=32,
+        embedding_batch_size=128,
         probe_batch_size=8,
         num_workers=8,
         pooling_type=PoolingType.MEAN,
@@ -379,7 +379,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
         input_modalities=[Modality.SENTINEL1.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
 }

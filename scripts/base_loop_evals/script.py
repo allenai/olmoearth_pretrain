@@ -72,7 +72,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=LOOP_EVAL_INTERVAL,
         input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "awf_lulc_map": DownstreamTaskConfig(
@@ -86,7 +86,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=LOOP_EVAL_INTERVAL,
         input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "tolbi_crop": DownstreamTaskConfig(
@@ -130,7 +130,7 @@ EVAL_TASKS = {
         eval_interval=LOOP_EVAL_INTERVAL,
         probe_lr=0.001,
         input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "geo_ecosystem_annual_test": DownstreamTaskConfig(
@@ -144,7 +144,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=LOOP_EVAL_INTERVAL,
         input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "forest_loss_driver": DownstreamTaskConfig(
@@ -158,7 +158,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=LOOP_EVAL_INTERVAL,
         input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "nigeria_settlement": DownstreamTaskConfig(
@@ -172,7 +172,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=LOOP_EVAL_INTERVAL,
         input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
     "oil_spill_detection": DownstreamTaskConfig(
@@ -186,7 +186,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=LOOP_EVAL_INTERVAL,
         input_modalities=[Modality.SENTINEL1.name],
-        epochs=100,
+        epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
 }
