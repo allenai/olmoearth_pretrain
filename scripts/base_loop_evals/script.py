@@ -2,7 +2,7 @@
 
 Only tolbi_crop, canada_wildfire_sat_eval_split, yemen_crop,
 geo_ecosystem_annual_test, forest_loss_driver, nigeria_settlement,
-nandi_crop_map, awf_lulc_map as loop evals every 5k steps.
+nandi_crop_map, awf_lulc_map, oil_spill_detection as loop evals every 5k steps.
 """
 
 import logging
@@ -117,6 +117,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
+        use_dice_loss=True,
     ),
     "yemen_crop": DownstreamTaskConfig(
         dataset="yemen_crop",
@@ -142,6 +143,7 @@ EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
         eval_interval=LOOP_EVAL_INTERVAL,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=100,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
@@ -155,6 +157,7 @@ EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
         eval_interval=LOOP_EVAL_INTERVAL,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=100,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
@@ -168,6 +171,21 @@ EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
         eval_interval=LOOP_EVAL_INTERVAL,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=100,
+        eval_mode=EvalMode.LINEAR_PROBE,
+    ),
+    "oil_spill_detection": DownstreamTaskConfig(
+        dataset="oil_spill_detection",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=LOOP_EVAL_INTERVAL,
+        input_modalities=[Modality.SENTINEL1.name],
         epochs=100,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),

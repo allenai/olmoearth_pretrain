@@ -37,5 +37,6 @@ python -m olmoearth_pretrain.evals.studio_ingest.cli info --name my_task
 | `nigeria_settlement` | segmentation | sentinel2_l2a, sentinel1, landsat |
 | `nandi_crop_map` | segmentation | sentinel2_l2a, sentinel1, landsat |
 | `awf_lulc_map` | segmentation | sentinel2_l2a, sentinel1, landsat |
+| `oil_spill_detection` | segmentation | sentinel1 |
 
 See the full tutorial for how to add a new one.

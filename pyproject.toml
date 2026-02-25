@@ -107,6 +107,7 @@ dataset-creation = [
     "rioxarray>=0.19.0",
     "rslearn>=0.0.19",
     "torch>=2.7,<2.8",
+    "tqdm>=4.66.0",
     "universal-pathlib>=0.2.5",
     "wandb>=0.19.0",
 ]
@@ -139,12 +140,6 @@ eval = [
 
 flash_attn = [
     "flash-attn>=2.4.0",
-]
-# Internal tool for ingesting Studio datasets into OlmoEarth evals
-# See olmoearth_pretrain/evals/studio_ingest/README.md
-ingest = [
-    { include-group = "dataset-creation" },
-    "tqdm>=4.66.0",  # Progress bars for copy operations
 ]
 
 [tool.uv.extra-build-dependencies]

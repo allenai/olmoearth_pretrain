@@ -6,7 +6,7 @@ This module provides CLI commands for:
 - info: Show details for a specific dataset
 
 Usage:
-    uv run --group ingest python -m olmoearth_pretrain.evals.studio_ingest.cli <command> [options]
+    python -m olmoearth_pretrain.evals.studio_ingest.cli <command> [options]
 
 Examples:
     # Ingest a dataset

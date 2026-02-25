@@ -101,6 +101,8 @@ class DownstreamTaskConfig:
     quantize_embeddings: bool = False
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
+    # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
+    use_dice_loss: bool = False
 
 
 class DownstreamEvaluator:
@@ -212,6 +214,7 @@ class DownstreamEvaluator:
                     probe_type=self.probe_type,
                     lr=self.probe_lr,
                     select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
+                    use_dice_loss=self.task.use_dice_loss,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
@@ -789,13 +792,6 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
         self, task: DownstreamTaskConfig, config: EvalDatasetConfig
     ) -> None:
         """Verify the input modality configuration for a task."""
-        # TODO: We should just always be explicit about the input modalities as it is a confusing default.
-        # if (task.dataset not in ["pastis", "pastis128", "nandi", "awf"]) and len(
-        #     task.input_modalities
-        # ) > 0:
-        #     raise ValueError(
-        #         f"input_modalities is only supported for multimodal tasks, got {task.dataset}"
-        #     )
         # Make sure input_modalities contains only unique modalities
         if len(task.input_modalities) != len(set(task.input_modalities)):
             raise ValueError(

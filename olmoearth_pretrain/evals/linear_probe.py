@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import math
 from enum import StrEnum
 from logging import getLogger
@@ -15,7 +16,6 @@ from einops import rearrange
 from olmo_core.data.utils import get_rng
 from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
-import functools
 from tqdm import tqdm
 
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
@@ -137,6 +137,7 @@ def train_and_eval_probe(
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
+    use_dice_loss: bool = False,
 ) -> EvalTaskResult:
     """Run a linear probe on the OlmoEarth Pretrain model.
 
@@ -213,6 +214,7 @@ def train_and_eval_probe(
             num_classes=config.num_classes,
             num_output_pixels_per_side_of_patch=output_pixels_per_side_of_patch,
             device=device,
+            use_dice_loss=use_dice_loss,
         )
         val_result = evaluate_probe(
             data_loader=DataLoader(
@@ -415,12 +417,16 @@ def train_probe(
     device: torch.device,
     task_type: TaskType,
     num_output_pixels_per_side_of_patch: int | None = None,
+    use_dice_loss: bool = False,
 ) -> nn.Module:
-    """Train a linear probe on a segmentation task."""
+    """Train a linear probe on a classification or segmentation task."""
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
 
     probe = probe.train()
-    loss_function = functools.partial(weighted_dice_loss, num_classes=num_classes) #  nn.CrossEntropyLoss(ignore_index=SEGMENTATION_IGNORE_LABEL)  # for MADOS, but ok for others #
+    if use_dice_loss:
+        loss_function = functools.partial(weighted_dice_loss, num_classes=num_classes)
+    else:
+        loss_function = nn.CrossEntropyLoss(ignore_index=SEGMENTATION_IGNORE_LABEL)
     start_epoch = current_epoch
     for epoch in range(start_epoch, epochs):
         for i, batch in enumerate(data_loader):

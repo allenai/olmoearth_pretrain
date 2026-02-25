@@ -1,7 +1,7 @@
 # Adding Evaluation Datasets (Internal)
 
 > **This guide is for AI2 researchers with access to Weka and internal rslearn datasets.**
-> It covers the end-to-end process of adding a new rslearn dataset as a linear probe
+> It covers the end-to-end process of adding a new rslearn dataset as a linear probe/knn
 > evaluation task in OlmoEarth pretraining.
 
 ---
@@ -19,11 +19,6 @@ Adding a new eval dataset requires two things:
 
 - Access to Weka (`/weka/dfive-default/`)
 - An rslearn dataset with a prepared `config.json` and a `model.yaml` training config
-- The `ingest` dependency group installed:
-  ```bash
-  uv sync --group ingest
-  # or: pip install -e ".[ingest]"
-  ```
 
 ---
 
