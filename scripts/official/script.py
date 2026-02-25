@@ -13,6 +13,7 @@ from olmo_core.train.callbacks import (
     BeakerCallback,
     CheckpointerCallback,
     ConfigSaverCallback,
+    GarbageCollectorCallback,
     GPUMemoryMonitorCallback,
 )
 from olmo_core.train.checkpoint import CheckpointerConfig
@@ -35,7 +36,6 @@ from olmoearth_pretrain.nn.flexi_vit import (
 )
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
-    FullGCCallback,
     OlmoEarthSpeedMonitorCallback,
     OlmoEarthWandBCallback,
 )
@@ -188,7 +188,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         entity=WANDB_USERNAME,
         enabled=True,  # set to False to avoid wandb errors
     )
-    garbage_collector_callback = FullGCCallback(gc_interval=1, full_gc_interval=50)
+    garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
     EVAL_TASKS = {
         "m-eurosat": DownstreamTaskConfig(
             dataset="m-eurosat",
