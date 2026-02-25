@@ -39,7 +39,7 @@ from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
 from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
-from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
+from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
 from olmoearth_pretrain.nn.flexi_vit import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
@@ -99,6 +99,11 @@ class DownstreamTaskConfig:
     quantize_embeddings: bool = False
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
+    # Override the default primary metric (e.g. EvalMetric.F1 instead of ACCURACY).
+    # None = use the default for the task type (accuracy for classification, miou for segmentation).
+    primary_metric: EvalMetric | None = None
+    # Class index for CLASS_F1 primary metric. Required when primary_metric is CLASS_F1.
+    primary_metric_class: int | None = None
 
 
 class DownstreamEvaluator:
@@ -157,6 +162,8 @@ class DownstreamEvaluator:
         )
         self.quantize_embeddings = task.quantize_embeddings
         self.embedding_dim = task.embedding_dim
+        self.primary_metric = task.primary_metric
+        self.primary_metric_class = task.primary_metric_class
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -486,22 +493,29 @@ class DownstreamEvaluator:
 def _log_eval_result_to_wandb(
     wandb_callback: Any, prefix: str, name: str, result: EvalResult
 ) -> None:
-    """Log an EvalResult to wandb."""
-    # Log all metrics
-    for metric_name, metric_value in result.metrics.items():
-        wandb_callback.wandb.log({f"{prefix}/{name}/{metric_name}": metric_value})
-    # Also log primary metric for backward compatibility
+    """Log an EvalResult to wandb.
+
+    Primary metric goes to {prefix}/{name} (e.g. eval/m_eurosat).
+    Non-primary metrics go to {prefix}_other/{name}/{metric_name}.
+    """
+    primary_key = result.primary_metric.value
     wandb_callback.wandb.log({f"{prefix}/{name}": result.primary})
+    for metric_name, metric_value in result.metrics.items():
+        if metric_name == primary_key:
+            continue
+        wandb_callback.wandb.log({f"{prefix}_other/{name}/{metric_name}": metric_value})
 
 
 def _record_eval_result(
     trainer: Trainer, prefix: str, name: str, result: EvalResult
 ) -> None:
     """Record an EvalResult to trainer metrics."""
-    for metric_name, metric_value in result.metrics.items():
-        trainer.record_metric(f"{prefix}/{name}/{metric_name}", metric_value)
-    # Also record primary metric for backward compatibility
+    primary_key = result.primary_metric.value
     trainer.record_metric(f"{prefix}/{name}", result.primary)
+    for metric_name, metric_value in result.metrics.items():
+        if metric_name == primary_key:
+            continue
+        trainer.record_metric(f"{prefix}_other/{name}/{metric_name}", metric_value)
 
 
 @dataclass
@@ -614,6 +628,12 @@ class DownstreamEvaluatorCallback(Callback):
                 _log_eval_result_to_wandb(
                     wandb_callback, "eval", evaluator.evaluation_name, val_result
                 )
+                wandb_callback.wandb.config.update(
+                    {
+                        f"eval_primary_metrics/{evaluator.evaluation_name}": val_result.primary_metric.value
+                    },
+                    allow_val_change=True,
+                )
             wandb_callback.wandb.log(
                 {"eval_time/" + evaluator.evaluation_name: eval_time}
             )
@@ -702,6 +722,17 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
         start_time = time.monotonic()
         result = evaluator.val()
+
+        if evaluator.primary_metric is not None:
+            if result.val_result is not None:
+                result.val_result = result.val_result.with_primary_metric(
+                    evaluator.primary_metric, class_idx=evaluator.primary_metric_class
+                )
+            if result.test_result is not None:
+                result.test_result = result.test_result.with_primary_metric(
+                    evaluator.primary_metric, class_idx=evaluator.primary_metric_class
+                )
+
         val_result = result.val_result
         test_result = result.test_result
         bootstrap_stats = result.bootstrap_stats
