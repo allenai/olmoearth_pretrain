@@ -222,6 +222,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             use_apt=True,
             apt_modality="sentinel2_l2a",
             apt_config=apt_config,
+            use_flash_attn=True,
         ),
     }
 

@@ -103,6 +103,8 @@ class DownstreamTaskConfig:
     apt_config: APTConfig | None = (
         None  # APT config (uses default_s2_finetune_config if None)
     )
+    # Override flash attention on the encoder (None = inherit from checkpoint config)
+    use_flash_attn: bool | None = None
     # Quantize embeddings to int8 for storage efficiency evaluation
     quantize_embeddings: bool = False
     # Reduce embedding dimensionality via PCA (None = no reduction)
@@ -167,6 +169,7 @@ class DownstreamEvaluator:
         self.use_apt = task.use_apt
         self.apt_modality = task.apt_modality
         self.apt_config = task.apt_config
+        self.use_flash_attn = task.use_flash_attn
         self.quantize_embeddings = task.quantize_embeddings
         self.embedding_dim = task.embedding_dim
         self.run_on_test = run_on_test
@@ -289,12 +292,14 @@ class DownstreamEvaluator:
                 encoder=model,
                 apt_config=apt_config,
                 apt_modality=self.apt_modality,
+                use_flash_attn=self.use_flash_attn,
             )
             logger.info(
                 f"APT enabled for modality: {self.apt_modality}, "
                 f"masking disabled: {apt_config.disable_masking}, "
                 f"thresholds: {apt_config.partitioner.thresholds}, "
-                f"num_scales: {apt_config.partitioner.num_scales}"
+                f"num_scales: {apt_config.partitioner.num_scales}, "
+                f"use_flash_attn: {self.use_flash_attn}"
             )
         else:
             if hasattr(self.trainer.train_module.model, "encoder"):
@@ -513,12 +518,14 @@ class DownstreamEvaluator:
                 encoder=model,
                 apt_config=apt_config,
                 apt_modality=self.apt_modality,
+                use_flash_attn=self.use_flash_attn,
             )
             logger.info(
                 f"APT enabled for finetune, modality: {self.apt_modality}, "
                 f"masking disabled: {apt_config.disable_masking}, "
                 f"thresholds: {apt_config.partitioner.thresholds}, "
-                f"num_scales: {apt_config.partitioner.num_scales}"
+                f"num_scales: {apt_config.partitioner.num_scales}, "
+                f"use_flash_attn: {self.use_flash_attn}"
             )
 
         original_state = {

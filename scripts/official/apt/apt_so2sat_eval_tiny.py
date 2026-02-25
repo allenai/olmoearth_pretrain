@@ -264,7 +264,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_interval=Duration.steps(1),
             use_apt=True,  # Enable APT adaptive patching
             apt_modality="sentinel2_l2a",  # Apply APT to S2
-            apt_config=apt_config,  # APT config - thresholds/scales can be overridden
+            apt_config=apt_config,
+            use_flash_attn=True,
         ),
     }
 

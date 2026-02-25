@@ -22,6 +22,7 @@ from olmoearth_pretrain.nn.apt.partitioner import PatchDescriptor, QuadtreeParti
 from olmoearth_pretrain.nn.apt.scorers import EntropyScorer
 from olmoearth_pretrain.nn.flexi_patch_embed import FlexiPatchEmbed
 from olmoearth_pretrain.nn.flexi_vit import Encoder, TokensAndMasks
+from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
@@ -405,6 +406,7 @@ class APTEncoderWrapper(nn.Module):
         apt_config: APTConfig,
         apt_modality: str = "sentinel2_l2a",
         apt_bandset_idx: int = 0,
+        use_flash_attn: bool | None = None,
     ):
         """Initialize APT encoder.
 
@@ -413,8 +415,12 @@ class APTEncoderWrapper(nn.Module):
             apt_config: APT configuration
             apt_modality: Which modality to apply APT to (others use uniform patching)
             apt_bandset_idx: Which bandset index to use for APT (default: 0, first bandset)
+            use_flash_attn: Override flash attention setting on the encoder.
+                None = inherit from encoder, True/False = force.
         """
         super().__init__()
+        if use_flash_attn is not None:
+            encoder.use_flash_attn = use_flash_attn
         self.encoder = encoder
         self.apt_config = apt_config
         self.apt_modality = apt_modality

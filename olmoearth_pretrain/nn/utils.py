@@ -38,9 +38,7 @@ def get_cumulative_sequence_lengths(seq_lengths: torch.Tensor) -> torch.Tensor:
     return torch.cat(
         [
             torch.tensor([0], dtype=torch.int32, device=seq_lengths.device),
-            torch.cumsum(
-                seq_lengths.masked_select(seq_lengths != 0), 0, dtype=torch.int32
-            ),
+            torch.cumsum(seq_lengths, 0, dtype=torch.int32),
         ]
     )
 
