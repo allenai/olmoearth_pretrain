@@ -80,6 +80,7 @@ class DownstreamTaskConfig:
     probe_lr: float | None = None
     probe_batch_size: int = 32
     linear_probe_eval_interval: int = 50  # calculate val results every N epochs
+    rank_max_lr: bool = False  # each rank uses different LR, take max across ranks
     # FT
     ft_lr: float | None = None
     ft_batch_size: int = 32
@@ -103,6 +104,9 @@ class DownstreamTaskConfig:
     quantize_embeddings: bool = False
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
+    # Rank-max LR: each rank uses a different LR and we take max across ranks
+    # This effectively gives a free LR sweep during evaluation
+    rank_max_lr: bool = False
 
 
 class DownstreamEvaluator:
@@ -144,6 +148,7 @@ class DownstreamEvaluator:
         self.input_layers = task.input_layers
         self.probe_lr = task.probe_lr
         self.probe_batch_size = task.probe_batch_size
+        self.rank_max_lr = task.rank_max_lr
         self.ft_lr = task.ft_lr
         self.ft_batch_size = task.ft_batch_size
         self.finetune_seed = task.finetune_seed
@@ -213,6 +218,7 @@ class DownstreamEvaluator:
                     probe_type=self.probe_type,
                     lr=self.probe_lr,
                     select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
+                    rank_max_lr=self.rank_max_lr,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
