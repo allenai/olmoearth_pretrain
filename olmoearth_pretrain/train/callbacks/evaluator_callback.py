@@ -93,7 +93,11 @@ class DownstreamTaskConfig:
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
-    norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
+    # Default to 2std no clip - this matches what our model sees in pretraining,
+    # so when using dataset stats (e.g. for MADOS) consistency is important.
+    norm_method: NormMethod = field(
+        default_factory=lambda: NormMethod.NORM_NO_CLIP_2_STD
+    )
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
     # Subsample train embeddings for faster probe training (None = use all)
     max_train_samples: int | None = None

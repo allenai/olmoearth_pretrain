@@ -40,7 +40,9 @@ def get_eval_dataset(
     input_modalities: list[str] = [],
     input_layers: list[str] = [],
     partition: str = EvalDatasetPartition.TRAIN1X,
-    norm_method: str = NormMethod.NORM_NO_CLIP,
+    # Default to 2std no clip - this matches what our model sees in pretraining,
+    # so when using dataset stats (e.g. for MADOS) consistency is important.
+    norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
 ) -> Dataset:
     """Retrieve an eval dataset from the dataset name."""
     if eval_dataset.startswith("m-"):

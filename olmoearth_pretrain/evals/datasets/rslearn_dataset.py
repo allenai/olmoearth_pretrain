@@ -93,7 +93,9 @@ class RslearnToOlmoEarthDataset(Dataset):
         target_task_name: str | None = None,
         target_task_type: str = "segmentation",
         norm_stats_from_pretrained: bool = True,
-        norm_method: str = "norm_no_clip",
+        # Default to 2std no clip - this matches what our model sees in pretraining,
+        # so when using dataset stats (e.g. for MADOS) consistency is important.
+        norm_method: str = "norm_no_clip_2_std",
         ds_norm_stats_json: str | None = None,
         start_time: str = "2022-09-01",
         end_time: str = "2023-09-01",

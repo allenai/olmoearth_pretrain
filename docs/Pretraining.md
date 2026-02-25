@@ -260,6 +260,10 @@ torchrun --nproc_per_node=8 scripts/official/base.py train base_run local \
 > **💾 Checkpoint Saving Note:**
 > When using `local` as the cluster argument, checkpoints are automatically saved to `./local_output`. You can override this location with `--common.save_folder=path/to/savefolder`.
 
+**Training on 1K-Example Subset**
+If you are using the [1K-Example Subset](Pretraining-Dataset.md#1k-example-subset), we recommend increasing the
+number of epochs by passing `--trainer.max_duration='{"unit": "epochs", "value": 3000}'`.
+
 ## Ablations
 
 Ablation studies isolate the impact of specific components in the base model configuration. All ablations can be launched similarly to the official training scripts (see the table in [Official Training Scripts](#official-training-scripts)).

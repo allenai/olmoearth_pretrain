@@ -9,7 +9,7 @@ from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_vit import Encoder, Predictor, Reconstructor
 from olmoearth_pretrain.nn.mae import MAE
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
-from olmoearth_pretrain.train.loss import MAELoss, PatchDiscriminationLossNew
+from olmoearth_pretrain.train.loss import MAELoss, PatchDiscriminationLoss
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger(__name__)
@@ -159,7 +159,7 @@ def test_mae_with_loss(
     loss_mae = MAELoss()
     loss = loss_mae.compute(reconstructed, x)
 
-    loss_mim = PatchDiscriminationLossNew()
+    loss_mim = PatchDiscriminationLoss()
     with torch.no_grad():
         logger.info("target encoder running here")
         output_dict = mae.encoder.forward(
