@@ -9,10 +9,12 @@ from logging import getLogger
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from olmo_core.data.utils import get_rng
+from olmo_core.distributed.utils import get_rank, get_world_size, is_distributed
 from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
@@ -26,6 +28,30 @@ from olmoearth_pretrain.evals.metrics import (
 from olmoearth_pretrain.evals.utils import adjust_learning_rate
 
 logger = getLogger(__name__)
+
+
+def get_rank_lr(base_lr: float, rank: int, world_size: int) -> float:
+    """Get the learning rate for this rank.
+
+    Generates log-spaced LRs centered on base_lr spanning 2 orders of magnitude.
+    E.g., with base_lr=0.01 and world_size=8:
+        LRs = [0.001, 0.00215, 0.00464, 0.01, 0.0215, 0.0464, 0.1, 0.215]
+    """
+    if world_size == 1:
+        return base_lr
+    log_min = math.log10(base_lr) - 1.0
+    log_max = math.log10(base_lr) + 1.0
+    log_lr = log_min + (log_max - log_min) * rank / (world_size - 1)
+    return 10**log_lr
+
+
+def all_reduce_max(value: float, device: torch.device) -> float:
+    """All-reduce a scalar value with MAX operation across ranks."""
+    if not is_distributed():
+        return value
+    tensor = torch.tensor([value], device=device, dtype=torch.float32)
+    dist.all_reduce(tensor, op=dist.ReduceOp.MAX)
+    return tensor.item()
 
 
 class ProbeType(StrEnum):
@@ -135,8 +161,12 @@ def train_and_eval_probe(
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False,
     n_bootstrap: int = 0,
     bootstrap_seed: int = 42,
+    rank_max_lr: bool = False,
 ) -> EvalTaskResult:
     """Run a linear probe on the OlmoEarth Pretrain model.
+
+    When rank_max_lr=True, each rank uses a different LR from a log-spaced range
+    and the best result (max primary metric) is returned via all_reduce.
 
     Returns:
         Dictionary with keys:
@@ -144,6 +174,35 @@ def train_and_eval_probe(
             - test_score: EvalResult for test, or None if no test set
             - bootstrap_stats: Bootstrap statistics dict (empty dict if n_bootstrap == 0)
     """
+    # Rank-max LR: each rank uses a different LR, then we take max across ranks
+    # Auto-disable if world_size is too small (need at least 2 ranks for a sweep)
+    # or too large (more than ~20 LRs is excessive for 2 orders of magnitude)
+    MAX_USEFUL_LRS = 20
+    use_rank_max = rank_max_lr and is_distributed()
+    if use_rank_max:
+        rank = get_rank()
+        world_size = get_world_size()
+        if world_size < 2:
+            logger.warning(
+                f"rank_max_lr disabled: world_size={world_size} < 2, need multiple ranks"
+            )
+            use_rank_max = False
+        elif world_size > MAX_USEFUL_LRS:
+            logger.warning(
+                f"rank_max_lr disabled: world_size={world_size} > {MAX_USEFUL_LRS}, "
+                "too many ranks for useful LR sweep"
+            )
+            use_rank_max = False
+
+    if use_rank_max:
+        effective_lr = get_rank_lr(lr, rank, world_size)
+        logger.info(
+            f"Rank-max LR enabled: rank {rank}/{world_size} using lr={effective_lr:.6f} "
+            f"(base lr={lr})"
+        )
+    else:
+        effective_lr = lr
+
     logger.info(f"Probe type {probe_type}")
     if train_embeddings.shape[-1] != val_embeddings.shape[-1]:
         raise ValueError("Embedding dims don't match.")
@@ -204,7 +263,7 @@ def train_and_eval_probe(
             task_type=config.task_type,
             probe=probe,
             data_loader=data_loader,
-            lr=lr,
+            lr=effective_lr,
             epochs=end_epoch,
             total_epochs=epochs,
             current_epoch=start_epoch,
@@ -347,6 +406,34 @@ def train_and_eval_probe(
         )
         if n_bootstrap == 0:
             logger.info(f"Test result: {test_result}")
+
+    # When using rank-max LR, aggregate results via all_reduce MAX
+    if use_rank_max:
+        local_val = final_val_result.primary
+        max_val_primary = all_reduce_max(local_val, device)
+        if max_val_primary > local_val:
+            logger.info(
+                f"Rank {rank}: local val={local_val:.4f}, max across ranks={max_val_primary:.4f}"
+            )
+        else:
+            logger.info(
+                f"Rank {rank}: this rank achieved max val={local_val:.4f} (lr={effective_lr:.6f})"
+            )
+        # Update the primary metric, keep other metrics from this rank
+        updated_metrics = dict(final_val_result.metrics)
+        for k, v in updated_metrics.items():
+            if v == local_val:
+                updated_metrics[k] = max_val_primary
+        final_val_result = EvalResult(primary=max_val_primary, metrics=updated_metrics)
+
+        if test_result is not None:
+            local_test = test_result.primary
+            max_test_primary = all_reduce_max(local_test, device)
+            updated_test_metrics = dict(test_result.metrics)
+            for k, v in updated_test_metrics.items():
+                if v == local_test:
+                    updated_test_metrics[k] = max_test_primary
+            test_result = EvalResult(primary=max_test_primary, metrics=updated_test_metrics)
 
     return EvalTaskResult(
         val_result=final_val_result,
