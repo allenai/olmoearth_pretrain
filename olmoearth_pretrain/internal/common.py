@@ -257,6 +257,9 @@ def build_common_components(
             clusters=cluster,
             nccl_debug=nccl_debug,
         )
+        # Set retries=2 for launch command
+        if cmd == SubCmd.launch:
+            launch_config.retries = 2
     root_dir = get_root_dir(cluster)
 
     beaker_user = get_beaker_username() or ANONYMOUS_USER
