@@ -1032,6 +1032,7 @@ class FlexiVitBase(nn.Module):
 
     def _init_weights(self, m: nn.Module) -> None:
         if getattr(m, "_skip_custom_init", False):
+            logger.info("Skipping custom initialization for %s", m)
             return
         if isinstance(m, nn.Linear):
             # we use xavier_uniform following official JAX ViT:
