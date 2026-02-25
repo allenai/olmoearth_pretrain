@@ -65,6 +65,10 @@ class FlexiPatchEmbed(nn.Module):
             # Reshape patches to (p1 p2 c) then project — hits cuBLAS GEMM (always fast
             # on TensorCores) vs Conv2d which hits slow cuDNN paths for small in_chans.
             self.proj = nn.Linear(in_chans * p_h * p_w, embedding_size, bias=bias)
+            # Keep PyTorch's default nn.Linear initialization (kaiming_uniform_) for
+            # patch projection to match prior Conv2d behavior; overriding this with
+            # encoder-level Xavier init correlated with a PASTIS regression.
+            self.proj._skip_custom_init = True
         else:
             self.proj = nn.Conv2d(
                 in_chans,
