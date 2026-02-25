@@ -74,6 +74,28 @@ def get_embedding_dim_args(dim: int) -> str:
     )
 
 
+def get_quantize_bits_args(bits: int) -> str:
+    """Get quantize_bits args for all tasks."""
+    return " ".join(
+        [" "]
+        + [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.quantize_bits={bits}"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+
+
+def get_quantile_config_path_args(path: str) -> str:
+    """Get quantile_config_path args for all tasks."""
+    return " ".join(
+        [" "]
+        + [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.quantile_config_path={path}"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+
+
 dataset_args = " ".join(
     [" "]
     + [
@@ -548,7 +570,15 @@ def _build_default_command(
     # Add quantization args if enabled
     if getattr(args, "quantize_embeddings", False):
         cmd_args += quantize_args
-        run_name += "_qt"
+        quantize_bits = getattr(args, "quantize_bits", None)
+        if quantize_bits is not None:
+            cmd_args += get_quantize_bits_args(quantize_bits)
+            run_name += f"_qt{quantize_bits}b"
+        else:
+            run_name += "_qt"
+        quantile_config_path = getattr(args, "quantile_config_path", None)
+        if quantile_config_path is not None:
+            cmd_args += get_quantile_config_path_args(quantile_config_path)
 
     # Add embedding dim args if enabled
     embedding_dim = getattr(args, "embedding_dim", None)
@@ -610,7 +640,15 @@ def _build_hyperparameter_command(
     # Add quantization args if enabled
     if getattr(args, "quantize_embeddings", False):
         cmd_args += quantize_args
-        run_name += "_qt"
+        quantize_bits = getattr(args, "quantize_bits", None)
+        if quantize_bits is not None:
+            cmd_args += get_quantize_bits_args(quantize_bits)
+            run_name += f"_qt{quantize_bits}b"
+        else:
+            run_name += "_qt"
+        quantile_config_path = getattr(args, "quantile_config_path", None)
+        if quantile_config_path is not None:
+            cmd_args += get_quantile_config_path_args(quantile_config_path)
 
     # Add embedding dim args if enabled
     embedding_dim = getattr(args, "embedding_dim", None)
@@ -754,7 +792,15 @@ def _build_command_from_eval_settings(
     # Add quantization args if enabled
     if getattr(args, "quantize_embeddings", False):
         cmd_args += quantize_args
-        run_name += "_qt"
+        quantize_bits = getattr(args, "quantize_bits", None)
+        if quantize_bits is not None:
+            cmd_args += get_quantize_bits_args(quantize_bits)
+            run_name += f"_qt{quantize_bits}b"
+        else:
+            run_name += "_qt"
+        quantile_config_path = getattr(args, "quantile_config_path", None)
+        if quantile_config_path is not None:
+            cmd_args += get_quantile_config_path_args(quantile_config_path)
 
     # Add embedding dim args if enabled
     embedding_dim = getattr(args, "embedding_dim", None)
@@ -1038,6 +1084,19 @@ def main() -> None:
         "--quantize_embeddings",
         action="store_true",
         help="If set, quantize embeddings to int8 for all tasks",
+    )
+    parser.add_argument(
+        "--quantize_bits",
+        type=int,
+        choices=[1, 2, 4, 8],
+        default=None,
+        help="Number of bits for percentile-based quantization (requires --quantile_config_path)",
+    )
+    parser.add_argument(
+        "--quantile_config_path",
+        type=str,
+        default=None,
+        help="Path to HDF5 file with precomputed quantile boundaries for percentile quantization",
     )
     parser.add_argument(
         "--embedding_dim",
