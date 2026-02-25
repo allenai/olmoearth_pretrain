@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import logging
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.datatypes import MaskValue
-
-if TYPE_CHECKING:
-    from olmoearth_pretrain.datatypes import TokensAndMasks
+from olmoearth_pretrain.datatypes import MaskValue, TokensAndMasks
 
 logger = logging.getLogger(__name__)
 

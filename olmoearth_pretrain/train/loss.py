@@ -15,7 +15,7 @@ from torch import Tensor
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
-from olmoearth_pretrain.nn.pooling import PoolingType
+from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
@@ -413,10 +413,10 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
     ) -> Tensor:
         """Compute patch discrimination loss with masked same-target negatives."""
-        modality_preds, modality_masks = predictions.flatten_tokens_and_masks(
-            return_lists=True
+        modality_preds, modality_masks = (
+            predictions.flatten_tokens_and_masks_per_modality()
         )
-        modality_targets = targets.flatten_tokens_and_masks(return_lists=True)[0]
+        modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
 
         total_loss = 0
         for all_preds, all_masks, all_targets, modality in zip(
@@ -426,7 +426,6 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
             target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
             pred = pred.float()
             target = target.float()
-
 
             all_preds, all_masks = predictions.flatten_all_tokens_and_masks()
             all_targets = targets.flatten_all_tokens_and_masks()[0]
@@ -949,8 +948,8 @@ class KoLeoLoss(Loss):
                     all_masks == MaskValue.ONLINE_ENCODER.value
                 ]
             else:
-                online_encodings = predictions.pool_unmasked_tokens(
-                    PoolingType.MEAN, spatial_pooling=False
+                online_encodings = pool_unmasked_tokens(
+                    predictions, PoolingType.MEAN, spatial_pooling=False
                 )
         else:
             online_encodings = predictions

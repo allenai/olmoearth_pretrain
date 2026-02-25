@@ -32,7 +32,7 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
-from olmoearth_pretrain.nn.pooling import PoolingType
+from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
@@ -92,8 +92,8 @@ class ProjectAndAggregate(nn.Module):
     ) -> torch.Tensor:
         """Apply the aggregate operation to the input."""
         if isinstance(x, TokensAndMasks):
-            pooled_for_contrastive = x.pool_unmasked_tokens(
-                PoolingType.MEAN, spatial_pooling=False
+            pooled_for_contrastive = pool_unmasked_tokens(
+                x, PoolingType.MEAN, spatial_pooling=False
             )
         elif isinstance(x, torch.Tensor):
             pooled_for_contrastive = reduce(x, "b ... d -> b  d", "mean")
@@ -117,8 +117,8 @@ class ProjectAndAggregate(nn.Module):
                     x, masked_modality_name
                 )
             x_projected = TokensAndMasks(**decoder_emedded_dict)
-            projected_pooled = x_projected.pool_unmasked_tokens(
-                PoolingType.MEAN, spatial_pooling=False
+            projected_pooled = pool_unmasked_tokens(
+                x_projected, PoolingType.MEAN, spatial_pooling=False
             )
         elif isinstance(x, torch.Tensor):
             x_projected = self.projection(x)

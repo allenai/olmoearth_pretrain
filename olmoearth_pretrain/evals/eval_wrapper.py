@@ -27,7 +27,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
     TokensAndMasks,
 )
 from olmoearth_pretrain.nn.pooled_modality_predictor import EncodeEarlyAttnPool
-from olmoearth_pretrain.nn.pooling import PoolingType
+from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.st_model import STBase
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
@@ -116,7 +116,8 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
             )["tokens_and_masks"]  # (bsz, dim)
             # Concat features across modalities in space averaged across time
-            batch_embeddings = batch_embeddings.pool_unmasked_tokens(
+            batch_embeddings = pool_unmasked_tokens(
+                batch_embeddings,
                 self.pooling_type,
                 spatial_pooling=self.spatial_pool,
                 concat_features=self.concat_features,
