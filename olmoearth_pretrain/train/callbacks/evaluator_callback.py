@@ -653,7 +653,7 @@ class DownstreamEvaluatorCallback(Callback):
         test_valid = test_result is not None and test_result.primary >= 0
 
         # Only logging valid results to wandb
-        if val_valid and test_valid:
+        if wandb_callback.enabled and val_valid and test_valid:
             # Log bootstrap statistics if available
             if bootstrap_stats:
                 wandb_callback.wandb.log(
