@@ -505,11 +505,10 @@ def _log_eval_result_to_wandb(
     Primary metric goes to {prefix}/{name} (e.g. eval/m_eurosat).
     Non-primary metrics go to eval_other/.../{name}/{metric_name}.
     """
-    primary_key = result.primary_metric.value
     other_prefix = _make_other_prefix(prefix)
     wandb_callback.wandb.log({f"{prefix}/{name}": result.primary})
     for metric_name, metric_value in result.metrics.items():
-        if metric_name == primary_key:
+        if metric_name == result.primary_metric_key:
             continue
         wandb_callback.wandb.log({f"{other_prefix}/{name}/{metric_name}": metric_value})
 
@@ -518,11 +517,10 @@ def _record_eval_result(
     trainer: Trainer, prefix: str, name: str, result: EvalResult
 ) -> None:
     """Record an EvalResult to trainer metrics."""
-    primary_key = result.primary_metric.value
     other_prefix = _make_other_prefix(prefix)
     trainer.record_metric(f"{prefix}/{name}", result.primary)
     for metric_name, metric_value in result.metrics.items():
-        if metric_name == primary_key:
+        if metric_name == result.primary_metric_key:
             continue
         trainer.record_metric(f"{other_prefix}/{name}/{metric_name}", metric_value)
 
@@ -636,12 +634,6 @@ class DownstreamEvaluatorCallback(Callback):
             if val_result is not None:
                 _log_eval_result_to_wandb(
                     wandb_callback, "eval", evaluator.evaluation_name, val_result
-                )
-                wandb_callback.wandb.config.update(
-                    {
-                        f"eval_primary_metrics/{evaluator.evaluation_name}": val_result.primary_metric.value
-                    },
-                    allow_val_change=True,
                 )
             wandb_callback.wandb.log(
                 {"eval_time/" + evaluator.evaluation_name: eval_time}

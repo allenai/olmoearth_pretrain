@@ -66,6 +66,9 @@ def run_knn(
             skip_idx=skip_idx,
         )
         val_score = accuracy_score(y_true=val_labels, y_pred=val_predictions)
+        val_macro_f1 = f1_score(
+            y_true=val_labels, y_pred=val_predictions, average="macro", zero_division=0
+        )
         val_per_class_f1 = f1_score(
             y_true=val_labels, y_pred=val_predictions, average=None, zero_division=0
         ).tolist()
@@ -83,6 +86,12 @@ def run_knn(
                 skip_idx=skip_idx,
             )
             test_score = accuracy_score(y_true=test_labels, y_pred=test_predictions)
+            test_macro_f1 = f1_score(
+                y_true=test_labels,
+                y_pred=test_predictions,
+                average="macro",
+                zero_division=0,
+            )
             test_per_class_f1 = f1_score(
                 y_true=test_labels,
                 y_pred=test_predictions,
@@ -90,7 +99,7 @@ def run_knn(
                 zero_division=0,
             ).tolist()
             test_result = EvalResult.from_classification(
-                test_score, per_class_f1=test_per_class_f1
+                test_score, macro_f1=test_macro_f1, per_class_f1=test_per_class_f1
             )
 
             # Perform bootstrap sampling if requested
@@ -110,7 +119,7 @@ def run_knn(
 
         return EvalTaskResult(
             val_result=EvalResult.from_classification(
-                val_score, per_class_f1=val_per_class_f1
+                val_score, macro_f1=val_macro_f1, per_class_f1=val_per_class_f1
             ),
             test_result=test_result,
             bootstrap_stats=bootstrap_stats,

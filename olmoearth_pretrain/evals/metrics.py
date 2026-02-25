@@ -36,14 +36,26 @@ class EvalTaskResult:
 class EvalResult:
     """Result from evaluation - handles both classification and segmentation."""
 
-    # Primary metric (used for model selection, backward compat logging)
+    # Primary metric value (used for model selection, backward compat logging)
     primary: float
 
-    # Which metric is primary
+    # Which metric enum is primary
     primary_metric: EvalMetric
+
+    # The exact key in `metrics` for the primary metric
+    primary_metric_key: str
 
     # All metrics as dict (superset including primary)
     metrics: dict[str, float]
+
+    @staticmethod
+    def _resolve_metric_key(metric: EvalMetric, class_idx: int | None = None) -> str:
+        """Resolve an EvalMetric enum to the actual metrics dict key."""
+        if metric == EvalMetric.CLASS_F1:
+            if class_idx is None:
+                raise ValueError("class_idx is required when metric is CLASS_F1")
+            return f"f1_class_{class_idx}"
+        return metric.value
 
     def with_primary_metric(
         self, metric: EvalMetric, class_idx: int | None = None
@@ -52,12 +64,7 @@ class EvalResult:
 
         For CLASS_F1, class_idx specifies which class's F1 to use.
         """
-        if metric == EvalMetric.CLASS_F1:
-            if class_idx is None:
-                raise ValueError("class_idx is required when metric is CLASS_F1")
-            key = f"f1_class_{class_idx}"
-        else:
-            key = metric.value
+        key = self._resolve_metric_key(metric, class_idx)
         if key not in self.metrics:
             raise ValueError(
                 f"primary_metric '{key}' not found in metrics: {list(self.metrics.keys())}"
@@ -65,6 +72,7 @@ class EvalResult:
         return EvalResult(
             primary=self.metrics[key],
             primary_metric=metric,
+            primary_metric_key=key,
             metrics=self.metrics,
         )
 
@@ -95,6 +103,7 @@ class EvalResult:
         return cls(
             primary=accuracy,
             primary_metric=EvalMetric.ACCURACY,
+            primary_metric_key=EvalMetric.ACCURACY.value,
             metrics=metrics,
         )
 
@@ -105,12 +114,13 @@ class EvalResult:
         overall_acc: float,
         macro_acc: float,
         macro_f1: float,
-        micro_f1: float = 0.0,
+        micro_f1: float,
     ) -> EvalResult:
         """Create EvalResult from segmentation metrics."""
         return cls(
             primary=miou,
             primary_metric=EvalMetric.MIOU,
+            primary_metric_key=EvalMetric.MIOU.value,
             metrics={
                 EvalMetric.MIOU.value: miou,
                 EvalMetric.OVERALL_ACC.value: overall_acc,
