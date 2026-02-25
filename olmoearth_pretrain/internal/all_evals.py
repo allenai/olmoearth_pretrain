@@ -93,7 +93,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
         eval_mode=EvalMode.KNN,
-        primary_metric=EvalMetric.F1,
+        primary_metric=EvalMetric.MACRO_F1,
     ),
     "m_so2sat": DownstreamTaskConfig(
         dataset="m-so2sat",
@@ -322,7 +322,7 @@ FT_EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         epochs=50,
-        primary_metric=EvalMetric.F1,
+        primary_metric=EvalMetric.MACRO_F1,
     ),
     "m_so2sat": DownstreamTaskConfig(
         dataset="m-so2sat",

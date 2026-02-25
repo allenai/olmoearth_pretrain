@@ -73,6 +73,7 @@ class EvalResult:
         cls,
         accuracy: float,
         f1: float | None = None,
+        macro_f1: float | None = None,
         per_class_f1: list[float] | None = None,
     ) -> EvalResult:
         """Create EvalResult from classification metrics.
@@ -80,11 +81,14 @@ class EvalResult:
         Args:
             accuracy: Classification accuracy (exact match for multilabel)
             f1: Optional F1 score (micro-averaged, typically for multilabel tasks)
+            macro_f1: Optional macro-averaged F1 score
             per_class_f1: Optional per-class F1 scores (index = class index)
         """
         metrics: dict[str, float] = {EvalMetric.ACCURACY.value: accuracy}
         if f1 is not None:
             metrics[EvalMetric.F1.value] = f1
+        if macro_f1 is not None:
+            metrics[EvalMetric.MACRO_F1.value] = macro_f1
         if per_class_f1 is not None:
             for i, score in enumerate(per_class_f1):
                 metrics[f"f1_class_{i}"] = score
