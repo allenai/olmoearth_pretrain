@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from olmo_core.data.utils import get_rng
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, f1_score
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
@@ -516,8 +516,16 @@ def compute_metric(
             preds, labels, num_classes=num_classes, ignore_label=-1
         )
     else:
-        acc = accuracy_score(labels.numpy(), preds.numpy())
-        return EvalResult.from_classification(acc)
+        labels_np = labels.numpy()
+        preds_np = preds.numpy()
+        acc = accuracy_score(labels_np, preds_np)
+        macro_f1_val = f1_score(labels_np, preds_np, average="macro", zero_division=0)
+        per_class_f1 = f1_score(
+            labels_np, preds_np, average=None, zero_division=0
+        ).tolist()
+        return EvalResult.from_classification(
+            acc, macro_f1=macro_f1_val, per_class_f1=per_class_f1
+        )
 
 
 def evaluate_probe(

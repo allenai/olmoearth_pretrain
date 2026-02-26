@@ -3,9 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 import torch
+
+
+class EvalMetric(StrEnum):
+    """Available eval metrics."""
+
+    ACCURACY = "accuracy"
+    F1 = "f1"
+    CLASS_F1 = "class_f1"
+    MICRO_F1 = "micro_f1"
+    MIOU = "miou"
+    OVERALL_ACC = "overall_acc"
+    MACRO_ACC = "macro_acc"
+    MACRO_F1 = "macro_f1"
 
 
 @dataclass
@@ -22,26 +36,76 @@ class EvalTaskResult:
 class EvalResult:
     """Result from evaluation - handles both classification and segmentation."""
 
-    # Primary metric (used for model selection, backward compat logging)
+    # Primary metric value (used for model selection, backward compat logging)
     primary: float
+
+    # Which metric enum is primary
+    primary_metric: EvalMetric
+
+    # The exact key in `metrics` for the primary metric, ie if primary_metric is EvalMetric.CLASS_F1, primary_metric_key may be "f1_class_0"
+    primary_metric_key: str
 
     # All metrics as dict (superset including primary)
     metrics: dict[str, float]
 
+    @staticmethod
+    def _resolve_metric_key(metric: EvalMetric, class_idx: int | None = None) -> str:
+        """Resolve an EvalMetric enum to the actual metrics dict key."""
+        if metric == EvalMetric.CLASS_F1:
+            if class_idx is None:
+                raise ValueError("class_idx is required when metric is CLASS_F1")
+            return f"f1_class_{class_idx}"
+        return metric.value
+
+    def with_primary_metric(
+        self, metric: EvalMetric, class_idx: int | None = None
+    ) -> EvalResult:
+        """Return a copy with a different primary metric selected.
+
+        For CLASS_F1, class_idx specifies which class's F1 to use.
+        """
+        key = self._resolve_metric_key(metric, class_idx)
+        if key not in self.metrics:
+            raise ValueError(
+                f"primary_metric '{key}' not found in metrics: {list(self.metrics.keys())}"
+            )
+        return EvalResult(
+            primary=self.metrics[key],
+            primary_metric=metric,
+            primary_metric_key=key,
+            metrics=self.metrics,
+        )
+
     @classmethod
     def from_classification(
-        cls, accuracy: float, f1: float | None = None
+        cls,
+        accuracy: float,
+        f1: float | None = None,
+        macro_f1: float | None = None,
+        per_class_f1: list[float] | None = None,
     ) -> EvalResult:
         """Create EvalResult from classification metrics.
 
         Args:
             accuracy: Classification accuracy (exact match for multilabel)
             f1: Optional F1 score (micro-averaged, typically for multilabel tasks)
+            macro_f1: Optional macro-averaged F1 score
+            per_class_f1: Optional per-class F1 scores (index = class index)
         """
-        metrics = {"accuracy": accuracy}
+        metrics: dict[str, float] = {EvalMetric.ACCURACY.value: accuracy}
         if f1 is not None:
-            metrics["f1"] = f1
-        return cls(primary=accuracy, metrics=metrics)
+            metrics[EvalMetric.F1.value] = f1
+        if macro_f1 is not None:
+            metrics[EvalMetric.MACRO_F1.value] = macro_f1
+        if per_class_f1 is not None:
+            for i, score in enumerate(per_class_f1):
+                metrics[f"f1_class_{i}"] = score
+        return cls(
+            primary=accuracy,
+            primary_metric=EvalMetric.ACCURACY,
+            primary_metric_key=EvalMetric.ACCURACY.value,
+            metrics=metrics,
+        )
 
     @classmethod
     def from_segmentation(
@@ -50,15 +114,19 @@ class EvalResult:
         overall_acc: float,
         macro_acc: float,
         macro_f1: float,
+        micro_f1: float,
     ) -> EvalResult:
         """Create EvalResult from segmentation metrics."""
         return cls(
             primary=miou,
+            primary_metric=EvalMetric.MIOU,
+            primary_metric_key=EvalMetric.MIOU.value,
             metrics={
-                "miou": miou,
-                "overall_acc": overall_acc,
-                "macro_acc": macro_acc,
-                "macro_f1": macro_f1,
+                EvalMetric.MIOU.value: miou,
+                EvalMetric.OVERALL_ACC.value: overall_acc,
+                EvalMetric.MACRO_ACC.value: macro_acc,
+                EvalMetric.MACRO_F1.value: macro_f1,
+                EvalMetric.MICRO_F1.value: micro_f1,
             },
         )
 
@@ -161,9 +229,14 @@ def segmentation_metrics(
     valid_f1_classes = class_totals > 0
     macro_f1 = per_class_f1[valid_f1_classes].mean().item()
 
+    # Micro F1: global TP / (TP + 0.5*(FP+FN))
+    tp_sum = tp.sum()
+    micro_f1 = (2 * tp_sum / (2 * tp_sum + fp.sum() + fn.sum() + 1e-8)).item()
+
     return EvalResult.from_segmentation(
         miou=miou,
         overall_acc=overall_acc,
         macro_acc=macro_acc,
         macro_f1=macro_f1,
+        micro_f1=micro_f1,
     )

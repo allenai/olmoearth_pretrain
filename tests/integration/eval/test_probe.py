@@ -105,7 +105,7 @@ def test_probe_seg() -> None:
     assert isinstance(result.test_result, EvalResult)
 
     # Segmentation returns EvalResult with segmentation metrics
-    expected_metrics = {"miou", "overall_acc", "macro_acc", "macro_f1"}
+    expected_metrics = {"miou", "overall_acc", "macro_acc", "macro_f1", "micro_f1"}
     assert set(result.val_result.metrics.keys()) == expected_metrics
     assert set(result.test_result.metrics.keys()) == expected_metrics
 

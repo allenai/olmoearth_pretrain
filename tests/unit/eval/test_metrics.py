@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from olmoearth_pretrain.evals.metrics import (
+    EvalMetric,
     EvalResult,
     _build_confusion_matrix,
     segmentation_metrics,
@@ -17,25 +18,29 @@ class TestEvalResult:
         """Test creating EvalResult from classification accuracy."""
         result = EvalResult.from_classification(0.95)
         assert result.primary == 0.95
+        assert result.primary_metric == EvalMetric.ACCURACY
         assert result.metrics == {"accuracy": 0.95}
 
     def test_from_classification_with_f1(self) -> None:
         """Test creating EvalResult from multilabel classification with accuracy and F1."""
         result = EvalResult.from_classification(0.80, f1=0.85)
         assert result.primary == 0.80
+        assert result.primary_metric == EvalMetric.ACCURACY
         assert result.metrics == {"accuracy": 0.80, "f1": 0.85}
 
     def test_from_segmentation(self) -> None:
         """Test creating EvalResult from segmentation metrics."""
         result = EvalResult.from_segmentation(
-            miou=0.8, overall_acc=0.9, macro_acc=0.85, macro_f1=0.82
+            miou=0.8, overall_acc=0.9, macro_acc=0.85, macro_f1=0.82, micro_f1=0.87
         )
         assert result.primary == 0.8
+        assert result.primary_metric == EvalMetric.MIOU
         assert result.metrics == {
             "miou": 0.8,
             "overall_acc": 0.9,
             "macro_acc": 0.85,
             "macro_f1": 0.82,
+            "micro_f1": 0.87,
         }
 
     def test_metrics_contains_primary(self) -> None:
@@ -43,6 +48,40 @@ class TestEvalResult:
         result = EvalResult.from_classification(0.95)
         assert "accuracy" in result.metrics
         assert result.metrics["accuracy"] == result.primary
+
+    def test_with_primary_metric(self) -> None:
+        """Test overriding the primary metric."""
+        result = EvalResult.from_classification(0.80, f1=0.85)
+        overridden = result.with_primary_metric(EvalMetric.F1)
+        assert overridden.primary == 0.85
+        assert overridden.primary_metric == EvalMetric.F1
+        assert overridden.metrics == result.metrics
+
+    def test_with_primary_metric_invalid(self) -> None:
+        """Test overriding with a metric not in the dict."""
+        result = EvalResult.from_classification(0.80)
+        with pytest.raises(ValueError, match="not found in metrics"):
+            result.with_primary_metric(EvalMetric.MIOU)
+
+    def test_from_classification_with_per_class_f1(self) -> None:
+        """Test creating EvalResult with per-class F1 scores."""
+        result = EvalResult.from_classification(0.90, per_class_f1=[0.85, 0.92, 0.88])
+        assert result.metrics["f1_class_0"] == 0.85
+        assert result.metrics["f1_class_1"] == 0.92
+        assert result.metrics["f1_class_2"] == 0.88
+
+    def test_with_primary_metric_class_f1(self) -> None:
+        """Test overriding primary to a specific class F1."""
+        result = EvalResult.from_classification(0.90, per_class_f1=[0.85, 0.92, 0.88])
+        overridden = result.with_primary_metric(EvalMetric.CLASS_F1, class_idx=1)
+        assert overridden.primary == 0.92
+        assert overridden.primary_metric == EvalMetric.CLASS_F1
+
+    def test_with_primary_metric_class_f1_requires_class_idx(self) -> None:
+        """CLASS_F1 without class_idx should raise."""
+        result = EvalResult.from_classification(0.90, per_class_f1=[0.85, 0.92])
+        with pytest.raises(ValueError, match="class_idx is required"):
+            result.with_primary_metric(EvalMetric.CLASS_F1)
 
 
 class TestBuildConfusionMatrix:
@@ -220,7 +259,7 @@ class TestSegmentationMetrics:
         result = segmentation_metrics(preds, labels, num_classes=2)
 
         assert isinstance(result, EvalResult)
-        expected_keys = {"miou", "overall_acc", "macro_acc", "macro_f1"}
+        expected_keys = {"miou", "overall_acc", "macro_acc", "macro_f1", "micro_f1"}
         assert set(result.metrics.keys()) == expected_keys
 
         for key in expected_keys:

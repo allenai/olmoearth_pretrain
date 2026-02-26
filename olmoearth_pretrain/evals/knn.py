@@ -66,6 +66,12 @@ def run_knn(
             skip_idx=skip_idx,
         )
         val_score = accuracy_score(y_true=val_labels, y_pred=val_predictions)
+        val_macro_f1 = f1_score(
+            y_true=val_labels, y_pred=val_predictions, average="macro", zero_division=0
+        )
+        val_per_class_f1 = f1_score(
+            y_true=val_labels, y_pred=val_predictions, average=None, zero_division=0
+        ).tolist()
 
         if test_embeddings is not None:
             if test_labels is None:
@@ -80,7 +86,21 @@ def run_knn(
                 skip_idx=skip_idx,
             )
             test_score = accuracy_score(y_true=test_labels, y_pred=test_predictions)
-            test_result = EvalResult.from_classification(test_score)
+            test_macro_f1 = f1_score(
+                y_true=test_labels,
+                y_pred=test_predictions,
+                average="macro",
+                zero_division=0,
+            )
+            test_per_class_f1 = f1_score(
+                y_true=test_labels,
+                y_pred=test_predictions,
+                average=None,
+                zero_division=0,
+            ).tolist()
+            test_result = EvalResult.from_classification(
+                test_score, macro_f1=test_macro_f1, per_class_f1=test_per_class_f1
+            )
 
             # Perform bootstrap sampling if requested
             if n_bootstrap > 0:
@@ -98,7 +118,9 @@ def run_knn(
                 )
 
         return EvalTaskResult(
-            val_result=EvalResult.from_classification(val_score),
+            val_result=EvalResult.from_classification(
+                val_score, macro_f1=val_macro_f1, per_class_f1=val_per_class_f1
+            ),
             test_result=test_result,
             bootstrap_stats=bootstrap_stats,
         )
@@ -143,6 +165,12 @@ def run_knn(
             val_predictions, dim=1
         )  # (num_samples, num_classes)
         val_score = f1_score(y_true=val_labels, y_pred=val_predictions, average="micro")
+        val_macro_f1 = f1_score(
+            y_true=val_labels, y_pred=val_predictions, average="macro", zero_division=0
+        )
+        val_per_class_f1 = f1_score(
+            y_true=val_labels, y_pred=val_predictions, average=None, zero_division=0
+        ).tolist()
 
         if len(test_predictions) > 0:
             test_predictions = torch.stack(
@@ -151,7 +179,23 @@ def run_knn(
             test_score = f1_score(
                 y_true=test_labels, y_pred=test_predictions, average="micro"
             )
-            test_result = EvalResult.from_classification(test_score)
+            test_macro_f1 = f1_score(
+                y_true=test_labels,
+                y_pred=test_predictions,
+                average="macro",
+                zero_division=0,
+            )
+            test_per_class_f1 = f1_score(
+                y_true=test_labels,
+                y_pred=test_predictions,
+                average=None,
+                zero_division=0,
+            ).tolist()
+            test_result = EvalResult.from_classification(
+                test_score,
+                macro_f1=test_macro_f1,
+                per_class_f1=test_per_class_f1,
+            )
 
             # Perform bootstrap sampling if requested
             if n_bootstrap > 0:
@@ -169,7 +213,9 @@ def run_knn(
                 )
 
         return EvalTaskResult(
-            val_result=EvalResult.from_classification(val_score),
+            val_result=EvalResult.from_classification(
+                val_score, macro_f1=val_macro_f1, per_class_f1=val_per_class_f1
+            ),
             test_result=test_result,
             bootstrap_stats=bootstrap_stats,
         )

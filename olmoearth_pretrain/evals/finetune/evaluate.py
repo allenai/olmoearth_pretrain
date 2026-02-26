@@ -41,11 +41,25 @@ def eval_cls(
         preds_np = preds.numpy()
         acc = accuracy_score(labels_np, preds_np)  # subset/exact match accuracy
         f1 = f1_score(labels_np, preds_np, average="micro", zero_division=0)
-        return EvalResult.from_classification(acc, f1=f1)
+        macro = f1_score(labels_np, preds_np, average="macro", zero_division=0)
+        per_class_f1 = f1_score(
+            labels_np, preds_np, average=None, zero_division=0
+        ).tolist()
+        return EvalResult.from_classification(
+            acc, f1=f1, macro_f1=macro, per_class_f1=per_class_f1
+        )
     else:
         preds = torch.argmax(logits, dim=-1)
-        acc = accuracy_score(labels.numpy(), preds.numpy())
-        return EvalResult.from_classification(acc)
+        labels_np = labels.numpy()
+        preds_np = preds.numpy()
+        acc = accuracy_score(labels_np, preds_np)
+        macro = f1_score(labels_np, preds_np, average="macro", zero_division=0)
+        per_class_f1 = f1_score(
+            labels_np, preds_np, average=None, zero_division=0
+        ).tolist()
+        return EvalResult.from_classification(
+            acc, macro_f1=macro, per_class_f1=per_class_f1
+        )
 
 
 @torch.no_grad()

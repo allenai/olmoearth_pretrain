@@ -18,6 +18,7 @@ from olmo_core.train.config import TrainerConfig
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
 from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
@@ -90,6 +91,7 @@ EVAL_TASKS = {
         norm_stats_from_pretrained=True,
         eval_interval=Duration.epochs(5),
         eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.MACRO_F1,
     ),
     "m_so2sat": DownstreamTaskConfig(
         dataset="m-so2sat",
@@ -144,6 +146,7 @@ EVAL_TASKS = {
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
         eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MICRO_F1,
     ),
     "sen1floods11": DownstreamTaskConfig(
         dataset="sen1floods11",
@@ -317,6 +320,7 @@ FT_EVAL_TASKS = {
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
         epochs=50,
+        primary_metric=EvalMetric.MACRO_F1,
     ),
     "m_so2sat": DownstreamTaskConfig(
         dataset="m-so2sat",
