@@ -500,7 +500,7 @@ class OlmoEarthTrainModule(TrainModule):
     def update_target_encoder(self) -> None:
         """Update the target encoder."""
         # Update target encoder with EMA this should be a callback
-        if self.start_ema == self.end_ema:
+        if self.start_ema == 1.0 and self.end_ema == 1.0:
             return
 
         cur_ema_value = (
