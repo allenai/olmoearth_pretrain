@@ -646,6 +646,8 @@ class CompositeEncodings(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
+        if getattr(m, "_skip_custom_init", False):
+            return
         if isinstance(m, nn.Linear):
             # we use xavier_uniform following official JAX ViT:
             torch.nn.init.xavier_uniform_(m.weight)
@@ -871,6 +873,9 @@ class FlexiVitBase(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
+        if getattr(m, "_skip_custom_init", False):
+            logger.debug("Skipping custom init for %s", m)
+            return
         if isinstance(m, nn.Linear):
             # we use xavier_uniform following official JAX ViT:
             torch.nn.init.xavier_uniform_(m.weight)

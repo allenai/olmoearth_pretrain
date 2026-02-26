@@ -6,6 +6,7 @@ from einops import rearrange
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_patch_embed import FlexiPatchEmbed
+from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
 
 
 def _make_seeded_conv_and_linear_pair(
@@ -213,3 +214,58 @@ def test_linear_vs_conv_with_flexi_patch_resize(
         f"Flexi resize mismatch (base={patch_size_at_16}, runtime={runtime_patch_size}): "
         f"max diff={(out_conv - out_linear).abs().max().item()}"
     )
+
+
+def test_encoder_config_all_modalities_patch_embed_init_equivalence() -> None:
+    """EncoderConfig with all modalities initializes conv/linear patch embeds equivalently."""
+    all_modalities = Modality.names()
+
+    base_kwargs = dict(
+        supported_modality_names=all_modalities,
+        embedding_size=32,
+        num_heads=4,
+        depth=2,
+        mlp_ratio=2.0,
+        max_patch_size=8,
+        max_sequence_length=12,
+    )
+
+    torch.manual_seed(321)
+    conv_encoder = EncoderConfig(
+        **base_kwargs,  # type: ignore
+        use_linear_patch_embed=False,
+    ).build()
+
+    torch.manual_seed(321)
+    linear_encoder = EncoderConfig(
+        **base_kwargs,  # type: ignore
+        use_linear_patch_embed=True,
+    ).build()
+
+    compared_modules = 0
+    for (
+        modality_name,
+        conv_modality_modules,
+    ) in conv_encoder.patch_embeddings.per_modality_embeddings.items():
+        linear_modality_modules = (
+            linear_encoder.patch_embeddings.per_modality_embeddings[modality_name]
+        )
+        for module_name, conv_module in conv_modality_modules.items():
+            linear_module = linear_modality_modules[module_name]
+            if not isinstance(conv_module, FlexiPatchEmbed):
+                continue
+            assert isinstance(linear_module, FlexiPatchEmbed)
+            compared_modules += 1
+
+            conv_weight_flat = conv_module.proj.weight.detach().reshape(
+                conv_module.proj.weight.shape[0], -1
+            )
+            linear_weight = linear_module.proj.weight.detach()
+            assert torch.allclose(conv_weight_flat, linear_weight), (
+                f"Init mismatch for {modality_name}/{module_name} weights"
+            )
+            assert torch.allclose(conv_module.proj.bias, linear_module.proj.bias), (
+                f"Init mismatch for {modality_name}/{module_name} bias"
+            )
+
+    assert compared_modules > 0, "Expected at least one spatial FlexiPatchEmbed module"
