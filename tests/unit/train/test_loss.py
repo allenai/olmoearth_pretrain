@@ -11,6 +11,7 @@ from olmoearth_pretrain.train.loss import (
     InfoNCELoss,
     L1Loss,
     L2Loss,
+    ModalityPatchDiscriminationMaskedNegatives,
     ModalityPatchDiscriminationLossNew,
     ModalityPatchDiscriminationLossVec,
     PatchDiscriminationLoss,
@@ -1052,3 +1053,36 @@ def test_new_vs_vec_gradients_all_modalities() -> None:
         assert torch.allclose(s1_n.grad, s1_v.grad, rtol=1e-4, atol=1e-6), (
             f"seed={seed}: s1 grad max diff={(s1_n.grad - s1_v.grad).abs().max().item()}"
         )
+
+
+def test_modality_patch_discrimination_masked_negatives() -> None:
+    """Test that masked negatives loss runs and masks identical-target negatives."""
+    b, t_h, t_w, t, d = 4, 2, 2, 2, 8
+
+    # Create targets where some tokens share the same embedding (e.g. same class)
+    target_s2 = torch.randn((b, t_h, t_w, t, d))
+    # Make first two spatial tokens identical per sample to trigger masking
+    target_s2[:, 0, 0, :, :] = target_s2[:, 0, 1, :, :]
+
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+    targets = TokensAndMasks(
+        sentinel2_l2a=target_s2,
+        sentinel2_l2a_mask=torch.ones((b, t_h, t_w, t)) * MaskValue.DECODER.value,
+    )
+
+    loss = ModalityPatchDiscriminationMaskedNegatives(tau=0.1)
+    loss_value = loss.compute(preds, targets)
+    assert loss_value > 0
+
+    # Without masking (set threshold impossibly high so nothing is masked)
+    loss_no_mask = ModalityPatchDiscriminationMaskedNegatives(
+        tau=0.1, same_target_threshold=2.0
+    )
+    loss_no_mask_value = loss_no_mask.compute(preds, targets)
+    assert loss_no_mask_value > 0
+
+    # Masking removes false negatives from denominator, so loss should be lower
+    assert loss_value < loss_no_mask_value

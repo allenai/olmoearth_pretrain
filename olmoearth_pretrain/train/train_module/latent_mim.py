@@ -220,7 +220,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 microbatch_masked = masked_microbatches[microbatch_idx]
                 logger.info(
                     f"Training microbatch {microbatch_idx} of {num_microbatches} "
-                    f"with batch size {microbatch_masked.timestamps.shape[0]} on rank {get_local_rank()}"
+                    f"with batch size {microbatch_masked.batch_size} on rank {get_local_rank()}"
                 )
                 masked_batch = microbatch_masked.to_device(self.device)
 

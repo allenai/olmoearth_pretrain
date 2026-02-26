@@ -58,7 +58,9 @@ class BreizhCropsDataset(Dataset):
         split: str,
         partition: str,
         norm_stats_from_pretrained: bool = False,
-        norm_method: str = "norm_no_clip",
+        # Default to 2std no clip - this matches what our model sees in pretraining,
+        # so when using dataset stats (e.g. for MADOS) consistency is important.
+        norm_method: str = "norm_no_clip_2_std",
         monthly_average: bool = True,
     ):
         """The Breizhcrops dataset.

@@ -857,7 +857,7 @@ class PooledModalityPredictor(PredictorBase):
         pooled_tokens_and_masks["modality_pooled_tokens"] = pooled_tokens
 
         # Prepare the Learnable Masked Outputs on the original Unpooled Tokens
-        decoder_emedded_dict = x.as_dict(return_none=False)
+        decoder_emedded_dict = x.as_dict()
         tokens_only_dict = self.add_masks(decoder_emedded_dict)
         decoder_emedded_dict.update(tokens_only_dict)
         tokens_and_masks = self.apply_attn(

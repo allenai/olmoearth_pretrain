@@ -33,14 +33,12 @@ from olmoearth_pretrain.internal.experiment import (
     main,
 )
 from olmoearth_pretrain.internal.utils import MODEL_SIZE_ARGS
-from olmoearth_pretrain.nn.flexi_vit import (
-    PoolingType,
-)
 from olmoearth_pretrain.nn.flexihelios import (
     EncoderConfig,
     PredictorConfig,
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthSpeedMonitorCallback,

@@ -314,7 +314,7 @@ class TimeMaskingStrategy(MaskingStrategy):
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for time masking")
-        output_dict: dict[str, ArrayTensor | None] = {}
+        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
         temporal_mask = None
         timesteps_with_at_least_one_modality = (
             batch.timesteps_with_at_least_one_modality
@@ -329,10 +329,6 @@ class TimeMaskingStrategy(MaskingStrategy):
                     MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = None
             else:
-                if modality_name == "timestamps":
-                    output_dict[modality_name] = instance
-                    continue
-
                 if isinstance(instance, torch.Tensor):
                     device: torch.device | None = instance.device
                 else:
@@ -477,7 +473,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for space masking")
-        output_dict: dict[str, ArrayTensor | None] = {}
+        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
         patch_spatial_mask = None
         # Same spatial mask for all modalities
         for modality_name in batch.modalities:
@@ -488,10 +484,6 @@ class SpaceMaskingStrategy(MaskingStrategy):
                 output_dict[
                     MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = None
-                continue
-
-            if modality_name == "timestamps":
-                output_dict[modality_name] = instance
                 continue
 
             if isinstance(instance, torch.Tensor):
@@ -659,14 +651,12 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         self, batch: MaskedOlmoEarthSample
     ) -> list[list[tuple[str, int]]]:
         """Get the modalities that are present for each sample."""
-        masked_sample_dict = batch.as_dict(return_none=False)
-        batch_size = batch.timestamps.shape[0]
+        masked_sample_dict = batch.as_dict()
+        batch_size = batch.batch_size
         present_modalities_bandsets: list[list[tuple[str, int]]] = [
             [] for _ in range(batch_size)
         ]
         for modality in batch.modalities:
-            if modality == "timestamps":
-                continue
             modality_mask_name = MaskedOlmoEarthSample.get_masked_modality_name(
                 modality
             )
@@ -844,12 +834,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
         Returns:
             The masked batch with the masks applied.
         """
-        masked_batch_dict = masked_batch.as_dict(return_none=False)
+        masked_batch_dict = masked_batch.as_dict()
         num_encoded: None | torch.Tensor = None
         num_decoded: None | torch.Tensor = None
         for modality in masked_batch.modalities:
-            if modality == "timestamps":
-                continue
             masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
                 modality
             )
@@ -859,7 +847,7 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
             out_modality_mask = modality_mask.clone()
             num_bandsets = modality_mask.shape[-1]
 
-            for sample_idx in range(masked_batch.timestamps.shape[0]):
+            for sample_idx in range(masked_batch.batch_size):
                 encoded_bandset_idxs, decoded_bandset_idxs = encoded_decoded_bandsets[
                     sample_idx
                 ]
@@ -1180,7 +1168,7 @@ class RandomMaskingStrategy(MaskingStrategy):
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for random masking")
-        output_dict: dict[str, ArrayTensor | None] = {}
+        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
         for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
             if instance is None:
@@ -1190,10 +1178,6 @@ class RandomMaskingStrategy(MaskingStrategy):
                     MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = None
             else:
-                if modality_name == "timestamps":
-                    output_dict[modality_name] = instance
-                    continue
-
                 if isinstance(instance, torch.Tensor):
                     device: torch.device | None = instance.device
                 else:
@@ -1343,7 +1327,7 @@ class RandomRangeMaskingStrategy(MaskingStrategy):
         """
         if patch_size is None:
             raise ValueError("patch_size must be provided for random masking")
-        output_dict: dict[str, ArrayTensor | None] = {}
+        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
         for modality_name in batch.modalities:
             instance = getattr(batch, modality_name)
             if instance is None:
@@ -1353,10 +1337,6 @@ class RandomRangeMaskingStrategy(MaskingStrategy):
                     MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = None
             else:
-                if modality_name == "timestamps":
-                    output_dict[modality_name] = instance
-                    continue
-
                 if isinstance(instance, torch.Tensor):
                     device: torch.device | None = instance.device
                 else:
@@ -1683,8 +1663,6 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
                 output_dict[
                     MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
                 ] = None
-            elif modality_name == "timestamps":
-                continue
             else:
                 if isinstance(instance, torch.Tensor):
                     device: torch.device | None = instance.device
@@ -1712,7 +1690,7 @@ class RandomWithDecodeMaskingStrategy(MaskingStrategy):
         encode_decode_modalities = [
             m
             for m in batch.modalities
-            if m not in self.only_decode_modalities + ["timestamps"] + none_modalites
+            if m not in self.only_decode_modalities + none_modalites
         ]
         for i in range(batch.batch_size):
             encode_decode_bandsets: list[tuple[str, int]] = []

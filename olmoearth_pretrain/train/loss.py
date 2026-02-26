@@ -369,6 +369,97 @@ class ModalityPatchDiscriminationLossNew(Loss):
         return self.weight * total_loss
 
 
+@LOSS_REGISTRY.register("modality_patch_discrimination_masked_negatives")
+class ModalityPatchDiscriminationMaskedNegatives(Loss):
+    """Patch discrimination that masks out same-target negatives.
+
+    Useful for map modalities where many tokens may have the same class/embedding.
+    When computing contrastive loss, tokens with identical target embeddings
+    are not treated as negatives (they are masked out from the denominator).
+    """
+
+    name = "ModalityPatchDiscMasked"
+
+    def __init__(
+        self,
+        tau: float = 0.1,
+        pred2unit: bool = False,
+        weight: float = 1.0,
+        modality_weights: dict[str, float] | None = None,
+        same_target_threshold: float = 0.999,
+        mask_negatives_for_modalities: list[str] | None = None,
+    ):
+        """Initialize masked-negatives patch discrimination loss."""
+        self.tau = tau
+        self.pred2unit = pred2unit
+        self.weight = weight
+        self.modality_weights = modality_weights
+        self.same_target_threshold = same_target_threshold
+        self.mask_negatives_for_modalities = mask_negatives_for_modalities
+
+    def compute(
+        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+    ) -> Tensor:
+        """Compute patch discrimination loss with masked same-target negatives."""
+        modality_preds, modality_masks = (
+            predictions.flatten_tokens_and_masks_per_modality()
+        )
+        modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
+
+        total_loss = 0
+        for all_preds, all_masks, all_targets, modality in zip(
+            modality_preds, modality_masks, modality_targets, targets.modalities
+        ):
+            pred = all_preds[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
+            pred = pred.float()
+            target = target.float()
+            bs, nt, _ = pred.shape
+
+            if nt == 0:
+                continue
+
+            if self.pred2unit:
+                pred_mu = pred.mean(1, keepdims=True)
+                pred_std = pred.std(1, keepdims=True)
+                pred = (pred - pred_mu) / (pred_std + 1e-4)
+
+            pred = F.normalize(pred, p=2, dim=-1)
+            target = F.normalize(target, p=2, dim=-1)
+            scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
+
+            should_mask = self.mask_negatives_for_modalities is None or (
+                modality in self.mask_negatives_for_modalities
+            )
+            if should_mask:
+                target_sim = torch.einsum("npd,nqd->npq", target, target)
+                same_target = target_sim > self.same_target_threshold
+                eye = torch.eye(nt, dtype=torch.bool, device=scores.device).unsqueeze(0)
+                false_negative_mask = same_target & (~eye)
+                logits_mask = torch.zeros_like(scores)
+                logits_mask = logits_mask.masked_fill(
+                    false_negative_mask, -torch.finfo(scores.dtype).max
+                )
+                scores = scores + logits_mask
+
+            labels = torch.arange(nt, dtype=torch.long, device=pred.device)[None].repeat(
+                bs, 1
+            )
+            loss = F.cross_entropy(
+                scores.flatten(0, 1), labels.flatten(0, 1), reduction="none"
+            ) * (self.tau * 2)
+
+            count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
+            loss_multiplier = self._expand_and_reciprocate(count)
+            loss = (loss * loss_multiplier).sum() / all_preds.shape[0]
+
+            if self.modality_weights is not None:
+                loss = loss * self.modality_weights[modality]
+            total_loss += loss
+
+        return self.weight * total_loss
+
+
 @LOSS_REGISTRY.register("modality_patch_discrimination_vec")
 class ModalityPatchDiscriminationLossVec(Loss):
     """Loss function for per-modality patch discrimination task.
