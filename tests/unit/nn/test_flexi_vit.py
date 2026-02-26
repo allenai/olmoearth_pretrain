@@ -1,6 +1,7 @@
 """Unit tests for the flexi_vit module."""
 
 import logging
+from typing import Any
 
 import pytest
 import torch
@@ -813,7 +814,7 @@ def _make_conv_and_linear_pair(
     in_chans: int,
     embedding_size: int,
     patch_size_at_16: int,
-):
+) -> tuple[Any, Any]:
     """Build conv and linear FlexiPatchEmbed with identical weights."""
     from einops import rearrange
 

@@ -2,6 +2,7 @@
 
 import logging
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -221,7 +222,7 @@ def test_train_batch_with_missing_modalities(
 def _run_train_batch_and_get_loss(
     model: LatentMIM,
     config: ContrastiveLatentMIMTrainModuleConfig,
-    batch: dict,
+    batch: Any,
 ) -> float:
     """Run a single train_batch and return the ModalityPatchDisc loss value.
 

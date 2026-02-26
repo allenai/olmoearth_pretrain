@@ -2,6 +2,7 @@
 
 import copy
 import logging
+from collections.abc import Iterator
 
 import pytest
 import torch
@@ -29,7 +30,7 @@ requires_flash = pytest.mark.skipif(
 
 
 @pytest.fixture(autouse=True)
-def _gpu_test_setup():
+def _gpu_test_setup() -> Iterator[None]:
     """Disable deterministic mode (incompatible with CuBLAS) for GPU tests."""
     torch.use_deterministic_algorithms(False)
     yield
@@ -71,7 +72,9 @@ def _build_model(use_flash_attn: bool) -> LatentMIMConfig:
     )
 
 
-def _make_fake_batch(device: torch.device, all_encoder: bool = False):
+def _make_fake_batch(
+    device: torch.device, all_encoder: bool = False
+) -> MaskedOlmoEarthSample:
     """Create a MaskedOlmoEarthSample.
 
     Args:

@@ -82,12 +82,15 @@ class FlexiPatchEmbed(nn.Module):
         self.antialias = antialias
 
     @staticmethod
-    def to_2tuple(x: Any) -> Any:
+    def to_2tuple(x: int | tuple[int, ...]) -> tuple[int, int]:
         """Convert a scalar or 2-element iterable to a (h, w) tuple."""
+        if isinstance(x, int):
+            return (x, x)
         if isinstance(x, Iterable) and not isinstance(x, str):
-            assert len(list(x)) == 2, "x must be a 2-tuple"
-            return tuple(x)
-        return (x, x)
+            values = tuple(x)
+            assert len(values) == 2, "x must be a 2-tuple"
+            return (int(values[0]), int(values[1]))
+        raise TypeError(f"Expected int or tuple[int, int], got {type(x)}")
 
     def _resolve_patch_size(
         self, patch_size: int | tuple[int, int] | None
