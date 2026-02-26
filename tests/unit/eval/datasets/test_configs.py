@@ -33,7 +33,7 @@ def test_eval_dataset_entry_to_eval_config() -> None:
     assert config.task_type == TaskType.SEGMENTATION
     assert config.num_classes == 9
     assert config.is_multilabel is False
-    assert config.supported_modalities == ["SENTINEL2_L2A", "SENTINEL1"]
+    assert config.supported_modalities == ["sentinel2_l2a", "sentinel1"]
     assert config.height_width == 64  # segmentation uses window_size
     assert config.timeseries is True
     assert config.imputes == []
