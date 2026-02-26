@@ -707,20 +707,6 @@ class DownstreamEvaluatorCallback(Callback):
         """Run the evaluator."""
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
 
-        try:
-            from olmoearth_pretrain.train.callbacks.eval_memory_monitor import (
-                log_diff,
-                take_snapshot,
-            )
-
-            save_folder = getattr(self.trainer, "save_folder", "")
-            snap_before = take_snapshot(
-                f"before_eval_{evaluator.evaluation_name}_step{self.step}",
-                save_folder,
-            )
-        except Exception:
-            snap_before = None
-
         start_time = time.monotonic()
         result = evaluator.val()
         val_result = result.val_result
@@ -761,16 +747,6 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(
             f"Finished {evaluator.evaluation_name} evaluations in {eval_time:.1f} seconds."
         )
-
-        try:
-            if snap_before is not None:
-                snap_after = take_snapshot(
-                    f"after_eval_{evaluator.evaluation_name}_step{self.step}",
-                    save_folder,
-                )
-                log_diff(snap_before, snap_after)
-        except Exception:
-            pass
 
         result.eval_time = eval_time
         return result
