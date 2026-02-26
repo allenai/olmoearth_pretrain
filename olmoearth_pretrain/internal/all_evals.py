@@ -24,9 +24,7 @@ from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     main,
 )
-from olmoearth_pretrain.nn.flexi_vit import (
-    PoolingType,
-)
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthWandBCallback,
