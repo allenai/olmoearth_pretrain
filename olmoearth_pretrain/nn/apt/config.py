@@ -126,7 +126,6 @@ class APTEmbedConfig(Config):
         from olmoearth_pretrain.nn.apt.adaptive_patch_embed import AdaptivePatchEmbed
 
         return AdaptivePatchEmbed(
-            base_patch_embed=base_patch_embed,
             num_scales=self.num_scales,
             embedding_size=self.embedding_size,
             base_patch_size=self.base_patch_size,

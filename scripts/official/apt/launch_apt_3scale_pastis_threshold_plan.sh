@@ -10,13 +10,13 @@
 #   - 50% reduction  => token ratio 0.50
 #   - 75% reduction  => token ratio 0.25
 #
-# Best matches from current sweep:
-#   - closest to 25% reduction: thresholds [0.7617737651, 1.2109026194]
-#       realized ratio=0.5531 (44.69% reduction)  <-- no near-0.75 candidate yet
-#   - closest to 50% reduction: thresholds [0.9102376699, 1.2109026194]
-#       realized ratio=0.5101 (48.99% reduction)
-#   - closest to 75% reduction: thresholds [0.7617737651, 2.0439155579]
-#       realized ratio=0.2446 (75.54% reduction)
+# Best matches from latest sweep:
+#   - 50% reduction target: thresholds [0.8986719251, 1.1866975069]
+#       realized ratio=0.509447 (49.06% reduction)
+#   - 75% reduction target: thresholds [0.7465922236, 2.0133407116]
+#       realized ratio=0.244595 (75.54% reduction)
+#   - 25% reduction target: not found in sweep; use a guessed threshold pair
+#       intended to increase token count vs the 50% setting.
 #
 # Variants per threshold:
 #   A) avg init, no freeze
@@ -56,9 +56,9 @@ fi
 # -------------------------
 # Threshold presets
 # -------------------------
-THRESH_T25_CLOSE='[0.7617737650871277,1.2109026193618775]'   # realized ratio 0.5531
-THRESH_T50='[0.9102376699447632,1.2109026193618775]'         # realized ratio 0.5101
-THRESH_T75='[0.7617737650871277,2.0439155578613284]'         # realized ratio 0.2446
+THRESH_T50='[0.8986719250679016,1.1866975069046022]'         # realized ratio 0.509447
+THRESH_T75='[0.7465922236442566,2.0133407115936284]'         # realized ratio 0.244595
+THRESH_T25_GUESS='[0.6,0.9]'                                 # guessed; expect higher token ratio
 
 echo "=============================================="
 echo "3-scale PASTIS APT prioritized launch plan"
@@ -71,10 +71,10 @@ echo "=============================================="
 # -------------------------
 # P1: balanced compute regime (near 50% reduction)
 # P2: aggressive compression (near 75% reduction)
-# P3: low compression request (closest available to 25% reduction target)
+# P3: guessed low-compression run (aiming toward 25% reduction)
 
 launch_variant() {
-  local threshold_tag="$1"      # t50 / t75 / t25close
+  local threshold_tag="$1"      # t50 / t75 / t25guess
   local thresholds="$2"         # json-like list string
   local variant_tag="$3"        # avg_nf / zero_res_nf / zero_res_frz
   local conv_init="$4"          # average / zero
@@ -118,11 +118,11 @@ run_threshold_block "t50" "$THRESH_T50"
 # Priority 2
 run_threshold_block "t75" "$THRESH_T75"
 # Priority 3
-run_threshold_block "t25close" "$THRESH_T25_CLOSE"
+run_threshold_block "t25guess" "$THRESH_T25_GUESS"
 
 echo ""
 echo "=============================================="
 echo "All runs launched in priority order."
-echo "Note: t25close is not truly 25% reduction; rerun threshold sweep with"
-echo "lower thresholds if you need token ratio closer to 0.75."
+echo "Note: t25guess is heuristic. If ratio is still too low/high, run a focused"
+echo "explicit-threshold sweep around [0.6,0.9] to calibrate toward 0.75."
 echo "=============================================="
