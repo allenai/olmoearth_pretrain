@@ -161,7 +161,7 @@ def build_train_module_config(
             input_dim=decoder_dim,
             hidden_dim=256,
             num_layers=3,
-            use_spectral_norm=True,
+            use_spectral_norm=False,
             target_modality=Modality.NAIP_10.name,
             weight=0.1,
             disc_lr=1e-4,

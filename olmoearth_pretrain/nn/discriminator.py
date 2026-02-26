@@ -25,7 +25,7 @@ class TokenDiscriminator(nn.Module):
         input_dim: int,
         hidden_dim: int = 256,
         num_layers: int = 3,
-        use_spectral_norm: bool = True,
+        use_spectral_norm: bool = False,
     ):
         super().__init__()
         layers: list[nn.Module] = []
@@ -77,6 +77,7 @@ class TokenDiscriminatorConfig(Config):
         hidden_dim: Hidden layer dimension.
         num_layers: Number of MLP layers.
         use_spectral_norm: Whether to apply spectral normalization for training stability.
+            Incompatible with FSDP mixed precision (bfloat16) — leave False when using FSDP.
         target_modality: Which modality to apply the discriminator to.
         weight: Scalar weight for the adversarial loss.
         disc_lr: Learning rate for the discriminator optimizer.
@@ -88,7 +89,7 @@ class TokenDiscriminatorConfig(Config):
     input_dim: int = 768
     hidden_dim: int = 256
     num_layers: int = 3
-    use_spectral_norm: bool = True
+    use_spectral_norm: bool = False
     target_modality: str = "naip_10"
     weight: float = 0.1
     disc_lr: float = 1e-4
