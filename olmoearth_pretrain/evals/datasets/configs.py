@@ -1,7 +1,6 @@
 """A common home for all eval dataset configs."""
 
 from dataclasses import asdict, dataclass
-from enum import Enum
 from typing import Any
 
 from olmoearth_pretrain.data.constants import Modality

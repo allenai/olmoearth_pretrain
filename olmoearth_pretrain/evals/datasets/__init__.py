@@ -7,7 +7,6 @@ from torch.utils.data import Dataset
 
 import olmoearth_pretrain.evals.datasets.paths as paths
 from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
-from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
 
 from .breizhcrops import BreizhCropsDataset
 from .floods_dataset import Sen1Floods11Dataset
@@ -15,7 +14,7 @@ from .geobench_dataset import GeobenchDataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
-from .rslearn_dataset import RslearnToOlmoEarthDataset, from_registry_entry
+from .rslearn_dataset import from_registry_entry
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,6 @@ class EvalDatasetPartition(StrEnum):
     TRAIN_010X = "0.10x_train"
     TRAIN_020X = "0.20x_train"
     TRAIN_050X = "0.50x_train"
-
 
 
 def get_eval_dataset(
@@ -97,50 +95,6 @@ def get_eval_dataset(
             partition=partition,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
-        )
-    elif eval_dataset == "nandi":
-        return RslearnToOlmoEarthDataset(
-            ds_path=paths.NANDI_DIR,
-            ds_groups=["groundtruth_polygon_split_window_32"],
-            layers=input_layers,
-            input_size=4,
-            split=split,
-            property_name="category",
-            classes=["Coffee", "Trees", "Grassland", "Maize", "Sugarcane", "Tea"],
-            partition=partition,
-            norm_stats_from_pretrained=norm_stats_from_pretrained,
-            norm_method=norm_method,
-            input_modalities=input_modalities,
-            start_time="2022-09-01",
-            end_time="2023-09-01",
-            ds_norm_stats_json="nandi_band_stats.json",
-        )
-    elif eval_dataset == "awf":
-        return RslearnToOlmoEarthDataset(
-            ds_path=paths.AWF_DIR,
-            ds_groups=["20250822"],
-            layers=input_layers,
-            input_size=32,
-            split=split,
-            property_name="lulc",
-            classes=[
-                "Agriculture/Settlement",
-                "Grassland/barren",
-                "Herbaceous wetland",
-                "Lava forest",
-                "Montane forest",
-                "Open water",
-                "Shrubland/Savanna",
-                "Urban/dense development",
-                "Woodland forest (>40% canopy)",
-            ],
-            partition=partition,
-            norm_stats_from_pretrained=norm_stats_from_pretrained,
-            norm_method=norm_method,
-            input_modalities=input_modalities,
-            start_time="2023-01-01",
-            end_time="2023-12-31",
-            ds_norm_stats_json="awf_band_stats.json",
         )
     else:
         eval_dataset_entry = get_dataset_entry(eval_dataset)

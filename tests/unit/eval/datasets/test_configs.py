@@ -17,13 +17,13 @@ def test_eval_dataset_entry_to_eval_config() -> None:
     """Test converting EvalDatasetEntry to EvalDatasetConfig."""
     entry = EvalDatasetEntry(
         name="tolbi_crops",
-        display_name="Tolbi Crop Classification",
+        source_path="",
+        weka_path="",
         task_type=TaskType.SEGMENTATION.value,
-        target_property="category",
         num_classes=9,
         modalities=["SENTINEL2_L2A", "SENTINEL1"],
         window_size=64,
-        multilabel=False,
+        is_multilabel=False,
         timeseries=True,
         imputes=[],
     )
@@ -43,9 +43,9 @@ def test_eval_dataset_entry_classification_no_height_width() -> None:
     """Test that classification tasks don't get height_width."""
     entry = EvalDatasetEntry(
         name="test_classification",
-        display_name="Test Classification",
+        source_path="",
+        weka_path="",
         task_type=TaskType.CLASSIFICATION.value,
-        target_property="category",
         num_classes=10,
         modalities=["SENTINEL2_L2A"],
         window_size=64,

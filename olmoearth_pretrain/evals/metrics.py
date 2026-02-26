@@ -11,6 +11,7 @@ import torch
 # Pixels with this label are excluded from loss and metric calculations.
 SEGMENTATION_IGNORE_LABEL = -1
 
+
 @dataclass
 class EvalTaskResult:
     """Result from an evaluation task (knn, linear probe, finetune)."""
@@ -19,6 +20,7 @@ class EvalTaskResult:
     test_result: EvalResult | None
     bootstrap_stats: dict[str, Any] = field(default_factory=dict)
     eval_time: float | None = None
+
 
 @dataclass
 class EvalResult:

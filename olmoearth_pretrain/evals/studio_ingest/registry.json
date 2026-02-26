@@ -1,129 +1,6 @@
 {
-  "version": "1.0",
-  "updated_at": "2026-02-24T00:15:34.513906",
   "datasets": {
-    "canada_wildfire_sat_eval_split": {
-      "name": "canada_wildfire_sat_eval_split",
-      "source_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_fire_sat_full",
-      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/canada_wildfire_sat_eval_split",
-      "task_type": "segmentation",
-      "num_classes": 2,
-      "is_multilabel": false,
-      "classes": [
-        "0",
-        "1"
-      ],
-      "modalities": [
-        "sentinel1",
-        "sentinel1",
-        "sentinel1",
-        "sentinel2_l2a"
-      ],
-      "imputes": [],
-      "window_size": 50,
-      "timeseries": true,
-      "num_timesteps": 8,
-      "train_split": "train",
-      "val_split": "val",
-      "test_split": "test",
-      "split_type": "tags",
-      "split_tag_key": "eval_split",
-      "split_stats": {
-        "train": {
-          "count": 282
-        },
-        "val": {
-          "count": 35
-        },
-        "test": {
-          "count": 36
-        }
-      },
-      "norm_stats": {
-        "sentinel2_l2a": {
-          "B02": {
-            "mean": 2941.73144196868,
-            "std": 3342.9967335273964,
-            "min": 0.0,
-            "max": 18376.0
-          },
-          "B03": {
-            "mean": 2941.4723575838925,
-            "std": 3177.8785336951396,
-            "min": 0.0,
-            "max": 17336.0
-          },
-          "B04": {
-            "mean": 2886.134347919463,
-            "std": 3167.035860651552,
-            "min": 0.0,
-            "max": 16664.0
-          },
-          "B08": {
-            "mean": 3661.1772266666667,
-            "std": 2710.487392906466,
-            "min": 0.0,
-            "max": 16184.0
-          },
-          "B05": {
-            "mean": 3187.698147114094,
-            "std": 3122.016838703972,
-            "min": 0.0,
-            "max": 16903.0
-          },
-          "B06": {
-            "mean": 3518.294487337808,
-            "std": 2814.4004386922643,
-            "min": 0.0,
-            "max": 16463.0
-          },
-          "B07": {
-            "mean": 3542.12462836689,
-            "std": 2642.8628394547904,
-            "min": 0.0,
-            "max": 16111.0
-          },
-          "B8A": {
-            "mean": 3548.0588674720357,
-            "std": 2482.940905571967,
-            "min": 0.0,
-            "max": 15928.0
-          },
-          "B11": {
-            "mean": 1640.3479896196868,
-            "std": 1331.4038618388904,
-            "min": 0.0,
-            "max": 9950.0
-          },
-          "B12": {
-            "mean": 1265.080817181208,
-            "std": 1173.725445633727,
-            "min": 0.0,
-            "max": 9636.0
-          },
-          "B01": {
-            "mean": 2954.8816023266218,
-            "std": 3360.215742611135,
-            "min": 0.0,
-            "max": 19423.0
-          },
-          "B09": {
-            "mean": 4059.089819239374,
-            "std": 3275.737687429828,
-            "min": 0.0,
-            "max": 17027.0
-          }
-        }
-      },
-      "use_pretrain_norm": true
-    },
-    "yemen_crop": {
-      "name": "yemen_crop",
-      "source_path": "/weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/dataset",
-      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/yemen_crop",
-      "task_type": "segmentation",
-      "num_classes": 9,
-      "is_multilabel": false,
+    "awf_lulc_map": {
       "classes": [
         "0",
         "1",
@@ -135,114 +12,229 @@
         "7",
         "8"
       ],
+      "imputes": [],
+      "is_multilabel": false,
       "modalities": [
         "sentinel2_l2a"
       ],
-      "imputes": [],
-      "window_size": 16,
-      "timeseries": true,
-      "num_timesteps": 12,
-      "train_split": "train",
-      "val_split": "val",
-      "test_split": "test",
-      "split_type": "tags",
-      "split_tag_key": "eval_split",
-      "split_stats": {
-        "train": {
-          "count": 456
-        },
-        "val": {
-          "count": 68
-        },
-        "test": {
-          "count": 69
-        }
-      },
+      "name": "awf_lulc_map",
       "norm_stats": {
         "sentinel2_l2a": {
-          "B02": {
-            "mean": 1171.2132361339548,
-            "std": 825.9018176673484,
+          "B01": {
+            "max": 18592.0,
+            "mean": 1286.3797682523937,
             "min": 0.0,
-            "max": 22248.0
+            "std": 2046.2735739014547
+          },
+          "B02": {
+            "max": 18872.0,
+            "mean": 1319.0016748152543,
+            "min": 0.0,
+            "std": 1925.9118599302944
           },
           "B03": {
-            "mean": 1642.1457662303546,
-            "std": 822.6207529891919,
+            "max": 17720.0,
+            "mean": 1508.9624430927433,
             "min": 0.0,
-            "max": 18728.0
+            "std": 1756.425396649228
           },
           "B04": {
-            "mean": 2042.859432108918,
-            "std": 1011.36032313747,
+            "max": 16856.0,
+            "mean": 1749.0725483748586,
             "min": 0.0,
-            "max": 17240.0
-          },
-          "B08": {
-            "mean": 3247.3280086405794,
-            "std": 908.1011763839273,
-            "min": 0.0,
-            "max": 16008.0
+            "std": 1680.9168500517828
           },
           "B05": {
-            "mean": 2435.9272689373174,
-            "std": 941.8008523910676,
+            "max": 16747.0,
+            "mean": 2102.312431098672,
             "min": 0.0,
-            "max": 17596.0
+            "std": 1727.7021117366203
           },
           "B06": {
-            "mean": 2962.424452753792,
-            "std": 826.3385390369624,
+            "max": 16281.0,
+            "mean": 2508.7019185347895,
             "min": 0.0,
-            "max": 16711.0
+            "std": 1605.2971225099116
           },
           "B07": {
-            "mean": 3207.189206128929,
-            "std": 867.1686029003656,
+            "max": 15688.0,
+            "mean": 2676.2374731701843,
             "min": 0.0,
-            "max": 16276.0
+            "std": 1577.781265911728
           },
-          "B8A": {
-            "mean": 3356.1349448042306,
-            "std": 889.1137986950747,
+          "B08": {
+            "max": 15720.0,
+            "mean": 2651.2538430481623,
             "min": 0.0,
-            "max": 16490.0
-          },
-          "B11": {
-            "mean": 3364.7720875879477,
-            "std": 1096.4712130090172,
-            "min": 183.0,
-            "max": 14924.0
-          },
-          "B12": {
-            "mean": 2883.625266270331,
-            "std": 1118.8864508440222,
-            "min": 143.0,
-            "max": 13490.0
-          },
-          "B01": {
-            "mean": 921.8646854155245,
-            "std": 822.0913502621366,
-            "min": 0.0,
-            "max": 23844.0
+            "std": 1542.8099118776793
           },
           "B09": {
-            "mean": 3402.772459509777,
-            "std": 1154.6031568954306,
-            "min": 102.0,
-            "max": 20333.0
+            "max": 16917.0,
+            "mean": 3290.210476175714,
+            "min": 0.0,
+            "std": 2760.6632397650997
+          },
+          "B11": {
+            "max": 13204.0,
+            "mean": 2715.544035329737,
+            "min": 0.0,
+            "std": 1292.8508897463134
+          },
+          "B12": {
+            "max": 14863.0,
+            "mean": 2235.1951750986836,
+            "min": 0.0,
+            "std": 1157.2226348927431
+          },
+          "B8A": {
+            "max": 15364.0,
+            "mean": 2808.4564456509866,
+            "min": 0.0,
+            "std": 1544.6953044568147
           }
         }
       },
-      "use_pretrain_norm": true
-    },
-    "tolbi_crop": {
-      "name": "tolbi_crop",
-      "source_path": "gs://rslearn-eai/datasets/tolbi",
-      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/tolbi_crop",
+      "num_classes": 9,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/awf",
+      "split_stats": {
+        "test": {
+          "count": 170
+        },
+        "train": {
+          "count": 1120
+        },
+        "val": {
+          "count": 169
+        }
+      },
+      "split_tag_key": "eval_split",
+      "split_type": "tags",
       "task_type": "segmentation",
-      "num_classes": 7,
+      "test_split": "test",
+      "timeseries": true,
+      "train_split": "train",
+      "use_pretrain_norm": true,
+      "val_split": "val",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/awf_lulc_map",
+      "window_size": 64
+    },
+    "canada_wildfire_sat_eval_split": {
+      "classes": [
+        "0",
+        "1"
+      ],
+      "imputes": [],
       "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "sentinel1",
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "canada_wildfire_sat_eval_split",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 19423.0,
+            "mean": 2954.8816023266218,
+            "min": 0.0,
+            "std": 3360.215742611135
+          },
+          "B02": {
+            "max": 18376.0,
+            "mean": 2941.73144196868,
+            "min": 0.0,
+            "std": 3342.9967335273964
+          },
+          "B03": {
+            "max": 17336.0,
+            "mean": 2941.4723575838925,
+            "min": 0.0,
+            "std": 3177.8785336951396
+          },
+          "B04": {
+            "max": 16664.0,
+            "mean": 2886.134347919463,
+            "min": 0.0,
+            "std": 3167.035860651552
+          },
+          "B05": {
+            "max": 16903.0,
+            "mean": 3187.698147114094,
+            "min": 0.0,
+            "std": 3122.016838703972
+          },
+          "B06": {
+            "max": 16463.0,
+            "mean": 3518.294487337808,
+            "min": 0.0,
+            "std": 2814.4004386922643
+          },
+          "B07": {
+            "max": 16111.0,
+            "mean": 3542.12462836689,
+            "min": 0.0,
+            "std": 2642.8628394547904
+          },
+          "B08": {
+            "max": 16184.0,
+            "mean": 3661.1772266666667,
+            "min": 0.0,
+            "std": 2710.487392906466
+          },
+          "B09": {
+            "max": 17027.0,
+            "mean": 4059.089819239374,
+            "min": 0.0,
+            "std": 3275.737687429828
+          },
+          "B11": {
+            "max": 9950.0,
+            "mean": 1640.3479896196868,
+            "min": 0.0,
+            "std": 1331.4038618388904
+          },
+          "B12": {
+            "max": 9636.0,
+            "mean": 1265.080817181208,
+            "min": 0.0,
+            "std": 1173.725445633727
+          },
+          "B8A": {
+            "max": 15928.0,
+            "mean": 3548.0588674720357,
+            "min": 0.0,
+            "std": 2482.940905571967
+          }
+        }
+      },
+      "num_classes": 2,
+      "num_timesteps": 8,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_fire_sat_full",
+      "split_stats": {
+        "test": {
+          "count": 36
+        },
+        "train": {
+          "count": 282
+        },
+        "val": {
+          "count": 35
+        }
+      },
+      "split_tag_key": "eval_split",
+      "split_type": "tags",
+      "task_type": "segmentation",
+      "test_split": "test",
+      "timeseries": true,
+      "train_split": "train",
+      "use_pretrain_norm": true,
+      "val_split": "val",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/canada_wildfire_sat_eval_split",
+      "window_size": 50
+    },
+    "forest_loss_driver": {
       "classes": [
         "0",
         "1",
@@ -250,116 +242,120 @@
         "3",
         "4",
         "5",
-        "6"
-      ],
-      "modalities": [
-        "sentinel2_l2a"
+        "6",
+        "7",
+        "8",
+        "9"
       ],
       "imputes": [],
-      "window_size": 64,
-      "timeseries": true,
-      "num_timesteps": 12,
-      "train_split": "train",
-      "val_split": "val",
-      "test_split": "test",
-      "split_type": "tags",
-      "split_tag_key": "eval_split",
-      "split_stats": {
-        "train": {
-          "count": 33444
-        },
-        "val": {
-          "count": 5608
-        },
-        "test": {
-          "count": 5609
-        }
-      },
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "sentinel2_l2a"
+      ],
+      "name": "forest_loss_driver",
       "norm_stats": {
         "sentinel2_l2a": {
-          "B02": {
-            "mean": 2935.1006834807968,
-            "std": 3298.7720881258288,
+          "B01": {
+            "max": 24820.0,
+            "mean": 689.9569191843361,
             "min": 0.0,
-            "max": 25552.0
+            "std": 1383.389427967669
+          },
+          "B02": {
+            "max": 27000.0,
+            "mean": 689.7802669213978,
+            "min": 0.0,
+            "std": 1343.977032658678
           },
           "B03": {
-            "mean": 2954.0412133959608,
-            "std": 3010.557857630703,
+            "max": 20792.0,
+            "mean": 838.67435222983,
             "min": 0.0,
-            "max": 22640.0
+            "std": 1248.3350860024443
           },
           "B04": {
-            "mean": 2790.4577884804776,
-            "std": 2926.007004644928,
+            "max": 19336.0,
+            "mean": 674.1208855666423,
             "min": 0.0,
-            "max": 20624.0
-          },
-          "B08": {
-            "mean": 4203.417642187692,
-            "std": 2220.479649710352,
-            "min": 0.0,
-            "max": 18528.0
+            "std": 1241.9898366980967
           },
           "B05": {
-            "mean": 3297.44492716258,
-            "std": 2962.937262554393,
+            "max": 18611.0,
+            "mean": 1144.8468372079901,
             "min": 0.0,
-            "max": 20391.0
+            "std": 1260.6035102067979
           },
           "B06": {
-            "mean": 4029.8836223413937,
-            "std": 2445.868516408366,
+            "max": 17803.0,
+            "mean": 2447.2694866998677,
             "min": 0.0,
-            "max": 19258.0
+            "std": 1114.9224505076638
           },
           "B07": {
-            "mean": 4291.149530624889,
-            "std": 2289.3659287569158,
+            "max": 17329.0,
+            "mean": 2976.006616044981,
             "min": 0.0,
-            "max": 18154.0
+            "std": 1124.401422746353
           },
-          "B8A": {
-            "mean": 4474.998842004395,
-            "std": 2193.6802013255333,
+          "B08": {
+            "max": 17112.0,
+            "mean": 2971.4503179360013,
             "min": 0.0,
-            "max": 17253.0
-          },
-          "B11": {
-            "mean": 3206.301090670798,
-            "std": 1581.0467682178562,
-            "min": 0.0,
-            "max": 9982.0
-          },
-          "B12": {
-            "mean": 2283.5368620433364,
-            "std": 1447.4338160905695,
-            "min": 0.0,
-            "max": 14673.0
-          },
-          "B01": {
-            "mean": 3142.160480795498,
-            "std": 3550.8886907962874,
-            "min": 0.0,
-            "max": 26763.0
+            "std": 1131.1593701715324
           },
           "B09": {
-            "mean": 6193.134033576878,
-            "std": 4515.68697170454,
+            "max": 19547.0,
+            "mean": 3549.2202716562324,
             "min": 0.0,
-            "max": 20377.0
+            "std": 2058.5273724157773
+          },
+          "B11": {
+            "max": 15923.0,
+            "mean": 1789.2463684819616,
+            "min": 0.0,
+            "std": 922.2400851413283
+          },
+          "B12": {
+            "max": 16281.0,
+            "mean": 963.0188811610473,
+            "min": 0.0,
+            "std": 870.7764098284637
+          },
+          "B8A": {
+            "max": 16861.0,
+            "mean": 3253.787806116202,
+            "min": 0.0,
+            "std": 1141.725072728547
           }
         }
       },
-      "use_pretrain_norm": true
+      "num_classes": 10,
+      "num_timesteps": 6,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/forest_loss_driver/dataset_v1/combined/",
+      "split_stats": {
+        "test": {
+          "count": 131
+        },
+        "train": {
+          "count": 6621
+        },
+        "val": {
+          "count": 131
+        }
+      },
+      "split_tag_key": "eval_split",
+      "split_type": "tags",
+      "task_type": "classification",
+      "test_split": "test",
+      "timeseries": true,
+      "train_split": "train",
+      "use_pretrain_norm": true,
+      "val_split": "val",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/forest_loss_driver",
+      "window_size": 64
     },
     "geo_ecosystem_annual_test": {
-      "name": "geo_ecosystem_annual_test",
-      "source_path": "/weka/dfive-default/rslearn-eai/datasets/geo_annual/dataset",
-      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/geo_ecosystem_annual_test",
-      "task_type": "segmentation",
-      "num_classes": 112,
-      "is_multilabel": false,
       "classes": [
         "0",
         "1",
@@ -474,466 +470,114 @@
         "110",
         "111"
       ],
+      "imputes": [],
+      "is_multilabel": false,
       "modalities": [
         "sentinel2_l2a"
       ],
-      "imputes": [],
-      "window_size": 64,
-      "timeseries": true,
+      "name": "geo_ecosystem_annual_test",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 31767.0,
+            "mean": 1819.088568620002,
+            "min": 0.0,
+            "std": 2342.1883306399764
+          },
+          "B02": {
+            "max": 31720.0,
+            "mean": 1996.005610825042,
+            "min": 0.0,
+            "std": 2330.6282929108443
+          },
+          "B03": {
+            "max": 25880.0,
+            "mean": 2322.217294739023,
+            "min": 0.0,
+            "std": 2198.330715679545
+          },
+          "B04": {
+            "max": 20968.0,
+            "mean": 2607.7632432417004,
+            "min": 0.0,
+            "std": 2259.304880453304
+          },
+          "B05": {
+            "max": 20826.0,
+            "mean": 2919.335195491541,
+            "min": 0.0,
+            "std": 2233.4564360917843
+          },
+          "B06": {
+            "max": 20446.0,
+            "mean": 3248.4085876268578,
+            "min": 0.0,
+            "std": 2058.670709134496
+          },
+          "B07": {
+            "max": 19867.0,
+            "mean": 3383.047375196358,
+            "min": 0.0,
+            "std": 1994.9128435544471
+          },
+          "B08": {
+            "max": 19192.0,
+            "mean": 3449.5427332393965,
+            "min": 0.0,
+            "std": 2016.4235668864221
+          },
+          "B09": {
+            "max": 20397.0,
+            "mean": 3684.2974328111372,
+            "min": 0.0,
+            "std": 2416.1750066606864
+          },
+          "B11": {
+            "max": 15993.0,
+            "mean": 3011.6458504009206,
+            "min": 0.0,
+            "std": 1735.4134650188385
+          },
+          "B12": {
+            "max": 15993.0,
+            "mean": 2530.9563287845326,
+            "min": 0.0,
+            "std": 1645.3072856773717
+          },
+          "B8A": {
+            "max": 18610.0,
+            "mean": 3465.1645740874533,
+            "min": 0.0,
+            "std": 1935.229360885325
+          }
+        }
+      },
+      "num_classes": 112,
       "num_timesteps": 12,
-      "train_split": "train",
-      "val_split": "val",
-      "test_split": "test",
-      "split_type": "tags",
-      "split_tag_key": "eval_split",
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/geo_annual/dataset",
       "split_stats": {
+        "test": {
+          "count": 1061
+        },
         "train": {
           "count": 19789
         },
         "val": {
           "count": 1060
-        },
-        "test": {
-          "count": 1061
         }
       },
-      "norm_stats": {
-        "sentinel2_l2a": {
-          "B02": {
-            "mean": 1996.005610825042,
-            "std": 2330.6282929108443,
-            "min": 0.0,
-            "max": 31720.0
-          },
-          "B03": {
-            "mean": 2322.217294739023,
-            "std": 2198.330715679545,
-            "min": 0.0,
-            "max": 25880.0
-          },
-          "B04": {
-            "mean": 2607.7632432417004,
-            "std": 2259.304880453304,
-            "min": 0.0,
-            "max": 20968.0
-          },
-          "B08": {
-            "mean": 3449.5427332393965,
-            "std": 2016.4235668864221,
-            "min": 0.0,
-            "max": 19192.0
-          },
-          "B05": {
-            "mean": 2919.335195491541,
-            "std": 2233.4564360917843,
-            "min": 0.0,
-            "max": 20826.0
-          },
-          "B06": {
-            "mean": 3248.4085876268578,
-            "std": 2058.670709134496,
-            "min": 0.0,
-            "max": 20446.0
-          },
-          "B07": {
-            "mean": 3383.047375196358,
-            "std": 1994.9128435544471,
-            "min": 0.0,
-            "max": 19867.0
-          },
-          "B8A": {
-            "mean": 3465.1645740874533,
-            "std": 1935.229360885325,
-            "min": 0.0,
-            "max": 18610.0
-          },
-          "B11": {
-            "mean": 3011.6458504009206,
-            "std": 1735.4134650188385,
-            "min": 0.0,
-            "max": 15993.0
-          },
-          "B12": {
-            "mean": 2530.9563287845326,
-            "std": 1645.3072856773717,
-            "min": 0.0,
-            "max": 15993.0
-          },
-          "B01": {
-            "mean": 1819.088568620002,
-            "std": 2342.1883306399764,
-            "min": 0.0,
-            "max": 31767.0
-          },
-          "B09": {
-            "mean": 3684.2974328111372,
-            "std": 2416.1750066606864,
-            "min": 0.0,
-            "max": 20397.0
-          }
-        }
-      },
-      "use_pretrain_norm": true
-    },
-    "forest_loss_driver": {
-      "name": "forest_loss_driver",
-      "source_path": "/weka/dfive-default/rslearn-eai/datasets/forest_loss_driver/dataset_v1/combined/",
-      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/forest_loss_driver",
-      "task_type": "classification",
-      "num_classes": 10,
-      "is_multilabel": false,
-      "classes": [
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
-        "5",
-        "6",
-        "7",
-        "8",
-        "9"
-      ],
-      "modalities": [
-        "sentinel2_l2a",
-        "sentinel2_l2a"
-      ],
-      "imputes": [],
-      "window_size": 64,
-      "timeseries": true,
-      "num_timesteps": 6,
-      "train_split": "train",
-      "val_split": "val",
-      "test_split": "test",
-      "split_type": "tags",
       "split_tag_key": "eval_split",
-      "split_stats": {
-        "train": {
-          "count": 6621
-        },
-        "val": {
-          "count": 131
-        },
-        "test": {
-          "count": 131
-        }
-      },
-      "norm_stats": {
-        "sentinel2_l2a": {
-          "B02": {
-            "mean": 689.7802669213978,
-            "std": 1343.977032658678,
-            "min": 0.0,
-            "max": 27000.0
-          },
-          "B03": {
-            "mean": 838.67435222983,
-            "std": 1248.3350860024443,
-            "min": 0.0,
-            "max": 20792.0
-          },
-          "B04": {
-            "mean": 674.1208855666423,
-            "std": 1241.9898366980967,
-            "min": 0.0,
-            "max": 19336.0
-          },
-          "B08": {
-            "mean": 2971.4503179360013,
-            "std": 1131.1593701715324,
-            "min": 0.0,
-            "max": 17112.0
-          },
-          "B05": {
-            "mean": 1144.8468372079901,
-            "std": 1260.6035102067979,
-            "min": 0.0,
-            "max": 18611.0
-          },
-          "B06": {
-            "mean": 2447.2694866998677,
-            "std": 1114.9224505076638,
-            "min": 0.0,
-            "max": 17803.0
-          },
-          "B07": {
-            "mean": 2976.006616044981,
-            "std": 1124.401422746353,
-            "min": 0.0,
-            "max": 17329.0
-          },
-          "B8A": {
-            "mean": 3253.787806116202,
-            "std": 1141.725072728547,
-            "min": 0.0,
-            "max": 16861.0
-          },
-          "B11": {
-            "mean": 1789.2463684819616,
-            "std": 922.2400851413283,
-            "min": 0.0,
-            "max": 15923.0
-          },
-          "B12": {
-            "mean": 963.0188811610473,
-            "std": 870.7764098284637,
-            "min": 0.0,
-            "max": 16281.0
-          },
-          "B01": {
-            "mean": 689.9569191843361,
-            "std": 1383.389427967669,
-            "min": 0.0,
-            "max": 24820.0
-          },
-          "B09": {
-            "mean": 3549.2202716562324,
-            "std": 2058.5273724157773,
-            "min": 0.0,
-            "max": 19547.0
-          }
-        }
-      },
-      "use_pretrain_norm": true
-    },
-    "nigeria_settlement": {
-      "name": "nigeria_settlement",
-      "source_path": "gs://earth-system-run-staging/olmoearth_run/scratch_dirs/2026/2/10/763dc1f3-6f60-4506-acd3-d90c0d41f068/dataset",
-      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/nigeria_settlement",
+      "split_type": "tags",
       "task_type": "segmentation",
-      "num_classes": 2,
-      "is_multilabel": false,
-      "classes": [
-        "0",
-        "1"
-      ],
-      "modalities": [
-        "sentinel2_l2a"
-      ],
-      "imputes": [],
-      "window_size": 64,
-      "timeseries": true,
-      "num_timesteps": 12,
-      "train_split": "train",
-      "val_split": "val",
       "test_split": "test",
-      "split_type": "tags",
-      "split_tag_key": "eval_split",
-      "split_stats": {
-        "train": {
-          "count": 3620
-        },
-        "val": {
-          "count": 987
-        },
-        "test": {
-          "count": 499
-        }
-      },
-      "norm_stats": {
-        "sentinel2_l2a": {
-          "B02": {
-            "mean": 1738.8381401835488,
-            "std": 2560.8160035864457,
-            "min": 0.0,
-            "max": 39512.0
-          },
-          "B03": {
-            "mean": 2014.6700505487493,
-            "std": 2201.0209488201162,
-            "min": 0.0,
-            "max": 31304.0
-          },
-          "B04": {
-            "mean": 2228.206200953197,
-            "std": 2058.484655676322,
-            "min": 0.0,
-            "max": 25512.0
-          },
-          "B08": {
-            "mean": 3571.553890974526,
-            "std": 1593.6584163143054,
-            "min": 0.0,
-            "max": 20680.0
-          },
-          "B05": {
-            "mean": 2687.0420715453324,
-            "std": 2024.3661788660581,
-            "min": 0.0,
-            "max": 24485.0
-          },
-          "B06": {
-            "mean": 3259.2560588552055,
-            "std": 1706.0860723928856,
-            "min": 0.0,
-            "max": 22269.0
-          },
-          "B07": {
-            "mean": 3540.257471163594,
-            "std": 1626.6279459982188,
-            "min": 0.0,
-            "max": 20755.0
-          },
-          "B8A": {
-            "mean": 3790.3857455976454,
-            "std": 1588.7652602424746,
-            "min": 0.0,
-            "max": 19033.0
-          },
-          "B11": {
-            "mean": 3692.630604007489,
-            "std": 1508.6677333878729,
-            "min": 0.0,
-            "max": 11923.0
-          },
-          "B12": {
-            "mean": 2866.607770882081,
-            "std": 1461.126831616309,
-            "min": 0.0,
-            "max": 15495.0
-          },
-          "B01": {
-            "mean": 1636.9035002769137,
-            "std": 2838.5718525941493,
-            "min": 0.0,
-            "max": 43668.0
-          },
-          "B09": {
-            "mean": 4598.0553918186815,
-            "std": 3374.6667943808966,
-            "min": 0.0,
-            "max": 23064.0
-          }
-        }
-      },
-      "use_pretrain_norm": true
-    },
-    "awf_lulc_map": {
-      "name": "awf_lulc_map",
-      "source_path": "/weka/dfive-default/rslearn-eai/datasets/awf",
-      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/awf_lulc_map",
-      "task_type": "segmentation",
-      "num_classes": 9,
-      "is_multilabel": false,
-      "classes": [
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
-        "5",
-        "6",
-        "7",
-        "8"
-      ],
-      "modalities": [
-        "sentinel2_l2a"
-      ],
-      "imputes": [],
-      "window_size": 64,
       "timeseries": true,
-      "num_timesteps": 12,
       "train_split": "train",
+      "use_pretrain_norm": true,
       "val_split": "val",
-      "test_split": "test",
-      "split_type": "tags",
-      "split_tag_key": "eval_split",
-      "split_stats": {
-        "train": {
-          "count": 1120
-        },
-        "val": {
-          "count": 169
-        },
-        "test": {
-          "count": 170
-        }
-      },
-      "norm_stats": {
-        "sentinel2_l2a": {
-          "B02": {
-            "mean": 1319.0016748152543,
-            "std": 1925.9118599302944,
-            "min": 0.0,
-            "max": 18872.0
-          },
-          "B03": {
-            "mean": 1508.9624430927433,
-            "std": 1756.425396649228,
-            "min": 0.0,
-            "max": 17720.0
-          },
-          "B04": {
-            "mean": 1749.0725483748586,
-            "std": 1680.9168500517828,
-            "min": 0.0,
-            "max": 16856.0
-          },
-          "B08": {
-            "mean": 2651.2538430481623,
-            "std": 1542.8099118776793,
-            "min": 0.0,
-            "max": 15720.0
-          },
-          "B05": {
-            "mean": 2102.312431098672,
-            "std": 1727.7021117366203,
-            "min": 0.0,
-            "max": 16747.0
-          },
-          "B06": {
-            "mean": 2508.7019185347895,
-            "std": 1605.2971225099116,
-            "min": 0.0,
-            "max": 16281.0
-          },
-          "B07": {
-            "mean": 2676.2374731701843,
-            "std": 1577.781265911728,
-            "min": 0.0,
-            "max": 15688.0
-          },
-          "B8A": {
-            "mean": 2808.4564456509866,
-            "std": 1544.6953044568147,
-            "min": 0.0,
-            "max": 15364.0
-          },
-          "B11": {
-            "mean": 2715.544035329737,
-            "std": 1292.8508897463134,
-            "min": 0.0,
-            "max": 13204.0
-          },
-          "B12": {
-            "mean": 2235.1951750986836,
-            "std": 1157.2226348927431,
-            "min": 0.0,
-            "max": 14863.0
-          },
-          "B01": {
-            "mean": 1286.3797682523937,
-            "std": 2046.2735739014547,
-            "min": 0.0,
-            "max": 18592.0
-          },
-          "B09": {
-            "mean": 3290.210476175714,
-            "std": 2760.6632397650997,
-            "min": 0.0,
-            "max": 16917.0
-          }
-        }
-      },
-      "use_pretrain_norm": true
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/geo_ecosystem_annual_test",
+      "window_size": 64
     },
     "nandi_crop_map": {
-      "name": "nandi_crop_map",
-      "source_path": "/weka/dfive-default/rslearn-eai/datasets/nandi",
-      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/nandi_crop_map",
-      "task_type": "segmentation",
-      "num_classes": 8,
-      "is_multilabel": false,
       "classes": [
         "0",
         "1",
@@ -944,29 +588,12 @@
         "6",
         "7"
       ],
+      "imputes": [],
+      "is_multilabel": false,
       "modalities": [
         "sentinel2_l2a"
       ],
-      "imputes": [],
-      "window_size": 64,
-      "timeseries": true,
-      "num_timesteps": 12,
-      "train_split": "train",
-      "val_split": "val",
-      "test_split": "test",
-      "split_type": "tags",
-      "split_tag_key": "eval_split",
-      "split_stats": {
-        "train": {
-          "count": 5066
-        },
-        "val": {
-          "count": 929
-        },
-        "test": {
-          "count": 929
-        }
-      },
+      "name": "nandi_crop_map",
       "norm_stats": {
         "landsat": {
           "B1": {
@@ -1125,59 +752,432 @@
           }
         }
       },
-      "use_pretrain_norm": true
-    },
-    "oil_spill_detection": {
-      "name": "oil_spill_detection",
-      "source_path": "gs://oil_spill_detection/dataset.tar.gz",
-      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/oil_spill_detection/dataset",
+      "num_classes": 8,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/nandi",
+      "split_stats": {
+        "test": {
+          "count": 929
+        },
+        "train": {
+          "count": 5066
+        },
+        "val": {
+          "count": 929
+        }
+      },
+      "split_tag_key": "eval_split",
+      "split_type": "tags",
       "task_type": "segmentation",
-      "num_classes": 2,
-      "is_multilabel": false,
+      "test_split": "test",
+      "timeseries": true,
+      "train_split": "train",
+      "use_pretrain_norm": true,
+      "val_split": "val",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/nandi_crop_map",
+      "window_size": 64
+    },
+    "nigeria_settlement": {
       "classes": [
         "0",
         "1"
       ],
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "nigeria_settlement",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 43668.0,
+            "mean": 1636.9035002769137,
+            "min": 0.0,
+            "std": 2838.5718525941493
+          },
+          "B02": {
+            "max": 39512.0,
+            "mean": 1738.8381401835488,
+            "min": 0.0,
+            "std": 2560.8160035864457
+          },
+          "B03": {
+            "max": 31304.0,
+            "mean": 2014.6700505487493,
+            "min": 0.0,
+            "std": 2201.0209488201162
+          },
+          "B04": {
+            "max": 25512.0,
+            "mean": 2228.206200953197,
+            "min": 0.0,
+            "std": 2058.484655676322
+          },
+          "B05": {
+            "max": 24485.0,
+            "mean": 2687.0420715453324,
+            "min": 0.0,
+            "std": 2024.3661788660581
+          },
+          "B06": {
+            "max": 22269.0,
+            "mean": 3259.2560588552055,
+            "min": 0.0,
+            "std": 1706.0860723928856
+          },
+          "B07": {
+            "max": 20755.0,
+            "mean": 3540.257471163594,
+            "min": 0.0,
+            "std": 1626.6279459982188
+          },
+          "B08": {
+            "max": 20680.0,
+            "mean": 3571.553890974526,
+            "min": 0.0,
+            "std": 1593.6584163143054
+          },
+          "B09": {
+            "max": 23064.0,
+            "mean": 4598.0553918186815,
+            "min": 0.0,
+            "std": 3374.6667943808966
+          },
+          "B11": {
+            "max": 11923.0,
+            "mean": 3692.630604007489,
+            "min": 0.0,
+            "std": 1508.6677333878729
+          },
+          "B12": {
+            "max": 15495.0,
+            "mean": 2866.607770882081,
+            "min": 0.0,
+            "std": 1461.126831616309
+          },
+          "B8A": {
+            "max": 19033.0,
+            "mean": 3790.3857455976454,
+            "min": 0.0,
+            "std": 1588.7652602424746
+          }
+        }
+      },
+      "num_classes": 2,
+      "num_timesteps": 12,
+      "source_path": "gs://earth-system-run-staging/olmoearth_run/scratch_dirs/2026/2/10/763dc1f3-6f60-4506-acd3-d90c0d41f068/dataset",
+      "split_stats": {
+        "test": {
+          "count": 499
+        },
+        "train": {
+          "count": 3620
+        },
+        "val": {
+          "count": 987
+        }
+      },
+      "split_tag_key": "eval_split",
+      "split_type": "tags",
+      "task_type": "segmentation",
+      "test_split": "test",
+      "timeseries": true,
+      "train_split": "train",
+      "use_pretrain_norm": true,
+      "val_split": "val",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/nigeria_settlement",
+      "window_size": 64
+    },
+    "oil_spill_detection": {
+      "classes": [
+        "0",
+        "1"
+      ],
+      "imputes": [],
+      "is_multilabel": false,
       "modalities": [
         "sentinel1"
       ],
-      "imputes": [],
-      "window_size": 128,
-      "timeseries": false,
+      "name": "oil_spill_detection",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 19.80240249633789,
+            "mean": -25.61349128922148,
+            "min": -100.0,
+            "std": 2.5431342329978874
+          },
+          "vv": {
+            "max": 32.378021240234375,
+            "mean": -19.439654238857432,
+            "min": -100.0,
+            "std": 3.372996230894738
+          }
+        }
+      },
+      "num_classes": 2,
       "num_timesteps": 1,
-      "train_split": "train",
-      "val_split": "val",
-      "test_split": "test",
-      "split_type": "tags",
-      "split_tag_key": "eval_split",
+      "source_path": "gs://oil_spill_detection/dataset.tar.gz",
       "split_stats": {
+        "test": {
+          "count": 36884
+        },
         "train": {
           "count": 166180
         },
         "val": {
           "count": 36724
-        },
-        "test": {
-          "count": 36884
         }
       },
+      "split_tag_key": "eval_split",
+      "split_type": "tags",
+      "task_type": "segmentation",
+      "test_split": "test",
+      "timeseries": false,
+      "train_split": "train",
+      "use_pretrain_norm": true,
+      "val_split": "val",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/oil_spill_detection/dataset",
+      "window_size": 128
+    },
+    "tolbi_crop": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6"
+      ],
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "tolbi_crop",
       "norm_stats": {
-        "sentinel1": {
-          "vv": {
-            "mean": -19.439654238857432,
-            "std": 3.372996230894738,
-            "min": -100.0,
-            "max": 32.378021240234375
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 26763.0,
+            "mean": 3142.160480795498,
+            "min": 0.0,
+            "std": 3550.8886907962874
           },
-          "vh": {
-            "mean": -25.61349128922148,
-            "std": 2.5431342329978874,
-            "min": -100.0,
-            "max": 19.80240249633789
+          "B02": {
+            "max": 25552.0,
+            "mean": 2935.1006834807968,
+            "min": 0.0,
+            "std": 3298.7720881258288
+          },
+          "B03": {
+            "max": 22640.0,
+            "mean": 2954.0412133959608,
+            "min": 0.0,
+            "std": 3010.557857630703
+          },
+          "B04": {
+            "max": 20624.0,
+            "mean": 2790.4577884804776,
+            "min": 0.0,
+            "std": 2926.007004644928
+          },
+          "B05": {
+            "max": 20391.0,
+            "mean": 3297.44492716258,
+            "min": 0.0,
+            "std": 2962.937262554393
+          },
+          "B06": {
+            "max": 19258.0,
+            "mean": 4029.8836223413937,
+            "min": 0.0,
+            "std": 2445.868516408366
+          },
+          "B07": {
+            "max": 18154.0,
+            "mean": 4291.149530624889,
+            "min": 0.0,
+            "std": 2289.3659287569158
+          },
+          "B08": {
+            "max": 18528.0,
+            "mean": 4203.417642187692,
+            "min": 0.0,
+            "std": 2220.479649710352
+          },
+          "B09": {
+            "max": 20377.0,
+            "mean": 6193.134033576878,
+            "min": 0.0,
+            "std": 4515.68697170454
+          },
+          "B11": {
+            "max": 9982.0,
+            "mean": 3206.301090670798,
+            "min": 0.0,
+            "std": 1581.0467682178562
+          },
+          "B12": {
+            "max": 14673.0,
+            "mean": 2283.5368620433364,
+            "min": 0.0,
+            "std": 1447.4338160905695
+          },
+          "B8A": {
+            "max": 17253.0,
+            "mean": 4474.998842004395,
+            "min": 0.0,
+            "std": 2193.6802013255333
           }
         }
       },
-      "use_pretrain_norm": true
+      "num_classes": 7,
+      "num_timesteps": 12,
+      "source_path": "gs://rslearn-eai/datasets/tolbi",
+      "split_stats": {
+        "test": {
+          "count": 5609
+        },
+        "train": {
+          "count": 33444
+        },
+        "val": {
+          "count": 5608
+        }
+      },
+      "split_tag_key": "eval_split",
+      "split_type": "tags",
+      "task_type": "segmentation",
+      "test_split": "test",
+      "timeseries": true,
+      "train_split": "train",
+      "use_pretrain_norm": true,
+      "val_split": "val",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/tolbi_crop",
+      "window_size": 64
+    },
+    "yemen_crop": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8"
+      ],
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "yemen_crop",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 23844.0,
+            "mean": 921.8646854155245,
+            "min": 0.0,
+            "std": 822.0913502621366
+          },
+          "B02": {
+            "max": 22248.0,
+            "mean": 1171.2132361339548,
+            "min": 0.0,
+            "std": 825.9018176673484
+          },
+          "B03": {
+            "max": 18728.0,
+            "mean": 1642.1457662303546,
+            "min": 0.0,
+            "std": 822.6207529891919
+          },
+          "B04": {
+            "max": 17240.0,
+            "mean": 2042.859432108918,
+            "min": 0.0,
+            "std": 1011.36032313747
+          },
+          "B05": {
+            "max": 17596.0,
+            "mean": 2435.9272689373174,
+            "min": 0.0,
+            "std": 941.8008523910676
+          },
+          "B06": {
+            "max": 16711.0,
+            "mean": 2962.424452753792,
+            "min": 0.0,
+            "std": 826.3385390369624
+          },
+          "B07": {
+            "max": 16276.0,
+            "mean": 3207.189206128929,
+            "min": 0.0,
+            "std": 867.1686029003656
+          },
+          "B08": {
+            "max": 16008.0,
+            "mean": 3247.3280086405794,
+            "min": 0.0,
+            "std": 908.1011763839273
+          },
+          "B09": {
+            "max": 20333.0,
+            "mean": 3402.772459509777,
+            "min": 102.0,
+            "std": 1154.6031568954306
+          },
+          "B11": {
+            "max": 14924.0,
+            "mean": 3364.7720875879477,
+            "min": 183.0,
+            "std": 1096.4712130090172
+          },
+          "B12": {
+            "max": 13490.0,
+            "mean": 2883.625266270331,
+            "min": 143.0,
+            "std": 1118.8864508440222
+          },
+          "B8A": {
+            "max": 16490.0,
+            "mean": 3356.1349448042306,
+            "min": 0.0,
+            "std": 889.1137986950747
+          }
+        }
+      },
+      "num_classes": 9,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/henryh/helios/olmoearth_projects/yemen_crop_64/dataset",
+      "split_stats": {
+        "test": {
+          "count": 69
+        },
+        "train": {
+          "count": 456
+        },
+        "val": {
+          "count": 68
+        }
+      },
+      "split_tag_key": "eval_split",
+      "split_type": "tags",
+      "task_type": "segmentation",
+      "test_split": "test",
+      "timeseries": true,
+      "train_split": "train",
+      "use_pretrain_norm": true,
+      "val_split": "val",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/yemen_crop",
+      "window_size": 16
     }
-  }
+  },
+  "updated_at": "2026-02-24T00:15:34.513906",
+  "version": "1.0"
 }

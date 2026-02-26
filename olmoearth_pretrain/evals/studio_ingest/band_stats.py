@@ -24,6 +24,7 @@ Usage as library:
 import logging
 import os
 import random
+from typing import Any
 
 import torch
 from einops import rearrange
@@ -44,7 +45,7 @@ _default_workers = 0
 NUM_WORKERS = int(os.environ.get("OLMOEARTH_INGEST_WORKERS", _default_workers))
 
 
-def _collate_inputs_only(batch):
+def _collate_inputs_only(batch: list) -> list:
     """Collate function that returns samples as-is (no stacking).
 
     This handles variable-shaped tensors by not attempting to stack them.
@@ -68,7 +69,9 @@ def _resolve_layer_name(layer: str) -> str | None:
     return None
 
 
-def _get_bands_by_modality_from_runtime_config(runtime_config) -> dict[str, list[str]]:
+def _get_bands_by_modality_from_runtime_config(
+    runtime_config: Any,
+) -> dict[str, list[str]]:
     """Extract bands by modality from runtime config.
 
     Args:
@@ -90,7 +93,7 @@ def _get_bands_by_modality_from_runtime_config(runtime_config) -> dict[str, list
 
 
 def compute_band_stats(
-    model_ds,
+    model_ds: Any,
     bands_by_modality: dict[str, list[str]],
     batch_size: int = 8,
 ) -> dict:
@@ -242,7 +245,7 @@ def compute_band_stats(
         logger.warning(f"Skipped {skipped_batches} batches due to missing/corrupt data")
 
     # Finalize: compute mean and std from accumulated values
-    out = {}
+    out: dict[str, dict[str, dict[str, float | None]]] = {}
     for modality, bands in bands_by_modality.items():
         out[modality] = {}
         for band in bands:
@@ -271,7 +274,7 @@ def compute_band_stats_from_model_config(
     model_config_path: str,
     source_path: str,
     groups: list[str] | None = None,
-    tags: dict[str, list[str]] | None = None,
+    tags: dict[str, str] | None = None,
     num_samples: int | None = None,
     seed: int = 42,
 ) -> dict:
@@ -284,7 +287,7 @@ def compute_band_stats_from_model_config(
         model_config_path: Path to model.yaml file.
         source_path: Path to the rslearn dataset.
         groups: Optional list of dataset group names to filter by.
-        tags: Optional dict of tag filters (e.g., {"split": ["val"]}).
+        tags: Optional dict of tag filters (e.g., {"split": "val"}).
         num_samples: Number of samples to process. If None, processes all samples.
         seed: Random seed for reproducible sampling.
 

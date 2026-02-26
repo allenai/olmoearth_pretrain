@@ -8,8 +8,8 @@ from importlib.resources import files
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
     from olmoearth_pretrain.evals.datasets.rslearn_builder import RuntimeConfig
+    from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
 
 import numpy as np
 import torch
@@ -20,9 +20,9 @@ from rslearn.train.model_context import RasterImage
 from torch.utils.data import Dataset
 
 from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS
-from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.data.constants import Modality as DataModality
 from olmoearth_pretrain.data.utils import convert_to_db
+from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSample
 
@@ -126,7 +126,9 @@ class RslearnToOlmoEarthDataset(Dataset):
         if not input_modalities:
             raise ValueError("Must specify at least one input modality")
         if not all(m in self.allowed_modalities for m in input_modalities):
-            raise ValueError(f"Input modalities must be in {self.allowed_modalities} but got {input_modalities}")
+            raise ValueError(
+                f"Input modalities must be in {self.allowed_modalities} but got {input_modalities}"
+            )
 
         self.dataset = model_dataset
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
@@ -140,7 +142,9 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         # Target parsing config - derived from Task structure
         self.target_task_name = target_task_name  # For MultiTask, e.g., "segment"
-        self.target_task_type = target_task_type  # "segmentation", "classification", etc.
+        self.target_task_type = (
+            target_task_type  # "segmentation", "classification", etc.
+        )
 
         if self.norm_stats_from_pretrained:
             from olmoearth_pretrain.data.normalize import Normalizer, Strategy
@@ -153,7 +157,7 @@ class RslearnToOlmoEarthDataset(Dataset):
     @classmethod
     def from_runtime_config(
         cls,
-        runtime_config: "RuntimeConfig",
+        runtime_config: RuntimeConfig,
         source_path: str,
         split: str = "val",
         input_modalities: list[str] | None = None,
@@ -166,7 +170,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         num_timesteps: int = 12,
         groups_override: list[str] | None = None,
         tags_override: dict[str, str] | None = None,
-    ) -> "RslearnToOlmoEarthDataset":
+    ) -> RslearnToOlmoEarthDataset:
         """Build from RuntimeConfig using jsonargparse-instantiated objects.
 
         This is the main way to build datasets from model.yaml.
@@ -216,8 +220,11 @@ class RslearnToOlmoEarthDataset(Dataset):
                 resolved = layer
                 if layer not in RSLEARN_TO_OLMOEARTH:
                     for prefix in ("pre_", "post_"):
-                        if layer.startswith(prefix) and layer[len(prefix):] in RSLEARN_TO_OLMOEARTH:
-                            resolved = layer[len(prefix):]
+                        if (
+                            layer.startswith(prefix)
+                            and layer[len(prefix) :] in RSLEARN_TO_OLMOEARTH
+                        ):
+                            resolved = layer[len(prefix) :]
                             break
                 if resolved in RSLEARN_TO_OLMOEARTH:
                     input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
@@ -244,7 +251,7 @@ class RslearnToOlmoEarthDataset(Dataset):
     @staticmethod
     def _get_norm_stats(ds_norm_stats_json: str) -> dict:
         """Load dataset norm stats."""
-        #TODO: We will need to use the registry to get this information.
+        # TODO: We will need to use the registry to get this information.
         with (
             files("olmoearth_pretrain.evals.datasets.config") / ds_norm_stats_json
         ).open() as f:
@@ -334,7 +341,9 @@ class RslearnToOlmoEarthDataset(Dataset):
         # TODO: WE should be reading this from the metadata.json of each window/is there a way to enable in rslearn
         # Generate timestamps for this sample's actual number of timesteps
         sample_timesteps = sample_timesteps or self.max_timesteps
-        timestamps = get_timestamps(self.start_time, self.end_time, num_timesteps=sample_timesteps)
+        timestamps = get_timestamps(
+            self.start_time, self.end_time, num_timesteps=sample_timesteps
+        )
         sample_dict["timestamps"] = torch.stack(timestamps)
 
         olmoearth_sample = OlmoEarthSample(**sample_dict)
@@ -342,13 +351,18 @@ class RslearnToOlmoEarthDataset(Dataset):
         # ensure modality and modality mask have same hw raise error if not
         # Error is likely padding the mask wrong maybe or something?
         from olmoearth_pretrain.data.constants import Modality
+
         for modality in self.input_modalities:
             modality_spec = Modality.get(modality)
             if modality_spec.is_spatial:
-                mask_attr_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+                mask_attr_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                    modality
+                )
                 masked_attr = getattr(masked_sample, mask_attr_name)
                 if masked_attr is None:
-                    raise ValueError(f"Modality mask {mask_attr_name} not found for modality {modality}")
+                    raise ValueError(
+                        f"Modality mask {mask_attr_name} not found for modality {modality}"
+                    )
                 # hw is only dims 1 and 2
                 if masked_attr.shape[1:3] != sample_dict[modality].shape[1:3]:
                     raise ValueError(
@@ -384,9 +398,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         classes = self._extract_target_tensor(classes_raw)
         valid = self._extract_target_tensor(valid_raw)
 
-        # actually we want to map valid onto target and fill with the ignore label index and not return valid
         if valid is not None:
-            # what is the right value to fill with?
+            assert classes is not None, "valid mask present but no classes tensor"
             classes = classes.masked_fill(valid == 0, SEGMENTATION_IGNORE_LABEL)
         return masked_sample, classes
 
@@ -404,6 +417,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             return torch.as_tensor(raw, dtype=torch.long)
         # Fallback - try to convert
         return torch.as_tensor(raw)
+
 
 def from_registry_entry(
     entry: EvalDatasetEntry,
@@ -447,6 +461,7 @@ def from_registry_entry(
         dataset = from_registry_entry(entry, split="val")
     """
     import logging
+
     log = logging.getLogger(__name__)
 
     dataset_path = entry.weka_path if entry.weka_path else entry.source_path
@@ -468,7 +483,11 @@ def from_registry_entry(
         input_modalities = [m.lower() for m in entry.modalities]
 
     # Use override if provided, otherwise use entry's setting
-    use_pretrain_norm = norm_stats_from_pretrained if norm_stats_from_pretrained is not None else entry.use_pretrain_norm
+    use_pretrain_norm = (
+        norm_stats_from_pretrained
+        if norm_stats_from_pretrained is not None
+        else entry.use_pretrain_norm
+    )
 
     # Normalize split name: "valid" -> "val"
     normalized_split = "val" if split == "valid" else split
@@ -509,7 +528,9 @@ def from_registry_entry(
             "Check that the file exists and is valid YAML."
         )
 
-    log.info(f"Building dataset from RuntimeConfig for {entry.name} (path: {dataset_path})")
+    log.info(
+        f"Building dataset from RuntimeConfig for {entry.name} (path: {dataset_path})"
+    )
     return RslearnToOlmoEarthDataset.from_runtime_config(
         runtime_config=runtime_config,
         source_path=dataset_path,

@@ -9,7 +9,6 @@ import torch
 from torch.utils.data import default_collate
 
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
-from olmoearth_pretrain.data.constants import Modality
 
 
 def eval_collate_fn(
@@ -33,6 +32,7 @@ def eval_collate_fn_variable_time(
     Padded timesteps get MaskValue.MISSING in their mask tensors.
     """
     from olmoearth_pretrain.datatypes import MaskValue
+
     samples, targets = zip(*batch)
 
     # Find max temporal length using sample.modalities property

@@ -192,7 +192,9 @@ class DownstreamEvaluator:
                         "config.height_width cannot be none for segmentation tasks."
                     )
                 if self.config.height_width % self.patch_size != 0:
-                    raise ValueError(f"Image height / width indivisable by patch size. {self.config.height_width} % {self.patch_size} != 0")
+                    raise ValueError(
+                        f"Image height / width indivisable by patch size. {self.config.height_width} % {self.patch_size} != 0"
+                    )
 
         if self.eval_mode == EvalMode.FINETUNE:
             if self.ft_lr is None:
@@ -314,14 +316,21 @@ class DownstreamEvaluator:
             train_loader, is_train=True
         )
         logger.info(f"Train embeddings shape: {train_embeddings.shape}")
-        logger.info(f"Train label counts: {torch.unique(train_labels, return_counts=True)}")
+        logger.info(
+            f"Train label counts: {torch.unique(train_labels, return_counts=True)}"
+        )
 
         # Subsample train embeddings if configured
-        if self.max_train_samples and train_embeddings.shape[0] > self.max_train_samples:
+        if (
+            self.max_train_samples
+            and train_embeddings.shape[0] > self.max_train_samples
+        ):
             logger.info(
                 f"Subsampling train embeddings from {train_embeddings.shape[0]} to {self.max_train_samples}"
             )
-            indices = torch.randperm(train_embeddings.shape[0])[:self.max_train_samples]
+            indices = torch.randperm(train_embeddings.shape[0])[
+                : self.max_train_samples
+            ]
             train_embeddings = train_embeddings[indices]
             train_labels = train_labels[indices]
 
@@ -337,7 +346,9 @@ class DownstreamEvaluator:
                 test_loader, is_train=False
             )
             logger.info(f"Test embeddings shape: {test_embeddings.shape}")
-            logger.info(f"Test label counts: {torch.unique(test_labels, return_counts=True)}")
+            logger.info(
+                f"Test label counts: {torch.unique(test_labels, return_counts=True)}"
+            )
         else:
             test_embeddings, test_labels = None, None
         logger.info(

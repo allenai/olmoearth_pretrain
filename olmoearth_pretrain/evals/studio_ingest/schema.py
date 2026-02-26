@@ -41,13 +41,12 @@ from olmoearth_pretrain.data.constants import ModalitySpec
 from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
 from olmoearth_pretrain.evals.task_types import SplitName, SplitType, TaskType
 
-
 # =============================================================================
 # Config Instantiation
 # =============================================================================
 
 
-def rslearn_task_type_to_olmoearth_task_type(rslearn_task):
+def rslearn_task_type_to_olmoearth_task_type(rslearn_task: Any) -> TaskType:
     """Map rslearn Task class to olmoearth TaskType enum."""
     # Note: Adjust as needed to match all possible rslearn task types
     rslearn_name = type(rslearn_task).__name__.lower()
@@ -112,7 +111,7 @@ def rslearn_to_olmoearth(layer_name: str) -> ModalitySpec:
 
     for prefix in ("pre_", "post_"):
         if layer_name.startswith(prefix):
-            stripped = layer_name[len(prefix):]
+            stripped = layer_name[len(prefix) :]
             if stripped in RSLEARN_TO_OLMOEARTH:
                 return RSLEARN_TO_OLMOEARTH[stripped]
 
@@ -182,15 +181,16 @@ class EvalDatasetEntry:
     test_split: str = "test"
     split_type: str = "tags"  # "groups" or "tags"
     split_tag_key: str = "eval_split"  # Tag key used for split filtering
-    split_stats: dict[str, dict[str, Any]] = field(default_factory=dict)  # Per-split sample counts
-
+    split_stats: dict[str, dict[str, Any]] = field(
+        default_factory=dict
+    )  # Per-split sample counts
 
     # Modality configuration
     modalities: list[str] = field(default_factory=list)
     imputes: list[tuple[str, str]] = field(default_factory=list)
 
     # Sizing
-    window_size: int = 64 # TOD: we should be reading this in
+    window_size: int = 64  # TOD: we should be reading this in
     timeseries: bool = False
 
     # Normalization
@@ -198,7 +198,6 @@ class EvalDatasetEntry:
     use_pretrain_norm: bool = True
 
     num_timesteps: int = 1
-
 
     def __post_init__(self) -> None:
         """Validate and normalize fields after initialization."""
@@ -227,7 +226,11 @@ class EvalDatasetEntry:
 
         # Normalize modalities: convert ModalitySpec to lowercase name strings
         self.modalities = [
-            m.name if isinstance(m, ModalitySpec) else m.lower() if isinstance(m, str) else m
+            m.name
+            if isinstance(m, ModalitySpec)
+            else m.lower()
+            if isinstance(m, str)
+            else m
             for m in self.modalities
         ]
 
@@ -266,10 +269,10 @@ class EvalDatasetEntry:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "EvalDatasetEntry":
+    def from_dict(cls, data: dict[str, Any]) -> EvalDatasetEntry:
         """Create from dictionary."""
-        # Handle imputes: list of lists -> list of tuples
-        imputes = [tuple(x) for x in data.get("imputes", [])]
+        # Handle imputes: list of lists -> list of 2-tuples
+        imputes = [(x[0], x[1]) for x in data.get("imputes", [])]
 
         # Handle backward compatibility: multilabel -> is_multilabel
         is_multilabel = data.get("is_multilabel", data.get("multilabel", False))
@@ -302,7 +305,7 @@ class EvalDatasetEntry:
         return json.dumps(self.to_dict(), indent=indent)
 
     @classmethod
-    def from_json(cls, json_str: str) -> "EvalDatasetEntry":
+    def from_json(cls, json_str: str) -> EvalDatasetEntry:
         """Deserialize from JSON string."""
         return cls.from_dict(json.loads(json_str))
 

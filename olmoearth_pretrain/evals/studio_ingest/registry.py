@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
@@ -260,7 +261,7 @@ class Registry:
         """Check if dataset exists in registry."""
         return name in self.datasets
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[EvalDatasetEntry]:
         """Iterate over dataset entries."""
         return iter(self.datasets.values())
 

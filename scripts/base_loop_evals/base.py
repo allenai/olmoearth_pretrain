@@ -1,6 +1,9 @@
-"""Base training run with loop evals only: tolbi_crop, canada_wildfire_sat_eval_split,
-yemen_crop, geo_ecosystem_annual_test, forest_loss_driver, nigeria_settlement.
-Same as official base except the evals run every 5k steps."""
+"""Base training run with loop evals only.
+
+tolbi_crop, canada_wildfire_sat_eval_split, yemen_crop,
+geo_ecosystem_annual_test, forest_loss_driver, nigeria_settlement.
+Same as official base except the evals run every 5k steps.
+"""
 
 import logging
 

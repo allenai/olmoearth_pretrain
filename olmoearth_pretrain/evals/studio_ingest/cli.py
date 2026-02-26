@@ -1,4 +1,4 @@
-"""Command-line interface for Studio dataset ingestion.
+r"""Command-line interface for Studio dataset ingestion.
 
 This module provides CLI commands for:
 - ingest: Full ingestion of a dataset
@@ -39,31 +39,6 @@ import json
 import logging
 import sys
 
-# =============================================================================
-# Configure logging BEFORE importing other modules
-# This ensures all loggers (including rslearn) have a handler
-# =============================================================================
-def _setup_logging() -> None:
-    """Configure logging for CLI usage."""
-    # Create handler that writes to stderr
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%H:%M:%S"
-    ))
-
-    # Configure root logger
-    root = logging.getLogger()
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
-
-    # Explicitly enable our loggers and rslearn
-    logging.getLogger("olmoearth_pretrain").setLevel(logging.INFO)
-    logging.getLogger("rslearn").setLevel(logging.INFO)
-
-_setup_logging()
-
-# Now import the rest (their loggers will inherit from root)
 from olmoearth_pretrain.evals.studio_ingest.ingest import IngestConfig, ingest_dataset
 from olmoearth_pretrain.evals.studio_ingest.registry import Registry
 

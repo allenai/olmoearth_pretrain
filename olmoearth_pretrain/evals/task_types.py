@@ -15,7 +15,7 @@ class SplitType(StrEnum):
     """How splits are defined in the dataset."""
 
     GROUPS = "groups"  # Splits are rslearn groups
-    TAGS = "tags"      # Splits are rslearn window tags
+    TAGS = "tags"  # Splits are rslearn window tags
 
 
 class SplitName(StrEnum):

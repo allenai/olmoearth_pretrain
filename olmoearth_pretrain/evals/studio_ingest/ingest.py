@@ -47,7 +47,7 @@ import json
 import logging
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -282,14 +282,14 @@ def _copy_from_gcs(
             group_dst_parent = f"{dest_path}/windows"
             Path(group_dst_parent).mkdir(parents=True, exist_ok=True)
             logger.info(f"  Running: gsutil -m cp -r {group_src} {group_dst_parent}")
-            subprocess.run(
+            subprocess.run(  # nosec B603 B607
                 ["gsutil", "-m", "cp", "-r", group_src, group_dst_parent], check=True
             )
     else:
         # Copy entire windows directory
         windows_src = f"{source_path}/windows"
         logger.info(f"  Running: gsutil -m cp -r {windows_src} {dest_path}")
-        subprocess.run(["gsutil", "-m", "cp", "-r", windows_src, dest_path], check=True)
+        subprocess.run(["gsutil", "-m", "cp", "-r", windows_src, dest_path], check=True)  # nosec B603 B607
 
     logger.info("  gsutil copy complete")
     return dest_path
@@ -320,10 +320,10 @@ def _copy_from_gcs_tar(
     local_archive = Path(dest_path) / archive_name
 
     logger.info(f"  Downloading {source_path} -> {local_archive}")
-    subprocess.run(["gsutil", "cp", source_path, str(local_archive)], check=True)
+    subprocess.run(["gsutil", "cp", source_path, str(local_archive)], check=True)  # nosec B603 B607
 
     logger.info(f"  Extracting {local_archive} -> {dest_path}")
-    subprocess.run(["tar", "xzf", str(local_archive), "-C", dest_path], check=True)
+    subprocess.run(["tar", "xzf", str(local_archive), "-C", dest_path], check=True)  # nosec B603 B607
 
     logger.info(f"  Removing archive {local_archive}")
     local_archive.unlink()
@@ -403,13 +403,13 @@ def _copy_local(
 
             cmd = _tar_copy_cmd(group_src, group_dst, has_pv)
             logger.info(f"  Running: {cmd}")
-            subprocess.run(cmd, shell=True, check=True)
+            subprocess.run(cmd, shell=True, check=True)  # nosec B602
             logger.info(f"  Copied group '{group}'")
     else:
         # Copy entire directory using streaming tar
         cmd = _tar_copy_cmd(source_path, dest_path, has_pv)
         logger.info(f"  Running: {cmd}")
-        subprocess.run(cmd, shell=True, check=True)
+        subprocess.run(cmd, shell=True, check=True)  # nosec B602
         logger.info("  Copy complete")
 
     return dest_path

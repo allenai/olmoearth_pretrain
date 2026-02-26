@@ -8,6 +8,8 @@ from einops import rearrange, reduce
 from torch import nn
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.datatypes import MaskValue
 from olmoearth_pretrain.evals.datasets.configs import TaskType
 from olmoearth_pretrain.evals.models import (
     AnySat,
@@ -27,8 +29,6 @@ from olmoearth_pretrain.nn.flexi_vit import (
     PoolingType,
     TokensAndMasks,
 )
-from olmoearth_pretrain.datatypes import MaskValue
-from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from olmoearth_pretrain.nn.st_model import STBase
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
@@ -118,7 +118,9 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         for modality_name in masked_olmoearth_sample.modalities:
             modality_spec = Modality.get(modality_name)
             if modality_spec.is_spatial:
-                mask_attr_name = MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+                mask_attr_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                    modality_name
+                )
                 masked_attr = getattr(masked_olmoearth_sample, mask_attr_name)
                 if masked_attr is None:
                     continue
@@ -126,9 +128,10 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     fast_pass = False
                     break
 
-
-        logger.debug(f"OlmoEarthEvalWrapper: spatial_pool={self.spatial_pool}, "
-                     f"use_pooled_tokens={self.use_pooled_tokens}, fast_pass={fast_pass}")
+        logger.debug(
+            f"OlmoEarthEvalWrapper: spatial_pool={self.spatial_pool}, "
+            f"use_pooled_tokens={self.use_pooled_tokens}, fast_pass={fast_pass}"
+        )
 
         if not self.use_pooled_tokens:
             batch_embeddings: TokensAndMasks = self.model(

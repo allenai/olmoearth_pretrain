@@ -24,6 +24,7 @@ class TestEvalResult:
         result = EvalResult.from_classification(0.80, f1=0.85)
         assert result.primary == 0.80
         assert result.metrics == {"accuracy": 0.80, "f1": 0.85}
+
     def test_from_segmentation(self) -> None:
         """Test creating EvalResult from segmentation metrics."""
         result = EvalResult.from_segmentation(

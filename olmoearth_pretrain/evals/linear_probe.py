@@ -382,7 +382,11 @@ def weighted_dice_loss(
     targets_masked[~valid_mask] = 0
 
     probs = F.softmax(logits, dim=1)
-    one_hot = F.one_hot(targets_masked, num_classes).permute(0, -1, *range(1, targets.ndim)).float()
+    one_hot = (
+        F.one_hot(targets_masked, num_classes)
+        .permute(0, -1, *range(1, targets.ndim))
+        .float()
+    )
 
     # Zero out ignored pixels in both probs and one_hot
     valid_mask_expanded = valid_mask.unsqueeze(1).expand_as(one_hot)
@@ -399,7 +403,11 @@ def weighted_dice_loss(
     # Class weights: inverse frequency of valid pixels per class
     class_counts = one_hot.sum(dim=dims)
     total = class_counts.sum()
-    weights = torch.where(class_counts > 0, total / (num_classes * class_counts), torch.zeros_like(class_counts))
+    weights = torch.where(
+        class_counts > 0,
+        total / (num_classes * class_counts),
+        torch.zeros_like(class_counts),
+    )
     weights = weights / (weights.sum() + 1e-8)
 
     loss = 1.0 - (weights * dice_per_class).sum()
@@ -568,7 +576,10 @@ def compute_metric(
     """
     if task_type == TaskType.SEGMENTATION:
         return segmentation_metrics(
-            preds, labels, num_classes=num_classes, ignore_label=SEGMENTATION_IGNORE_LABEL
+            preds,
+            labels,
+            num_classes=num_classes,
+            ignore_label=SEGMENTATION_IGNORE_LABEL,
         )
     else:
         acc = accuracy_score(labels.numpy(), preds.numpy())
