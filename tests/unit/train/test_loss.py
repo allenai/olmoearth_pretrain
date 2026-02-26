@@ -12,9 +12,9 @@ from olmoearth_pretrain.train.loss import (
     KoLeoLoss,
     L1Loss,
     L2Loss,
-    ModalityPatchDiscriminationMaskedNegatives,
     ModalityPatchDiscriminationLossNew,
     ModalityPatchDiscriminationLossVec,
+    ModalityPatchDiscriminationMaskedNegatives,
     PatchDiscriminationLoss,
     PatchDiscriminationLossNew,
 )
@@ -358,12 +358,16 @@ def test_vec_gradient_matches_new() -> None:
         s2_pred_v = s2_data.clone().requires_grad_(True)
         ll_pred_v = ll_data.clone().requires_grad_(True)
         preds_v = TokensAndMasks(
-            sentinel2_l2a=s2_pred_v, sentinel2_l2a_mask=s2_mask,
-            latlon=ll_pred_v, latlon_mask=ll_mask,
+            sentinel2_l2a=s2_pred_v,
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_pred_v,
+            latlon_mask=ll_mask,
         )
         targets_v = TokensAndMasks(
-            sentinel2_l2a=s2_tgt.clone(), sentinel2_l2a_mask=s2_mask,
-            latlon=ll_tgt.clone(), latlon_mask=ll_mask,
+            sentinel2_l2a=s2_tgt.clone(),
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_tgt.clone(),
+            latlon_mask=ll_mask,
         )
         loss_v = ModalityPatchDiscriminationLossVec().compute(preds_v, targets_v)
         loss_v.backward()
@@ -372,12 +376,16 @@ def test_vec_gradient_matches_new() -> None:
         s2_pred_n = s2_data.clone().requires_grad_(True)
         ll_pred_n = ll_data.clone().requires_grad_(True)
         preds_n = TokensAndMasks(
-            sentinel2_l2a=s2_pred_n, sentinel2_l2a_mask=s2_mask,
-            latlon=ll_pred_n, latlon_mask=ll_mask,
+            sentinel2_l2a=s2_pred_n,
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_pred_n,
+            latlon_mask=ll_mask,
         )
         targets_n = TokensAndMasks(
-            sentinel2_l2a=s2_tgt.clone(), sentinel2_l2a_mask=s2_mask,
-            latlon=ll_tgt.clone(), latlon_mask=ll_mask,
+            sentinel2_l2a=s2_tgt.clone(),
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_tgt.clone(),
+            latlon_mask=ll_mask,
         )
         loss_n = ModalityPatchDiscriminationLossNew().compute(preds_n, targets_n)
         loss_n.backward()
@@ -389,8 +397,16 @@ def test_vec_gradient_matches_new() -> None:
             f"seed={seed}: s2 grad mismatch, "
             f"max diff={(s2_pred_v.grad - s2_pred_n.grad).abs().max().item()}"
         )
-        grad_v = ll_pred_v.grad if ll_pred_v.grad is not None else torch.zeros_like(ll_pred_v)
-        grad_n = ll_pred_n.grad if ll_pred_n.grad is not None else torch.zeros_like(ll_pred_n)
+        grad_v = (
+            ll_pred_v.grad
+            if ll_pred_v.grad is not None
+            else torch.zeros_like(ll_pred_v)
+        )
+        grad_n = (
+            ll_pred_n.grad
+            if ll_pred_n.grad is not None
+            else torch.zeros_like(ll_pred_n)
+        )
         assert torch.allclose(grad_v, grad_n, rtol=1e-4, atol=1e-6), (
             f"seed={seed}: latlon grad mismatch, "
             f"max diff={(grad_v - grad_n).abs().max().item()}"
@@ -415,12 +431,16 @@ def test_vec_gradient_matches_new_bfloat16() -> None:
         s2_v = s2_data.bfloat16().requires_grad_(True)
         ll_v = ll_data.bfloat16().requires_grad_(True)
         preds_v = TokensAndMasks(
-            sentinel2_l2a=s2_v, sentinel2_l2a_mask=s2_mask,
-            latlon=ll_v, latlon_mask=ll_mask,
+            sentinel2_l2a=s2_v,
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_v,
+            latlon_mask=ll_mask,
         )
         targets_v = TokensAndMasks(
-            sentinel2_l2a=s2_tgt.bfloat16(), sentinel2_l2a_mask=s2_mask,
-            latlon=ll_tgt.bfloat16(), latlon_mask=ll_mask,
+            sentinel2_l2a=s2_tgt.bfloat16(),
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_tgt.bfloat16(),
+            latlon_mask=ll_mask,
         )
         loss_v = ModalityPatchDiscriminationLossVec().compute(preds_v, targets_v)
         loss_v.backward()
@@ -429,12 +449,16 @@ def test_vec_gradient_matches_new_bfloat16() -> None:
         s2_n = s2_data.bfloat16().requires_grad_(True)
         ll_n = ll_data.bfloat16().requires_grad_(True)
         preds_n = TokensAndMasks(
-            sentinel2_l2a=s2_n, sentinel2_l2a_mask=s2_mask,
-            latlon=ll_n, latlon_mask=ll_mask,
+            sentinel2_l2a=s2_n,
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_n,
+            latlon_mask=ll_mask,
         )
         targets_n = TokensAndMasks(
-            sentinel2_l2a=s2_tgt.bfloat16(), sentinel2_l2a_mask=s2_mask,
-            latlon=ll_tgt.bfloat16(), latlon_mask=ll_mask,
+            sentinel2_l2a=s2_tgt.bfloat16(),
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_tgt.bfloat16(),
+            latlon_mask=ll_mask,
         )
         loss_n = ModalityPatchDiscriminationLossNew().compute(preds_n, targets_n)
         loss_n.backward()
@@ -556,9 +580,7 @@ def test_vec_multiple_modalities() -> None:
     s2_mask = torch.randint(0, 4, (b, t_h, t_w, t))
     s1_mask = torch.randint(0, 4, (b, t_h, t_w, t))
     # worldcover: only decode modality — all decoder
-    wc_mask = (
-        torch.ones((b, t_h, t_w, 1), dtype=torch.long) * MaskValue.DECODER.value
-    )
+    wc_mask = torch.ones((b, t_h, t_w, 1), dtype=torch.long) * MaskValue.DECODER.value
 
     preds = TokensAndMasks(
         sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
@@ -604,12 +626,12 @@ def test_vec_modality_weights() -> None:
             latlon=torch.randn((b, 1, d)),
             latlon_mask=ll_mask,
         )
-        vec = ModalityPatchDiscriminationLossVec(
-            modality_weights=weights
-        ).compute(preds, targets)
-        new = ModalityPatchDiscriminationLossNew(
-            modality_weights=weights
-        ).compute(preds, targets)
+        vec = ModalityPatchDiscriminationLossVec(modality_weights=weights).compute(
+            preds, targets
+        )
+        new = ModalityPatchDiscriminationLossNew(modality_weights=weights).compute(
+            preds, targets
+        )
         assert torch.isclose(vec, new, rtol=1e-4, atol=1e-6), (
             f"seed={seed} weighted: {vec.item()} vs {new.item()}"
         )
@@ -631,8 +653,7 @@ def test_vec_high_dim_large_tokens() -> None:
     vec = ModalityPatchDiscriminationLossVec().compute(preds, targets)
     new = ModalityPatchDiscriminationLossNew().compute(preds, targets)
     assert torch.isclose(vec, new, rtol=1e-3, atol=1e-5), (
-        f"high-dim: {vec.item()} vs {new.item()}, "
-        f"diff={abs(vec.item() - new.item())}"
+        f"high-dim: {vec.item()} vs {new.item()}, diff={abs(vec.item() - new.item())}"
     )
 
 
@@ -801,12 +822,16 @@ def test_new_vs_vec_gradients() -> None:
         s2_new = s2_data.clone().requires_grad_(True)
         ll_new = ll_data.clone().requires_grad_(True)
         preds_new = TokensAndMasks(
-            sentinel2_l2a=s2_new, sentinel2_l2a_mask=s2_mask,
-            latlon=ll_new, latlon_mask=ll_mask,
+            sentinel2_l2a=s2_new,
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_new,
+            latlon_mask=ll_mask,
         )
         targets_new = TokensAndMasks(
-            sentinel2_l2a=s2_tgt.clone(), sentinel2_l2a_mask=s2_mask,
-            latlon=ll_tgt.clone(), latlon_mask=ll_mask,
+            sentinel2_l2a=s2_tgt.clone(),
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_tgt.clone(),
+            latlon_mask=ll_mask,
         )
         loss_n = ModalityPatchDiscriminationLossNew().compute(preds_new, targets_new)
         loss_n.backward()
@@ -815,12 +840,16 @@ def test_new_vs_vec_gradients() -> None:
         s2_vec = s2_data.clone().requires_grad_(True)
         ll_vec = ll_data.clone().requires_grad_(True)
         preds_vec = TokensAndMasks(
-            sentinel2_l2a=s2_vec, sentinel2_l2a_mask=s2_mask,
-            latlon=ll_vec, latlon_mask=ll_mask,
+            sentinel2_l2a=s2_vec,
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_vec,
+            latlon_mask=ll_mask,
         )
         targets_vec = TokensAndMasks(
-            sentinel2_l2a=s2_tgt.clone(), sentinel2_l2a_mask=s2_mask,
-            latlon=ll_tgt.clone(), latlon_mask=ll_mask,
+            sentinel2_l2a=s2_tgt.clone(),
+            sentinel2_l2a_mask=s2_mask,
+            latlon=ll_tgt.clone(),
+            latlon_mask=ll_mask,
         )
         loss_v = ModalityPatchDiscriminationLossVec().compute(preds_vec, targets_vec)
         loss_v.backward()
@@ -904,9 +933,7 @@ def test_new_vs_vec_multiple_modalities() -> None:
 
     s2_mask = torch.randint(0, 4, (b, t_h, t_w, t))
     s1_mask = torch.randint(0, 4, (b, t_h, t_w, t))
-    wc_mask = (
-        torch.ones((b, t_h, t_w, 1), dtype=torch.long) * MaskValue.DECODER.value
-    )
+    wc_mask = torch.ones((b, t_h, t_w, 1), dtype=torch.long) * MaskValue.DECODER.value
 
     preds = TokensAndMasks(
         sentinel2_l2a=torch.randn((b, t_h, t_w, t, d)),
@@ -1025,16 +1052,24 @@ def test_new_vs_vec_gradients_all_modalities() -> None:
         s2_n = s2_data.clone().requires_grad_(True)
         s1_n = s1_data.clone().requires_grad_(True)
         preds_n = TokensAndMasks(
-            sentinel2_l2a=s2_n, sentinel2_l2a_mask=s2_mask,
-            sentinel1=s1_n, sentinel1_mask=s1_mask,
-            worldcover=wc_data.clone(), worldcover_mask=wc_mask,
-            latlon=ll_data.clone(), latlon_mask=ll_mask,
+            sentinel2_l2a=s2_n,
+            sentinel2_l2a_mask=s2_mask,
+            sentinel1=s1_n,
+            sentinel1_mask=s1_mask,
+            worldcover=wc_data.clone(),
+            worldcover_mask=wc_mask,
+            latlon=ll_data.clone(),
+            latlon_mask=ll_mask,
         )
         targets_n = TokensAndMasks(
-            sentinel2_l2a=s2_tgt.clone(), sentinel2_l2a_mask=s2_mask,
-            sentinel1=s1_tgt.clone(), sentinel1_mask=s1_mask,
-            worldcover=wc_tgt.clone(), worldcover_mask=wc_mask,
-            latlon=ll_tgt.clone(), latlon_mask=ll_mask,
+            sentinel2_l2a=s2_tgt.clone(),
+            sentinel2_l2a_mask=s2_mask,
+            sentinel1=s1_tgt.clone(),
+            sentinel1_mask=s1_mask,
+            worldcover=wc_tgt.clone(),
+            worldcover_mask=wc_mask,
+            latlon=ll_tgt.clone(),
+            latlon_mask=ll_mask,
         )
         loss_n = ModalityPatchDiscriminationLossNew().compute(preds_n, targets_n)
         loss_n.backward()
@@ -1043,16 +1078,24 @@ def test_new_vs_vec_gradients_all_modalities() -> None:
         s2_v = s2_data.clone().requires_grad_(True)
         s1_v = s1_data.clone().requires_grad_(True)
         preds_v = TokensAndMasks(
-            sentinel2_l2a=s2_v, sentinel2_l2a_mask=s2_mask,
-            sentinel1=s1_v, sentinel1_mask=s1_mask,
-            worldcover=wc_data.clone(), worldcover_mask=wc_mask,
-            latlon=ll_data.clone(), latlon_mask=ll_mask,
+            sentinel2_l2a=s2_v,
+            sentinel2_l2a_mask=s2_mask,
+            sentinel1=s1_v,
+            sentinel1_mask=s1_mask,
+            worldcover=wc_data.clone(),
+            worldcover_mask=wc_mask,
+            latlon=ll_data.clone(),
+            latlon_mask=ll_mask,
         )
         targets_v = TokensAndMasks(
-            sentinel2_l2a=s2_tgt.clone(), sentinel2_l2a_mask=s2_mask,
-            sentinel1=s1_tgt.clone(), sentinel1_mask=s1_mask,
-            worldcover=wc_tgt.clone(), worldcover_mask=wc_mask,
-            latlon=ll_tgt.clone(), latlon_mask=ll_mask,
+            sentinel2_l2a=s2_tgt.clone(),
+            sentinel2_l2a_mask=s2_mask,
+            sentinel1=s1_tgt.clone(),
+            sentinel1_mask=s1_mask,
+            worldcover=wc_tgt.clone(),
+            worldcover_mask=wc_mask,
+            latlon=ll_tgt.clone(),
+            latlon_mask=ll_mask,
         )
         loss_v = ModalityPatchDiscriminationLossVec().compute(preds_v, targets_v)
         loss_v.backward()

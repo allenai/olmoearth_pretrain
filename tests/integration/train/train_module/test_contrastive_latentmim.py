@@ -233,14 +233,18 @@ def _run_train_batch_and_get_loss(
     torch.manual_seed(42)
     try:
         train_module = config.build(model, device="cpu")
-        with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        with patch(
+            "olmoearth_pretrain.train.train_module.train_module.build_world_mesh"
+        ):
             mock_trainer = MockTrainer()
             on_attach_mock = MagicMock(return_value=None)
             train_module.on_attach = on_attach_mock  # type: ignore
             train_module._attach_trainer(mock_trainer)
             train_module.train_batch(batch)
         patch_disc_key = [k for k in mock_trainer._metrics if "PatchDisc" in k]
-        assert patch_disc_key, f"No PatchDisc metric found in {list(mock_trainer._metrics.keys())}"
+        assert patch_disc_key, (
+            f"No PatchDisc metric found in {list(mock_trainer._metrics.keys())}"
+        )
         return mock_trainer._metrics[patch_disc_key[0]]
     finally:
         model.load_state_dict(saved_state)

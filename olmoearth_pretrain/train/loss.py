@@ -443,9 +443,9 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
                 )
                 scores = scores + logits_mask
 
-            labels = torch.arange(nt, dtype=torch.long, device=pred.device)[None].repeat(
-                bs, 1
-            )
+            labels = torch.arange(nt, dtype=torch.long, device=pred.device)[
+                None
+            ].repeat(bs, 1)
             loss = F.cross_entropy(
                 scores.flatten(0, 1), labels.flatten(0, 1), reduction="none"
             ) * (self.tau * 2)
@@ -523,7 +523,9 @@ class ModalityPatchDiscriminationLossVec(Loss):
 
         # Validity mask: first count[b] positions per sample are decoder tokens.
         range_tensor = torch.arange(num_tokens, device=count.device)
-        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(1)  # (batch, num_tokens)
+        valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(
+            1
+        )  # (batch, num_tokens)
 
         if self.pred2unit:
             # Global mean/std across all decoder tokens (matches original flat behavior)
@@ -1079,8 +1081,7 @@ class KoLeoLoss(Loss):
                 ]
             else:
                 online_encodings = pool_unmasked_tokens(
-                    predictions,
-                    PoolingType.MEAN, spatial_pooling=False
+                    predictions, PoolingType.MEAN, spatial_pooling=False
                 )
         else:
             online_encodings = predictions

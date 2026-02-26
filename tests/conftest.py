@@ -2,8 +2,6 @@
 
 import calendar
 import random
-import sys
-import types
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path

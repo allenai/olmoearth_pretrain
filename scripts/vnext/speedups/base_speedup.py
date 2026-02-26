@@ -22,9 +22,11 @@ from script import (  # noqa: E402
     build_common_components,
     build_dataloader_config,
     build_dataset_config,
-    build_train_module_config as _build_train_module_config_base,
     build_trainer_config,
     build_visualize_config,
+)
+from script import (
+    build_train_module_config as _build_train_module_config_base,
 )
 
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402

@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 try:
     import flash_attn  # noqa: F401
+
     HAS_FLASH_ATTN = True
 except ImportError:
     HAS_FLASH_ATTN = False
@@ -34,6 +35,7 @@ def _gpu_test_setup():
     yield
     torch.use_deterministic_algorithms(True)
 
+
 MODALITIES = [
     Modality.SENTINEL2_L2A.name,
     Modality.SENTINEL1.name,
@@ -46,15 +48,25 @@ def _build_model(use_flash_attn: bool) -> LatentMIMConfig:
     return LatentMIMConfig(
         encoder_config=EncoderConfig(
             supported_modality_names=MODALITIES,
-            embedding_size=64, max_patch_size=8, num_heads=4, mlp_ratio=1.0,
-            depth=2, drop_path=0.0, max_sequence_length=12,
+            embedding_size=64,
+            max_patch_size=8,
+            num_heads=4,
+            mlp_ratio=1.0,
+            depth=2,
+            drop_path=0.0,
+            max_sequence_length=12,
             use_flash_attn=use_flash_attn,
         ),
         decoder_config=PredictorConfig(
             supported_modality_names=MODALITIES,
-            encoder_embedding_size=64, decoder_embedding_size=64,
-            depth=2, mlp_ratio=1.0, num_heads=4, max_sequence_length=12,
-            drop_path=0.0, use_flash_attn=use_flash_attn,
+            encoder_embedding_size=64,
+            decoder_embedding_size=64,
+            depth=2,
+            mlp_ratio=1.0,
+            num_heads=4,
+            max_sequence_length=12,
+            drop_path=0.0,
+            use_flash_attn=use_flash_attn,
         ),
     )
 
@@ -79,8 +91,14 @@ def _make_fake_batch(device: torch.device, all_encoder: bool = False):
         s2_mask = torch.zeros(B, H, W, T, s2_bs, dtype=torch.long, device=device)
         s1_mask = torch.zeros(B, H, W, T, s1_bs, dtype=torch.long, device=device)
     else:
-        s2_mask = torch.randint(0, 2, (B, H, W, T, s2_bs), device=device) * MaskValue.DECODER.value
-        s1_mask = torch.randint(0, 2, (B, H, W, T, s1_bs), device=device) * MaskValue.DECODER.value
+        s2_mask = (
+            torch.randint(0, 2, (B, H, W, T, s2_bs), device=device)
+            * MaskValue.DECODER.value
+        )
+        s1_mask = (
+            torch.randint(0, 2, (B, H, W, T, s1_bs), device=device)
+            * MaskValue.DECODER.value
+        )
     wc_mask = torch.zeros(B, H, W, 1, wc_bs, dtype=torch.long, device=device)
     ll_mask = torch.zeros(B, 1, dtype=torch.long, device=device)
     return MaskedOlmoEarthSample(
@@ -102,8 +120,17 @@ def test_flash_vs_sdpa_train_mode(patch_size: int) -> None:
     """Train mode: mixed masks (ONLINE_ENCODER + DECODER), both paths apply masking."""
     device = torch.device("cuda")
     torch.manual_seed(42)
-    model_sdpa = _build_model(use_flash_attn=False).build().to(device=device, dtype=torch.bfloat16).train()
-    model_flash = _build_model(use_flash_attn=True).build().to(device=device, dtype=torch.bfloat16)
+    model_sdpa = (
+        _build_model(use_flash_attn=False)
+        .build()
+        .to(device=device, dtype=torch.bfloat16)
+        .train()
+    )
+    model_flash = (
+        _build_model(use_flash_attn=True)
+        .build()
+        .to(device=device, dtype=torch.bfloat16)
+    )
     model_flash.load_state_dict(copy.deepcopy(model_sdpa.state_dict()))
     model_flash.train()
     torch.manual_seed(42)
@@ -115,7 +142,9 @@ def test_flash_vs_sdpa_train_mode(patch_size: int) -> None:
     dec_f = decoded_flash.flatten_all_tokens_and_masks()[0]
     max_diff = (dec_s - dec_f).abs().max().item()
     mean_diff = (dec_s - dec_f).abs().mean().item()
-    logger.info(f"TRAIN patch_size={patch_size}: max_diff={max_diff:.6f}, mean_diff={mean_diff:.6f}")
+    logger.info(
+        f"TRAIN patch_size={patch_size}: max_diff={max_diff:.6f}, mean_diff={mean_diff:.6f}"
+    )
     assert torch.allclose(dec_s, dec_f, rtol=1e-3, atol=1e-3), (
         f"Train mode patch_size={patch_size}: max_diff={max_diff}, mean_diff={mean_diff}"
     )
@@ -132,8 +161,17 @@ def test_flash_vs_sdpa_eval_encoder_only(patch_size: int) -> None:
     """
     device = torch.device("cuda")
     torch.manual_seed(42)
-    model_sdpa = _build_model(use_flash_attn=False).build().to(device=device, dtype=torch.bfloat16).eval()
-    model_flash = _build_model(use_flash_attn=True).build().to(device=device, dtype=torch.bfloat16)
+    model_sdpa = (
+        _build_model(use_flash_attn=False)
+        .build()
+        .to(device=device, dtype=torch.bfloat16)
+        .eval()
+    )
+    model_flash = (
+        _build_model(use_flash_attn=True)
+        .build()
+        .to(device=device, dtype=torch.bfloat16)
+    )
     model_flash.load_state_dict(copy.deepcopy(model_sdpa.state_dict()))
     model_flash.eval()
     torch.manual_seed(42)
@@ -145,7 +183,9 @@ def test_flash_vs_sdpa_eval_encoder_only(patch_size: int) -> None:
     flash_tokens = out_flash["tokens_and_masks"].flatten_all_tokens_and_masks()[0]
     max_diff = (sdpa_tokens - flash_tokens).abs().max().item()
     mean_diff = (sdpa_tokens - flash_tokens).abs().mean().item()
-    logger.info(f"EVAL encoder patch_size={patch_size}: max_diff={max_diff:.6f}, mean_diff={mean_diff:.6f}")
+    logger.info(
+        f"EVAL encoder patch_size={patch_size}: max_diff={max_diff:.6f}, mean_diff={mean_diff:.6f}"
+    )
     assert torch.allclose(sdpa_tokens, flash_tokens, rtol=1e-3, atol=1e-3), (
         f"Eval encoder patch_size={patch_size}: max_diff={max_diff}, mean_diff={mean_diff}"
     )
