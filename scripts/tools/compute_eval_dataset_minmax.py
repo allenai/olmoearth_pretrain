@@ -22,9 +22,6 @@ from pathlib import Path
 import numpy as np
 import torch
 from einops import rearrange
-from tqdm import tqdm
-from upath import UPath
-
 from helios.evals.datasets import (
     BREIZHCROPS_DIR,
     FLOODS_DIR,
@@ -37,6 +34,8 @@ from helios.evals.datasets.constants import (
     EVAL_S1_BAND_NAMES,
     EVAL_S2_BAND_NAMES,
 )
+from tqdm import tqdm
+from upath import UPath
 
 
 def _process_image_file(file_path, modality_type):

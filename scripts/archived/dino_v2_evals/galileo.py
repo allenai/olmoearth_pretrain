@@ -2,10 +2,6 @@
 
 import logging
 
-from olmo_core.optim import AdamWConfig
-from olmo_core.optim.scheduler import WSD
-from upath import UPath
-
 from helios.data.concat import HeliosConcatDatasetConfig
 from helios.data.constants import Modality
 from helios.data.dataloader import HeliosDataLoaderConfig
@@ -16,6 +12,9 @@ from helios.nn.latent_mim import LatentMIMConfig
 from helios.train.loss import LossConfig
 from helios.train.masking import MaskingConfig
 from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
+from olmo_core.optim import AdamWConfig
+from olmo_core.optim.scheduler import WSD
+from upath import UPath
 
 logger = logging.getLogger(__name__)
 

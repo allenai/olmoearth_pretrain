@@ -1,5 +1,9 @@
 """Trying to prototype fitting everything into olmo core."""
 
+from helios.internal.common import build_common_components
+from helios.internal.experiment import CommonComponents, main
+from helios.train.masking import MaskingConfig
+from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 from olmo_core.config import DType
 from olmo_core.distributed.parallel.data_parallel import (
     DataParallelConfig,
@@ -13,11 +17,6 @@ from shared import (
     build_trainer_config,
     build_visualize_config,
 )
-
-from helios.internal.common import build_common_components
-from helios.internal.experiment import CommonComponents, main
-from helios.train.masking import MaskingConfig
-from helios.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 
 def my_build_train_module_config(

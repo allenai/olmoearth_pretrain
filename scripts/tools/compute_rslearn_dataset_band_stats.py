@@ -5,11 +5,6 @@ import json
 
 import torch
 from einops import rearrange
-from rslearn.dataset.dataset import Dataset as RslearnDataset
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-from upath import UPath
-
 from helios.data.constants import YEAR_NUM_TIMESTEPS
 from helios.data.constants import Modality as DataModality
 from helios.data.utils import convert_to_db
@@ -17,6 +12,10 @@ from helios.evals.datasets.rslearn_dataset import (
     RSLEARN_TO_HELIOS,
     build_rslearn_model_dataset,
 )
+from rslearn.dataset.dataset import Dataset as RslearnDataset
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from upath import UPath
 
 
 def get_bands_by_modality(input_layers: list[str]) -> dict[str, list[str]]:

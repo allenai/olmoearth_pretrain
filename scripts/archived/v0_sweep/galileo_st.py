@@ -1,5 +1,7 @@
 """Script for v0 sweep for Galileo."""
 
+from helios.internal.common import build_common_components
+from helios.internal.experiment import main
 from shared import (
     build_dataloader_config,
     build_dataset_config,
@@ -8,9 +10,6 @@ from shared import (
     build_trainer_config,
     build_visualize_config,
 )
-
-from helios.internal.common import build_common_components
-from helios.internal.experiment import main
 
 if __name__ == "__main__":
     main(
