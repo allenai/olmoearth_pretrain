@@ -116,6 +116,7 @@ def build_launch_config(
     workspace: str = WORKSPACE,
     budget: str = BUDGET,
     nccl_debug: bool = False,
+    use_fa3: bool = False,
 ) -> OlmoEarthBeakerLaunchConfig:
     """Build a launch config for an OlmoEarth Pretrain experiment.
 
@@ -171,7 +172,9 @@ def build_launch_config(
         workspace=workspace,
         clusters=clusters,
         weka_buckets=weka_buckets,
-        beaker_image=f"petew/{OLMoCoreBeakerImage.stable_cu128}",  # we can all use the same image for now trying petes to see if it works or we need a copy in our workspace
+        beaker_image="tylerr/olmo-core-tch271cu128-2025-11-25"
+        if use_fa3
+        else f"petew/{OLMoCoreBeakerImage.stable_cu128}",
         num_nodes=1,
         num_gpus=1,
         shared_memory="256GiB",

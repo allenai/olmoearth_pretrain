@@ -11,11 +11,23 @@ from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
 try:
-    import flash_attn
+    import flash_attn_interface as _fa3
+
+    _FA_VERSION = 3
 except ImportError:
-    flash_attn = None
+    _fa3 = None
+    _FA_VERSION = 0
+
+try:
+    import flash_attn as _fa2
+except ImportError:
+    _fa2 = None
+
+if _FA_VERSION == 0 and _fa2 is not None:
+    _FA_VERSION = 2
 
 logger = getLogger(__name__)
+logger.info(f"Flash attention version: {_FA_VERSION}")
 
 
 @torch._dynamo.disable()
@@ -34,12 +46,16 @@ def dispatch_flash_attn(
     softmax_scale: float | None = None,
     causal: bool = False,
 ) -> torch.Tensor:
-    """Dispatch flash attention.
+    """Dispatch flash attention, preferring FA3 (Hopper) over FA2.
 
-    Modeled after olmo core but doesnt flatten internally
+    FA3 does not support attention dropout natively. If dropout_p > 0,
+    dropout is applied to the attention output instead.
     """
-    if flash_attn is None:
-        raise RuntimeError("flash-attn is required!")
+    if _FA_VERSION == 0:
+        raise RuntimeError(
+            "No flash attention backend found. "
+            "Install flash-attn (FA2) or flash-attn-3 (FA3/Hopper)."
+        )
 
     if cu_seqlens is not None:
         if cu_seqlens_q is None:
@@ -56,11 +72,93 @@ def dispatch_flash_attn(
         x is not None for x in (cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k)
     )
 
-    if varlen:
-        assert q.ndim == 3, "q must be pre-packed"
-        logger.debug("using varlen")
+    if _FA_VERSION == 3:
+        out = _dispatch_fa3(
+            q,
+            k,
+            v,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            varlen=varlen,
+        )
+        if dropout_p > 0.0:
+            out = F.dropout(out, p=dropout_p, training=True)
+        return out
+    else:
+        return _dispatch_fa2(
+            q,
+            k,
+            v,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            dropout_p=dropout_p,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            varlen=varlen,
+        )
 
-        return flash_attn.flash_attn_varlen_func(
+
+def _dispatch_fa3(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    cu_seqlens_q: torch.Tensor | None,
+    cu_seqlens_k: torch.Tensor | None,
+    max_seqlen_q: int | None,
+    max_seqlen_k: int | None,
+    softmax_scale: float | None,
+    causal: bool,
+    varlen: bool,
+) -> torch.Tensor:
+    assert _fa3 is not None
+    if varlen:
+        assert q.ndim == 3, "q must be pre-packed for varlen"
+        return _fa3.flash_attn_varlen_func(
+            q,
+            k,
+            v,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            max_seqlen_q,
+            max_seqlen_k,
+            softmax_scale=softmax_scale,
+            causal=causal,
+        )
+    else:
+        return _fa3.flash_attn_func(
+            q,
+            k,
+            v,
+            softmax_scale=softmax_scale,
+            causal=causal,
+        )
+
+
+def _dispatch_fa2(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    cu_seqlens_q: torch.Tensor | None,
+    cu_seqlens_k: torch.Tensor | None,
+    max_seqlen_q: int | None,
+    max_seqlen_k: int | None,
+    dropout_p: float,
+    softmax_scale: float | None,
+    causal: bool,
+    varlen: bool,
+) -> torch.Tensor:
+    assert _fa2 is not None
+    if varlen:
+        assert q.ndim == 3, "q must be pre-packed for varlen"
+        return _fa2.flash_attn_varlen_func(
             q,
             k,
             v,
@@ -73,7 +171,7 @@ def dispatch_flash_attn(
             causal=causal,
         )
     else:
-        return flash_attn.flash_attn_func(
+        return _fa2.flash_attn_func(
             q,
             k,
             v,
