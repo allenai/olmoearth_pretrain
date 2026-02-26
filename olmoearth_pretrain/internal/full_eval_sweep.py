@@ -25,7 +25,7 @@ from olmoearth_pretrain.internal.constants import (
     EVAL_WANDB_PROJECT,
 )
 from olmoearth_pretrain.internal.experiment import SubCmd
-from olmoearth_pretrain.nn.flexi_vit import PoolingType
+from olmoearth_pretrain.nn.pooling import PoolingType
 
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 Normalization_MODES = ["pre_trained", "dataset"]

@@ -8,8 +8,6 @@ from einops import rearrange, reduce
 from torch import nn
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
-from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.datatypes import MaskValue
 from olmoearth_pretrain.evals.datasets.configs import TaskType
 from olmoearth_pretrain.evals.models import (
     AnySat,
@@ -26,10 +24,10 @@ from olmoearth_pretrain.evals.models import (
 )
 from olmoearth_pretrain.nn.flexi_vit import (
     FlexiVitBase,
-    PoolingType,
     TokensAndMasks,
 )
 from olmoearth_pretrain.nn.pooled_modality_predictor import EncodeEarlyAttnPool
+from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.st_model import STBase
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
@@ -113,41 +111,20 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
-        # set fast pass based on whether there are missing tokens or not by looping through and checking the modalities
-        fast_pass = True
-        for modality_name in masked_olmoearth_sample.modalities:
-            modality_spec = Modality.get(modality_name)
-            if modality_spec.is_spatial:
-                mask_attr_name = MaskedOlmoEarthSample.get_masked_modality_name(
-                    modality_name
-                )
-                masked_attr = getattr(masked_olmoearth_sample, mask_attr_name)
-                if masked_attr is None:
-                    continue
-                if (masked_attr == MaskValue.MISSING.value).all():
-                    fast_pass = False
-                    break
-
-        logger.debug(
-            f"OlmoEarthEvalWrapper: spatial_pool={self.spatial_pool}, "
-            f"use_pooled_tokens={self.use_pooled_tokens}, fast_pass={fast_pass}"
-        )
-
         if not self.use_pooled_tokens:
             batch_embeddings: TokensAndMasks = self.model(
-                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
+                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
             )["tokens_and_masks"]  # (bsz, dim)
-
-            # Use pool_unmasked_tokens which now handles MISSING tokens properly
-            # (pool_spatially checks for ONLINE_ENCODER with .any() not .all())
-            batch_embeddings = batch_embeddings.pool_unmasked_tokens(
+            # Concat features across modalities in space averaged across time
+            batch_embeddings = pool_unmasked_tokens(
+                batch_embeddings,
                 self.pooling_type,
                 spatial_pooling=self.spatial_pool,
                 concat_features=self.concat_features,
             )
         else:
             pooled_tokens_dict = self.model(
-                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
+                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
             )["pooled_tokens_and_masks"]
             pooled_tokens = pooled_tokens_dict["modality_pooled_tokens"]
             # spatial pool is true means we want to keep the spatial dimensions

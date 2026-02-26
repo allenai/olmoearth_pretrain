@@ -11,7 +11,12 @@ from upath import UPath
 
 from olmoearth_pretrain.data.collate import collate_olmoearth_pretrain
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
-from olmoearth_pretrain.data.dataset import OlmoEarthDataset, OlmoEarthSample
+from olmoearth_pretrain.data.dataset import (
+    OlmoEarthDataset,
+    OlmoEarthSample,
+    get_valid_start_ts,
+    subset_sample_default,
+)
 
 logger = getLogger(__name__)
 
@@ -56,7 +61,8 @@ class TestOlmoEarthSample:
         max_tokens_per_instance = 100
         current_length = 12
         sample: OlmoEarthSample = samples_with_missing_modalities[1][1]
-        subset_sample = sample.subset_default(
+        subset_sample = subset_sample_default(
+            sample,
             patch_size=patch_size,
             max_tokens_per_instance=max_tokens_per_instance,
             sampled_hw_p=sampled_hw_p,
@@ -84,9 +90,7 @@ class TestOlmoEarthSample:
             }
             max_t = 2
             current_length = 6
-            OlmoEarthSample._get_valid_start_ts(
-                missing_timesteps, max_t, current_length
-            )
+            get_valid_start_ts(missing_timesteps, max_t, current_length)
 
     def test_get_valid_start_ts_with_cropped_timesteps(self) -> None:
         """Test the get_valid_start_ts function with properly cropped timesteps."""
@@ -98,9 +102,7 @@ class TestOlmoEarthSample:
         current_length = 8
 
         # This should not raise an error since timesteps are properly cropped
-        start_ts = OlmoEarthSample._get_valid_start_ts(
-            missing_timesteps, max_t, current_length
-        )
+        start_ts = get_valid_start_ts(missing_timesteps, max_t, current_length)
 
         # Verify that a valid start timestamp is returned
         for t in start_ts:
