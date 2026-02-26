@@ -19,6 +19,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
     ProjectAndAggregate,
     TokensAndMasks,
 )
+from olmoearth_pretrain.nn.pooling import pool_unmasked_tokens
 from olmoearth_pretrain.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
@@ -664,7 +665,7 @@ class TestTokensAndMasks:
     """Test TestTokensAndMasks."""
 
     def test_flatten_tokens_and_masks(self) -> None:
-        """Test TokensAndMasks.flatten_tokens_and_masks."""
+        """Test TokensAndMasks.flatten_all_tokens_and_masks."""
         b, h, w, t, d = 2, 4, 4, 3, 128
         sentinel_2 = torch.ones((b, h, w, t, d))
         sentinel_2[0, 0, 0, 0, :] = 0  # set one "token" to 0s
@@ -673,7 +674,7 @@ class TestTokensAndMasks:
         t_and_m = TokensAndMasks(
             sentinel2_l2a=sentinel_2, sentinel2_l2a_mask=sentinel_2_mask
         )
-        x, mask = t_and_m.flatten_tokens_and_masks()
+        x, mask = t_and_m.flatten_all_tokens_and_masks()
 
         assert x.shape == (b, h * w * t, d)
         assert mask.shape == (b, h * w * t)
@@ -701,12 +702,16 @@ class TestTokensAndMasks:
         )
 
         # Test max pooling
-        pooled_max = t_and_m_max.pool_unmasked_tokens(PoolingType.MAX)
+        pooled_max = pool_unmasked_tokens(
+            t_and_m_max, PoolingType.MAX, spatial_pooling=False
+        )
         assert pooled_max.shape == (b, d)
         assert (pooled_max == 2).all()  # check the 3 tokens have been ignored
 
         # Test mean pooling
-        pooled_mean = t_and_m_mean.pool_unmasked_tokens(PoolingType.MEAN)
+        pooled_mean = pool_unmasked_tokens(
+            t_and_m_mean, PoolingType.MEAN, spatial_pooling=False
+        )
         assert pooled_mean.shape == (b, d)
         assert (pooled_mean == 1).all()  # check the 0 tokens have been ignored
 
@@ -727,8 +732,8 @@ class TestTokensAndMasks:
         )
 
         # Test mean pooling
-        pooled_mean = t_and_m_mean.pool_unmasked_tokens(
-            PoolingType.MEAN, spatial_pooling=True
+        pooled_mean = pool_unmasked_tokens(
+            t_and_m_mean, PoolingType.MEAN, spatial_pooling=True
         )
         assert pooled_mean.shape == (b, h, w, d)
         assert (pooled_mean == 1).all()  # check the sen1 tokens have been ignored
@@ -748,8 +753,8 @@ class TestTokensAndMasks:
         )
 
         # Test max pooling
-        pooled_max = t_and_m_max.pool_unmasked_tokens(
-            PoolingType.MAX, spatial_pooling=True
+        pooled_max = pool_unmasked_tokens(
+            t_and_m_max, PoolingType.MAX, spatial_pooling=True
         )
         assert pooled_max.shape == (b, h, w, d)
         assert (pooled_max == 2).all()  # check the 3 tokens have been ignored

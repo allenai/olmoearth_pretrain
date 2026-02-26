@@ -9,6 +9,7 @@ from olmoearth_pretrain.train.loss import (
     AdjustedPatchDiscriminationLoss,
     CrossEntropyLoss,
     InfoNCELoss,
+    KoLeoLoss,
     L1Loss,
     L2Loss,
     ModalityPatchDiscriminationMaskedNegatives,
@@ -241,6 +242,18 @@ def test_infonce_loss() -> None:
     loss = InfoNCELoss(weight=0.1)
     w_loss_value = loss.compute(torch.ones((b, d)), torch.zeros((b, d)))
     assert 0.1 * loss_value == w_loss_value
+
+
+def test_koleo_loss_instance_mode_tokens_and_masks() -> None:
+    """KoLeo instance mode should work with TokensAndMasks input."""
+    b, h, w, t, d = 8, 2, 2, 2, 16
+    preds = TokensAndMasks(
+        sentinel2_l2a=torch.randn((b, h, w, t, d)),
+        sentinel2_l2a_mask=torch.ones((b, h, w, t)) * MaskValue.ONLINE_ENCODER.value,
+    )
+    loss_value = KoLeoLoss(mode="instance").compute(preds, None)
+    assert loss_value.ndim == 0
+    assert torch.isfinite(loss_value)
 
 
 def test_modality_patch_disc_parallelized_matches_sequential() -> None:

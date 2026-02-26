@@ -111,8 +111,8 @@ def test_flash_vs_sdpa_train_mode(patch_size: int) -> None:
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
         latent_sdpa, decoded_sdpa, pooled_sdpa, _, _ = model_sdpa(batch, patch_size)
         latent_flash, decoded_flash, pooled_flash, _, _ = model_flash(batch, patch_size)
-    dec_s = decoded_sdpa.flatten_tokens_and_masks()[0]
-    dec_f = decoded_flash.flatten_tokens_and_masks()[0]
+    dec_s = decoded_sdpa.flatten_all_tokens_and_masks()[0]
+    dec_f = decoded_flash.flatten_all_tokens_and_masks()[0]
     max_diff = (dec_s - dec_f).abs().max().item()
     mean_diff = (dec_s - dec_f).abs().mean().item()
     logger.info(f"TRAIN patch_size={patch_size}: max_diff={max_diff:.6f}, mean_diff={mean_diff:.6f}")
@@ -141,8 +141,8 @@ def test_flash_vs_sdpa_eval_encoder_only(patch_size: int) -> None:
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
         out_sdpa = model_sdpa.encoder(batch, patch_size=patch_size)
         out_flash = model_flash.encoder(batch, patch_size=patch_size)
-    sdpa_tokens = out_sdpa["tokens_and_masks"].flatten_tokens_and_masks()[0]
-    flash_tokens = out_flash["tokens_and_masks"].flatten_tokens_and_masks()[0]
+    sdpa_tokens = out_sdpa["tokens_and_masks"].flatten_all_tokens_and_masks()[0]
+    flash_tokens = out_flash["tokens_and_masks"].flatten_all_tokens_and_masks()[0]
     max_diff = (sdpa_tokens - flash_tokens).abs().max().item()
     mean_diff = (sdpa_tokens - flash_tokens).abs().mean().item()
     logger.info(f"EVAL encoder patch_size={patch_size}: max_diff={max_diff:.6f}, mean_diff={mean_diff:.6f}")
