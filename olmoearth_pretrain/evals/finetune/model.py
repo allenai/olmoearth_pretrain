@@ -86,7 +86,20 @@ def snapshot_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
     return {k: v.detach().cpu().clone() for k, v in module.state_dict().items()}
 
 
-def set_backbone_trainable(backbone: nn.Module, requires_grad: bool) -> None:
-    """Toggle gradient computation for backbone parameters."""
+def set_backbone_trainable(
+    backbone: nn.Module,
+    requires_grad: bool,
+    keep_apt_conv_downsample_trainable: bool = False,
+) -> None:
+    """Toggle gradient computation for backbone parameters.
+
+    When freezing the backbone, this can keep APT conv-downsample layers trainable
+    so newly initialized adaptive merge weights can warm up early.
+    """
     for param in backbone.parameters():
         param.requires_grad = requires_grad
+
+    if not requires_grad and keep_apt_conv_downsample_trainable:
+        for name, param in backbone.named_parameters():
+            if "adaptive_patch_embed.conv_downsample" in name:
+                param.requires_grad = True

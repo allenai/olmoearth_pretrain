@@ -216,6 +216,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             ft_lr=1e-4,
             ft_batch_size=8,
             epochs=50,
+            freeze_epoch_fraction=0.0,
+            train_apt_conv_downsample_during_freeze=True,
             eval_interval=Duration.steps(1),
             patch_size=1,
             input_modalities=[Modality.SENTINEL2_L2A.name],

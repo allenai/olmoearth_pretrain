@@ -1,12 +1,35 @@
-"""PASTIS finetuning with 2-scale APT (patch sizes 4 and 8).
+"""PASTIS finetuning evaluation with tiny model.
+
+This script loads a pretrained tiny model and evaluates on PASTIS with APT
+(Adaptive Patch Transformers) for adaptive patching based on image complexity.
+
+PASTIS is a multi-temporal segmentation dataset (19 crop classes) with
+Sentinel-2 and Sentinel-1 data. APT is applied to Sentinel-2.
 
 Usage:
-    python scripts/official/apt/apt_2scale_pastis_eval_tiny.py launch \
-        pastis_apt_2scale ai2/saturn-cirrascale \
+    # Local evaluation with the tiny checkpoint
+    python scripts/official/apt/apt_pastis_eval_tiny.py evaluate \
+        apt_pastis_eval_tiny local \
         --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000
 
-    # Override threshold (1 value for 2 scales: 8->4)
-    --trainer.callbacks.downstream_evaluator.tasks.pastis_finetune.apt_config.partitioner.thresholds=[0.5]
+    # On Beaker
+    python scripts/official/apt/apt_pastis_eval_tiny.py launch \
+        apt_pastis_eval_tiny ai2/saturn-cirrascale \
+        --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000
+
+    # Override APT thresholds
+    python scripts/official/apt/apt_pastis_eval_tiny.py evaluate \
+        apt_pastis_eval_tiny local \
+        --trainer.load_path=/path/to/checkpoint \
+        --trainer.callbacks.downstream_evaluator.tasks.pastis_finetune.apt_config.partitioner.thresholds=[0.5]
+
+APT Configuration:
+    The apt_config field supports these overridable nested fields:
+    - partitioner.thresholds: List[float] - entropy thresholds for scale transitions
+    - partitioner.num_scales: int - number of patch size scales
+    - partitioner.base_patch_size: int - smallest patch size in pixels
+    - scorer.scorer_type: "entropy" or "laplacian"
+    - scorer.num_bins: int - histogram bins for entropy scorer
 """
 
 import logging
@@ -22,7 +45,9 @@ from olmo_core.train.callbacks import (
     CheckpointerCallback,
     ConfigSaverCallback,
     GarbageCollectorCallback,
+    GPUMemoryMonitorCallback,
 )
+from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
@@ -49,6 +74,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
+    OlmoEarthSpeedMonitorCallback,
     OlmoEarthWandBCallback,
 )
 from olmoearth_pretrain.train.callbacks.evaluator_callback import (
@@ -63,6 +89,7 @@ from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
 
 logger = logging.getLogger(__name__)
 
+# Model configuration for tiny
 MAX_PATCH_SIZE = 8
 MIN_PATCH_SIZE = 1
 
@@ -74,7 +101,10 @@ def build_common_components(
     cluster: str,
     overrides: list[str],
 ) -> CommonComponents:
+    """Build the common components for an experiment."""
     config = build_common_components_default(script, cmd, run_name, cluster, overrides)
+
+    # Match the modalities the tiny model was trained on
     config.training_modalities = [
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
@@ -86,11 +116,14 @@ def build_common_components(
         Modality.CDL.name,
         Modality.WORLDCEREAL.name,
     ]
+
     return config
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
+    """Build the model config - using TINY model size."""
     model_size = MODEL_SIZE_ARGS["tiny_shallow_decoder"]
+
     encoder_config = EncoderConfig(
         embedding_size=model_size["encoder_embedding_size"],
         num_heads=model_size["encoder_num_heads"],
@@ -119,6 +152,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 def build_train_module_config(
     common: CommonComponents,
 ) -> ContrastiveLatentMIMTrainModuleConfig:
+    """Build the train module config."""
     return ContrastiveLatentMIMTrainModuleConfig(
         optim_config=AdamWConfig(lr=1e-6, weight_decay=0.02, fused=False),
         rank_microbatch_size=32,
@@ -154,6 +188,7 @@ def build_train_module_config(
 
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build the dataloader config."""
     return OlmoEarthDataLoaderConfig(
         num_workers=4,
         global_batch_size=32,
@@ -175,6 +210,7 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
 
 
 def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
+    """Build the dataset config."""
     return OlmoEarthDatasetConfig(
         h5py_dir="/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
         training_modalities=common.training_modalities,
@@ -182,6 +218,7 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
+    """Build the trainer config for evaluation."""
     MAX_DURATION = Duration.steps(1000000)
     METRICS_COLLECT_INTERVAL = 5
     CANCEL_CHECK_INTERVAL = 1
@@ -196,32 +233,32 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         project=WANDB_PROJECT,
         entity=WANDB_USERNAME,
         enabled=True,
-        upload_dataset_distribution_pre_train=False,
     )
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
 
+    # PASTIS finetuning evaluation with APT
     apt_config = APTConfig.default_s2_finetune_config()
 
     EVAL_TASKS = {
         "pastis_finetune": DownstreamTaskConfig(
             dataset="pastis",
-            embedding_batch_size=32,
+            embedding_batch_size=128,
             num_workers=0,
             pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
+            norm_stats_from_pretrained=False,
+            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
             eval_mode=EvalMode.FINETUNE,
             ft_lr=1e-4,
-            ft_batch_size=8,
+            ft_batch_size=16,
             epochs=50,
             freeze_epoch_fraction=0.0,
             train_apt_conv_downsample_during_freeze=True,
             eval_interval=Duration.steps(1),
-            patch_size=4,
-            input_modalities=[Modality.SENTINEL2_L2A.name],
             use_apt=True,
             apt_modality="sentinel2_l2a",
             apt_config=apt_config,
-            use_flash_attn=True,
+            # PASTIS is multimodal — specify which modalities to use
+            input_modalities=[Modality.SENTINEL2_L2A.name],
         ),
     }
 
@@ -258,6 +295,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
 
 
 def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig:
+    """Build the visualize config."""
     return OlmoEarthVisualizeConfig(
         num_samples=None,
         output_dir=f"{common.save_folder}/visualizations",
@@ -266,7 +304,9 @@ def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig
 
 
 if __name__ == "__main__":
-    logger.info("2-scale APT (4,8) on PASTIS")
+    logger.info("Using TINY model configuration with APT enabled for PASTIS")
+    logger.info("APT thresholds and scales can be overridden via command line - see docstring")
+
     main(
         common_components_builder=build_common_components,
         model_config_builder=build_model_config,

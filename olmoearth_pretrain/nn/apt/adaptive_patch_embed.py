@@ -29,7 +29,7 @@ class ConvDownsample(nn.Module):
         Args:
             embedding_size: Size of embeddings
             scale: Scale index (1 = 2x2, 2 = 4x4, etc.)
-            init: Weight initialization strategy. "kaiming" (default) or "average".
+            init: Weight initialization strategy. "kaiming", "average", or "zero".
         """
         super().__init__()
         self.embedding_size = embedding_size
@@ -51,8 +51,13 @@ class ConvDownsample(nn.Module):
                 nn.init.zeros_(conv.weight)
                 conv.weight.data[range(embedding_size), range(embedding_size), :, :] = 1.0 / 4.0
                 nn.init.zeros_(conv.bias)
+            elif init == "zero":
+                nn.init.zeros_(conv.weight)
+                nn.init.zeros_(conv.bias)
             elif init != "kaiming":
-                raise ValueError(f"Unknown init: {init!r}, expected 'kaiming' or 'average'")
+                raise ValueError(
+                    f"Unknown init: {init!r}, expected 'kaiming', 'average', or 'zero'"
+                )
             layers.append(conv)
         self.convs = nn.Sequential(*layers)
 
@@ -86,6 +91,7 @@ class AdaptivePatchEmbed(nn.Module):
         embedding_size: int,
         base_patch_size: int,
         conv_init: str = "average",
+        add_resize_residual: bool = False,
     ):
         """Initialize adaptive patch embedding.
 
@@ -93,12 +99,15 @@ class AdaptivePatchEmbed(nn.Module):
             num_scales: Number of patch size scales (1 = base only)
             embedding_size: Size of embeddings
             base_patch_size: Base (smallest) patch size in pixels
-            conv_init: Weight initialization for ConvDownsample. "kaiming" or "average".
+            conv_init: Weight initialization for ConvDownsample. "kaiming", "average", or "zero".
+            add_resize_residual: If True, add an area-resized block token to the
+                conv-merged token for coarse scales.
         """
         super().__init__()
         self.num_scales = num_scales
         self.embedding_size = embedding_size
         self.base_patch_size = base_patch_size
+        self.add_resize_residual = add_resize_residual
 
         # Compute patch sizes for each scale
         self.patch_sizes = [base_patch_size * (2**i) for i in range(num_scales)]
@@ -125,7 +134,15 @@ class AdaptivePatchEmbed(nn.Module):
             Merged token with shape [B, D]
         """
         conv_idx = scale - 1  # scale 1 -> index 0, scale 2 -> index 1
-        return self.conv_downsample[conv_idx](block)  # [B, D]
+        merged = self.conv_downsample[conv_idx](block)  # [B, D]
+        if self.add_resize_residual:
+            resize_token = F.interpolate(
+                block,
+                size=(1, 1),
+                mode="area",
+            ).squeeze(-1).squeeze(-1)  # [B, D]
+            merged = merged + resize_token
+        return merged
 
     def forward(
         self,

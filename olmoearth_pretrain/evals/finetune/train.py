@@ -100,6 +100,7 @@ def run_finetune_eval(
     best_checkpoint_path: str | None = None,
     resume_checkpoint_path: str | None = None,
     freeze_epoch_fraction: float = FREEZE_EPOCH_FRACTION,
+    train_apt_conv_downsample_during_freeze: bool = False,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     if seed is not None:
@@ -137,7 +138,11 @@ def run_finetune_eval(
     freeze_epochs = math.ceil(freeze_epoch_fraction * epochs) if epochs > 0 else 0
     backbone_unfrozen = freeze_epochs == 0
     if not backbone_unfrozen:
-        set_backbone_trainable(ft.backbone, False)
+        set_backbone_trainable(
+            ft.backbone,
+            False,
+            keep_apt_conv_downsample_trainable=train_apt_conv_downsample_during_freeze,
+        )
         logger.info(
             f"Freezing backbone for the first {freeze_epochs} epoch(s) before unfreezing."
         )
@@ -177,7 +182,11 @@ def run_finetune_eval(
         best_val_metric = ckpt["best_val_metric"]
         backbone_unfrozen = ckpt["backbone_unfrozen"]
         # Handle backbone freeze state on resume
-        set_backbone_trainable(ft.backbone, backbone_unfrozen)
+        set_backbone_trainable(
+            ft.backbone,
+            backbone_unfrozen,
+            keep_apt_conv_downsample_trainable=train_apt_conv_downsample_during_freeze,
+        )
         logger.info(
             f"Resumed from epoch {start_epoch}, best_val_metric={best_val_metric:.4f}, "
             f"backbone_unfrozen={backbone_unfrozen}"

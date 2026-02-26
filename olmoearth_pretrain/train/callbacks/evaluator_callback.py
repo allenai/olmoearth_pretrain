@@ -86,6 +86,7 @@ class DownstreamTaskConfig:
     ft_batch_size: int = 32
     finetune_seed: int = 42
     freeze_epoch_fraction: float = 0.2  # Fraction of epochs to freeze backbone (0.0 = full finetune from start)
+    train_apt_conv_downsample_during_freeze: bool = False
     # LP / FT
     epochs: int = 50
     # LP / KNN / FT
@@ -154,6 +155,9 @@ class DownstreamEvaluator:
         self.ft_batch_size = task.ft_batch_size
         self.finetune_seed = task.finetune_seed
         self.freeze_epoch_fraction = task.freeze_epoch_fraction
+        self.train_apt_conv_downsample_during_freeze = (
+            task.train_apt_conv_downsample_during_freeze
+        )
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
@@ -580,6 +584,7 @@ class DownstreamEvaluator:
             best_checkpoint_path=best_checkpoint_path,
             resume_checkpoint_path=resume_checkpoint_path,
             freeze_epoch_fraction=self.freeze_epoch_fraction,
+            train_apt_conv_downsample_during_freeze=self.train_apt_conv_downsample_during_freeze,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"

@@ -1,12 +1,14 @@
-"""PASTIS finetuning with 2-scale APT (patch sizes 4 and 8).
+"""PASTIS finetuning with 3-scale APT (patch sizes 2, 4, 8).
+
+Segmentation task with timeseries S2 data.
 
 Usage:
-    python scripts/official/apt/apt_2scale_pastis_eval_tiny.py launch \
-        pastis_apt_2scale ai2/saturn-cirrascale \
+    python scripts/official/apt/apt_3scale_pastis_eval_tiny.py evaluate \
+        apt_3scale_pastis local \
         --trainer.load_path=/weka/dfive-default/helios/checkpoints/joer/tiny_lr0.0002_wd0.02/step360000
 
-    # Override threshold (1 value for 2 scales: 8->4)
-    --trainer.callbacks.downstream_evaluator.tasks.pastis_finetune.apt_config.partitioner.thresholds=[0.5]
+    # Override thresholds (2 values for 3 scales: 4->2, 8->4)
+    --trainer.callbacks.downstream_evaluator.tasks.pastis_finetune.apt_config.partitioner.thresholds=[0.5,0.8]
 """
 
 import logging
@@ -200,7 +202,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     )
     garbage_collector_callback = GarbageCollectorCallback(gc_interval=1)
 
-    apt_config = APTConfig.default_s2_finetune_config()
+    apt_config = APTConfig.default_s2_finetune_config_3scale()
 
     EVAL_TASKS = {
         "pastis_finetune": DownstreamTaskConfig(
@@ -216,7 +218,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             freeze_epoch_fraction=0.0,
             train_apt_conv_downsample_during_freeze=True,
             eval_interval=Duration.steps(1),
-            patch_size=4,
+            patch_size=2,
             input_modalities=[Modality.SENTINEL2_L2A.name],
             use_apt=True,
             apt_modality="sentinel2_l2a",
@@ -266,7 +268,7 @@ def build_visualize_config(common: CommonComponents) -> OlmoEarthVisualizeConfig
 
 
 if __name__ == "__main__":
-    logger.info("2-scale APT (4,8) on PASTIS")
+    logger.info("3-scale APT (2,4,8) on PASTIS with avg-init")
     main(
         common_components_builder=build_common_components,
         model_config_builder=build_model_config,

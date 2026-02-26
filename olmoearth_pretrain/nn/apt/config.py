@@ -114,7 +114,8 @@ class APTEmbedConfig(Config):
     embedding_size: int = 768
     base_patch_size: int = 4  # Smallest patch: 4px
     num_scales: int = 2  # Scales: 4, 8
-    conv_init: str = "average"  # "kaiming" or "average"
+    conv_init: str = "average"  # "kaiming", "average", or "zero"
+    add_resize_residual: bool = False
 
     def build(self, base_patch_embed):
         """Build the adaptive embed instance.
@@ -130,6 +131,7 @@ class APTEmbedConfig(Config):
             embedding_size=self.embedding_size,
             base_patch_size=self.base_patch_size,
             conv_init=self.conv_init,
+            add_resize_residual=self.add_resize_residual,
         )
 
 
@@ -338,6 +340,52 @@ class APTConfig(Config):
                 base_patch_size=1,
                 num_scales=4,
                 conv_init="average",
+                add_resize_residual=False,
+            ),
+            transform=APTTransformConfig(modality_name="sentinel2_l2a"),
+            masking=APTMaskingConfig(
+                apt_modalities=["sentinel2_l2a"],
+                encode_ratio=1.0,
+                decode_ratio=0.0,
+            ),
+            apt_modalities=["sentinel2_l2a"],
+            enabled=True,
+            disable_masking=True,
+        )
+        return config
+
+    @classmethod
+    def default_s2_finetune_config_3scale(cls) -> "APTConfig":
+        """Get 3-scale APT config for Sentinel-2 finetuning.
+
+        Scales: [2, 4, 8] pixel patches with avg-init conv downsampling.
+        2 thresholds control splitting at each level:
+          thresholds[0] -> 4px→2px, thresholds[1] -> 8px→4px
+
+        Returns:
+            APTConfig with 3 scales, masking disabled, average conv init
+        """
+        config = cls(
+            scorer=APTScorerConfig(
+                scorer_type=ScorerType.ENTROPY,
+                num_bins=32,
+                bands=[
+                    Modality.SENTINEL2_L2A.band_order.index(band)
+                    for band in ["B02", "B03", "B04"]
+                ],
+                normalize=True,
+            ),
+            partitioner=APTPartitionerConfig(
+                base_patch_size=2,
+                num_scales=3,  # Scales: 2, 4, 8
+                thresholds=[0.5, 0.8],
+            ),
+            embed=APTEmbedConfig(
+                embedding_size=768,
+                base_patch_size=2,
+                num_scales=3,
+                conv_init="average",
+                add_resize_residual=False,
             ),
             transform=APTTransformConfig(modality_name="sentinel2_l2a"),
             masking=APTMaskingConfig(
