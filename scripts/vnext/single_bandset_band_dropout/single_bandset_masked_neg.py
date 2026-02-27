@@ -16,6 +16,7 @@ Experiments:
 20. single bandset S2 (all 12 bands) / Landsat + random band dropout (rate ~ Uniform(0, 0.3)) + random_time_with_decode masking + NDVI + ERA5 decode-only + masked neg loss
 21. exp 20 + decoder supervision on decode-only spatial modalities (worldcover, srtm, osm, canopy height, cdl, worldcereal, ndvi)
 22. exp 19 + decoder supervision (same as exp 21 but random_with_decode instead of random_time_with_decode)
+23. exp 21 but with LatentMIM train module (no contrastive loss, single view)
 """
 
 import copy
@@ -54,6 +55,9 @@ from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
     ContrastiveLatentMIMTrainModuleConfig,
+)
+from olmoearth_pretrain.train.train_module.latent_mim import (
+    LatentMIMTrainModuleConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -1293,6 +1297,65 @@ def build_dataloader_exp22(common: CommonComponents) -> OlmoEarthDataLoaderConfi
 
 
 # ============================================================
+# Experiment 23: exp 21 with LatentMIM (no contrastive loss, single view)
+# ============================================================
+
+
+def build_common_exp23(
+    script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
+) -> CommonComponents:
+    """Build common components for exp23 (same as exp21)."""
+    return build_common_exp21(script, cmd, run_name, cluster, overrides)
+
+
+def build_train_module_exp23(
+    common: CommonComponents,
+) -> LatentMIMTrainModuleConfig:
+    """Build train module for exp23 (LatentMIM, no contrastive loss)."""
+    return LatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=0.0001, weight_decay=0.02, fused=False),
+        rank_microbatch_size=32,
+        masking_config=_masking_config_random_time_ndvi_era5(
+            common.tokenization_config
+        ),
+        loss_config=_loss_config_ndvi_era5(),
+        token_exit_cfg={modality: 0 for modality in common.training_modalities},
+        max_grad_norm=1.0,
+        scheduler=CosWithWarmup(warmup_steps=8000),
+        ema_decay=(1.0, 1.0),
+        dp_config=DataParallelConfig(
+            name=DataParallelType.fsdp,
+            param_dtype=DType.bfloat16,
+            reduce_dtype=DType.float32,
+        ),
+    )
+
+
+def build_model_exp23(common: CommonComponents) -> LatentMIMConfig:
+    """Build model for exp23 (same as exp21)."""
+    return build_model_exp21(common)
+
+
+def build_dataloader_exp23(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
+    """Build dataloader for exp23 (single view, no contrastive)."""
+    return OlmoEarthDataLoaderConfig(
+        num_workers=16,
+        global_batch_size=512,
+        token_budget=2250,
+        prefetch_factor=4,
+        sampled_hw_p_list=list(range(1, 13)),
+        min_patch_size=MIN_PATCH_SIZE,
+        max_patch_size=MAX_PATCH_SIZE,
+        work_dir=common.save_folder,
+        seed=3622,
+        num_masked_views=1,
+        masking_config=_masking_config_random_time_ndvi_era5(
+            common.tokenization_config
+        ),
+    )
+
+
+# ============================================================
 # Entry point — select experiment via EXPERIMENT env var or arg
 # ============================================================
 
@@ -1386,6 +1449,12 @@ EXPERIMENTS = {
         build_model_exp22,
         build_train_module_exp22,
         build_dataloader_exp22,
+    ),
+    "single_bandset_all12_random_band_dropout_ndvi_era5_random_time_decode_masked_neg_decoder_supervision_no_contrastive": (
+        build_common_exp23,
+        build_model_exp23,
+        build_train_module_exp23,
+        build_dataloader_exp23,
     ),
 }
 
