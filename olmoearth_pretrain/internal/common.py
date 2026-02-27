@@ -26,6 +26,14 @@ from olmoearth_pretrain.internal.experiment import (
 logger = logging.getLogger(__name__)
 BUDGET = "ai2/es-platform"
 WORKSPACE = "ai2/earth-systems"
+DEFAULT_BEAKER_IMAGE = f"petew/{OLMoCoreBeakerImage.stable_cu128}"
+DEFAULT_FA3_BEAKER_IMAGE = "tylerr/olmo-core-tch271cu128-2025-11-25"
+DEFAULT_UV_SYNC_CMD = "uv sync --locked --all-extras"
+DEFAULT_FA3_UV_SYNC_CMD = "uv sync --locked --extra all-no-flash"
+DEFAULT_FA3_EGG_PATH = (
+    "/opt/conda/lib/python3.12/site-packages/"
+    "flash_attn_3-3.0.0b1-py3.12-linux-x86_64.egg"
+)
 
 DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET = BeakerWekaBucket(
     "dfive-default", "/weka/dfive-default"
@@ -85,6 +93,14 @@ def extract_nccl_debug_from_overrides(overrides: list[str]) -> bool:
     return False
 
 
+def extract_use_fa3_from_overrides(overrides: list[str]) -> bool:
+    """Extract the use_fa3 flag from the overrides."""
+    for override in overrides:
+        if override.startswith("--common.use_fa3="):
+            return override.split("=")[1].lower() in ("true", "1", "yes")
+    return False
+
+
 def set_nccl_debug_env_vars(
     nccl_debug: bool, local: bool = False
 ) -> list[BeakerEnvVar] | None:
@@ -105,6 +121,18 @@ def set_nccl_debug_env_vars(
         for k, v in nccl_settings.items():
             os.environ[k] = v
         return None
+
+
+def get_uv_sync_cmd(use_fa3: bool) -> str:
+    """Get uv sync command based on whether FA3 is enabled."""
+    if use_fa3:
+        return DEFAULT_FA3_UV_SYNC_CMD
+    return DEFAULT_UV_SYNC_CMD
+
+
+def get_fa3_egg_path() -> str:
+    """Get default FA3 egg path."""
+    return DEFAULT_FA3_EGG_PATH
 
 
 def build_launch_config(
@@ -163,6 +191,46 @@ def build_launch_config(
     if experiment is not None:
         logger.info(f"Propagating experiment key to experiment: {experiment}")
         env_vars.append(BeakerEnvVar(name="EXPERIMENT", value=experiment))
+    uv_sync_cmd = get_uv_sync_cmd(use_fa3=use_fa3)
+    fa3_egg_path = get_fa3_egg_path()
+    beaker_image = DEFAULT_FA3_BEAKER_IMAGE if use_fa3 else DEFAULT_BEAKER_IMAGE
+
+    setup_steps = [
+        # Write GCP credentials.
+        'echo "$GCP_CREDENTIALS" > $GOOGLE_APPLICATION_CREDENTIALS',
+        # Clone private repo.
+        "conda install gh --channel conda-forge",
+        # assumes that conda is installed, which is true for our beaker images.
+        "gh auth status",
+        "gh repo clone $REPO_URL .",
+        'git checkout "$GIT_REF"',
+        "git submodule update --init --recursive",
+        "pip install uv",
+        # so that we can use uv tools
+        'export PATH="/root/.local/bin:$PATH" ',
+        uv_sync_cmd,
+        # activate the uv venv
+        "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
+        'source "$(dirname "$venv_path")/activate"',
+        # explicitly install breizhcrops
+        "uv pip install breizhcrops==0.0.4.1 ",
+    ]
+    if use_fa3:
+        setup_steps.extend(
+            [
+                # Ensure FA3 from the base image is visible in the uv venv.
+                f"python - <<'PY'\nimport site\nfrom pathlib import Path\nsp = Path(site.getsitepackages()[0])\npth = sp / '_fa3_only.pth'\nfa3_egg_path = {fa3_egg_path!r}\npth.write_text(f'{{fa3_egg_path}}\\n')\nprint('wrote', pth, '->', fa3_egg_path)\nPY",
+                "uv run python -c 'import flash_attn_interface; print(\"FA3 import OK\")'",
+            ]
+        )
+    setup_steps.extend(
+        [
+            # debugging - check torch version
+            "uv pip show torch",
+            # and then show the arch
+            "uv run python -c 'import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.get_arch_list())'",
+        ]
+    )
 
     return OlmoEarthBeakerLaunchConfig(
         name=f"{name}-{generate_uuid()[:8]}",
@@ -172,9 +240,7 @@ def build_launch_config(
         workspace=workspace,
         clusters=clusters,
         weka_buckets=weka_buckets,
-        beaker_image="tylerr/olmo-core-tch271cu128-2025-11-25"
-        if use_fa3
-        else f"petew/{OLMoCoreBeakerImage.stable_cu128}",
+        beaker_image=beaker_image,
         num_nodes=1,
         num_gpus=1,
         shared_memory="256GiB",
@@ -190,30 +256,7 @@ def build_launch_config(
             BeakerEnvSecret(name="GITHUB_TOKEN", secret=f"{beaker_user}_GITHUB_TOKEN"),  # nosec
             BeakerEnvSecret(name="GCP_CREDENTIALS", secret="HELIOS_GCP_CREDENTIALS"),  # nosec
         ],
-        setup_steps=[
-            # Write GCP credentials.
-            'echo "$GCP_CREDENTIALS" > $GOOGLE_APPLICATION_CREDENTIALS',
-            # Clone private repo.
-            "conda install gh --channel conda-forge",
-            # assumes that conda is installed, which is true for our beaker images.
-            "gh auth status",
-            "gh repo clone $REPO_URL .",
-            'git checkout "$GIT_REF"',
-            "git submodule update --init --recursive",
-            "pip install uv",
-            # so that we can use uv tools
-            'export PATH="/root/.local/bin:$PATH" ',
-            "uv sync --locked --all-extras",
-            # activate the uv venv
-            "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
-            'source "$(dirname "$venv_path")/activate"',
-            # explicitly install breizhcrops
-            "uv pip install breizhcrops==0.0.4.1 ",
-            # debugging - check torch version
-            "uv pip show torch",
-            # and then show the arch
-            "uv run python -c 'import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.get_arch_list())'",
-        ],
+        setup_steps=setup_steps,
     )
 
 
@@ -247,8 +290,9 @@ def build_common_components(
     else:
         cmd_to_launch = cmd
 
-    # Extract nccl_debug from overrides if present
+    # Extract launch-relevant common overrides before CommonComponents exists.
     nccl_debug = extract_nccl_debug_from_overrides(overrides)
+    use_fa3 = extract_use_fa3_from_overrides(overrides)
     # If we are running on a local cluster, we don't need to build a launch config as we may not have beaker access
     if local := cluster == LOCAL_CLUSTER_NAME:
         set_nccl_debug_env_vars(nccl_debug=nccl_debug, local=local)
@@ -259,6 +303,7 @@ def build_common_components(
             cmd=[script, cmd_to_launch, run_name, cluster, *overrides],
             clusters=cluster,
             nccl_debug=nccl_debug,
+            use_fa3=use_fa3,
         )
         # Set retries=2 for launch command
         if cmd == SubCmd.launch:
@@ -275,4 +320,5 @@ def build_common_components(
         save_folder=f"{root_dir}/checkpoints/{beaker_user.lower()}/{run_name}",
         launch=launch_config,
         training_modalities=TRAINING_MODALITIES,
+        use_fa3=use_fa3,
     )

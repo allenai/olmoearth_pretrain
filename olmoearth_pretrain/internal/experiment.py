@@ -84,6 +84,7 @@ class CommonComponents(Config):
         tokenization_config: Optional custom tokenization config for band groupings.
             If provided, will be used by both the model and masking strategy to ensure
             consistent band groupings.
+        use_fa3: Whether to configure Beaker launch for FlashAttention-3.
     """
 
     run_name: str
@@ -92,6 +93,7 @@ class CommonComponents(Config):
     launch: OlmoEarthBeakerLaunchConfig | None = None
     nccl_debug: bool = False
     tokenization_config: TokenizationConfig | None = None
+    use_fa3: bool = False
 
     def validate(self) -> None:
         """Validate the common components."""
