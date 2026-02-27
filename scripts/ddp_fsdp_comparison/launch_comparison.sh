@@ -42,7 +42,7 @@ echo ""
 
 # Launch DDP run
 echo "[2/2] Launching DDP run..."
-python $SCRIPT_DIR/compare_ddp_fsdp.py" launch "${RUN_PREFIX}" "$CLUSTER" \
+python $SCRIPT_DIR/compare_ddp_fsdp.py launch "${RUN_PREFIX}" "$CLUSTER" \
     --dp_type=ddp \
     --launch.num_gpus=4 \
     --launch.num_nodes=1
