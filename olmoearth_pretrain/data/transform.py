@@ -95,7 +95,7 @@ class FlipAndRotateSpace(Transform):
         # Choose a random transformation
         transformation = random.choice(self.transformations)
         new_data_dict: dict[str, ArrayTensor] = {}
-        for attribute, modality_data in batch.as_dict(ignore_nones=True).items():
+        for attribute, modality_data in batch.as_dict().items():
             if attribute == "timestamps":
                 new_data_dict[attribute] = modality_data
             else:

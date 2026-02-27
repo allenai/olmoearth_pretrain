@@ -40,7 +40,7 @@ from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
 from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
 from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
-from olmoearth_pretrain.nn.flexi_vit import PoolingType
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
 logger = logging.getLogger(__name__)
@@ -93,7 +93,11 @@ class DownstreamTaskConfig:
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
     partition: str = field(default_factory=lambda: EvalDatasetPartition.TRAIN1X)
-    norm_method: NormMethod = field(default_factory=lambda: NormMethod.NORM_NO_CLIP)
+    # Default to 2std no clip - this matches what our model sees in pretraining,
+    # so when using dataset stats (e.g. for MADOS) consistency is important.
+    norm_method: NormMethod = field(
+        default_factory=lambda: NormMethod.NORM_NO_CLIP_2_STD
+    )
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
     # Quantize embeddings to int8 for storage efficiency evaluation
     quantize_embeddings: bool = False

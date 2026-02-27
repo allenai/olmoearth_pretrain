@@ -3,8 +3,7 @@
 import logging
 import math
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import Any, NamedTuple
+from typing import Any
 
 import torch
 from einops import rearrange, reduce, repeat
@@ -18,7 +17,11 @@ from olmoearth_pretrain.data.constants import (
     ModalitySpec,
     get_modality_specs_from_names,
 )
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    TokensAndMasks,
+)
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
     get_1d_sincos_pos_encoding,
@@ -29,6 +32,7 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
+from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
@@ -54,241 +58,8 @@ def return_modalities_from_dict(
     ]
 
 
-class PoolingType(StrEnum):
-    """Strategy for pooling the tokens."""
-
-    MAX = "max"
-    MEAN = "mean"
-
-
-class TokensAndMasks(NamedTuple):
-    """Output to compute the loss on.
-
-    Args:
-        sentinel2: sentinel 2 data of shape (B, P_H, P_W, T, Band_Sets, D)
-        sentinel2_mask: sentinel 2 mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
-        sentinel1: sentinel 1 data of shape (B, P_H, P_W, T, Band_Sets, D)
-        sentinel1_mask: sentinel 1 mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
-        worldcover: worldcover data of shape (B, P_H, P_W, T, Band_Sets, D)
-        worldcover_mask: worldcover mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
-        latlon: lat lon data containing geographical coordinates
-        latlon_mask: lat lon mask indicating which coordinates are masked/unmasked
-        openstreetmap_raster: openstreetmap raster data of shape (B, P_H, P_W, T, Band_Sets, D)
-        openstreetmap_raster_mask: openstreetmap raster mask indicating which tokens are masked/unmasked (B, P_H, P_W, T, Band_Sets)
-    """
-
-    sentinel2_l2a: Tensor | None = None
-    sentinel2_l2a_mask: Tensor | None = None
-    sentinel1: Tensor | None = None
-    sentinel1_mask: Tensor | None = None
-    worldcover: Tensor | None = None
-    worldcover_mask: Tensor | None = None
-    latlon: Tensor | None = None
-    latlon_mask: Tensor | None = None
-    openstreetmap_raster: Tensor | None = None
-    openstreetmap_raster_mask: Tensor | None = None
-    srtm: Tensor | None = None
-    srtm_mask: Tensor | None = None
-    landsat: Tensor | None = None
-    landsat_mask: Tensor | None = None
-    naip: Tensor | None = None
-    naip_mask: Tensor | None = None
-    naip_10: Tensor | None = None
-    naip_10_mask: Tensor | None = None
-    gse: Tensor | None = None
-    gse_mask: Tensor | None = None
-    cdl: Tensor | None = None
-    cdl_mask: Tensor | None = None
-    worldpop: Tensor | None = None
-    worldpop_mask: Tensor | None = None
-    worldcereal: Tensor | None = None
-    worldcereal_mask: Tensor | None = None
-    wri_canopy_height_map: Tensor | None = None
-    wri_canopy_height_map_mask: Tensor | None = None
-    era5_10: Tensor | None = None
-    era5_10_mask: Tensor | None = None
-    ndvi: Tensor | None = None
-    ndvi_mask: Tensor | None = None
-    eurocrops: Tensor | None = None
-    eurocrops_mask: Tensor | None = None
-
-    @property
-    def device(self) -> torch.device:
-        """Get the device of the tokens and masks."""
-        if self.sentinel2_l2a is not None:
-            return self.sentinel2_l2a.device
-        else:
-            # look for any other modality that is not None
-            for modality in self._fields:
-                if getattr(self, modality) is not None:
-                    return getattr(self, modality).device
-            raise ValueError("No data to get device from")
-
-    # TODO: It seems like we want a lot of our named tuples to have this functionality so we should probably create a utility base class for the named tuples and double subclass
-    @classmethod
-    def get_masked_modality_name(cls, modality: str) -> str:
-        """Get the masked modality name."""
-        return f"{modality}_mask"
-
-    def as_dict(self, return_none: bool = True) -> dict[str, Any]:
-        """Convert the namedtuple to a dictionary.
-
-        Returns:
-            Dictionary representation of the namedtuple.
-        """
-        return_dict = {}
-        for field in self._fields:
-            val = getattr(self, field)
-            if return_none:
-                return_dict[field] = val
-            else:
-                if val is not None:
-                    return_dict[field] = val
-        return return_dict
-
-    @property
-    def modalities(self) -> list[str]:
-        """Return all data fields."""
-        return [
-            x
-            for x in self._fields
-            if not x.endswith("mask") and getattr(self, x) is not None
-        ]
-
-    def get_shape_dict(self) -> dict[str, tuple]:
-        """Return a dictionary of the shapes of the fields."""
-        return {x: getattr(self, x).shape for x in self._fields}
-
-    @staticmethod
-    def _flatten(x: Tensor) -> Tensor:
-        return rearrange(x, "b ... d -> b (...) d")
-
-    def flatten_tokens_and_masks(
-        self, return_lists: bool = False
-    ) -> tuple[Tensor, Tensor]:
-        """Return the flattened tokens and masks.
-
-        Args:
-            return_lists: If True, return the original lists before concatenation.
-                          If False, return concatenated tensors.
-
-        Tokens will have shape [B, T, D] and masks will have shape [B, T]
-        """
-        flattened_x, flattened_masks = [], []
-        for attr_name in self.modalities:
-            mask_attr_name = self.get_masked_modality_name(attr_name)
-            attr = getattr(self, attr_name)
-            masked_attr = getattr(self, mask_attr_name)
-            if attr is not None:
-                if masked_attr is None:
-                    raise ValueError(
-                        f"Can't have present {attr_name} but None {mask_attr_name}"
-                    )
-                masked_attr = masked_attr.unsqueeze(dim=-1)
-                flattened_x.append(self._flatten(attr))
-                flattened_masks.append(self._flatten(masked_attr))
-
-        if return_lists:
-            # Remove the extra dimension from the masks
-            flattened_masks = [mask[:, :, 0] for mask in flattened_masks]
-            return flattened_x, flattened_masks
-
-        x = torch.cat(flattened_x, dim=1)
-        masks = torch.cat(flattened_masks, dim=1)[:, :, 0]
-        return x, masks
-
-    def pool_spatially_and_concat_modalities(self) -> Tensor:
-        """Pool the modalities  across time to get spatial features and concatenate the features."""
-        spatial_stacked_features = []
-        for attr_name in self.modalities:
-            if Modality.get(attr_name).is_spatial:
-                mask_attr_name = self.get_masked_modality_name(attr_name)
-                masked_attr = getattr(self, mask_attr_name)
-                if masked_attr is None:
-                    continue
-                if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
-                    attr = getattr(self, attr_name)
-                    # only mean in temporal dimension
-                    pooled_attr = torch.mean(attr, dim=(-3))
-                    spatial_stacked_features.append(pooled_attr)
-        if len(spatial_stacked_features) == 0:
-            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
-        # Concatenate along the band sets dimension instead of stacking
-        spatial_stacked_features = torch.cat(spatial_stacked_features, dim=-2)
-        return spatial_stacked_features
-
-    def pool_spatially(self, pooling_type: PoolingType) -> Tensor:
-        """Pool the modalities across time to get spatial features."""
-        spatial_average = []
-        for attr_name in self.modalities:
-            if Modality.get(attr_name).is_spatial:
-                mask_attr_name = self.get_masked_modality_name(attr_name)
-                masked_attr = getattr(self, mask_attr_name)
-                if masked_attr is None:
-                    continue
-                if (masked_attr == MaskValue.ONLINE_ENCODER.value).all():
-                    attr = getattr(self, attr_name)
-                    # pool across time and bandset dimensions
-                    if pooling_type == PoolingType.MEAN:
-                        spatial_average.append(torch.mean(attr, dim=(-2, -3)))
-                    else:
-                        spatial_average.append(
-                            torch.max(torch.max(attr, dim=-2).values, dim=-2).values
-                        )
-        if len(spatial_average) == 0:
-            raise ValueError("Missing unmasked spatial modalities for spatial pooling.")
-        spatial_average_t = torch.stack(spatial_average, dim=-1)
-        if pooling_type == PoolingType.MEAN:
-            return spatial_average_t.mean(dim=-1)
-        else:
-            return spatial_average_t.max(dim=-1).values
-
-    def pool_instance_wise(self, pooling_type: PoolingType) -> Tensor:
-        """Pool all the tokens in the instance."""
-        x, mask = self.flatten_tokens_and_masks()
-        # 1s for online encoder, 0s elsewhere
-        mask = (mask == MaskValue.ONLINE_ENCODER.value).long()
-        x_for_pooling = x * mask.unsqueeze(-1)
-        if pooling_type == PoolingType.MAX:
-            x_for_pooling = x_for_pooling.masked_fill(
-                ~mask.bool().unsqueeze(-1), -float("inf")
-            )
-            return x_for_pooling.max(dim=1).values
-        elif pooling_type == PoolingType.MEAN:
-            num_encoded_tokens = torch.sum(mask, -1, keepdim=True)
-            logger.debug(f"num_encoded_tokens: {num_encoded_tokens}")
-            if (num_encoded_tokens == 0).any():
-                raise ValueError(
-                    f"num_encoded_tokens is 0 for some samples {num_encoded_tokens}"
-                )
-            return x_for_pooling.sum(dim=1) / num_encoded_tokens
-        else:
-            raise ValueError(f"Invalid pooling type: {pooling_type}")
-
-    def pool_unmasked_tokens(
-        self,
-        pooling_type: PoolingType = PoolingType.MAX,
-        spatial_pooling: bool = False,
-        concat_features: bool = False,
-    ) -> Tensor:
-        """Pool the unmasked tokens.
-
-        Args:
-            pooling_type: Pooling type for the tokens
-            spatial_pooling: Whether to keep the spatial dimensions when pooling. If true,
-                this expects the masks within a spatial modality to be consistent (e.g. all
-                s2 tokens would have the same mask.)
-            concat_features: Whether to concatenate the features instead of averaging them, only enabled for spatial pooling as of now,
-            requires no masked out tokens
-        """
-        if concat_features and spatial_pooling:
-            return self.pool_spatially_and_concat_modalities()
-        if concat_features:
-            raise ValueError("concat_features is not supported for non-spatial pooling")
-        if not spatial_pooling:
-            return self.pool_instance_wise(pooling_type)
-        else:
-            return self.pool_spatially(pooling_type)
+# TokensAndMasks is imported from datatypes and re-exported here for backwards compatibility
+# See olmoearth_pretrain.datatypes.TokensAndMasks for the implementation
 
 
 class ProjectAndAggregate(nn.Module):
@@ -321,8 +92,8 @@ class ProjectAndAggregate(nn.Module):
     ) -> torch.Tensor:
         """Apply the aggregate operation to the input."""
         if isinstance(x, TokensAndMasks):
-            pooled_for_contrastive = x.pool_unmasked_tokens(
-                PoolingType.MEAN, spatial_pooling=False
+            pooled_for_contrastive = pool_unmasked_tokens(
+                x, PoolingType.MEAN, spatial_pooling=False
             )
         elif isinstance(x, torch.Tensor):
             pooled_for_contrastive = reduce(x, "b ... d -> b  d", "mean")
@@ -335,7 +106,7 @@ class ProjectAndAggregate(nn.Module):
     ) -> torch.Tensor:
         """Apply the project operation to the input then aggregate."""
         if isinstance(x, TokensAndMasks):
-            decoder_emedded_dict = x._asdict()
+            decoder_emedded_dict = x.as_dict(include_nones=True)
             for modality in x.modalities:
                 x_modality = getattr(x, modality)
                 # Are these normalizations masked correctly?
@@ -346,8 +117,8 @@ class ProjectAndAggregate(nn.Module):
                     x, masked_modality_name
                 )
             x_projected = TokensAndMasks(**decoder_emedded_dict)
-            projected_pooled = x_projected.pool_unmasked_tokens(
-                PoolingType.MEAN, spatial_pooling=False
+            projected_pooled = pool_unmasked_tokens(
+                x_projected, PoolingType.MEAN, spatial_pooling=False
             )
         elif isinstance(x, torch.Tensor):
             x_projected = self.projection(x)
@@ -2150,8 +1921,7 @@ class Predictor(PredictorBase):
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
         """
-        decoder_emedded_dict = x.as_dict(return_none=False)
-
+        decoder_emedded_dict = x.as_dict()
         # Apply Input Norms and encoder to decoder embeds to each modality
         available_modalities = x.modalities
         modalities_to_process = get_modalities_to_process(

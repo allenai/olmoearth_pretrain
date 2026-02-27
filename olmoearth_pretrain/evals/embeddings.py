@@ -36,9 +36,7 @@ def get_embeddings(
     total_samples = len(data_loader)
     with torch.no_grad():
         for i, (masked_olmoearth_sample, label) in enumerate(data_loader):
-            masked_olmoearth_sample_dict = masked_olmoearth_sample.as_dict(
-                return_none=False
-            )
+            masked_olmoearth_sample_dict = masked_olmoearth_sample.as_dict()
             for key, val in masked_olmoearth_sample_dict.items():
                 if key == "timestamps":
                     masked_olmoearth_sample_dict[key] = val.to(device=device)
