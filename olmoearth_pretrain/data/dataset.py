@@ -39,6 +39,9 @@ from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
 
+# Derived modalities that don't need normalization (already bounded)
+_DERIVED_MODALITIES_SKIP_NORMALIZATION: set[str] = {"ndvi"}
+
 
 # =============================================================================
 # Subsetting Functions
@@ -442,10 +445,13 @@ class OlmoEarthDataset(Dataset):
 
         # Get the indices of samples that don't have any training modalities that are
         # spacetime varying. We want to remove these samples.
+        # Skip derived modalities (ignore_when_parsing=True) since they don't have
+        # columns in the metadata CSV.
         spacetime_varying_training_modalities = [
             modality
             for modality in self.training_modalities
             if Modality.get(modality).is_spacetime_varying
+            and not Modality.get(modality).ignore_when_parsing
         ]
         if len(spacetime_varying_training_modalities) == 0:
             raise ValueError(
@@ -534,6 +540,39 @@ class OlmoEarthDataset(Dataset):
             return self.normalizer_computed.normalize(modality, image)
         except Exception:
             return self.normalizer_predefined.normalize(modality, image)
+
+    def _compute_ndvi(
+        self,
+        s2_data: np.ndarray,
+        missing_modalities: list[str],
+    ) -> tuple[np.ndarray, list[str]]:
+        """Compute NDVI from raw Sentinel-2 L2A bands.
+
+        NDVI = (NIR - Red) / (NIR + Red) where NIR=B08 (index 3) and Red=B04 (index 2).
+        If either band has MISSING_VALUE at a pixel, NDVI is set to MISSING_VALUE there.
+
+        Args:
+            s2_data: Raw (un-normalized) S2 L2A data, shape [H, W, T, C].
+            missing_modalities: List of modalities that are entirely missing.
+
+        Returns:
+            Tuple of (ndvi array [H, W, T, 1], updated missing_modalities).
+        """
+        s2_band_order = Modality.SENTINEL2_L2A.band_order
+        red = s2_data[..., s2_band_order.index("B04")]
+        nir = s2_data[..., s2_band_order.index("B08")]
+
+        missing = (red == MISSING_VALUE) | (nir == MISSING_VALUE)
+
+        denom = nir + red
+        safe_denom = np.where(np.abs(denom) < 1e-10, 1.0, denom)
+        ndvi = (nir - red) / safe_denom
+        ndvi = np.where(np.abs(denom) < 1e-10, 0.0, ndvi)
+        ndvi = np.where(missing, MISSING_VALUE, ndvi)
+
+        # Remove "ndvi" from missing_modalities since we computed it
+        updated_missing = [m for m in missing_modalities if m != "ndvi"]
+        return ndvi[..., np.newaxis].astype(self.dtype), updated_missing
 
     def _fill_missing_timesteps(
         self,
@@ -785,9 +824,22 @@ class OlmoEarthDataset(Dataset):
 
         sample_dict = subset_sample.as_dict()
 
+        # Compute NDVI from raw (un-normalized) S2 L2A bands if requested
+        if (
+            "ndvi" in sample_dict
+            and "sentinel2_l2a" in sample_dict
+            and "sentinel2_l2a" not in missing_modalities
+        ):
+            sample_dict["ndvi"], missing_modalities = self._compute_ndvi(
+                sample_dict["sentinel2_l2a"], missing_modalities
+            )
+
         if self.normalize:
             for modality_name in sample_dict.keys():
                 if modality_name == "timestamps":
+                    continue
+                # Skip derived modalities that are already bounded (e.g. NDVI in [-1, 1])
+                if modality_name in _DERIVED_MODALITIES_SKIP_NORMALIZATION:
                     continue
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality_name in missing_modalities:

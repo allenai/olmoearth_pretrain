@@ -99,6 +99,8 @@ class OlmoEarthSample(NamedTuple):
     wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
     # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
+    # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
+    ndvi: ArrayTensor | None = None  # [B, H, W, T, 1]
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
@@ -355,6 +357,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     sentinel1_mask: Tensor | None = None
     worldcover: Tensor | None = None
     worldcover_mask: Tensor | None = None
+    latlon: Tensor | None = None  # [B, 2]
+    latlon_mask: Tensor | None = None
     openstreetmap_raster: Tensor | None = None
     openstreetmap_raster_mask: Tensor | None = None
     srtm: Tensor | None = None
@@ -377,10 +381,10 @@ class MaskedOlmoEarthSample(NamedTuple):
     wri_canopy_height_map_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
+    ndvi: Tensor | None = None
+    ndvi_mask: Tensor | None = None
     eurocrops: Tensor | None = None
     eurocrops_mask: Tensor | None = None
-    latlon: Tensor | None = None
-    latlon_mask: Tensor | None = None
 
     def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
         """Convert to a dictionary.
@@ -515,6 +519,8 @@ class TokensAndMasks(NamedTuple):
     wri_canopy_height_map_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
+    ndvi: Tensor | None = None
+    ndvi_mask: Tensor | None = None
     eurocrops: Tensor | None = None
     eurocrops_mask: Tensor | None = None
     latlon: Tensor | None = None
