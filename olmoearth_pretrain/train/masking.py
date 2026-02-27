@@ -260,12 +260,15 @@ class TimeMaskingStrategy(MaskingStrategy):
         # can we relax the all sample contraint here as we are doing per sample stuff anyways
         present_t = timesteps_with_at_least_one_modality.shape[0]  # across all samples
         assert present_t >= 3
-        logger.info(f"Present timesteps: {present_t}")
+        logger.info("Present timesteps: %s", present_t)
         encode_times = max(int(self.encode_ratio * present_t), 1)
         decode_times = max(int(self.decode_ratio * present_t), 1)
         target_times = present_t - encode_times - decode_times
         logger.info(
-            f"Encode times: {encode_times}, Decode times: {decode_times}, Target times: {target_times}"
+            "Encode times: %s, Decode times: %s, Target times: %s",
+            encode_times,
+            decode_times,
+            target_times,
         )
         # Create mask values only for the encodable timesteps
         encodable_mask_values = torch.cat(
@@ -339,7 +342,8 @@ class TimeMaskingStrategy(MaskingStrategy):
                     if temporal_mask is None:
                         # if there are timesteps that we wouldn't want to pick we should call a seprate mask creation function
                         logger.info(
-                            f"Creating temporal mask for modality {modality.name}"
+                            "Creating temporal mask for modality %s",
+                            modality.name,
                         )
                         temporal_mask = self._create_temporal_mask(
                             shape, timesteps_with_at_least_one_modality, device
@@ -491,12 +495,13 @@ class SpaceMaskingStrategy(MaskingStrategy):
             shape = instance.shape
             if not modality.is_spatial:
                 logger.warning(
-                    f"Modality {modality.name} is not spatial, random masking strategy will be applied"
+                    "Modality %s is not spatial, random masking strategy will be applied",
+                    modality.name,
                 )
                 mask = self._create_random_mask(modality, shape, patch_size, device)
             else:
                 if patch_spatial_mask is None:
-                    logger.info(f"Creating spatial mask for modality {modality.name}")
+                    logger.info("Creating spatial mask for modality %s", modality.name)
                     patch_spatial_mask = self._create_patch_spatial_mask(
                         modality, shape, patch_size, device
                     )
@@ -552,7 +557,7 @@ class SpaceTimeMaskingStrategy(MaskingStrategy):
         # I need a timestamp mask
 
         if not has_enough_timesteps:
-            logger.debug(f"Valid time: {batch.valid_time}, Time: {batch.time}")
+            logger.debug("Valid time: %s, Time: %s", batch.valid_time, batch.time)
         if (np.random.random() < 0.5) or (not has_enough_timesteps):
             logger.info("Applying space masking")
             return self.space_strategy.apply_mask(batch, patch_size, **kwargs)
@@ -852,7 +857,9 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                 ]
                 if modality not in available_modalities:
                     logger.debug(
-                        f"Modality {modality} not present for sample {sample_idx}"
+                        "Modality %s not present for sample %s",
+                        modality,
+                        sample_idx,
                     )
                     continue
 
@@ -873,7 +880,10 @@ class ModalityCrossMaskingStrategy(MaskingStrategy):
                         else:
                             continue
                         logger.debug(
-                            f"Setting {modality} bandset {bandset_idx} to {forced_mask_value}"
+                            "Setting %s bandset %s to %s",
+                            modality,
+                            bandset_idx,
+                            forced_mask_value,
                         )
                         not_missing_mask = (
                             modality_mask[sample_idx, ..., bandset_idx]

@@ -750,6 +750,7 @@ class STEncoder(STBase):
         layer_attention_modes: list[AttentionMode] | None = None,
         fuse_using_cross_attn: bool = True,
         tokenization_config: TokenizationConfig | None = None,
+        use_linear_patch_embed: bool = True,
     ):
         """Initialize the encoder.
 
@@ -776,6 +777,8 @@ class STEncoder(STBase):
                 arbitrarily pick one unmasked token at each spatial patch to copy to all the other tokens at
                 that patch.
             tokenization_config: Optional config for custom band groupings
+            use_linear_patch_embed: If True, use nn.Linear for patch projection (faster).
+                Set False to load checkpoints trained before this flag existed (Conv2d weights).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -803,6 +806,7 @@ class STEncoder(STBase):
             self.max_patch_size,
             self.embedding_size,
             tokenization_config=self.tokenization_config,
+            use_linear_patch_embed=use_linear_patch_embed,
         )
         # TODO: add backwards compatibility without the project and aggregate module
         self.project_and_aggregate = ProjectAndAggregate(
@@ -1514,6 +1518,7 @@ class STEncoderConfig(Config):
     layer_attention_modes: list[str] | None = None
     fuse_using_cross_attn: bool = True
     tokenization_config: TokenizationConfig | None = None
+    use_linear_patch_embed: bool = True
 
     def validate(self) -> None:
         """Validate the configuration."""

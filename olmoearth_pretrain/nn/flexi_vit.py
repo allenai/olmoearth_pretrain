@@ -148,6 +148,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         max_patch_size: int,
         embedding_size: int,
         tokenization_config: TokenizationConfig | None = None,
+        use_linear_patch_embed: bool = True,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
@@ -160,6 +161,8 @@ class MultiModalPatchEmbeddings(nn.Module):
             max_patch_size: Maximum size of patches
             embedding_size: Size of embeddings
             tokenization_config: Optional config for custom band groupings
+            use_linear_patch_embed: Passed through to FlexiPatchEmbed. Set False to load
+                checkpoints trained before this flag existed (which used Conv2d).
             band_dropout_rate: Probability of dropping each band channel during training.
                 When > 0, randomly zeroes out bands before the patch embedding Conv2d,
                 forcing the model to learn cross-spectral representations. Only active
@@ -175,6 +178,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.embedding_size = embedding_size
         self.supported_modality_names = supported_modality_names
         self.tokenization_config = tokenization_config or TokenizationConfig()
+        self.use_linear_patch_embed = use_linear_patch_embed
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
@@ -240,6 +244,7 @@ class MultiModalPatchEmbeddings(nn.Module):
                         embedding_size=self.embedding_size,
                         patch_size_at_16=self.max_patch_size,
                         modality_spec=modality_spec,
+                        use_linear_patch_embed=self.use_linear_patch_embed,
                     )
                     for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
@@ -641,6 +646,8 @@ class CompositeEncodings(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
+        if getattr(m, "_skip_custom_init", False):
+            return
         if isinstance(m, nn.Linear):
             # we use xavier_uniform following official JAX ViT:
             torch.nn.init.xavier_uniform_(m.weight)
@@ -866,6 +873,9 @@ class FlexiVitBase(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m: nn.Module) -> None:
+        if getattr(m, "_skip_custom_init", False):
+            logger.debug("Skipping custom init for %s", m)
+            return
         if isinstance(m, nn.Linear):
             # we use xavier_uniform following official JAX ViT:
             torch.nn.init.xavier_uniform_(m.weight)
@@ -1051,6 +1061,7 @@ class Encoder(FlexiVitBase):
         qk_norm: bool = False,
         log_token_norm_stats: bool = False,
         tokenization_config: TokenizationConfig | None = None,
+        use_linear_patch_embed: bool = True,
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
@@ -1080,6 +1091,8 @@ class Encoder(FlexiVitBase):
             qk_norm: Whether to apply normalization to Q and K in attention
             log_token_norm_stats: Whether to log the token norm stats
             tokenization_config: Optional config for custom band groupings
+            use_linear_patch_embed: If True, use nn.Linear for patch projection (faster).
+                Set False to load checkpoints trained before this flag existed (Conv2d weights).
             band_dropout_rate: Probability of dropping each band channel during training.
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
@@ -1110,6 +1123,7 @@ class Encoder(FlexiVitBase):
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
+        self.use_linear_patch_embed = use_linear_patch_embed
         self.band_dropout_rate = band_dropout_rate
         self.random_band_dropout = random_band_dropout
         self.band_dropout_modalities = band_dropout_modalities
@@ -1118,6 +1132,7 @@ class Encoder(FlexiVitBase):
             self.max_patch_size,
             self.embedding_size,
             tokenization_config=self.tokenization_config,
+            use_linear_patch_embed=self.use_linear_patch_embed,
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
@@ -1993,6 +2008,7 @@ class EncoderConfig(Config):
     qk_norm: bool = False
     log_token_norm_stats: bool = False
     tokenization_config: TokenizationConfig | None = None
+    use_linear_patch_embed: bool = True
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None

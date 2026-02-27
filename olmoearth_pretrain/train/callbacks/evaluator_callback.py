@@ -371,6 +371,7 @@ class DownstreamEvaluator:
 
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
+        del val_embeddings, val_labels
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -472,6 +473,7 @@ class DownstreamEvaluator:
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
         )
         model.load_state_dict(original_state)
+        del original_state
 
         torch.cuda.empty_cache()
         gc.collect()
@@ -704,6 +706,7 @@ class DownstreamEvaluatorCallback(Callback):
     def _perform_eval(self, evaluator: DownstreamEvaluator) -> EvalTaskResult:
         """Run the evaluator."""
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
+
         start_time = time.monotonic()
         result = evaluator.val()
         val_result = result.val_result
@@ -744,6 +747,7 @@ class DownstreamEvaluatorCallback(Callback):
         logger.info(
             f"Finished {evaluator.evaluation_name} evaluations in {eval_time:.1f} seconds."
         )
+
         result.eval_time = eval_time
         return result
 
