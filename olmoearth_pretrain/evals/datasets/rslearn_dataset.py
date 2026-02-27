@@ -97,6 +97,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         # so when using dataset stats (e.g. for MADOS) consistency is important.
         norm_method: str = "norm_no_clip_2_std",
         ds_norm_stats_json: str | None = None,
+        ds_norm_stats: dict[str, Any] | None = None,
         start_time: str = "2022-09-01",
         end_time: str = "2023-09-01",
         num_timesteps: int = 12,
@@ -113,14 +114,19 @@ class RslearnToOlmoEarthDataset(Dataset):
             norm_stats_from_pretrained: Use pretrain normalization stats.
             norm_method: Normalization method when not using pretrain stats.
             ds_norm_stats_json: Path to dataset norm stats JSON.
+            ds_norm_stats: Dataset norm stats blob (e.g. from registry entry).
             start_time: Start time for timestamp generation.
             end_time: End time for timestamp generation.
             num_timesteps: Number of timesteps per sample.
         """
-        if not norm_stats_from_pretrained and ds_norm_stats_json is None:
+        if (
+            not norm_stats_from_pretrained
+            and ds_norm_stats_json is None
+            and ds_norm_stats is None
+        ):
             raise ValueError(
                 "norm_stats_from_pretrained=False requires a JSON file with dataset stats "
-                "(set ds_norm_stats_json)."
+                "or registry stats (set ds_norm_stats_json or ds_norm_stats)."
             )
 
         if not input_modalities:
@@ -151,7 +157,10 @@ class RslearnToOlmoEarthDataset(Dataset):
 
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
         else:
-            self.dataset_norm_stats = self._get_norm_stats(ds_norm_stats_json)  # type: ignore
+            if ds_norm_stats is not None:
+                self.dataset_norm_stats = self._parse_norm_stats(ds_norm_stats)
+            else:
+                self.dataset_norm_stats = self._get_norm_stats(ds_norm_stats_json)  # type: ignore[arg-type]
             self.norm_method = norm_method
 
     @classmethod
@@ -164,6 +173,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         norm_stats_from_pretrained: bool = True,
         norm_method: str = "norm_no_clip",
         ds_norm_stats_json: str | None = None,
+        ds_norm_stats: dict[str, Any] | None = None,
         start_time: str = "2022-09-01",
         end_time: str = "2023-09-01",
         max_samples: int | None = None,
@@ -183,6 +193,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             norm_stats_from_pretrained: Use pretrain norm stats.
             norm_method: Normalization method.
             ds_norm_stats_json: Path to dataset norm stats.
+            ds_norm_stats: Dataset norm stats blob (e.g. from registry entry).
             start_time: Start time for timestamps (used for timestamp generation).
             end_time: End time for timestamps (used for timestamp generation).
             max_samples: Optional sample limit.
@@ -243,24 +254,47 @@ class RslearnToOlmoEarthDataset(Dataset):
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
             ds_norm_stats_json=ds_norm_stats_json,
+            ds_norm_stats=ds_norm_stats,
             start_time=start_time,
             end_time=end_time,
             num_timesteps=num_timesteps,
         )
 
     @staticmethod
-    def _get_norm_stats(ds_norm_stats_json: str) -> dict:
-        """Load dataset norm stats."""
-        # TODO: We will need to use the registry to get this information.
-        with (
-            files("olmoearth_pretrain.evals.datasets.config") / ds_norm_stats_json
-        ).open() as f:
-            blob = json.load(f)
-        out = {}
-        for modality, per_band in blob.items():
-            band_order = DataModality.get(modality).band_order
-            means, stds, mins, maxs = [], [], [], []
+    def _parse_norm_stats(
+        raw_stats: dict[str, Any],
+    ) -> dict[str, dict[str, np.ndarray]]:
+        """Convert raw stats into modality arrays keyed by band order."""
+        out: dict[str, dict[str, np.ndarray]] = {}
+        for modality, per_band in raw_stats.items():
+            modality_name = modality.lower()
+            band_order = DataModality.get(modality_name).band_order
 
+            # Also support pre-aggregated format: {"means": [...], "stds": [...], ...}
+            if all(
+                key in per_band for key in ("means", "stds", "mins", "maxs")
+            ) and isinstance(per_band.get("means"), list | tuple):
+                means = np.array(per_band["means"], dtype=np.float32)
+                stds = np.array(per_band["stds"], dtype=np.float32)
+                mins = np.array(per_band["mins"], dtype=np.float32)
+                maxs = np.array(per_band["maxs"], dtype=np.float32)
+                if not (
+                    len(means) == len(stds) == len(mins) == len(maxs) == len(band_order)
+                ):
+                    raise ValueError(
+                        f"Invalid aggregated norm stats for modality {modality_name}: "
+                        f"expected {len(band_order)} bands, got "
+                        f"{len(means)}, {len(stds)}, {len(mins)}, {len(maxs)}"
+                    )
+                out[modality_name] = {
+                    "means": means,
+                    "stds": stds,
+                    "mins": mins,
+                    "maxs": maxs,
+                }
+                continue
+
+            means, stds, mins, maxs = [], [], [], []
             for band in band_order:
                 band_stats = (
                     per_band.get(band)
@@ -268,20 +302,30 @@ class RslearnToOlmoEarthDataset(Dataset):
                     or per_band.get(band.lower())
                 )
                 if band_stats is None:
-                    raise ValueError(f"Missing stats for {band} in modality {modality}")
+                    raise ValueError(
+                        f"Missing stats for {band} in modality {modality_name}"
+                    )
                 means.append(band_stats["mean"])
                 stds.append(band_stats["std"])
                 mins.append(band_stats["min"])
                 maxs.append(band_stats["max"])
 
-            out[modality] = {
+            out[modality_name] = {
                 "means": np.array(means, dtype=np.float32),
                 "stds": np.array(stds, dtype=np.float32),
                 "mins": np.array(mins, dtype=np.float32),
                 "maxs": np.array(maxs, dtype=np.float32),
             }
-
         return out
+
+    @staticmethod
+    def _get_norm_stats(ds_norm_stats_json: str) -> dict:
+        """Load dataset norm stats from a JSON file."""
+        with (
+            files("olmoearth_pretrain.evals.datasets.config") / ds_norm_stats_json
+        ).open() as f:
+            blob = json.load(f)
+        return RslearnToOlmoEarthDataset._parse_norm_stats(blob)
 
     def __len__(self) -> int:
         """Length of the dataset."""
@@ -531,6 +575,10 @@ def from_registry_entry(
     log.info(
         f"Building dataset from RuntimeConfig for {entry.name} (path: {dataset_path})"
     )
+    if not use_pretrain_norm and not entry.norm_stats:
+        raise ValueError(
+            f"Dataset '{entry.name}' has use_pretrain_norm=False but no norm_stats in registry."
+        )
     return RslearnToOlmoEarthDataset.from_runtime_config(
         runtime_config=runtime_config,
         source_path=dataset_path,
@@ -539,6 +587,7 @@ def from_registry_entry(
         norm_stats_from_pretrained=use_pretrain_norm,
         norm_method=norm_method,
         ds_norm_stats_json=None,  # Not currently used
+        ds_norm_stats=entry.norm_stats if not use_pretrain_norm else None,
         max_samples=max_samples,
         groups_override=groups_override,
         tags_override=effective_tags,
