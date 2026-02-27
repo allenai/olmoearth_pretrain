@@ -292,7 +292,7 @@ class GalileoTrainModule(OlmoEarthTrainModule):
                     )
                 if self.contrastive_loss is not None:
                     contrastive_loss = self.contrastive_loss.compute(pooled_a, pooled_b)
-                    logger.info(f"contrastive loss: {contrastive_loss}")
+                    logger.info("contrastive loss: %s", contrastive_loss)
                     loss += contrastive_loss
                     total_batch_con += (
                         get_local_tensor(contrastive_loss.detach()) / num_microbatches

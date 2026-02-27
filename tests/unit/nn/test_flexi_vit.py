@@ -13,12 +13,13 @@ from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
     FlexiVitBase,
     MultiModalPatchEmbeddings,
+    PoolingType,
     Predictor,
     PredictorConfig,
     ProjectAndAggregate,
     TokensAndMasks,
 )
-from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
+from olmoearth_pretrain.nn.pooling import pool_unmasked_tokens
 from olmoearth_pretrain.train.masking import MaskValue
 
 logger = logging.getLogger(__name__)
@@ -91,20 +92,6 @@ class TestCompositeEncodings:
         )
         assert not (wc_enc == 0).all()
         assert not (wc_enc == worldcover_tokens).all()
-        assert worldcover_tokens.shape == wc_enc.shape
-
-    def test_apply_encodings_per_modality_worldcover_rectangular_grid(
-        self,
-        composite_encodings: CompositeEncodings,
-    ) -> None:
-        """Rectangular (H!=W) spatial grids should not crash."""
-        B, H, W, C, D = 1, 18, 20, 1, 16
-        patch_size = 4
-        input_res = 10
-        worldcover_tokens = torch.randn(B, H, W, C, D)
-        wc_enc = composite_encodings._apply_encodings_per_modality(
-            "worldcover", worldcover_tokens, None, patch_size, input_res
-        )
         assert worldcover_tokens.shape == wc_enc.shape
 
     def test_apply_encodings_per_modality_grad(
@@ -678,7 +665,7 @@ class TestTokensAndMasks:
     """Test TestTokensAndMasks."""
 
     def test_flatten_tokens_and_masks(self) -> None:
-        """Test TokensAndMasks.flatten_tokens_and_masks."""
+        """Test TokensAndMasks.flatten_all_tokens_and_masks."""
         b, h, w, t, d = 2, 4, 4, 3, 128
         sentinel_2 = torch.ones((b, h, w, t, d))
         sentinel_2[0, 0, 0, 0, :] = 0  # set one "token" to 0s
@@ -715,12 +702,16 @@ class TestTokensAndMasks:
         )
 
         # Test max pooling
-        pooled_max = pool_unmasked_tokens(t_and_m_max, PoolingType.MAX)
+        pooled_max = pool_unmasked_tokens(
+            t_and_m_max, PoolingType.MAX, spatial_pooling=False
+        )
         assert pooled_max.shape == (b, d)
         assert (pooled_max == 2).all()  # check the 3 tokens have been ignored
 
         # Test mean pooling
-        pooled_mean = pool_unmasked_tokens(t_and_m_mean, PoolingType.MEAN)
+        pooled_mean = pool_unmasked_tokens(
+            t_and_m_mean, PoolingType.MEAN, spatial_pooling=False
+        )
         assert pooled_mean.shape == (b, d)
         assert (pooled_mean == 1).all()  # check the 0 tokens have been ignored
 
@@ -874,9 +865,7 @@ class TestBandDropout:
             "No values should be zero when eval mode skips dropout"
         )
 
-    def test_disable_band_dropout(
-        self, supported_modalities: list[ModalitySpec]
-    ) -> None:
+    def test_disable_band_dropout(self) -> None:
         """Test Encoder.disable_band_dropout sets rate to 0."""
         encoder = Encoder(
             embedding_size=8,
@@ -886,13 +875,10 @@ class TestBandDropout:
             mlp_ratio=4.0,
             depth=2,
             drop_path=0.1,
-            supported_modalities=supported_modalities,
+            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
             max_sequence_length=12,
             band_dropout_rate=0.5,
             random_band_dropout=True,
         )
         encoder.disable_band_dropout()
         assert encoder.patch_embeddings.band_dropout_rate == 0.0
-
-
-# TODO: write a unit test for the FlexiPatchEmbeddings

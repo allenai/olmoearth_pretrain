@@ -2,8 +2,6 @@
 
 import calendar
 import random
-import sys
-import types
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -34,9 +32,9 @@ from olmoearth_pretrain.dataset.sample import SampleInformation
 from olmoearth_pretrain.train.masking import MaskValue
 
 # Avoid triton imports from olmo-core during tests
-sys.modules["triton"] = types.SimpleNamespace(
-    runtime=types.SimpleNamespace(autotuner=object(), driver=object())  # type: ignore
-)
+# sys.modules["triton"] = types.SimpleNamespace(
+#     runtime=types.SimpleNamespace(autotuner=object(), driver=object())  # type: ignore
+# )
 
 
 @pytest.fixture(autouse=True)

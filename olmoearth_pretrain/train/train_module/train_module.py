@@ -35,6 +35,7 @@ from torch.optim import Optimizer
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.transform import TransformConfig
+from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.train.loss import LossConfig
 
@@ -442,7 +443,8 @@ class OlmoEarthTrainModule(TrainModule):
         if self.trainer.load_path is not None:
             with open(f"{self.trainer.load_path}/config.json") as f:
                 config_dict = json.load(f)
-                model_config = Config.from_dict(config_dict["model"])
+            config_dict = patch_legacy_encoder_config(config_dict)
+            model_config = Config.from_dict(config_dict["model"])
             model = model_config.build()
             # Check if any keys are missing
             for key in self.model.state_dict().keys():
@@ -498,6 +500,9 @@ class OlmoEarthTrainModule(TrainModule):
     def update_target_encoder(self) -> None:
         """Update the target encoder."""
         # Update target encoder with EMA this should be a callback
+        if self.start_ema == 1.0 and self.end_ema == 1.0:
+            return
+
         cur_ema_value = (
             self.start_ema
             + self.trainer.global_step
