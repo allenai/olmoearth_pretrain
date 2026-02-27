@@ -17,7 +17,7 @@ def eval_collate_fn(
     """Collate function for DataLoaders."""
     samples, targets = zip(*batch)
     # we assume that the same values are consistently None
-    collated_sample = default_collate([s.as_dict(return_none=False) for s in samples])
+    collated_sample = default_collate([s.as_dict() for s in samples])
     collated_target = default_collate([t for t in targets])
     return MaskedOlmoEarthSample(**collated_sample), collated_target
 
