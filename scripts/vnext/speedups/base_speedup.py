@@ -4,7 +4,7 @@ Inherits all data, masking, and trainer config from scripts/official/script.py.
 Only overrides what's needed to turn on the speed improvements.
 
 Launch example:
-    python scripts/vnext/speedups/base_speedup.py launch base_speedup_flash ai2/jupiter \
+    python scripts/vnext/speedups/base_speedup.py launch base_speedup_noflash ai2/jupiter \
         --launch.num_gpus=8 \
         --launch.clusters=[ai2/ceres,ai2/jupiter,ai2/titan] \
         --trainer.callbacks.wandb.project=YYYY_MM_DD_speed_optimizations
@@ -42,7 +42,7 @@ MIN_PATCH_SIZE = 1
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """Base model config with speed optimizations: flash attention + linear patch embed."""
+    """Base model config with speed optimizations and flash attention disabled."""
     model_size = MODEL_SIZE_ARGS["base_shallow_decoder"]
 
     encoder_config = EncoderConfig(
@@ -54,7 +54,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         max_patch_size=MAX_PATCH_SIZE,
         drop_path=0.1,
         max_sequence_length=12,
-        use_flash_attn=True,
+        use_flash_attn=False,
         use_linear_patch_embed=True,
     )
     decoder_config = PredictorConfig(
@@ -65,7 +65,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
         num_heads=model_size["decoder_num_heads"],
         supported_modality_names=common.training_modalities,
         max_sequence_length=12,
-        use_flash_attn=True,
+        use_flash_attn=False,
     )
     return LatentMIMConfig(encoder_config=encoder_config, decoder_config=decoder_config)
 

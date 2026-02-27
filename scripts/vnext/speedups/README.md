@@ -1,17 +1,18 @@
 # Training Speed Optimizations
 
-Scripts in this folder are the starting point for new runs that use the full set of
-training speed improvements. Use these instead of `scripts/official/` for any new
-experiment that doesn't need to resume an old checkpoint.
+Scripts in this folder are the starting point for new runs that use speed
+improvements (with FlashAttention currently disabled). Use these instead of
+`scripts/official/` for any new experiment that doesn't need to resume an old
+checkpoint.
 
 ## What's enabled
 
 | Optimization | Config knob | Impact |
 |---|---|---|
-| Flash Attention | `encoder_config.use_flash_attn=True`, `decoder_config.use_flash_attn=True` | ~20-30% attention speedup on A100/H100 |
+| Flash Attention | `encoder_config.use_flash_attn=False`, `decoder_config.use_flash_attn=False` | Disabled in these scripts due to observed InfoNCE mismatch investigations. |
 | Linear patch embed | `encoder_config.use_linear_patch_embed=True` | Replaces Conv2d with `nn.Linear` (reshape + cuBLAS GEMM). Faster for small channel counts on all GPU types. **Checkpoints from this path are not compatible with `use_linear_patch_embed=False`.** |
 | torch.compile | `train_module.compile_model=True` | Fuses kernels across transformer blocks. Best gains on H100/B200. |
-| Vectorized loss | `modality_patch_discrimination_new_vec` | Eliminates per-sample Python loops and GPU→CPU syncs in the discrimination loss. |
+| Vectorized loss | `modality_patch_discrimination_vec` | Eliminates per-sample Python loops and GPU→CPU syncs in the discrimination loss. |
 | Sync-free unmask | (always on) | `Encoder.unmask` uses scatter ops instead of boolean indexing, removing a GPU sync per step. |
 
 ## Checkpoint compatibility
