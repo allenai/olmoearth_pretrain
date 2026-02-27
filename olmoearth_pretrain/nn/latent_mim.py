@@ -17,6 +17,10 @@ from torch.distributed.fsdp import (
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.supervision_head import (
+    SupervisionHead,
+    SupervisionHeadConfig,
+)
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
 logger = logging.getLogger(__name__)
@@ -32,6 +36,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         encoder: nn.Module,
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
+        supervision_head: SupervisionHead | None = None,
     ):
         """Initialize the Latent MIM Style.
 
@@ -39,11 +44,14 @@ class LatentMIM(nn.Module, DistributedMixins):
             encoder: The encoder to use.
             decoder: The decoder to use.
             reconstructor: Optional reconstructor for auto-encoding.
+            supervision_head: Optional supervision head for direct supervision
+                of decode-only modalities from decoder output.
         """
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.reconstructor = reconstructor
+        self.supervision_head = supervision_head
         self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
@@ -59,6 +67,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         torch.Tensor,
         TokensAndMasks | None,
         dict[str, Any],
+        dict[str, torch.Tensor] | None,
     ]:
         """Forward pass for the Latent MIM Style.
 
@@ -67,6 +76,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             decoded: predictions from decoder for masked tokens
             latent_projected_and_pooled: pooled tokens for contrastive loss
             reconstructed: MAE predictions if enabled
+            extra_metrics: additional metrics to log
+            supervision_preds: per-modality supervision predictions (or None)
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         output_dict = self.encoder(x, patch_size=patch_size)
@@ -83,12 +94,18 @@ class LatentMIM(nn.Module, DistributedMixins):
         decoded = self.decoder(
             latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
         )
+
+        supervision_preds = None
+        if self.supervision_head is not None:
+            supervision_preds = self.supervision_head(decoded, x)
+
         return (
             latent,
             decoded,
             latent_projected_and_pooled,
             reconstructed,
             extra_metrics,
+            supervision_preds,
         )
 
     def apply_fsdp(
@@ -109,6 +126,8 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.target_encoder.apply_fsdp(**fsdp_config)
         if self.reconstructor:
             self.reconstructor.apply_fsdp(**fsdp_config)
+        if self.supervision_head is not None:
+            fully_shard(self.supervision_head, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -122,6 +141,9 @@ class LatentMIM(nn.Module, DistributedMixins):
         logger.info("Applied torch.compile to the decoder")
         self.target_encoder.apply_compile()
         logger.info("Applied torch.compile to the target encoder")
+        if self.supervision_head is not None:
+            self.supervision_head = torch.compile(self.supervision_head)
+            logger.info("Applied torch.compile to the supervision head")
 
 
 @dataclass
@@ -131,6 +153,7 @@ class LatentMIMConfig(Config):
     encoder_config: Config
     decoder_config: Config
     reconstructor_config: Config | None = None
+    supervision_head_config: SupervisionHeadConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -162,8 +185,23 @@ class LatentMIMConfig(Config):
             if self.reconstructor_config is not None
             else None
         )
+        supervision_head = None
+        if self.supervision_head_config is not None:
+            output_embed_size = getattr(
+                self.decoder_config, "output_embedding_size", None
+            )
+            embedding_dim = (
+                output_embed_size
+                if output_embed_size is not None
+                else self.encoder_config.embedding_size
+            )
+            supervision_head = self.supervision_head_config.build(
+                embedding_dim=embedding_dim,
+                max_patch_size=self.encoder_config.max_patch_size,
+            )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
+            supervision_head=supervision_head,
         )
