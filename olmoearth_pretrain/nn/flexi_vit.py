@@ -376,6 +376,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        use_spectral_mixer: bool = False,
     ):
         """Initialize the patch embeddings.
 
@@ -394,6 +395,11 @@ class MultiModalPatchEmbeddings(nn.Module):
                 and acts as stronger augmentation. Default: False (fixed rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            use_spectral_mixer: If True, apply a lightweight cross-band MLP mixer
+                pixel-wise before the patch embedding Conv2d. Learns non-linear
+                spectral combinations (e.g., NDVI-like ratios) that the linear Conv2d
+                alone cannot express. Applied to spatial bandsets with >1 band.
+                Initialized as identity for stable training. Default: False.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -423,7 +429,24 @@ class MultiModalPatchEmbeddings(nn.Module):
                     buffer_name, banset_indices_tensor, persistent=False
                 )
 
-        # Create a dictionary of per modality index tensors to do  index select with registered buffer
+        # Spectral mixers: one per (modality, bandset) for spatial multi-band bandsets.
+        self.spectral_mixers: nn.ModuleDict | None = None
+        if use_spectral_mixer:
+            from olmoearth_pretrain.nn.spectral_mixer import SpectralMixer
+
+            mixers: dict[str, nn.Module] = {}
+            for modality in self.supported_modality_names:
+                modality_spec = Modality.get(modality)
+                if not modality_spec.is_spatial:
+                    continue
+                for idx, bandset_indices in enumerate(
+                    self.tokenization_config.get_bandset_indices(modality)
+                ):
+                    if len(bandset_indices) > 1:
+                        key = self._get_embedding_module_name(modality, idx)
+                        mixers[key] = SpectralMixer(len(bandset_indices))
+            if mixers:
+                self.spectral_mixers = nn.ModuleDict(mixers)
 
     @staticmethod
     def _get_buffer_name(modality: str, idx: int) -> str:
@@ -523,6 +546,12 @@ class MultiModalPatchEmbeddings(nn.Module):
                     else:
                         rate = self.band_dropout_rate
                     patchified_data = self._apply_band_dropout(patchified_data, rate)
+
+            # Spectral mixer: cross-band MLP applied pixel-wise before Conv2d.
+            if self.spectral_mixers is not None:
+                mixer_key = self._get_embedding_module_name(modality, idx)
+                if mixer_key in self.spectral_mixers:
+                    patchified_data = self.spectral_mixers[mixer_key](patchified_data)
 
             embedding_module = self.per_modality_embeddings[modality][
                 self._get_embedding_module_name(modality, idx)
@@ -1279,6 +1308,7 @@ class Encoder(FlexiVitBase):
         band_dropout_rate: float = 0.0,
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
+        use_spectral_mixer: bool = False,
     ):
         """Initialize the encoder.
 
@@ -1309,6 +1339,9 @@ class Encoder(FlexiVitBase):
             random_band_dropout: If True, sample dropout rate from Uniform(0, band_dropout_rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
+            use_spectral_mixer: If True, apply a lightweight cross-band MLP mixer before
+                the patch embedding Conv2d for each spatial multi-band bandset. Learns
+                non-linear spectral combinations pixel-wise. Initialized as identity.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1346,6 +1379,7 @@ class Encoder(FlexiVitBase):
             band_dropout_rate=self.band_dropout_rate,
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
+            use_spectral_mixer=use_spectral_mixer,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -2222,6 +2256,7 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
+    use_spectral_mixer: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
