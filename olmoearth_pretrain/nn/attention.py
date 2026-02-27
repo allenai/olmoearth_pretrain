@@ -1,4 +1,15 @@
-"""Attention Components for OlmoEarth Pretrain."""
+"""Attention Components for OlmoEarth Pretrain.
+
+# 4) add only FA3 from base image
+python - <<'PY'
+import site
+from pathlib import Path
+sp = Path(site.getsitepackages()[0])
+pth = sp / "_fa3_only.pth"
+pth.write_text("/opt/conda/lib/python3.12/site-packages/flash_attn_3-3.0.0b1-py3.12-linux-x86_64.egg\n")
+print("wrote", pth)
+PY
+"""
 
 from logging import getLogger
 from typing import Any
@@ -10,13 +21,17 @@ from einops import rearrange
 from torch.distributed.fsdp import fully_shard
 from torch.jit import Final
 
+logger = getLogger(__name__)
+
+_fa3_import_error: Exception | None = None
 try:
     import flash_attn_interface as _fa3
-
-    _FA_VERSION = 3
-except ImportError:
+except ImportError as error:
+    _fa3_import_error = error
     _fa3 = None
     _FA_VERSION = 0
+else:
+    _FA_VERSION = 3
 
 try:
     import flash_attn as _fa2
@@ -26,8 +41,9 @@ except ImportError:
 if _FA_VERSION == 0 and _fa2 is not None:
     _FA_VERSION = 2
 
-logger = getLogger(__name__)
 logger.info(f"Flash attention version: {_FA_VERSION}")
+if _FA_VERSION != 3 and _fa3_import_error is not None:
+    logger.info("Flash attention 3 import failed: %r", _fa3_import_error)
 
 
 @torch._dynamo.disable()
