@@ -433,6 +433,11 @@ build_model_exp8 = _build_model
 
 
 RANDOM_BAND_DROPOUT_MAX_RATE = 0.3
+SATELLITE_MODALITIES = [
+    Modality.SENTINEL2_L2A.name,
+    Modality.SENTINEL1.name,
+    Modality.LANDSAT.name,
+]
 
 # ============================================================
 # Experiment 13: single bandset + random band dropout (rate ~ Uniform(0, 0.3))
@@ -810,6 +815,7 @@ def build_model_exp18(common: CommonComponents) -> LatentMIMConfig:
         band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
         random_band_dropout=True,
         use_spectral_mixer=True,
+        spectral_mixer_modalities=SATELLITE_MODALITIES,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],
@@ -868,6 +874,7 @@ def build_model_exp19(common: CommonComponents) -> LatentMIMConfig:
         band_dropout_rate=RANDOM_BAND_DROPOUT_MAX_RATE,
         random_band_dropout=True,
         use_spectral_mixer=True,
+        spectral_mixer_modalities=SATELLITE_MODALITIES,
     )
     decoder_config = PredictorConfig(
         encoder_embedding_size=model_size["encoder_embedding_size"],

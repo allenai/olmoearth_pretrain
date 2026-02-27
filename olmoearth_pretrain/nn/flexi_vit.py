@@ -377,6 +377,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
         use_spectral_mixer: bool = False,
+        spectral_mixer_modalities: list[str] | None = None,
     ):
         """Initialize the patch embeddings.
 
@@ -400,6 +401,9 @@ class MultiModalPatchEmbeddings(nn.Module):
                 spectral combinations (e.g., NDVI-like ratios) that the linear Conv2d
                 alone cannot express. Applied to spatial bandsets with >1 band.
                 Initialized as identity for stable training. Default: False.
+            spectral_mixer_modalities: If provided, only apply the spectral mixer to
+                these modalities. If None, apply to all eligible spatial multi-band
+                modalities. Default: None.
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -436,6 +440,8 @@ class MultiModalPatchEmbeddings(nn.Module):
 
             mixers: dict[str, nn.Module] = {}
             for modality in self.supported_modality_names:
+                if spectral_mixer_modalities is not None and modality not in spectral_mixer_modalities:
+                    continue
                 modality_spec = Modality.get(modality)
                 if not modality_spec.is_spatial:
                     continue
@@ -1309,6 +1315,7 @@ class Encoder(FlexiVitBase):
         random_band_dropout: bool = False,
         band_dropout_modalities: list[str] | None = None,
         use_spectral_mixer: bool = False,
+        spectral_mixer_modalities: list[str] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1342,6 +1349,8 @@ class Encoder(FlexiVitBase):
             use_spectral_mixer: If True, apply a lightweight cross-band MLP mixer before
                 the patch embedding Conv2d for each spatial multi-band bandset. Learns
                 non-linear spectral combinations pixel-wise. Initialized as identity.
+            spectral_mixer_modalities: If provided, only apply the spectral mixer to these
+                modalities. If None, apply to all eligible spatial multi-band modalities.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1380,6 +1389,7 @@ class Encoder(FlexiVitBase):
             random_band_dropout=self.random_band_dropout,
             band_dropout_modalities=self.band_dropout_modalities,
             use_spectral_mixer=use_spectral_mixer,
+            spectral_mixer_modalities=spectral_mixer_modalities,
         )
         self.project_and_aggregate = ProjectAndAggregate(
             embedding_size=self.embedding_size,
@@ -2257,6 +2267,7 @@ class EncoderConfig(Config):
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
     use_spectral_mixer: bool = False
+    spectral_mixer_modalities: list[str] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -2273,6 +2284,15 @@ class EncoderConfig(Config):
             if unknown:
                 raise ValueError(
                     f"band_dropout_modalities contains modalities not in "
+                    f"supported_modality_names: {unknown}"
+                )
+        if self.spectral_mixer_modalities is not None:
+            unknown = set(self.spectral_mixer_modalities) - set(
+                self.supported_modality_names
+            )
+            if unknown:
+                raise ValueError(
+                    f"spectral_mixer_modalities contains modalities not in "
                     f"supported_modality_names: {unknown}"
                 )
         if self.tokenization_config is not None:
