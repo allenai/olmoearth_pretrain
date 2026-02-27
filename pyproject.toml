@@ -29,6 +29,7 @@ include = ["olmoearth_pretrain*", "helios*"]
 "olmoearth_pretrain" = ["py.typed"]
 "olmoearth_pretrain.data.norm_configs" = ["*.json"]
 "olmoearth_pretrain.evals.datasets.config" = ["*.json"]
+"olmoearth_pretrain.evals.studio_ingest" = ["registry.json"]
 
 [tool.ruff]
 fix = true
@@ -104,7 +105,7 @@ beaker = [
     "pytest>=8.4.2",
     "rasterio>=1.4.3",
     "rioxarray>=0.19.0",
-    "rslearn==0.0.11",
+    "rslearn>=0.0.19",
     "torch>=2.7,<2.8",
     "universal-pathlib>=0.2.5",
     "wandb>=0.19.0",
@@ -126,13 +127,14 @@ eval = [
     "pytorch-lightning==2.5.5",
     "pyyaml>=6.0",
     "rioxarray>=0.19.0",
-    "rslearn==0.0.11",
+    "rslearn>=0.0.26",
     "satlaspretrain-models>=0.3.1",
     "scikit-learn>=1.7.2",
     "terratorch==1.1",
     "timm==1.0.20",
     "torchmetrics==1.7.1",
     "xarray>=2025.10.1",
+    "tqdm>=4.66.0",
 ]
 flash-attn = [
     "flash-attn>=2.4.0",

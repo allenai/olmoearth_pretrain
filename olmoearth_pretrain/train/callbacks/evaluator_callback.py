@@ -29,7 +29,7 @@ from olmoearth_pretrain.evals.datasets.configs import (
     get_eval_mode,
 )
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
-from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn
+from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_time
 from olmoearth_pretrain.evals.embedding_transforms import (
     dequantize_embeddings,
     reduce_embedding_dim,
@@ -99,10 +99,14 @@ class DownstreamTaskConfig:
         default_factory=lambda: NormMethod.NORM_NO_CLIP_2_STD
     )
     select_final_test_miou_based_on_epoch_of_max_val_miou: bool = False
+    # Subsample train embeddings for faster probe training (None = use all)
+    max_train_samples: int | None = None
     # Quantize embeddings to int8 for storage efficiency evaluation
     quantize_embeddings: bool = False
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
+    # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
+    use_dice_loss: bool = False
 
 
 class DownstreamEvaluator:
@@ -150,6 +154,7 @@ class DownstreamEvaluator:
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
+        self.max_train_samples = task.max_train_samples
         self.eval_interval = task.eval_interval
         self.eval_mode = task.eval_mode
         self.probe_type = task.probe_type
@@ -161,6 +166,7 @@ class DownstreamEvaluator:
         )
         self.quantize_embeddings = task.quantize_embeddings
         self.embedding_dim = task.embedding_dim
+        self.use_dice_loss = task.use_dice_loss
         self.run_on_test = run_on_test
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
@@ -186,7 +192,9 @@ class DownstreamEvaluator:
                         "config.height_width cannot be none for segmentation tasks."
                     )
                 if self.config.height_width % self.patch_size != 0:
-                    raise ValueError("Image height / width indivisable by patch size.")
+                    raise ValueError(
+                        f"Image height / width indivisable by patch size. {self.config.height_width} % {self.patch_size} != 0"
+                    )
 
         if self.eval_mode == EvalMode.FINETUNE:
             if self.ft_lr is None:
@@ -213,6 +221,7 @@ class DownstreamEvaluator:
                     probe_type=self.probe_type,
                     lr=self.probe_lr,
                     select_final_test_miou_based_on_epoch_of_max_val_miou=self.select_final_test_miou_based_on_epoch_of_max_val_miou,
+                    use_dice_loss=self.use_dice_loss,
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
@@ -246,7 +255,7 @@ class DownstreamEvaluator:
                 input_layers=self.input_layers,
                 norm_method=self.norm_method,
             ),
-            collate_fn=eval_collate_fn,
+            collate_fn=eval_collate_fn_variable_time,
             batch_size=batch_size,
             num_workers=self.num_workers,
             generator=generator,
@@ -296,21 +305,49 @@ class DownstreamEvaluator:
     def _val_embed_probe(self) -> EvalTaskResult:
         """Validate the model using embeddings and probe (knn or linear probe)."""
         logger.info(f"Validating {self.dataset} with {self.eval_mode}")
+        logger.info(f"Getting train loader for {self.dataset}...")
         train_loader = self._get_data_loader("train", self.embedding_batch_size)
+        logger.info(f"Getting val loader for {self.dataset}...")
         val_loader = self._get_data_loader("valid", self.embedding_batch_size)
-        test_loader = self._get_data_loader("test", self.embedding_batch_size)
 
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
         train_embeddings, train_labels = self._get_embeddings(
             train_loader, is_train=True
         )
+        logger.info(f"Train embeddings shape: {train_embeddings.shape}")
+        logger.info(
+            f"Train label counts: {torch.unique(train_labels, return_counts=True)}"
+        )
+
+        # Subsample train embeddings if configured
+        if (
+            self.max_train_samples
+            and train_embeddings.shape[0] > self.max_train_samples
+        ):
+            logger.info(
+                f"Subsampling train embeddings from {train_embeddings.shape[0]} to {self.max_train_samples}"
+            )
+            indices = torch.randperm(train_embeddings.shape[0])[
+                : self.max_train_samples
+            ]
+            train_embeddings = train_embeddings[indices]
+            train_labels = train_labels[indices]
+
         logger.info(f"Getting val embeddings for {self.dataset}...")
         val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
+        logger.info(f"Val embeddings shape: {val_embeddings.shape}")
+        logger.info(f"Val label counts: {torch.unique(val_labels, return_counts=True)}")
         if self.run_on_test:
+            logger.info(f"Getting test loader for {self.dataset}...")
+            test_loader = self._get_data_loader("test", self.embedding_batch_size)
             logger.info(f"Getting test embeddings for {self.dataset}...")
             test_embeddings, test_labels = self._get_embeddings(
                 test_loader, is_train=False
+            )
+            logger.info(f"Test embeddings shape: {test_embeddings.shape}")
+            logger.info(
+                f"Test label counts: {torch.unique(test_labels, return_counts=True)}"
             )
         else:
             test_embeddings, test_labels = None, None
@@ -472,7 +509,6 @@ class DownstreamEvaluator:
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
         )
         model.load_state_dict(original_state)
-
         torch.cuda.empty_cache()
         gc.collect()
         return result
@@ -636,7 +672,7 @@ class DownstreamEvaluatorCallback(Callback):
         test_valid = test_result is not None and test_result.primary >= 0
 
         # Only logging valid results to wandb
-        if val_valid and test_valid:
+        if wandb_callback.enabled and val_valid and test_valid:
             # Log bootstrap statistics if available
             if bootstrap_stats:
                 wandb_callback.wandb.log(
@@ -772,13 +808,6 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
         self, task: DownstreamTaskConfig, config: EvalDatasetConfig
     ) -> None:
         """Verify the input modality configuration for a task."""
-        # Check that input_modalities is only set for multimodal tasks
-        if (task.dataset not in ["pastis", "pastis128", "nandi", "awf"]) and len(
-            task.input_modalities
-        ) > 0:
-            raise ValueError(
-                f"input_modalities is only supported for multimodal tasks, got {task.dataset}"
-            )
         # Make sure input_modalities contains only unique modalities
         if len(task.input_modalities) != len(set(task.input_modalities)):
             raise ValueError(

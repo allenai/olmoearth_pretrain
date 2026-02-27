@@ -1,16 +1,10 @@
 """A common home for all eval dataset configs."""
 
-from enum import Enum
-from typing import NamedTuple
+from dataclasses import asdict, dataclass
+from typing import Any
 
 from olmoearth_pretrain.data.constants import Modality
-
-
-class TaskType(Enum):
-    """Possible task types."""
-
-    CLASSIFICATION = "classification"
-    SEGMENTATION = "segmentation"
+from olmoearth_pretrain.evals.task_types import TaskType
 
 
 def get_eval_mode(task_type: TaskType) -> str:
@@ -21,7 +15,11 @@ def get_eval_mode(task_type: TaskType) -> str:
         return "linear_probe"
 
 
-class EvalDatasetConfig(NamedTuple):
+__all__ = ["TaskType", "get_eval_mode", "EvalDatasetConfig"]
+
+
+@dataclass
+class EvalDatasetConfig:
     """EvalDatasetConfig configs."""
 
     task_type: TaskType
@@ -33,6 +31,20 @@ class EvalDatasetConfig(NamedTuple):
     # and defines the input / output height width.
     height_width: int | None = None
     timeseries: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict."""
+        d = asdict(self)
+        d["task_type"] = self.task_type.value
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "EvalDatasetConfig":
+        """Deserialize from dict."""
+        d = d.copy()
+        d["task_type"] = TaskType(d["task_type"])
+        d["imputes"] = [tuple(x) for x in d["imputes"]]
+        return cls(**d)
 
 
 DATASET_TO_CONFIG = {
@@ -172,8 +184,24 @@ DATASET_TO_CONFIG = {
 
 
 def dataset_to_config(dataset: str) -> EvalDatasetConfig:
-    """Retrieve the correct config for a given dataset."""
-    try:
+    """Get EvalDatasetConfig by name, checking both hardcoded and registry.
+
+    First checks DATASET_TO_CONFIG dict, then falls back to registry.
+
+    Args:
+        dataset: Dataset name to look up.
+
+    Returns:
+        EvalDatasetConfig for the dataset.
+
+    Raises:
+        ValueError: If dataset not found in either location.
+    """
+    if dataset in DATASET_TO_CONFIG:
         return DATASET_TO_CONFIG[dataset]
-    except KeyError:
-        raise ValueError(f"Unrecognized dataset: {dataset}")
+
+    # Try registry
+    from olmoearth_pretrain.evals.studio_ingest import get_dataset_entry
+
+    entry = get_dataset_entry(dataset)
+    return entry.to_eval_config()

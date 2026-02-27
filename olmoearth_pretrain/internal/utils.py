@@ -207,6 +207,7 @@ class MockOlmoEarthDataLoader(DataLoaderBase):
         )
         self._seed = 42
         self._epoch = 0
+        self.token_budget: int | None = None
 
     def _iter_batches(self) -> Iterable[Any]:
         return iter(())
