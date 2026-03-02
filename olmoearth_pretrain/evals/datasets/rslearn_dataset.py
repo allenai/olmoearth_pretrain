@@ -345,23 +345,16 @@ class RslearnToOlmoEarthDataset(Dataset):
         for modality in self.input_modalities:
             if modality not in input_dict:
                 raise ValueError(f"Modality {modality} not found in dataset inputs")
-            num_bands = DataModality.get(modality).num_bands
             x = input_dict[modality]
-            # print(f"x shape: {x.shape} for modality {modality} ")
-            # Extract tensor and rearrange to OlmoEarth format (H, W, T, C)
-            if isinstance(x, RasterImage):
-                # RasterImage.image has shape (C, T, H, W)
-                img = x.image
-                if isinstance(img, torch.Tensor):
-                    img = img.numpy()
-                x = rearrange(img, "c t h w -> h w t c")
-            else:
-                # Tensor with shape (T*C, H, W) from rslearn
-                if isinstance(x, torch.Tensor):
-                    x = x.numpy()
-                # Infer T from the actual data shape
-                actual_t = x.shape[0] // num_bands
-                x = rearrange(x, "(t c) h w -> h w t c", t=actual_t, c=num_bands)
+            if not isinstance(x, RasterImage):
+                raise TypeError(
+                    f"Input modality '{modality}' must be RasterImage, got {type(x).__name__}"
+                )
+
+            img = x.image
+            if isinstance(img, torch.Tensor):
+                img = img.numpy()
+            x = rearrange(img, "c t h w -> h w t c")
 
             # Track actual timesteps from data (should be consistent across modalities)
             if sample_timesteps is None:
