@@ -2,6 +2,7 @@
 
 import logging
 import math
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -13,8 +14,8 @@ from einops import rearrange, repeat
 from torch import Tensor
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.nn.flexi_vit import PoolingType, TokensAndMasks
-from olmoearth_pretrain.nn.pooling import pool_unmasked_tokens
+from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
@@ -183,12 +184,12 @@ class ModalityAllDiscriminationLoss(Loss):
         return total_loss
 
 
-@LOSS_REGISTRY.register("patch_discrimination_new")
-class PatchDiscriminationLossNew(Loss):
+@LOSS_REGISTRY.register("patch_discrimination")
+class PatchDiscriminationLoss(Loss):
     """Loss function for patch discrimination task.
 
-    This has lower memory consumption than the old patch discrimination loss.
-    It does not support all discrimination loss.
+    Memory-efficient per-sample contrastive loss. Computes similarity matrices
+    per sample rather than across the full batch.
     """
 
     name = "PatchDisc"
@@ -265,12 +266,12 @@ class PatchDiscriminationLossNew(Loss):
         return self.weight * loss
 
 
-@LOSS_REGISTRY.register("modality_patch_discrimination_new")
-class ModalityPatchDiscriminationLossNew(Loss):
+@LOSS_REGISTRY.register("modality_patch_discrimination")
+class ModalityPatchDiscriminationLoss(Loss):
     """Loss function for per-modality patch discrimination task.
 
-    This has lower memory consumption than the old patch discrimination loss.
-    It does not support all discrimination loss.
+    Memory-efficient per-sample contrastive loss. Computes similarity matrices
+    per sample rather than across the full batch, independently for each modality.
     """
 
     name = "ModalityPatchDisc"
@@ -390,7 +391,17 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         same_target_threshold: float = 0.999,
         mask_negatives_for_modalities: list[str] | None = None,
     ):
-        """Initialize masked-negatives patch discrimination loss."""
+        """Initialize masked negatives patch discrimination loss.
+
+        Args:
+            tau: the softmax temperature
+            pred2unit: whether to standardize the predictions using batch statistics
+            weight: the weight to apply to this loss
+            modality_weights: the weights to apply to each modality
+            same_target_threshold: cosine similarity threshold to consider targets as same
+            mask_negatives_for_modalities: list of modality names to apply masking for.
+                If None, applies to all modalities.
+        """
         self.tau = tau
         self.pred2unit = pred2unit
         self.weight = weight
@@ -415,8 +426,12 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
             target = all_targets[all_masks == MaskValue.DECODER.value].unsqueeze(dim=0)
             pred = pred.float()
             target = target.float()
+            all_preds, all_masks = predictions.flatten_all_tokens_and_masks()
+            all_targets = targets.flatten_all_tokens_and_masks()[0]
+            decoder_mask = all_masks == MaskValue.DECODER.value
+            pred = all_preds[decoder_mask].unsqueeze(dim=0)
+            target = all_targets[decoder_mask].unsqueeze(dim=0)
             bs, nt, _ = pred.shape
-
             if nt == 0:
                 continue
 
@@ -427,35 +442,74 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
 
             pred = F.normalize(pred, p=2, dim=-1)
             target = F.normalize(target, p=2, dim=-1)
-            scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
 
-            should_mask = self.mask_negatives_for_modalities is None or (
-                modality in self.mask_negatives_for_modalities
+            # Check if we should mask negatives for this modality
+            should_mask = (
+                self.mask_negatives_for_modalities is None
+                or modality in self.mask_negatives_for_modalities
             )
-            if should_mask:
-                target_sim = torch.einsum("npd,nqd->npq", target, target)
-                same_target = target_sim > self.same_target_threshold
-                eye = torch.eye(nt, dtype=torch.bool, device=scores.device).unsqueeze(0)
-                false_negative_mask = same_target & (~eye)
-                logits_mask = torch.zeros_like(scores)
-                logits_mask = logits_mask.masked_fill(
-                    false_negative_mask, -torch.finfo(scores.dtype).max
-                )
-                scores = scores + logits_mask
-
-            labels = torch.arange(nt, dtype=torch.long, device=pred.device)[
-                None
-            ].repeat(bs, 1)
-            loss = F.cross_entropy(
-                scores.flatten(0, 1), labels.flatten(0, 1), reduction="none"
-            ) * (self.tau * 2)
 
             count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
-            loss_multiplier = self._expand_and_reciprocate(count)
-            loss = (loss * loss_multiplier).sum() / all_preds.shape[0]
+            losses = []
+            start = 0
 
+            for c in count:
+                c_val = c.item() if hasattr(c, "item") else int(c)
+                end = start + c_val
+                if c_val == 0:
+                    continue
+
+                pred_sample = pred[:, start:end, :]
+                target_sample = target[:, start:end, :]
+
+                # Compute similarity scores
+                score_sample = (
+                    torch.einsum("npd,nqd->npq", pred_sample, target_sample) / self.tau
+                )
+
+                # Apply same-target masking if enabled for this modality
+                if should_mask and c_val > 1:
+                    target_flat = target_sample.squeeze(0)  # [c, dim]
+                    target_sim = target_flat @ target_flat.T  # [c, c]
+                    same_target = target_sim > self.same_target_threshold
+
+                    # Mask: same target but not self (diagonal)
+                    diagonal = torch.eye(
+                        c_val, dtype=torch.bool, device=target_flat.device
+                    )
+                    invalid_negatives = same_target & ~diagonal
+
+                    # Check if any token has valid negatives
+                    valid_neg_count = (~same_target).sum(dim=-1)
+                    if valid_neg_count.min() == 0:
+                        # Some tokens have no valid negatives - skip this sample
+                        start = end
+                        continue
+
+                    # Apply mask to scores: set invalid negatives to -inf
+                    score_sample = score_sample.masked_fill(
+                        invalid_negatives[None, :, :], float("-inf")
+                    )
+
+                # Standard cross-entropy
+                labels = torch.arange(c_val, dtype=torch.long, device=pred.device)[None]
+                loss = F.cross_entropy(
+                    score_sample.flatten(0, 1),
+                    labels.flatten(0, 1),
+                    reduction="none",
+                ) * (self.tau * 2)
+
+                loss = loss.mean()
+                losses.append(loss)
+                start = end
+
+            if len(losses) == 0:
+                continue
+
+            loss = torch.stack(losses).mean()
             if self.modality_weights is not None:
-                loss = loss * self.modality_weights[modality]
+                loss = loss * self.modality_weights.get(modality, 1.0)
+
             total_loss += loss
 
         return self.weight * total_loss
@@ -608,82 +662,42 @@ class ModalityPatchDiscriminationLossVec(Loss):
         return self.weight * total_loss
 
 
-@LOSS_REGISTRY.register("patch_discrimination")
-class PatchDiscriminationLoss(Loss):
-    """Loss function for patch discrimination task."""
+# --- Deprecated aliases for backward compatibility ---
 
-    name = "PatchDisc"
 
-    def __init__(
-        self,
-        tau: float = 0.1,
-        pred2unit: bool = False,
-        mask_other_samples: bool = True,
-    ):
-        """Initialize patch discrimination loss.
-
-        Args:
-            tau: the softmax temperature
-            pred2unit: whether to standardize the predictions using batch statistics
-            mask_other_samples: whether to apply the contrastive loss drawing samples
-                from within a sample (True) or using all other instances in a batch (False).
-                If this is False, then this is the AllDisc loss from the Galileo paper
-        """
-        self.tau = tau
-        self.pred2unit = pred2unit
-        self.mask_other_samples = mask_other_samples
-
-    def compute(
-        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
-    ) -> Tensor:
-        """Compute patch discrimination loss between predictions and targets.
-
-        Args:
-            predictions: Model predictions.
-            targets: Ground truth targets.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            The computed loss value.
-        """
-        all_preds, all_masks = predictions.flatten_all_tokens_and_masks()
-        all_targets = targets.flatten_all_tokens_and_masks()[0]
-        decoder_mask = all_masks == MaskValue.DECODER.value
-        pred = all_preds[decoder_mask].unsqueeze(dim=0)
-        target = all_targets[decoder_mask].unsqueeze(dim=0)
-        bs, nt, _ = pred.shape
-
-        if self.pred2unit:
-            pred_mu = pred.mean(1, keepdims=True)
-            pred_std = pred.std(1, keepdims=True)
-            pred = (pred - pred_mu) / (pred_std + 1e-4)
-
-        pred = F.normalize(pred, p=2, dim=-1)
-        target = F.normalize(target, p=2, dim=-1)
-
-        scores = torch.einsum("npd,nqd->npq", pred, target) / self.tau
-        count = (all_masks == MaskValue.DECODER.value).sum(dim=-1)
-        if self.mask_other_samples:
-            logit_mask = torch.full_like(scores, -torch.finfo(scores.dtype).max)
-            start = 0
-            for c in count:
-                end = start + c
-                logit_mask[:, start:end, start:end] = 0
-                start += c
-            scores = scores + logit_mask
-
-        labels = torch.arange(nt, dtype=torch.long, device=pred.device)[None].repeat(
-            bs, 1
+class _DeprecatedPatchDiscriminationLossNew(PatchDiscriminationLoss):
+    def __init__(self, *args: Any, **kwargs: Any):
+        warnings.warn(
+            '"patch_discrimination_new" is deprecated, use "patch_discrimination" instead.',
+            DeprecationWarning,
+            stacklevel=2,
         )
-        loss = F.cross_entropy(
-            scores.flatten(0, 1), labels.flatten(0, 1), reduction="none"
-        ) * (self.tau * 2)
+        super().__init__(*args, **kwargs)
 
-        # emulate averaging across the batch dimension
-        loss_multiplier = self._expand_and_reciprocate(count)
-        # can't use bs here since this is after the unsqueezing, so bs == 1
-        loss = (loss * loss_multiplier).sum() / all_preds.shape[0]
-        return loss
+
+LOSS_REGISTRY.register("patch_discrimination_new")(
+    _DeprecatedPatchDiscriminationLossNew
+)
+
+
+class _DeprecatedModalityPatchDiscriminationLossNew(ModalityPatchDiscriminationLoss):
+    def __init__(self, *args: Any, **kwargs: Any):
+        warnings.warn(
+            '"modality_patch_discrimination_new" is deprecated, '
+            'use "modality_patch_discrimination" instead.',
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
+
+
+LOSS_REGISTRY.register("modality_patch_discrimination_new")(
+    _DeprecatedModalityPatchDiscriminationLossNew
+)
+
+# Backward-compat class name aliases
+PatchDiscriminationLossNew = PatchDiscriminationLoss
+ModalityPatchDiscriminationLossNew = ModalityPatchDiscriminationLoss
 
 
 @LOSS_REGISTRY.register("adjusted_patch_discrimination")
