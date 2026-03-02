@@ -15,7 +15,13 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
 
+import jsonargparse
 import yaml
+from rslearn.dataset.dataset import Dataset as RslearnDataset
+from rslearn.template_params import substitute_env_vars_in_string
+from rslearn.train.dataset import DataInput, IndexMode, ModelDataset, SplitConfig
+from rslearn.train.tasks import Task
+from rslearn.utils.jsonargparse import init_jsonargparse
 from upath import UPath
 
 logger = logging.getLogger(__name__)
@@ -23,8 +29,6 @@ logger = logging.getLogger(__name__)
 
 def _init_rslearn_jsonargparse() -> None:
     """Initialize rslearn's custom jsonargparse serializers."""
-    from rslearn.utils.jsonargparse import init_jsonargparse
-
     init_jsonargparse()
 
 
@@ -37,8 +41,6 @@ def parse_model_config(model_config_path: str) -> dict[str, Any]:
     Returns:
         Parsed config dict with env vars substituted.
     """
-    from rslearn.template_params import substitute_env_vars_in_string
-
     model_config_upath = UPath(model_config_path)
     if not model_config_upath.exists():
         raise FileNotFoundError(f"model.yaml not found at {model_config_path}")
@@ -83,11 +85,6 @@ def instantiate_data_inputs(model_config: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Dict mapping input name -> instantiated DataInput object.
     """
-    import inspect
-
-    import jsonargparse
-    from rslearn.train.dataset import DataInput
-
     _init_rslearn_jsonargparse()
 
     data_init_args = model_config.get("data", {}).get("init_args", {})
@@ -96,39 +93,15 @@ def instantiate_data_inputs(model_config: dict[str, Any]) -> dict[str, Any]:
     if not inputs_config:
         return {}
 
-    # Get valid DataInput field names to filter unknown fields
-    valid_fields = set(inspect.signature(DataInput.__init__).parameters.keys()) - {
-        "self"
-    }
-
     # Use jsonargparse to instantiate each DataInput
     parser = jsonargparse.ArgumentParser()
     parser.add_argument("--data_input", type=DataInput)
 
     instantiated_inputs = {}
     for name, input_config in inputs_config.items():
-        try:
-            # Filter to only known fields
-            filtered_config = {
-                k: v for k, v in input_config.items() if k in valid_fields
-            }
-            cfg = parser.parse_object({"data_input": filtered_config})
-            instantiated_inputs[name] = parser.instantiate_classes(cfg).data_input
-            logger.debug(f"Instantiated DataInput '{name}' via jsonargparse")
-        except Exception as e:
-            logger.warning(f"Failed to instantiate DataInput '{name}': {e}")
-            # Fall back to direct instantiation with filtered fields
-            try:
-                filtered_config = {
-                    k: v for k, v in input_config.items() if k in valid_fields
-                }
-                instantiated_inputs[name] = DataInput(**filtered_config)
-                logger.debug(f"Instantiated DataInput '{name}' directly")
-            except Exception as e2:
-                logger.warning(
-                    f"Failed direct instantiation of DataInput '{name}': {e2}"
-                )
-                instantiated_inputs[name] = input_config
+        cfg = parser.parse_object({"data_input": input_config})
+        instantiated_inputs[name] = parser.instantiate_classes(cfg).data_input
+        logger.debug(f"Instantiated DataInput '{name}' via jsonargparse")
 
     return instantiated_inputs
 
@@ -142,9 +115,6 @@ def instantiate_task(model_config: dict[str, Any]) -> Any:
     Returns:
         Instantiated Task object.
     """
-    import jsonargparse
-    from rslearn.train.tasks import Task
-
     _init_rslearn_jsonargparse()
 
     data_init_args = model_config.get("data", {}).get("init_args", {})
@@ -181,8 +151,6 @@ def instantiate_split_config(
     Returns:
         Instantiated SplitConfig object.
     """
-    from rslearn.train.dataset import SplitConfig
-
     data_init_args = model_config.get("data", {}).get("init_args", {})
     default_config = data_init_args.get("default_config", {})
     split_specific = data_init_args.get(f"{split}_config", {})
@@ -414,6 +382,9 @@ def build_model_dataset_from_config(
 
     This uses the jsonargparse-instantiated objects (inputs, task, split_config)
     to build the ModelDataset, avoiding manual construction.
+    We intentionally do not construct this via LightningCLI(run=False), because
+    this path needs explicit eval-time groups/tags overrides and transparent
+    control over split filtering behavior.
 
     Args:
         runtime_config: RuntimeConfig with parsed model.yaml.
@@ -426,10 +397,6 @@ def build_model_dataset_from_config(
     Returns:
         Instantiated ModelDataset.
     """
-    from rslearn.dataset.dataset import Dataset as RslearnDataset
-    from rslearn.train.dataset import IndexMode, ModelDataset
-    from upath import UPath
-
     # Get instantiated objects from RuntimeConfig
     inputs = runtime_config.inputs
     task = runtime_config.task
