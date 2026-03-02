@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.studio_ingest import get_dataset_entry
 from olmoearth_pretrain.evals.task_types import TaskType
 
 
@@ -199,9 +200,6 @@ def dataset_to_config(dataset: str) -> EvalDatasetConfig:
     """
     if dataset in DATASET_TO_CONFIG:
         return DATASET_TO_CONFIG[dataset]
-
-    # Try registry
-    from olmoearth_pretrain.evals.studio_ingest import get_dataset_entry
 
     entry = get_dataset_entry(dataset)
     return entry.to_eval_config()

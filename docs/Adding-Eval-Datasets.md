@@ -146,9 +146,10 @@ Once ingested, add a `DownstreamTaskConfig` to the eval tasks dict in your train
 A PR adding a new eval dataset should include:
 
 1. **The ingest has been run** and the dataset is registered (verify with `cli list`)
-2. **`DownstreamTaskConfig`** added to the relevant training script(s)
-3. **A local eval test** confirming the dataset loads and the eval runs end-to-end (even just step 0)
-4. **The dataset name and paths** documented in the PR description so teammates can reproduce
+2. **Registry update committed** at `olmoearth_pretrain/evals/datasets/studio_ingest/registry.json`
+3. **`DownstreamTaskConfig`** added to the relevant training script(s)
+4. **A local eval test** confirming the dataset loads and the eval runs end-to-end (even just step 0)
+5. **The dataset name and paths** documented in the PR description so teammates can reproduce
 
 ---
 
