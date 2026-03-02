@@ -237,7 +237,7 @@ def cmd_info(args: argparse.Namespace) -> int:
         print(f"Error: {e}")
         return 1
 
-    print(json.dumps(entry.to_dict(), indent=2))
+    print(json.dumps(entry.model_dump(mode="json"), indent=2))
     return 0
 
 

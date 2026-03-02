@@ -129,7 +129,7 @@ class Registry:
         # Parse datasets
         datasets = {}
         for name, entry_data in data.get("datasets", {}).items():
-            datasets[name] = EvalDatasetEntry.from_dict(entry_data)
+            datasets[name] = EvalDatasetEntry.model_validate(entry_data)
 
         return cls(
             datasets=datasets,
@@ -153,7 +153,8 @@ class Registry:
             "version": self.version,
             "updated_at": self.updated_at,
             "datasets": {
-                name: entry.to_dict() for name, entry in self.datasets.items()
+                name: entry.model_dump(mode="json")
+                for name, entry in self.datasets.items()
             },
         }
 

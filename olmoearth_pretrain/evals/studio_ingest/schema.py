@@ -1,11 +1,11 @@
 """Schema definitions for the eval dataset registry.
 
-This module defines the dataclasses that represent dataset registry entries
+This module defines schema models that represent dataset registry entries
 (EvalDatasetEntry), serialized to JSON and stored on Weka alongside the dataset.
 
 Design Decisions:
 -----------------
-- We use dataclasses for simplicity and JSON serialization
+- We use pydantic models for validation and serialization
 - All fields are explicitly typed for clarity
 - Optional fields use None as default
 - Timestamps are ISO 8601 strings for human readability
@@ -14,25 +14,22 @@ Design Decisions:
 Future Considerations:
 ---------------------
 - May want to add versioning to schema for backwards compatibility
-- May want to add validation methods to dataclasses
 - May want to support additional task types (detection, etc.)
-
-Todo:
------
-- [ ] Consider migrating to pydantic models for better validation,
-      serialization, and schema generation. Would provide:
-      - Automatic validation on construction
-      - JSON Schema export for documentation
-      - Better error messages
-      - Field aliasing and serialization customization
 """
 
 from __future__ import annotations
 
 import importlib
-import json
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 if TYPE_CHECKING:
     from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
@@ -118,8 +115,7 @@ def rslearn_to_olmoearth(layer_name: str) -> ModalitySpec:
     raise KeyError(f"Unknown rslearn layer name: {layer_name!r}")
 
 
-@dataclass
-class EvalDatasetEntry:
+class EvalDatasetEntry(BaseModel):
     """A single entry in the eval dataset registry.
 
     This represents metadata needed to load and use a dataset for OlmoEarth
@@ -164,6 +160,8 @@ class EvalDatasetEntry:
     """
 
     # Identity
+    model_config = ConfigDict(extra="ignore", use_enum_values=True)
+
     name: str
 
     # Paths (source of truth for runtime loading)
@@ -173,7 +171,10 @@ class EvalDatasetEntry:
     # Task configuration (needed for EvalDatasetConfig)
     task_type: str
     num_classes: int | None = None
-    is_multilabel: bool = False
+    is_multilabel: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("is_multilabel", "multilabel"),
+    )
     classes: list[str] | None = None  # Optional class names
     # Split configuration
     train_split: str = "train"
@@ -181,133 +182,75 @@ class EvalDatasetEntry:
     test_split: str = "test"
     split_type: str = "tags"  # "groups" or "tags"
     split_tag_key: str = "eval_split"  # Tag key used for split filtering
-    split_stats: dict[str, dict[str, Any]] = field(
-        default_factory=dict
-    )  # Per-split sample counts
+    split_stats: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     # Modality configuration
-    modalities: list[str] = field(default_factory=list)
-    imputes: list[tuple[str, str]] = field(default_factory=list)
+    modalities: list[str] = Field(default_factory=list)
+    imputes: list[tuple[str, str]] = Field(default_factory=list)
 
     # Sizing
     window_size: int = 64  # TOD: we should be reading this in
     timeseries: bool = False
 
     # Normalization
-    norm_stats: dict[str, Any] = field(default_factory=dict)
+    norm_stats: dict[str, Any] = Field(default_factory=dict)
     use_pretrain_norm: bool = True
 
     num_timesteps: int = 1
 
-    def __post_init__(self) -> None:
-        """Validate and normalize fields after initialization."""
-        # Normalize task_type: accept both TaskType enum and string
-        if isinstance(self.task_type, TaskType):
-            self.task_type = self.task_type.value
+    @field_validator("task_type", mode="before")
+    @classmethod
+    def _normalize_task_type(cls, value: str | TaskType) -> str:
+        if isinstance(value, TaskType):
+            return value.value
+        return value
 
+    @field_validator("task_type")
+    @classmethod
+    def _validate_task_type(cls, value: str) -> str:
         valid_task_types = {t.value for t in TaskType}
-        if self.task_type not in valid_task_types:
+        if value not in valid_task_types:
             raise ValueError(
-                f"Invalid task_type '{self.task_type}'. "
-                f"Must be one of: {valid_task_types}"
+                f"Invalid task_type '{value}'. Must be one of: {valid_task_types}"
             )
+        return value
 
-        # Normalize split_type
-        if isinstance(self.split_type, SplitType):
-            self.split_type = self.split_type.value
+    @field_validator("split_type", mode="before")
+    @classmethod
+    def _normalize_split_type(cls, value: str | SplitType) -> str:
+        if isinstance(value, SplitType):
+            return value.value
+        return value
 
-        # Normalize split names
-        if isinstance(self.train_split, SplitName):
-            self.train_split = self.train_split.value
-        if isinstance(self.val_split, SplitName):
-            self.val_split = self.val_split.value
-        if isinstance(self.test_split, SplitName):
-            self.test_split = self.test_split.value
+    @field_validator("train_split", "val_split", "test_split", mode="before")
+    @classmethod
+    def _normalize_split_name(cls, value: str | SplitName) -> str:
+        if isinstance(value, SplitName):
+            return value.value
+        return value
 
-        # Normalize modalities: convert ModalitySpec to lowercase name strings
-        self.modalities = [
-            m.name
-            if isinstance(m, ModalitySpec)
-            else m.lower()
-            if isinstance(m, str)
-            else m
-            for m in self.modalities
+    @field_validator("modalities", mode="before")
+    @classmethod
+    def _normalize_modalities(cls, value: list[Any]) -> list[str]:
+        return [
+            modality.name
+            if isinstance(modality, ModalitySpec)
+            else modality.lower()
+            if isinstance(modality, str)
+            else modality
+            for modality in value
         ]
 
-        # Set num_classes from classes if not provided
+    @model_validator(mode="after")
+    def _set_num_classes_from_classes(self) -> EvalDatasetEntry:
         if self.classes is not None and self.num_classes is None:
             self.num_classes = len(self.classes)
+        return self
 
     @property
     def model_yaml_path(self) -> str:
         """Get the path to the model.yaml file."""
         return f"{self.weka_path}/model.yaml"
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            "name": self.name,
-            "source_path": self.source_path,
-            "weka_path": self.weka_path,
-            "task_type": self.task_type,
-            "num_classes": self.num_classes,
-            "is_multilabel": self.is_multilabel,
-            "classes": self.classes,
-            "modalities": self.modalities,
-            "imputes": [list(t) for t in self.imputes],
-            "window_size": self.window_size,
-            "timeseries": self.timeseries,
-            "num_timesteps": self.num_timesteps,
-            "train_split": self.train_split,
-            "val_split": self.val_split,
-            "test_split": self.test_split,
-            "split_type": self.split_type,
-            "split_tag_key": self.split_tag_key,
-            "split_stats": self.split_stats,
-            "norm_stats": self.norm_stats,
-            "use_pretrain_norm": self.use_pretrain_norm,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> EvalDatasetEntry:
-        """Create from dictionary."""
-        # Handle imputes: list of lists -> list of 2-tuples
-        imputes = [(x[0], x[1]) for x in data.get("imputes", [])]
-
-        # Handle backward compatibility: multilabel -> is_multilabel
-        is_multilabel = data.get("is_multilabel", data.get("multilabel", False))
-
-        return cls(
-            name=data["name"],
-            source_path=data.get("source_path", ""),
-            weka_path=data.get("weka_path", ""),
-            task_type=data.get("task_type", TaskType.CLASSIFICATION),
-            num_classes=data.get("num_classes"),
-            is_multilabel=is_multilabel,
-            classes=data.get("classes"),
-            modalities=data.get("modalities", []),
-            imputes=imputes,
-            window_size=data.get("window_size", 64),
-            timeseries=data.get("timeseries", False),
-            num_timesteps=data.get("num_timesteps", 1),
-            train_split=data.get("train_split", SplitName.TRAIN),
-            val_split=data.get("val_split", SplitName.VAL),
-            test_split=data.get("test_split", SplitName.TEST),
-            split_type=data.get("split_type", SplitType.GROUPS),
-            split_tag_key=data.get("split_tag_key", "split"),
-            split_stats=data.get("split_stats", {}),
-            norm_stats=data.get("norm_stats", {}),
-            use_pretrain_norm=data.get("use_pretrain_norm", True),
-        )
-
-    def to_json(self, indent: int | None = 2) -> str:
-        """Serialize to JSON string."""
-        return json.dumps(self.to_dict(), indent=indent)
-
-    @classmethod
-    def from_json(cls, json_str: str) -> EvalDatasetEntry:
-        """Deserialize from JSON string."""
-        return cls.from_dict(json.loads(json_str))
 
     def to_eval_config(self) -> EvalDatasetConfig:
         """Convert to EvalDatasetConfig for use with eval functions.
