@@ -6,7 +6,6 @@ by https://github.com/bwconrad/flexivit/
 
 import logging
 from collections.abc import Iterable
-from typing import Any
 
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,6 +15,17 @@ from torch import Tensor
 from olmoearth_pretrain.data.constants import ModalitySpec
 
 logger = logging.getLogger(__name__)
+
+
+def _to_2tuple(x: int | tuple[int, ...]) -> tuple[int, int]:
+    """Convert a scalar or 2-element iterable to a (h, w) tuple."""
+    if isinstance(x, int):
+        return (x, x)
+    if isinstance(x, Iterable) and not isinstance(x, str):
+        values = tuple(x)
+        assert len(values) == 2, "x must be a 2-tuple"
+        return (int(values[0]), int(values[1]))
+    raise TypeError(f"Expected int or tuple[int, int], got {type(x)}")
 
 
 class FlexiPatchEmbed(nn.Module):
@@ -56,7 +66,7 @@ class FlexiPatchEmbed(nn.Module):
         self.use_linear_patch_embed = use_linear_patch_embed
 
         self.modality_spec = modality_spec
-        self.patch_size = self.to_2tuple(
+        self.patch_size = _to_2tuple(
             patch_size_at_16 * modality_spec.image_tile_size_factor
         )
 
@@ -81,17 +91,6 @@ class FlexiPatchEmbed(nn.Module):
         self.interpolation = interpolation
         self.antialias = antialias
 
-    @staticmethod
-    def to_2tuple(x: int | tuple[int, ...]) -> tuple[int, int]:
-        """Convert a scalar or 2-element iterable to a (h, w) tuple."""
-        if isinstance(x, int):
-            return (x, x)
-        if isinstance(x, Iterable) and not isinstance(x, str):
-            values = tuple(x)
-            assert len(values) == 2, "x must be a 2-tuple"
-            return (int(values[0]), int(values[1]))
-        raise TypeError(f"Expected int or tuple[int, int], got {type(x)}")
-
     def _resolve_patch_size(
         self, patch_size: int | tuple[int, int] | None
     ) -> tuple[int, int]:
@@ -105,7 +104,7 @@ class FlexiPatchEmbed(nn.Module):
             )
         else:
             patch_size = patch_size * self.modality_spec.image_tile_size_factor
-        resolved = self.to_2tuple(patch_size)
+        resolved = _to_2tuple(patch_size)
         assert isinstance(resolved, tuple) and len(resolved) == 2
         return resolved
 
@@ -227,7 +226,7 @@ class FlexiPatchReconstruction(nn.Module):
 
         self.embedding_size = embedding_size
 
-        self.max_patch_size = self.to_2tuple(max_patch_size)
+        self.max_patch_size = _to_2tuple(max_patch_size)
 
         self.proj = nn.ConvTranspose2d(
             embedding_size,
@@ -239,14 +238,6 @@ class FlexiPatchReconstruction(nn.Module):
         self.norm = norm_layer(embedding_size) if norm_layer else nn.Identity()
         self.interpolation = interpolation
         self.antialias = antialias
-
-    @staticmethod
-    def to_2tuple(x: Any) -> Any:
-        """Convert a scalar or 2-element iterable to a (h, w) tuple."""
-        if isinstance(x, Iterable) and not isinstance(x, str):
-            assert len(list(x)) == 2, "x must be a 2-tuple"
-            return tuple(x)
-        return (x, x)
 
     def _resize(self, x: Tensor, shape: tuple[int, int]) -> Tensor:
         """Resize the input tensor to the target shape.
@@ -291,7 +282,7 @@ class FlexiPatchReconstruction(nn.Module):
             # During evaluation use base patch size if not specified
             patch_size = self.max_patch_size
 
-        patch_size = self.to_2tuple(patch_size)
+        patch_size = _to_2tuple(patch_size)
 
         if has_time_dimension:
             x = rearrange(x, "b h w t d -> (b t) d h w", b=b, t=t)
