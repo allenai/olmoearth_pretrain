@@ -260,7 +260,7 @@ class TimeMaskingStrategy(MaskingStrategy):
         # can we relax the all sample contraint here as we are doing per sample stuff anyways
         present_t = timesteps_with_at_least_one_modality.shape[0]  # across all samples
         assert present_t >= 3
-        logger.info("Present timesteps: %s", present_t)
+        logger.info(f"Present timesteps: {present_t}")
         encode_times = max(int(self.encode_ratio * present_t), 1)
         decode_times = max(int(self.decode_ratio * present_t), 1)
         target_times = present_t - encode_times - decode_times
@@ -501,7 +501,7 @@ class SpaceMaskingStrategy(MaskingStrategy):
                 mask = self._create_random_mask(modality, shape, patch_size, device)
             else:
                 if patch_spatial_mask is None:
-                    logger.info("Creating spatial mask for modality %s", modality.name)
+                    logger.info(f"Creating spatial mask for modality {modality.name}")
                     patch_spatial_mask = self._create_patch_spatial_mask(
                         modality, shape, patch_size, device
                     )
@@ -557,7 +557,7 @@ class SpaceTimeMaskingStrategy(MaskingStrategy):
         # I need a timestamp mask
 
         if not has_enough_timesteps:
-            logger.debug("Valid time: %s, Time: %s", batch.valid_time, batch.time)
+            logger.debug(f"Valid time: {batch.valid_time}, Time: {batch.time}")
         if (np.random.random() < 0.5) or (not has_enough_timesteps):
             logger.info("Applying space masking")
             return self.space_strategy.apply_mask(batch, patch_size, **kwargs)
