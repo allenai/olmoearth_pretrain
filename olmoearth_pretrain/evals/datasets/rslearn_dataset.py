@@ -431,39 +431,21 @@ class RslearnToOlmoEarthDataset(Dataset):
         # - ClassificationTask: {"class": tensor, "valid": tensor}
         # - RegressionTask: {"value": tensor, "valid": tensor}
         if self.target_task_type == TaskType.SEGMENTATION:
-            classes_raw = data_dict.get("classes", None)
-            valid_raw = data_dict.get("valid", None)
+            classes = torch.as_tensor(data_dict["classes"].squeeze(), dtype=torch.long)
+            valid = torch.as_tensor(data_dict["valid"].squeeze(), dtype=torch.long)
         elif self.target_task_type == TaskType.CLASSIFICATION:
-            classes_raw = data_dict.get("class", None)
-            valid_raw = data_dict.get("valid", None)
+            # already a tensor
+            classes = data_dict["class"]
+            valid = data_dict["valid"]
         else:
             raise ValueError(
                 f"Unsupported target task type: {self.target_task_type.value}"
             )
-        # Extract tensors from RasterImage if needed
-        # rslearn tasks wrap outputs in RasterImage with shape (1, 1, H, W)
-        classes = self._extract_target_tensor(classes_raw)
-        valid = self._extract_target_tensor(valid_raw)
 
         if valid is not None:
             assert classes is not None, "valid mask present but no classes tensor"
             classes = classes.masked_fill(valid == 0, SEGMENTATION_IGNORE_LABEL)
         return masked_sample, classes
-
-    def _extract_target_tensor(self, raw: Any) -> torch.Tensor | None:
-        """Extract tensor from RasterImage or return tensor directly."""
-        if raw is None:
-            return None
-        if isinstance(raw, RasterImage):
-            # RasterImage.image has shape (C, T, H, W), squeeze to (H, W)
-            arr = raw.image.squeeze()  # Remove singleton dims
-            return torch.as_tensor(arr, dtype=torch.long)
-        if isinstance(raw, torch.Tensor):
-            return raw
-        if isinstance(raw, np.ndarray):
-            return torch.as_tensor(raw, dtype=torch.long)
-        # Fallback - try to convert
-        return torch.as_tensor(raw)
 
 
 def from_registry_entry(
