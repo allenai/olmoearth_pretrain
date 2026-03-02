@@ -23,7 +23,12 @@ from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS
 from olmoearth_pretrain.data.constants import Modality as DataModality
 from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
+from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.datasets.rslearn_builder import (
+    build_model_dataset_from_config,
+)
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
+from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSample
 
 from .normalize import normalize_bands
@@ -91,11 +96,9 @@ class RslearnToOlmoEarthDataset(Dataset):
         model_dataset: RsModelDataset,
         input_modalities: list[str],
         target_task_name: str | None = None,
-        target_task_type: str = "segmentation",
+        target_task_type: TaskType | str = TaskType.SEGMENTATION,
         norm_stats_from_pretrained: bool = True,
-        # Default to 2std no clip - this matches what our model sees in pretraining,
-        # so when using dataset stats (e.g. for MADOS) consistency is important.
-        norm_method: str = "norm_no_clip_2_std",
+        norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
         ds_norm_stats_json: str | None = None,
         ds_norm_stats: dict[str, Any] | None = None,
         start_time: str = "2022-09-01",
@@ -109,7 +112,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             input_modalities: OlmoEarth modality names (e.g., ["sentinel2_l2a"]).
             target_task_name: For MultiTask, the sub-task name (e.g., "segment").
                 If None, assumes single task and accesses target dict directly.
-            target_task_type: Type of task ("segmentation", "classification", "regression").
+            target_task_type: Type of task ("segmentation" or "classification").
                 Determines how to parse the target dict.
             norm_stats_from_pretrained: Use pretrain normalization stats.
             norm_method: Normalization method when not using pretrain stats.
@@ -148,9 +151,14 @@ class RslearnToOlmoEarthDataset(Dataset):
 
         # Target parsing config - derived from Task structure
         self.target_task_name = target_task_name  # For MultiTask, e.g., "segment"
-        self.target_task_type = (
-            target_task_type  # "segmentation", "classification", etc.
-        )
+        self.target_task_type = TaskType(target_task_type)
+        if self.target_task_type not in {
+            TaskType.SEGMENTATION,
+            TaskType.CLASSIFICATION,
+        }:
+            raise ValueError(
+                f"Unsupported target task type: {self.target_task_type.value}"
+            )
 
         if self.norm_stats_from_pretrained:
             from olmoearth_pretrain.data.normalize import Normalizer, Strategy
@@ -205,10 +213,6 @@ class RslearnToOlmoEarthDataset(Dataset):
         Returns:
             RslearnToOlmoEarthDataset instance.
         """
-        from olmoearth_pretrain.evals.datasets.rslearn_builder import (
-            build_model_dataset_from_config,
-        )
-
         # Build ModelDataset using jsonargparse
         print(f"Building ModelDataset from RuntimeConfig for {source_path}")
         model_dataset = build_model_dataset_from_config(
@@ -426,17 +430,16 @@ class RslearnToOlmoEarthDataset(Dataset):
         # - SegmentationTask: {"classes": RasterImage, "valid": RasterImage}
         # - ClassificationTask: {"class": tensor, "valid": tensor}
         # - RegressionTask: {"value": tensor, "valid": tensor}
-        if self.target_task_type == "segmentation":
+        if self.target_task_type == TaskType.SEGMENTATION:
             classes_raw = data_dict.get("classes", None)
             valid_raw = data_dict.get("valid", None)
-        elif self.target_task_type == "classification":
+        elif self.target_task_type == TaskType.CLASSIFICATION:
             classes_raw = data_dict.get("class", None)
             valid_raw = data_dict.get("valid", None)
         else:
-            # Default fallback
-            classes_raw = data_dict.get("classes", data_dict.get("class", None))
-            valid_raw = data_dict.get("valid", None)
-
+            raise ValueError(
+                f"Unsupported target task type: {self.target_task_type.value}"
+            )
         # Extract tensors from RasterImage if needed
         # rslearn tasks wrap outputs in RasterImage with shape (1, 1, H, W)
         classes = self._extract_target_tensor(classes_raw)

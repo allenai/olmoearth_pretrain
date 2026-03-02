@@ -8,7 +8,6 @@ class TaskType(StrEnum):
 
     CLASSIFICATION = "classification"
     SEGMENTATION = "segmentation"
-    REGRESSION = "regression"
 
 
 class SplitType(StrEnum):
