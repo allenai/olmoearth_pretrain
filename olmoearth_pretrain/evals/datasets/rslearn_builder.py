@@ -8,6 +8,7 @@ fields. This ensures we stay in sync with rslearn's actual parsing logic.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -27,7 +28,6 @@ def _init_rslearn_jsonargparse() -> None:
     init_jsonargparse()
 
 
-# TODO: we should validate this in some way
 def parse_model_config(model_config_path: str) -> dict[str, Any]:
     """Load and parse model.yaml, substituting environment variables.
 
@@ -46,8 +46,28 @@ def parse_model_config(model_config_path: str) -> dict[str, Any]:
     with model_config_upath.open() as f:
         raw_content = f.read()
 
-    # Substitute environment variables like ${DATASET_PATH}
+    # Keep rslearn env-substitution semantics for model.yaml compatibility.
+    # In this builder path, dataset location is passed separately
+    # via source_path/registry weka_path, so ${DATASET_PATH} in model.yaml
+    # does not control where the dataset is loaded from.
+    if "${DATASET_PATH}" in raw_content:
+        logger.warning(
+            "model.yaml contains ${DATASET_PATH}, but dataset loading here uses "
+            "explicit source_path/weka_path instead."
+        )
+
     substituted_content = substitute_env_vars_in_string(raw_content)
+
+    # Surface unresolved placeholders rather than failing silently.
+    unresolved_vars = sorted(
+        set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", substituted_content))
+    )
+    if unresolved_vars:
+        logger.warning(
+            "Unresolved env vars in model.yaml after substitution: %s",
+            unresolved_vars,
+        )
+
     return yaml.safe_load(substituted_content)
 
 
